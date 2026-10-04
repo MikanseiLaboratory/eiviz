@@ -2,14 +2,16 @@
 //! Text commands, `\r\n` terminated, port 8099. Iryx talks to this surface.
 
 use std::collections::HashSet;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::panic::AssertUnwindSafe;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::abi::{ERR_INVALID_ARGUMENT, ERR_IO, OK};
+use crate::guard::LockExt;
 use crate::vmix_xml::{FlatMap, UnitLive};
 
 pub const TCP_PORT: u16 = 8099;
@@ -52,16 +54,12 @@ pub fn configure(enabled: bool) -> i32 {
                 }
                 None => crate::diag::http_error(&format!("tcp listen {addr}: {error}")),
             }
-            if let Ok(mut slot) = tcp_slot().lock() {
-                slot.listen_owner = owner;
-            }
+            tcp_slot().lock_or_recover().listen_owner = owner;
             return ERR_IO;
         }
     };
     let stop = Arc::new(AtomicBool::new(false));
-    let Ok(mut slot) = tcp_slot().lock() else {
-        return ERR_INVALID_ARGUMENT;
-    };
+    let mut slot = tcp_slot().lock_or_recover();
     slot.listen_owner = None;
     let thread_stop = Arc::clone(&stop);
     match thread::Builder::new()
@@ -81,10 +79,7 @@ pub fn configure(enabled: bool) -> i32 {
 }
 
 pub fn listen_owner() -> Option<String> {
-    tcp_slot()
-        .lock()
-        .ok()
-        .and_then(|slot| slot.listen_owner.clone())
+    tcp_slot().lock_or_recover().listen_owner.clone()
 }
 
 pub unsafe fn listen_owner_c(out: *mut u8, cap: usize) -> i32 {
@@ -100,32 +95,78 @@ pub unsafe fn listen_owner_c(out: *mut u8, cap: usize) -> i32 {
 }
 
 fn stop_worker() {
-    let Ok(mut slot) = tcp_slot().lock() else {
-        return;
+    let (stop, join) = {
+        let mut slot = tcp_slot().lock_or_recover();
+        slot.listen_owner = None;
+        (slot.stop.take(), slot.join.take())
     };
-    if let Some(stop) = slot.stop.take() {
+    if let Some(stop) = stop {
         stop.store(true, Ordering::Relaxed);
     }
-    if let Some(join) = slot.join.take() {
+    if let Some(join) = join {
         let _ = join.join();
     }
-    slot.listen_owner = None;
+}
+
+const MAX_LINE_BYTES: usize = 64 * 1024;
+const MAX_CLIENTS: usize = 32;
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
+static ACTIVE_CLIENTS: AtomicUsize = AtomicUsize::new(0);
+
+struct ClientGuard;
+
+impl ClientGuard {
+    fn acquire() -> Option<Self> {
+        let previous = ACTIVE_CLIENTS.fetch_add(1, Ordering::AcqRel);
+        if previous >= MAX_CLIENTS {
+            ACTIVE_CLIENTS.fetch_sub(1, Ordering::AcqRel);
+            return None;
+        }
+        Some(Self)
+    }
+}
+
+impl Drop for ClientGuard {
+    fn drop(&mut self) {
+        ACTIVE_CLIENTS.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 fn accept_loop(listener: TcpListener, stop: Arc<AtomicBool>) {
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
-            Ok((stream, _)) => {
+            Ok((stream, peer)) => {
+                let Some(guard) = ClientGuard::acquire() else {
+                    crate::diag::http_warn(&format!(
+                        "tcp client {peer} rejected: too many clients"
+                    ));
+                    continue;
+                };
                 let stop = Arc::clone(&stop);
-                let _ = thread::Builder::new()
+                if let Err(error) = thread::Builder::new()
                     .name("eiviz-vmix-tcp-client".into())
-                    .spawn(move || handle_client(stream, stop));
+                    .spawn(move || {
+                        let _guard = guard;
+                        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                            handle_client(stream, stop)
+                        })) {
+                            crate::diag::http_error(&format!(
+                                "tcp client panicked: {}",
+                                crate::guard::panic_message(payload.as_ref())
+                            ));
+                        }
+                    })
+                {
+                    crate::diag::http_error(&format!("tcp client spawn: {error}"));
+                }
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(50));
             }
-            Err(_) => {
+            Err(error) => {
                 if !stop.load(Ordering::Relaxed) {
+                    crate::diag::http_warn(&format!("tcp accept: {error}"));
                     thread::sleep(Duration::from_millis(50));
                 }
             }
@@ -133,24 +174,62 @@ fn accept_loop(listener: TcpListener, stop: Arc<AtomicBool>) {
     }
 }
 
+/// Splits `\n` terminated lines out of a byte stream, keeping partial lines across reads.
+struct LineBuffer {
+    pending: Vec<u8>,
+}
+
+impl LineBuffer {
+    fn new() -> Self {
+        Self {
+            pending: Vec::new(),
+        }
+    }
+
+    /// Returns `Err` when an unterminated line grows beyond [`MAX_LINE_BYTES`].
+    fn push(&mut self, chunk: &[u8]) -> Result<(), ()> {
+        self.pending.extend_from_slice(chunk);
+        let terminated = self.pending.contains(&b'\n');
+        if !terminated && self.pending.len() > MAX_LINE_BYTES {
+            return Err(());
+        }
+        Ok(())
+    }
+
+    fn next_line(&mut self) -> Option<String> {
+        let end = self.pending.iter().position(|byte| *byte == b'\n')?;
+        let raw: Vec<u8> = self.pending.drain(..=end).collect();
+        let text = String::from_utf8_lossy(&raw);
+        Some(text.trim_end_matches(['\r', '\n']).to_string())
+    }
+}
+
 fn handle_client(stream: TcpStream, stop: Arc<AtomicBool>) {
+    // Accepted sockets inherit the listener's non-blocking mode on some platforms.
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
+    let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
     let Ok(clone) = stream.try_clone() else {
         return;
     };
     let writer = Arc::new(Mutex::new(clone));
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
+    let mut reader = stream;
+    let mut lines = LineBuffer::new();
+    let mut chunk = [0u8; 4096];
     let mut sub_tally = false;
     let mut sub_acts = false;
     let mut last_tally = String::new();
     let mut last_acts = String::new();
-    while !stop.load(Ordering::Relaxed) {
-        line.clear();
-        match reader.read_line(&mut line) {
+    'session: while !stop.load(Ordering::Relaxed) {
+        match reader.read(&mut chunk) {
             Ok(0) => break,
-            Ok(_) => {}
+            Ok(n) => {
+                if lines.push(&chunk[..n]).is_err() {
+                    crate::diag::http_warn("tcp line too long, closing");
+                    break;
+                }
+            }
             Err(error)
                 if error.kind() == std::io::ErrorKind::WouldBlock
                     || error.kind() == std::io::ErrorKind::TimedOut =>
@@ -167,44 +246,56 @@ fn handle_client(stream: TcpStream, stop: Arc<AtomicBool>) {
                 }
                 continue;
             }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => break,
         }
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        if trimmed.is_empty() {
-            continue;
-        }
-        match dispatch_line(trimmed) {
-            Reply::Line(text) => {
-                if write_all(&writer, text.as_bytes()).is_err() {
-                    break;
+        while let Some(line) = lines.next_line() {
+            if line.is_empty() {
+                continue;
+            }
+            let reply = match std::panic::catch_unwind(AssertUnwindSafe(|| dispatch_line(&line))) {
+                Ok(reply) => reply,
+                Err(payload) => {
+                    crate::diag::http_error(&format!(
+                        "tcp command panicked: {}",
+                        crate::guard::panic_message(payload.as_ref())
+                    ));
+                    Reply::Line("ER internal error\r\n".into())
                 }
-            }
-            Reply::Xml(xml) => {
-                if write_all(&writer, &encode_xml(&xml)).is_err() {
-                    break;
+            };
+            match reply {
+                Reply::Line(text) => {
+                    if write_all(&writer, text.as_bytes()).is_err() {
+                        break 'session;
+                    }
                 }
+                Reply::Xml(xml) => {
+                    if write_all(&writer, &encode_xml(&xml)).is_err() {
+                        break 'session;
+                    }
+                }
+                Reply::SubscribeTally => {
+                    crate::diag::http_info("tcp SUBSCRIBE TALLY");
+                    sub_tally = true;
+                    let _ = write_all(&writer, b"SUBSCRIBE OK TALLY\r\n");
+                    last_tally.clear();
+                }
+                Reply::SubscribeActs => {
+                    crate::diag::http_info("tcp SUBSCRIBE ACTS");
+                    sub_acts = true;
+                    let _ = write_all(&writer, b"SUBSCRIBE OK ACTS\r\n");
+                    last_acts.clear();
+                }
+                Reply::UnsubscribeTally => {
+                    sub_tally = false;
+                    let _ = write_all(&writer, b"UNSUBSCRIBE OK TALLY\r\n");
+                }
+                Reply::UnsubscribeActs => {
+                    sub_acts = false;
+                    let _ = write_all(&writer, b"UNSUBSCRIBE OK ACTS\r\n");
+                }
+                Reply::Quit => break 'session,
             }
-            Reply::SubscribeTally => {
-                crate::diag::http_info("tcp SUBSCRIBE TALLY");
-                sub_tally = true;
-                let _ = write_all(&writer, b"SUBSCRIBE OK TALLY\r\n");
-                last_tally.clear();
-            }
-            Reply::SubscribeActs => {
-                crate::diag::http_info("tcp SUBSCRIBE ACTS");
-                sub_acts = true;
-                let _ = write_all(&writer, b"SUBSCRIBE OK ACTS\r\n");
-                last_acts.clear();
-            }
-            Reply::UnsubscribeTally => {
-                sub_tally = false;
-                let _ = write_all(&writer, b"UNSUBSCRIBE OK TALLY\r\n");
-            }
-            Reply::UnsubscribeActs => {
-                sub_acts = false;
-                let _ = write_all(&writer, b"UNSUBSCRIBE OK ACTS\r\n");
-            }
-            Reply::Quit => break,
         }
     }
 }
@@ -236,9 +327,7 @@ fn tick_subs(
 }
 
 fn write_all(writer: &Arc<Mutex<TcpStream>>, bytes: &[u8]) -> std::io::Result<()> {
-    let mut slot = writer
-        .lock()
-        .map_err(|_| std::io::Error::other("tcp writer lock"))?;
+    let mut slot = writer.lock_or_recover();
     slot.write_all(bytes)?;
     slot.flush()
 }
@@ -559,6 +648,9 @@ fn assigned_input(name: &str, flat: &FlatMap, lives: &[UnitLive]) -> Result<Stri
             .trim_start_matches("Overlay")
             .parse::<usize>()
             .map_err(|_| "unknown activator".to_string())?;
+        if !(1..=8).contains(&slot) {
+            return Err("unknown activator".into());
+        }
         let live = lives.first().ok_or_else(|| "No Input".to_string())?;
         let source = live.overlay_sources.get(slot - 1).copied().unwrap_or(0);
         let number = flat
@@ -773,6 +865,31 @@ mod tests {
             overlay_sources: Vec::new(),
         }];
         assert_eq!(tally_from(&flat, &both_program), "10");
+    }
+
+    #[test]
+    fn overlay_zero_is_rejected_without_panic() {
+        assert!(assigned_input("Overlay0", &FlatMap { inputs: Vec::new() }, &[]).is_err());
+    }
+
+    #[test]
+    fn line_buffer_keeps_partial_lines() {
+        let mut lines = LineBuffer::new();
+        lines.push(b"TAL").unwrap();
+        assert_eq!(lines.next_line(), None);
+        lines.push(b"LY\r\nVERSION\r\nQU").unwrap();
+        assert_eq!(lines.next_line().as_deref(), Some("TALLY"));
+        assert_eq!(lines.next_line().as_deref(), Some("VERSION"));
+        assert_eq!(lines.next_line(), None);
+        lines.push(b"IT\n").unwrap();
+        assert_eq!(lines.next_line().as_deref(), Some("QUIT"));
+    }
+
+    #[test]
+    fn line_buffer_rejects_unbounded_line() {
+        let mut lines = LineBuffer::new();
+        let big = vec![b'a'; MAX_LINE_BYTES + 1];
+        assert!(lines.push(&big).is_err());
     }
 
     #[test]

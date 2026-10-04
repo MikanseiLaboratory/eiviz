@@ -3,53 +3,48 @@ title: システム要件とサポートするハードウェア
 description: eivizが必要とする環境とサポートするハードウェア
 ---
 
-2026年9月現在の推奨動作環境です。技術選定の背景は[eivizについて](/eiviz/ja/introduction/about/)をご参照ください。
+eivizの動作環境とサポートハードウェアの一覧です。
 
-CPUからGPUへ映像を転送するとき、通常の低速転送（256MB単位）ではなく、CPUがGPUメモリへ直接書けることを前提にしています。  
-WindowsではResizable BAR（ReBAR）、macOSではApple SiliconのUnified Memory、LinuxではVulkanのhost-visibleなVRAMがそれに当たります。
+本ソフトウェアは、CPUからGPUメモリ（VRAM）への直接書き込みが可能なハードウェア構成を前提としています。WindowsのResizable BAR（ReBAR）、macOSのUnified Memory、LinuxのVulkan host-visible VRAMがこれに該当します。
 
 ## Windows
 
-Windows 11（x64）を対象にします。[Windows on ARMは未対応](https://github.com/MikanseiLaboratory/eiviz/issues/80)です。
+- OS: Windows 11（x64）※[Windows on ARMは未対応](https://github.com/MikanseiLaboratory/eiviz/issues/80)
+- GPU: **Resizable BARが有効なディスクリートGPU**（内蔵GPU環境は非推奨）
+  - AMD環境では「Smart Access Memory（SAM）」と表記される場合があります。
+  - Windows 11 24H2以前の一部環境では、GPU upload heapsに非対応のため最適化が機能しない場合があります。
 
-**外付けGPUでResizable BARが有効であること**が必須です。内蔵GPUだけのマシンは対象外です。  
-AMDでは同じ機能がSmart Access Memory（SAM）と呼ばれることがあります。
-
-Resizable BAR対応環境でも、Windows 11 24H2以前など一部の環境ではGPU upload heapsに非対応の為、この最適化が利用できない場合があります。
-
-| GPU | 推奨要件 |
+| GPUベンダー | 推奨要件 |
 | --- | --- |
-| NVIDIA | GeForce RTX 3000世代以降 |
-| AMD | Radeon RX 6000世代以降 |
+| NVIDIA | GeForce RTX 3000シリーズ以降 |
+| AMD | Radeon RX 6000シリーズ以降 |
 | Intel | Arc Aシリーズ（Alchemist）以降 |
 
-DX12がサポートされているGPUであれば動作は可能です。
+Direct3D 12対応GPUであれば基本動作は可能ですが、快適な運用のために上記推奨環境での使用をお勧めします。
 
 ## macOS
 
-**macOS 14以降のApple Silicon Mac**を対象にしています。
-
-Intel Mac、外部GPUは対象外です。
+- OS: **macOS 14以降**
+- 対応ハードウェア: **Apple Silicon（Mシリーズ）搭載Mac**
+- Intel Macおよび外付けGPU（eGPU）は非対応です。
 
 :::note
-開発チームにApple Silicon Macの常用者がいないため、実機での性能は未検証です。開発はIntel世代のMacBookで行っています。
+開発チームの機材都合により、現在Intel Macでのビルド・動作確認を主として進めており、Apple Silicon実機での最適化は順次進めています。
 :::
 
-## Linux
+## Linux（実験的）
 
 :::caution
-現在未実装のプラットフォームです。以下の内容は予告なく変更される場合があり、現在の実装の実態に沿ったものではありません。
+現在開発中のため、要件や仕様は今後変更される可能性があります。
 :::
 
-次の**両方**が必要です。
+以下の2点を満たす環境を対象としています。
 
-1. **Vulkan Video**動画ファイルやUSB Video CaptureをGPUに直結するための回路です。
-2. **Vulkan Host-visible VRAM** CPUがVulkan経由でVRAMへデータを直接書けること。WindowsのReBARと同等の機能です。
-
-両方を同時に満たす目安は、Windowsと同じ世代です。
+1. **Vulkan Video**: 動画デコードやカメラ入力をGPU上で処理するためのハードウェア機能
+2. **Vulkan host-visible VRAM**: CPUからVRAM領域への直接アクセス（WindowsのReBAR相当）
 
 | GPU | 最小要件 | ドライバの目安 |
 | --- | --- | --- |
-| NVIDIA | GeForce RTX 3000世代以降 | v535以降 |
-| AMD | Radeon RX 6000世代以降 | Mesa RADV以降 |
-| Intel | Arc Aシリーズ以降 | Mesa ANV以降 |
+| NVIDIA | GeForce RTX 3000シリーズ以降 | ドライバv535以降 |
+| AMD | Radeon RX 6000シリーズ以降 | Mesa RADV |
+| Intel | Arc Aシリーズ以降 | Mesa ANV |

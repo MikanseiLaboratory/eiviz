@@ -1,3 +1,4 @@
+use crate::guard::LockExt;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -60,24 +61,35 @@ impl AudioScheduler {
         monitor_pcm: Arc<Mutex<std::collections::VecDeque<f32>>>,
         follow_primed: Arc<AtomicBool>,
         clock: SharedMediaClock,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = Arc::clone(&stop);
         let join = thread::Builder::new()
             .name("eiviz-audio".into())
             .spawn(move || {
-                run_scheduler(
-                    audio,
-                    uploads,
-                    snapshot,
-                    monitor_pcm,
-                    follow_primed,
-                    clock,
-                    stop_t,
-                )
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run_scheduler(
+                        audio,
+                        uploads,
+                        snapshot,
+                        monitor_pcm,
+                        follow_primed,
+                        clock,
+                        stop_t,
+                    )
+                }));
+                if let Err(payload) = result {
+                    crate::diag::mark_fatal(format!(
+                        "audio scheduler panicked: {}",
+                        crate::guard::panic_message(payload.as_ref())
+                    ));
+                }
             })
-            .ok();
-        Self { stop, join }
+            .map_err(|error| format!("audio scheduler spawn failed: {error}"))?;
+        Ok(Self {
+            stop,
+            join: Some(join),
+        })
     }
 
     pub fn stop(&mut self) {
@@ -105,7 +117,7 @@ fn run_scheduler(
 ) {
     let mut produced = 0u64;
     let mut tone_phase: HashMap<u64, f64> = HashMap::new();
-    let mut last_buffer = 0u32;
+    let mut last_delay = (0u32, 0u32, 0u32);
     while !stop.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
         produced = produced.saturating_add(AUDIO_BLOCK_FRAMES as u64);
         let deadline = clock.audio_deadline(produced, AUDIO_RATE as u32);
@@ -126,10 +138,11 @@ fn run_scheduler(
                     * AUDIO_BLOCK_FRAMES as u64;
             }
         }
-        let snap = snapshot.lock().expect("audio snap").clone();
-        if snap.buffer_frames != last_buffer {
+        let snap = snapshot.lock_or_recover().clone();
+        let delay = (snap.buffer_frames, snap.fps_num, snap.fps_den);
+        if delay != last_delay {
             audio.set_video_delay(snap.buffer_frames, snap.fps_num, snap.fps_den);
-            last_buffer = snap.buffer_frames;
+            last_delay = delay;
         }
         let pts = clock.audio_pts(produced, AUDIO_RATE as u32);
         let mut tones = Vec::new();
@@ -145,7 +158,7 @@ fn run_scheduler(
             ));
         }
         let mixed = {
-            let mut uploads = uploads.lock().expect("uploads");
+            let mut uploads = uploads.lock_or_recover();
             for (id, packet) in tones {
                 uploads.ingest_audio(id, packet);
             }
@@ -170,7 +183,7 @@ fn publish_monitor(
     follow_primed: &AtomicBool,
     mixed: &MixedAudio,
 ) {
-    let mut guard = monitor_pcm.lock().expect("monitor pcm");
+    let mut guard = monitor_pcm.lock_or_recover();
     guard.extend(mixed.master.iter().copied());
     let cap = AUDIO_RATE as usize;
     while guard.len() > cap {
@@ -258,19 +271,20 @@ mod tests {
             Arc::clone(&pcm),
             Arc::clone(&primed),
             crate::clock::SharedMediaClock::new(),
-        );
+        )
+        .expect("audio scheduler");
         // CI macOS runners skip late slots (45–100ms). 200ms of PCM is
         // required to set primed; a fixed 250ms sleep is not enough.
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            let samples = pcm.lock().expect("pcm").len();
+            let samples = pcm.lock_or_recover().len();
             if samples >= AUDIO_BLOCK_FRAMES * 8 && primed.load(Ordering::Relaxed) {
                 break;
             }
             thread::sleep(Duration::from_millis(20));
         }
         sched.stop();
-        let samples = pcm.lock().expect("pcm").len();
+        let samples = pcm.lock_or_recover().len();
         assert!(
             samples >= AUDIO_BLOCK_FRAMES * 8,
             "audio must keep filling the monitor ring while GPU/render is idle (got {samples})"

@@ -49,11 +49,8 @@ impl HeadlessPrefs {
 
     pub fn save_to(&self, path: &Path) -> Result<(), String> {
         self.validate()?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
         let text = serde_json::to_string_pretty(self).map_err(|error| error.to_string())?;
-        fs::write(path, text).map_err(|error| error.to_string())
+        eiviz_control::session::atomic_write(path, text.as_bytes())
     }
 
     pub fn validate(&self) -> Result<(), String> {

@@ -29,10 +29,10 @@ fn rgb_to_yuv(rgb: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let dims = vec2<f32>(textureDimensions(src_tex));
-    let x0 = (floor(in.uv.x * dims.x) * 2.0 + 0.5) / (dims.x * 2.0);
-    let x1 = x0 + 1.0 / (dims.x * 2.0);
-    let a = rgb_to_yuv(textureSample(src_tex, src_samp, vec2<f32>(x0, in.uv.y)).rgb);
-    let b = rgb_to_yuv(textureSample(src_tex, src_samp, vec2<f32>(x1, in.uv.y)).rgb);
+    // One output texel covers two source pixels. The left and right source pixel centers sit a
+    // quarter of an output texel either side of this texel's center, whatever the source size.
+    let quarter = abs(dpdx(in.uv.x)) * 0.25;
+    let a = rgb_to_yuv(textureSample(src_tex, src_samp, vec2<f32>(in.uv.x - quarter, in.uv.y)).rgb);
+    let b = rgb_to_yuv(textureSample(src_tex, src_samp, vec2<f32>(in.uv.x + quarter, in.uv.y)).rgb);
     return vec4<f32>(a.y, a.x, a.z, b.x);
 }

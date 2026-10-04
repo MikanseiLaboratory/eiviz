@@ -1,32 +1,4 @@
-use std::collections::HashMap;
-
 use crate::upload::AudioPacket;
-
-pub(super) fn mix_mapped_f32(
-    dest: &mut [f32],
-    channels: usize,
-    mapped: &HashMap<(i32, i32), Vec<(f32, f32)>>,
-) {
-    dest.fill(0.0);
-    let channels = channels.max(1);
-    for ((left, right), stereo) in mapped {
-        let map_left = (*left).max(0) as usize;
-        let map_right = (*right).max(0) as usize;
-        for (i, (sl, sr)) in stereo.iter().enumerate() {
-            let base = i * channels;
-            if map_left < channels {
-                if let Some(slot) = dest.get_mut(base + map_left) {
-                    *slot += sl.clamp(-1.0, 1.0);
-                }
-            }
-            if map_right != map_left && map_right < channels {
-                if let Some(slot) = dest.get_mut(base + map_right) {
-                    *slot += sr.clamp(-1.0, 1.0);
-                }
-            }
-        }
-    }
-}
 
 pub(super) fn f32_to_i16(src: &[f32], dest: &mut [i16]) {
     for (sample, slot) in src.iter().zip(dest.iter_mut()) {
@@ -168,8 +140,6 @@ fn read_sample(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::{interleaved_f32_packet, mapped_packet, silent_packet};
     use crate::upload::AUDIO_RATE;
 
@@ -197,14 +167,5 @@ mod tests {
     fn interleaved_f32_packet_maps_channels() {
         let packet = interleaved_f32_packet(0, 48_000, &[0.25, 0.5, 0.75, 1.0], 2, 0, 1);
         assert_eq!(packet.pcm_planar_f32, vec![0.25, 0.75, 0.5, 1.0]);
-    }
-
-    #[test]
-    fn mix_mapped_f32_writes_stereo() {
-        let mut dest = [0.0f32; 4];
-        let mut mapped = HashMap::new();
-        mapped.insert((0, 1), vec![(0.5, -0.5), (1.0, -1.0)]);
-        super::mix_mapped_f32(&mut dest, 2, &mapped);
-        assert_eq!(dest, [0.5, -0.5, 1.0, -1.0]);
     }
 }

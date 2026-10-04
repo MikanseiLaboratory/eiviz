@@ -1,3 +1,4 @@
+use crate::guard::LockExt;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -30,7 +31,7 @@ use grafton_ndi::{
 use crate::abi::FMT_BGRA;
 use crate::upload::{
     AudioPacket, CpuFormat, GpuIngest, GpuUploadRing, GpuVideoFrame, UploadStore,
-    ingest_audio_throttled, write_slot,
+    ingest_audio_live, write_slot,
 };
 
 static RUNTIME: OnceLock<Result<NDI, String>> = OnceLock::new();
@@ -142,7 +143,7 @@ impl NdiReceiver {
             .name(format!("eiviz-ndi-{source_id}"))
             .spawn(move || {
                 {
-                    let mut store = uploads.lock().expect("uploads lock");
+                    let mut store = uploads.lock_or_recover();
                     store.ensure_playout(
                         source_id,
                         16,
@@ -155,6 +156,7 @@ impl NdiReceiver {
                 #[cfg(windows)]
                 let mut ingest_ring: Option<crate::rebar::FrameIngestRing> = None;
                 let mut gpu_warned = false;
+                let mut last_error = String::new();
                 while !stop_thread.load(Ordering::Relaxed) {
                     match receiver.video().try_capture(Duration::from_millis(4)) {
                         Ok(Some(frame)) => ingest_video(
@@ -164,6 +166,7 @@ impl NdiReceiver {
                             #[cfg(windows)]
                             &mut ingest_ring,
                             &mut gpu_warned,
+                            &mut last_error,
                             source_id,
                             depth,
                             &frame,
@@ -174,7 +177,7 @@ impl NdiReceiver {
                     loop {
                         match receiver.audio().try_capture(Duration::ZERO) {
                             Ok(Some(audio)) => {
-                                ingest_audio_throttled(&uploads, source_id, to_audio(&audio));
+                                ingest_audio_live(&uploads, source_id, to_audio(&audio));
                             }
                             _ => break,
                         }
@@ -380,8 +383,10 @@ impl NdiSender {
 
 impl Drop for NdiSender {
     fn drop(&mut self) {
+        // Never block in drop: if the control queue is full, dropping `video_tx` below
+        // disconnects the worker, which flushes and exits on its own.
         if let Some(tx) = self.ctrl_tx.take() {
-            let _ = tx.send(NdiCtrl::Shutdown);
+            let _ = tx.try_send(NdiCtrl::Shutdown);
         }
         self.video_tx.take();
         self.audio_tx.take();
@@ -525,6 +530,7 @@ fn ingest_video(
     gpu_ring: &mut GpuUploadRing,
     #[cfg(windows)] ingest_ring: &mut Option<crate::rebar::FrameIngestRing>,
     gpu_warned: &mut bool,
+    last_error: &mut String,
     source_id: u64,
     depth: u32,
     frame: &VideoFrame,
@@ -546,56 +552,61 @@ fn ingest_video(
         _ => width as usize * bpp,
     };
     if let Some(gpu) = gpu.filter(|gpu| gpu.ndi_gpu.load(Ordering::Relaxed)) {
+        // With GPU ingest enabled a failed upload drops the frame: silently switching to the
+        // CPU path would change latency and load behind the operator's back.
         #[cfg(windows)]
         if gpu.use_rebar.load(Ordering::Relaxed) && gpu.rebar_available {
             if ingest_ring.is_none() {
                 *ingest_ring = crate::rebar::FrameIngestRing::new(&gpu.device, &gpu.queue);
             }
-            if let Some(ring) = ingest_ring.as_mut().filter(|ring| ring.is_live()) {
-                let packed = matches!(format, CpuFormat::Uyvy | CpuFormat::Uyva);
-                let bgra = format == CpuFormat::Bgra;
-                let tex_format = if packed {
-                    wgpu::TextureFormat::Rgba8Unorm
-                } else if bgra {
-                    wgpu::TextureFormat::Bgra8Unorm
-                } else {
-                    wgpu::TextureFormat::Rgba8Unorm
-                };
-                match ring.upload(
-                    frame.data(),
-                    stride,
-                    width as usize * bpp,
-                    width,
-                    height,
-                    packed,
-                    bgra,
-                    tex_format,
-                    frame.timestamp(),
-                ) {
-                    Ok(uploaded) => {
-                        finish_gpu_frame(
-                            uploads,
-                            gpu_warned,
-                            source_id,
-                            depth,
-                            width,
-                            height,
-                            pixel_format,
-                            stride,
-                            frame,
-                            uploaded,
-                            ring.vram_bytes(),
-                            "host",
-                        );
-                        return;
-                    }
-                    Err(error) => {
-                        eprintln!(
-                            "eiviz ndi host-visible upload: {error}; falling back to write_texture"
-                        );
-                    }
+            let Some(ring) = ingest_ring.as_mut().filter(|ring| ring.is_live()) else {
+                report_ingest_error(
+                    last_error,
+                    source_id,
+                    "host-visible ingest ring is unavailable".into(),
+                );
+                return;
+            };
+            let packed = matches!(format, CpuFormat::Uyvy | CpuFormat::Uyva);
+            let bgra = format == CpuFormat::Bgra;
+            let tex_format = if packed {
+                wgpu::TextureFormat::Rgba8Unorm
+            } else if bgra {
+                wgpu::TextureFormat::Bgra8Unorm
+            } else {
+                wgpu::TextureFormat::Rgba8Unorm
+            };
+            match ring.upload(
+                frame.data(),
+                stride,
+                width as usize * bpp,
+                width,
+                height,
+                packed,
+                bgra,
+                tex_format,
+                frame.timestamp(),
+            ) {
+                Ok(uploaded) => {
+                    last_error.clear();
+                    finish_gpu_frame(
+                        uploads,
+                        gpu_warned,
+                        source_id,
+                        depth,
+                        width,
+                        height,
+                        pixel_format,
+                        stride,
+                        frame,
+                        uploaded,
+                        ring.vram_bytes(),
+                        "host",
+                    );
                 }
+                Err(error) => report_ingest_error(last_error, source_id, error),
             }
+            return;
         }
         match gpu_ring.upload(
             gpu,
@@ -607,6 +618,7 @@ fn ingest_video(
             frame.timestamp(),
         ) {
             Ok(uploaded) => {
+                last_error.clear();
                 finish_gpu_frame(
                     uploads,
                     gpu_warned,
@@ -621,18 +633,14 @@ fn ingest_video(
                     gpu_ring.vram_bytes(),
                     "queue",
                 );
-                return;
             }
-            Err(error) if !*gpu_warned => {
-                eprintln!("eiviz ndi gpu upload: {error}; falling back to CPU frames");
-                *gpu_warned = true;
-            }
-            Err(_) => {}
+            Err(error) => report_ingest_error(last_error, source_id, error),
         }
+        return;
     }
     let opaque_x = matches!(pixel_format, PixelFormat::BGRX | PixelFormat::RGBX);
     let (mut pixels, format, width, height) = {
-        let mut store = uploads.lock().expect("uploads lock");
+        let mut store = uploads.lock_or_recover();
         match store.take_playout_buf(source_id, width, height, format, depth) {
             Some(ready) => ready,
             None => return,
@@ -647,8 +655,16 @@ fn ingest_video(
         format,
         opaque_x,
     );
-    let mut store = uploads.lock().expect("uploads lock");
+    let mut store = uploads.lock_or_recover();
     store.finish_playout_cpu(source_id, pixels, frame.timestamp());
+}
+
+fn report_ingest_error(last_error: &mut String, source_id: u64, error: String) {
+    if crate::staging::is_exhausted(&error) || *last_error == error {
+        return;
+    }
+    eprintln!("eiviz ndi {source_id}: gpu upload failed, frame dropped: {error}");
+    *last_error = error;
 }
 
 fn finish_gpu_frame(
@@ -672,21 +688,38 @@ fn finish_gpu_frame(
         );
         *gpu_warned = true;
     }
-    let mut store = uploads.lock().expect("uploads lock");
+    let mut store = uploads.lock_or_recover();
     store.ensure_playout(source_id, width, height, CpuFormat::GpuRgba, depth);
     store.set_ring_vram(source_id, ring_vram);
     let _ = store.push_playout_gpu(source_id, uploaded);
 }
 
 fn to_audio(frame: &AudioFrame) -> AudioPacket {
-    let channels = frame.num_channels().max(1);
-    let samples = frame.num_samples().max(1);
-    let pcm = frame.data().to_vec();
+    let channels = frame.num_channels().max(1) as usize;
+    let samples = frame.num_samples().max(0) as usize;
+    let stride = frame.channel_stride_in_bytes().max(0) as usize / std::mem::size_of::<f32>();
+    let data = frame.data();
+    // NDI may pad each channel plane; compact them so downstream sees `channels * samples`.
+    let pcm = if stride == samples || stride == 0 {
+        data.get(..channels * samples)
+            .map(<[f32]>::to_vec)
+            .unwrap_or_else(|| data.to_vec())
+    } else {
+        let mut pcm = Vec::with_capacity(channels * samples);
+        for channel in 0..channels {
+            let start = channel * stride;
+            match data.get(start..start + samples) {
+                Some(plane) => pcm.extend_from_slice(plane),
+                None => pcm.resize(pcm.len() + samples, 0.0),
+            }
+        }
+        pcm
+    };
     AudioPacket {
         timestamp: frame.timestamp(),
-        sample_rate: frame.sample_rate().max(1),
-        channels,
-        samples_per_channel: samples,
+        sample_rate: frame.sample_rate(),
+        channels: channels as i32,
+        samples_per_channel: samples as i32,
         pcm_planar_f32: pcm,
     }
 }

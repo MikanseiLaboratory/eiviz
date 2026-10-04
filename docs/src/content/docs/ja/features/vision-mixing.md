@@ -3,35 +3,21 @@ title: Vision Mixing
 description: Mixing Unitを使った多段M/E映像スイッチング
 ---
 
-eivizでは、他スイッチャーでMix EffectやM/Eと呼ばれる映像合成の単位を**Mixing Unit**と呼びます。  
-vMixのMix Input、Panasonic Kairosのシーン、Viz/NewTek TriCasterやBlackmagic DesignのM/Eに相当します。
+eivizのスイッチング操作は、M/E（Mix/Effects）に相当する**Mixing Unit**を中心に行われます。
 
-セッションごとのMixing Unitに上限はありません。PC性能が許す限り追加できます。  
-解像度と出力フレームレートはユニットごとに持てます。セッション全体の時計は[設定](/eiviz/ja/introduction/settings/)のマスターフレームレートです。
+## バス構成とスイッチング
 
-## バス
+各Mixing Unitは**Preview**（待機画面）と**Program**（本線出力）の2系統のバスを備えています。
 
-それぞれのMixing Unitには、切替用の映像バスが2本あります。**Preview**と**Program**です。
+- **Sceneの選択**: スイッチャー画面のボタンをクリックして、Previewに次のシーン（[Scene](/eiviz/ja/concepts/scenes/)）をスタンバイします。
+- **トランジション実行**: CUT、AUTOボタン、またはTバーのスライダー操作によって、Previewの映像をProgramへ切り替えます。
+- **トランジション効果**: WGSLシェーダーによる多彩なトランジション（Cut、Fade、Wipe等）が用意されており、継続時間（ミリ秒）やイージングを指定可能です。
 
-Previewは次の絵を確認する用途です。Programは実際に出力される本線です。  
-スイッチャー画面からPreviewへ載せられるのは[Scene](/eiviz/ja/concepts/scenes/)です。CUT、AUTO、TバーでPreviewをProgramへ入れ替えます。
+## OverlayとMultiview
 
-### Overlay
+- **[Overlay](/eiviz/ja/concepts/overlays/)**: 各Mixing UnitのProgram出力に対し、最大8系統のDSK（テロップやPinP）を重ねて合成できます。
+- **[Multiviews](/eiviz/ja/concepts/multiviews/)**: 複数の入力や各ユニットのPreview/Programを一覧表示するマルチビュー画面を構築し、外部ディスプレイや別ウィンドウで常時監視できます。
 
-[Overlay](/eiviz/ja/concepts/overlays/)はMixing Unitごとに最大8本です。ソースはSceneまたはInputです。  
-CUTやTバーで混ざったあとのProgramに載ります。Previewバスには載りません。
+## 多段M/E（リentrant構成）
 
-### Multiview
-
-監視用のモザイクはMixing Unitのバスではなく、セッション単位の[Multiviews](/eiviz/ja/concepts/multiviews/)です。  
-セッションへ置ける数に上限はありません。同時に開く監視窓は[設定](/eiviz/ja/introduction/settings/)の映像出力先ウィンドウの上限に入ります。タイルにはInput、Scene、MU Preview、MU Programを置けます。
-
-## Transition
-
-映像の切り替え時にはTransitionを使用可能です。  
-Transitionは複数種類選択可能であり、WGSLを使った合成処理をしています。  
-使用するアニメーション、フレーム補完方法を選択し、実行することでProgramの映像が切り替わります。
-
-## 出力との関係
-
-Outputに使用可能な映像ソースはInput、Scene、Mixing UnitのPreview・Program、Multiviewです。既定はMixing UnitのProgramです。Multiviewを映像ソースに選択した場合、音声の送出は出来ません。流れは[Inputs](/eiviz/ja/concepts/inputs/)と[NDI/OMT](/eiviz/ja/features/outputs/ndi-omt/)をご参照ください。
+あるMixing Unitの出力を「Mix Input」として別のMixing Unitの入力レイヤーに配置することで、ATEMやKairosのような多段M/E構成を容易に実現できます。

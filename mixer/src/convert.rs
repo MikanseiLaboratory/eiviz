@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use windows::Win32::Graphics::Direct3D12::ID3D12Resource;
 
-use crate::upload::{GpuVideoFrame, texture_bytes};
+use crate::upload::{FrameLease, GpuVideoFrame, texture_bytes};
 
 /// Reused NV12/BGRA destinations so file and capture ingest do not allocate every frame.
 pub struct VideoGpuRing {
@@ -9,7 +11,6 @@ pub struct VideoGpuRing {
     uv: Option<wgpu::Texture>,
     plane_w: u32,
     plane_h: u32,
-    next: usize,
     cap: usize,
 }
 
@@ -19,6 +20,9 @@ struct DestSlot {
     width: u32,
     height: u32,
     format: wgpu::TextureFormat,
+    /// Every frame handed out from this slot (FIFO entry, on-screen source) holds a clone, so a
+    /// strong count of one means nobody but the ring still references the texture.
+    lease: FrameLease,
 }
 
 impl VideoGpuRing {
@@ -29,7 +33,6 @@ impl VideoGpuRing {
             uv: None,
             plane_w: 0,
             plane_h: 0,
-            next: 0,
             cap: cap.clamp(2, 8) as usize,
         }
     }
@@ -41,7 +44,7 @@ impl VideoGpuRing {
         height: u32,
         format: wgpu::TextureFormat,
         usage: wgpu::TextureUsages,
-    ) -> (wgpu::Texture, wgpu::TextureView) {
+    ) -> Result<(wgpu::Texture, wgpu::TextureView, FrameLease), String> {
         let width = width.max(2);
         let height = height.max(2);
         if self
@@ -50,36 +53,52 @@ impl VideoGpuRing {
             .any(|slot| slot.width != width || slot.height != height || slot.format != format)
         {
             self.dests.clear();
-            self.next = 0;
         }
-        while self.dests.len() < self.cap {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("eiviz video gpu"),
-                size: wgpu::Extent3d {
+        let free = self
+            .dests
+            .iter()
+            .position(|slot| Arc::strong_count(&slot.lease) == 1);
+        let index = match free {
+            Some(index) => index,
+            None if self.dests.len() < self.cap * 2 => {
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("eiviz video gpu"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&Default::default());
+                self.dests.push(DestSlot {
+                    texture,
+                    view,
                     width,
                     height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage,
-                view_formats: &[],
-            });
-            let view = texture.create_view(&Default::default());
-            self.dests.push(DestSlot {
-                texture,
-                view,
-                width,
-                height,
-                format,
-            });
-        }
-        let slot = &self.dests[self.next];
-        let out = (slot.texture.clone(), slot.view.clone());
-        self.next = (self.next + 1) % self.cap;
-        out
+                    format,
+                    lease: Arc::new(()),
+                });
+                self.dests.len() - 1
+            }
+            None => {
+                return Err(format!(
+                    "video gpu ring exhausted: all {} destination textures are still in use",
+                    self.dests.len()
+                ));
+            }
+        };
+        let slot = &self.dests[index];
+        Ok((
+            slot.texture.clone(),
+            slot.view.clone(),
+            Arc::clone(&slot.lease),
+        ))
     }
 
     fn acquire_planes(
@@ -106,8 +125,8 @@ impl VideoGpuRing {
             self.uv = Some(owned_plane(
                 device,
                 wgpu::TextureFormat::Rg8Unorm,
-                width / 2,
-                height / 2,
+                width.div_ceil(2),
+                height.div_ceil(2),
             ));
         }
         (
@@ -223,28 +242,37 @@ impl Nv12Converter {
         queue: &wgpu::Queue,
         ring: &mut VideoGpuRing,
         resource: ID3D12Resource,
+        coded: (u32, u32),
         width: u32,
         height: u32,
         pts: i64,
     ) -> Result<GpuVideoFrame, String> {
+        if width > coded.0 || height > coded.1 {
+            return Err(format!(
+                "visible size {width}x{height} exceeds the decoded surface {}x{}",
+                coded.0, coded.1
+            ));
+        }
+        // Decoders pad the surface (1080p is usually 1088 rows). The planes are imported at the
+        // surface size and only the visible rectangle is copied out.
         let y_src = import_plane(
             device,
             resource.clone(),
             wgpu::TextureFormat::R8Unorm,
-            width,
-            height,
+            coded.0,
+            coded.1,
             0,
         )?;
         let uv_src = import_plane(
             device,
             resource,
             wgpu::TextureFormat::Rg8Unorm,
-            width / 2,
-            height / 2,
+            coded.0.div_ceil(2),
+            coded.1.div_ceil(2),
             1,
         )?;
         let (y, uv) = ring.acquire_planes(device, width, height);
-        let (dest, dest_view) = ring.acquire_dest(
+        let (dest, dest_view, lease) = ring.acquire_dest(
             device,
             width,
             height,
@@ -252,7 +280,7 @@ impl Nv12Converter {
             wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC,
-        );
+        )?;
         let y_view = y.create_view(&Default::default());
         let uv_view = uv.create_view(&Default::default());
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -289,8 +317,8 @@ impl Nv12Converter {
             uv_src.as_image_copy(),
             uv.as_image_copy(),
             wgpu::Extent3d {
-                width: (width / 2).max(1),
-                height: (height / 2).max(1),
+                width: width.div_ceil(2).max(1),
+                height: height.div_ceil(2).max(1),
                 depth_or_array_layers: 1,
             },
         );
@@ -333,9 +361,12 @@ impl Nv12Converter {
             bgra: false,
             texture: dest,
             view: dest_view,
+            lease: Some(lease),
         })
     }
 
+    /// Submits the NV12 to RGBA pass and returns its submission index.
+    /// Does not wait. `nv12` must stay alive until that submission completes.
     pub fn convert_nv12_texture(
         &self,
         device: &wgpu::Device,
@@ -345,7 +376,7 @@ impl Nv12Converter {
         width: u32,
         height: u32,
         pts: i64,
-    ) -> Result<GpuVideoFrame, String> {
+    ) -> Result<(GpuVideoFrame, wgpu::SubmissionIndex), String> {
         let y_view = nv12.create_view(&wgpu::TextureViewDescriptor {
             label: Some("eiviz nv12 y"),
             format: Some(wgpu::TextureFormat::R8Unorm),
@@ -360,7 +391,7 @@ impl Nv12Converter {
             aspect: wgpu::TextureAspect::Plane1,
             ..Default::default()
         });
-        let (dest, dest_view) = ring.acquire_dest(
+        let (dest, dest_view, lease) = ring.acquire_dest(
             device,
             width,
             height,
@@ -368,7 +399,7 @@ impl Nv12Converter {
             wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC,
-        );
+        )?;
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("nv12 convert bg"),
             layout: &self.layout,
@@ -415,19 +446,21 @@ impl Nv12Converter {
             let _guard = crate::device::lock_gpu_queue();
             queue.submit(Some(encoder.finish()))
         };
-        let _ = device.poll(wgpu::PollType::Wait {
-            submission_index: Some(index),
-            timeout: None,
-        });
-        Ok(GpuVideoFrame {
-            pts,
-            width,
-            height,
-            packed: false,
-            bgra: false,
-            texture: dest,
-            view: dest_view,
-        })
+        // The caller keeps `nv12` alive until this submission finishes. Waiting here would
+        // drain every earlier mixer submission on the shared queue, once per frame.
+        Ok((
+            GpuVideoFrame {
+                pts,
+                width,
+                height,
+                packed: false,
+                bgra: false,
+                texture: dest,
+                view: dest_view,
+                lease: Some(lease),
+            },
+            index,
+        ))
     }
 
     pub fn copy_bgra(
@@ -447,7 +480,7 @@ impl Nv12Converter {
             wgpu::TextureFormat::Bgra8Unorm
         };
         let src = import_plane(device, resource, format, width, height, 0)?;
-        let (dest, dest_view) = ring.acquire_dest(
+        let (dest, dest_view, lease) = ring.acquire_dest(
             device,
             width,
             height,
@@ -455,7 +488,7 @@ impl Nv12Converter {
             wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::COPY_SRC,
-        );
+        )?;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("bgra gpu copy"),
         });
@@ -485,6 +518,7 @@ impl Nv12Converter {
             bgra: !rgba,
             texture: dest,
             view: dest_view,
+            lease: Some(lease),
         })
     }
 }

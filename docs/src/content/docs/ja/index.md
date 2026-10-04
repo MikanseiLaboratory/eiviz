@@ -43,5 +43,5 @@ WindowsとmacOSに対応しています。Linuxは実験的です。
 ## 開発者向け情報
 
 - [互換API（vMix HTTP & TCP/OBS WebSocket）](/eiviz/ja/developers/compatibility/) — vMix HTTP・TCPおよびOBS WebSocket互換API
-- [新規API](/eiviz/ja/developers/api/) — eiviz固有のAPI
+- [eiviz API](/eiviz/ja/developers/api/) — eiviz固有のProtobuf制御API
 - [Function Reference](/eiviz/ja/developers/function-reference/) — eivizの関数リファレンス

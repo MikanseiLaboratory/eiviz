@@ -1,3 +1,4 @@
+use crate::guard::LockExt;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -5,6 +6,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::abi::{FMT_BGRA, FMT_RGBA, FMT_UYVA, FMT_UYVY};
+use crate::audio_in::{self, PacketError, StreamResampler};
 
 const SLOTS: usize = 3;
 pub const AUDIO_RATE: i32 = 48_000;
@@ -151,6 +153,10 @@ pub struct CpuFrameSnap {
     pub gpu: Option<GpuVideoFrame>,
 }
 
+/// Marks a ring slot as in use. Ring slots are only rewritten once the ring holds the sole
+/// clone, so a frame that is queued or still on screen can never be overwritten.
+pub type FrameLease = Arc<()>;
+
 #[derive(Clone, Debug)]
 pub struct GpuVideoFrame {
     pub pts: i64,
@@ -160,6 +166,7 @@ pub struct GpuVideoFrame {
     pub bgra: bool,
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
+    pub lease: Option<FrameLease>,
 }
 
 /// wgpu device/queue handle for ingest threads. Render only binds the result.
@@ -178,20 +185,21 @@ struct GpuUploadSlot {
     width: u32,
     height: u32,
     format: wgpu::TextureFormat,
+    lease: FrameLease,
 }
 
-/// Triple-buffered textures written on the NDI/OMT thread.
+const UPLOAD_RING_SLOTS: usize = 3;
+const UPLOAD_RING_MAX_SLOTS: usize = 6;
+
+/// Textures written on the NDI/OMT thread. Slots are reused only after every frame that
+/// referenced them has been dropped; the ring grows briefly when the consumer lags.
 pub struct GpuUploadRing {
     slots: Vec<GpuUploadSlot>,
-    next: usize,
 }
 
 impl GpuUploadRing {
     pub fn new() -> Self {
-        Self {
-            slots: Vec::new(),
-            next: 0,
-        }
+        Self { slots: Vec::new() }
     }
 
     pub fn upload(
@@ -221,7 +229,7 @@ impl GpuUploadRing {
         } else {
             wgpu::TextureFormat::Rgba8Unorm
         };
-        let slot_i = self.ensure(gpu, tex_w, tex_h, tex_format);
+        let slot_i = self.acquire(gpu, tex_w, tex_h, tex_format)?;
         let slot = &self.slots[slot_i];
         write_queue_texture(
             &gpu.queue,
@@ -232,7 +240,6 @@ impl GpuUploadRing {
             tex_h,
             tex_w,
         );
-        self.next = (slot_i + 1) % 3;
         Ok(GpuVideoFrame {
             pts,
             width,
@@ -241,57 +248,68 @@ impl GpuUploadRing {
             bgra,
             texture: slot.texture.clone(),
             view: slot.view.clone(),
+            lease: Some(Arc::clone(&slot.lease)),
         })
     }
 
-    fn ensure(
+    fn acquire(
         &mut self,
         gpu: &GpuIngest,
         width: u32,
         height: u32,
         format: wgpu::TextureFormat,
-    ) -> usize {
-        if self.slots.get(self.next).is_some_and(|slot| {
-            slot.width == width && slot.height == height && slot.format == format
-        }) {
-            return self.next;
-        }
-        if self.slots.len() == 3
-            && self
-                .slots
-                .iter()
-                .any(|slot| slot.width != width || slot.height != height || slot.format != format)
+    ) -> Result<usize, String> {
+        if self
+            .slots
+            .iter()
+            .any(|slot| slot.width != width || slot.height != height || slot.format != format)
         {
             self.slots.clear();
-            self.next = 0;
         }
-        while self.slots.len() < 3 {
-            let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("eiviz ndi gpu"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_DST
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            });
-            let view = texture.create_view(&Default::default());
-            self.slots.push(GpuUploadSlot {
-                texture,
-                view,
+        if let Some(index) = self
+            .slots
+            .iter()
+            .position(|slot| Arc::strong_count(&slot.lease) == 1)
+        {
+            return Ok(index);
+        }
+        let limit = if self.slots.len() < UPLOAD_RING_SLOTS {
+            UPLOAD_RING_SLOTS
+        } else {
+            UPLOAD_RING_MAX_SLOTS
+        };
+        if self.slots.len() >= limit {
+            return Err(format!(
+                "gpu upload ring exhausted: all {} textures are still in use",
+                self.slots.len()
+            ));
+        }
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("eiviz ndi gpu"),
+            size: wgpu::Extent3d {
                 width,
                 height,
-                format,
-            });
-        }
-        self.next
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        self.slots.push(GpuUploadSlot {
+            texture,
+            view,
+            width,
+            height,
+            format,
+            lease: Arc::new(()),
+        });
+        Ok(self.slots.len() - 1)
     }
 
     pub fn vram_bytes(&self) -> u64 {
@@ -336,6 +354,16 @@ pub(crate) fn write_queue_texture(
         }
         (Cow::Owned(padded), aligned as u32)
     };
+    let needed = (pitch as usize)
+        .saturating_mul(height.saturating_sub(1) as usize)
+        .saturating_add(row_bytes);
+    if bytes.len() < needed || row_bytes > pitch as usize {
+        crate::diag::warn(&format!(
+            "write_queue_texture: short frame ({} < {needed} bytes), skipped",
+            bytes.len()
+        ));
+        return;
+    }
     queue.write_texture(
         texture.as_image_copy(),
         &bytes,
@@ -622,11 +650,15 @@ struct AudioRing {
     last_hold: (f32, f32),
     fifo_primed: bool,
     audio: Option<AudioPacket>,
+    resampler: StreamResampler,
+    rejected_logged: bool,
 }
 
 impl AudioRing {
     fn new() -> Self {
         Self {
+            resampler: StreamResampler::default(),
+            rejected_logged: false,
             fifo: SampleRing::new(AUDIO_FIFO_FRAMES * 2),
             last_peak: (0.0, 0.0),
             last_hold: (0.0, 0.0),
@@ -636,8 +668,17 @@ impl AudioRing {
     }
 
     fn ingest(&mut self, packet: AudioPacket) {
-        self.last_peak = peak_planar(&packet);
-        let stereo = resample_to_stereo_48k(&packet);
+        let stereo = match packet_to_stereo_48k(&mut self.resampler, &packet) {
+            Ok(stereo) => stereo,
+            Err(error) => {
+                if !self.rejected_logged {
+                    crate::diag::warn(&format!("audio packet rejected: {error}"));
+                    self.rejected_logged = true;
+                }
+                return;
+            }
+        };
+        self.last_peak = crate::simd::peak_interleaved(&stereo);
         self.fifo.extend(stereo);
         if self.fifo.len() >= AUDIO_PRIME_FRAMES * 2 {
             self.fifo_primed = true;
@@ -651,6 +692,7 @@ impl AudioRing {
         self.last_peak = (0.0, 0.0);
         self.last_hold = (0.0, 0.0);
         self.fifo_primed = false;
+        self.resampler.reset();
     }
 
     #[cfg(test)]
@@ -754,11 +796,19 @@ impl AudioInputStore {
         ring.trim_to_live();
         let want = frames * 2;
         ring.fifo.pop_into(want, out);
-        while out.len() < want {
-            out.push(ring.last_hold.0);
-            out.push(ring.last_hold.1);
-        }
-        if want >= 2 {
+        let got = out.len() & !1;
+        if got < want {
+            let last = if got >= 2 {
+                (out[got - 2], out[got - 1])
+            } else {
+                ring.last_hold
+            };
+            out.truncate(got);
+            out.resize(want, 0.0);
+            crate::audio_in::fill_underrun(&mut out[got..], last);
+            ring.last_hold = (0.0, 0.0);
+            ring.fifo_primed = false;
+        } else if want >= 2 {
             ring.last_hold = (out[want - 2], out[want - 1]);
         }
         notify_fifo();
@@ -833,7 +883,7 @@ impl UploadStore {
 
     pub fn unregister(&mut self, id: u64) {
         self.sources.remove(&id);
-        self.audio.lock().expect("audio").unregister(id);
+        self.audio.lock_or_recover().unregister(id);
     }
 
     pub fn ensure(&mut self, id: u64, width: u32, height: u32, format: CpuFormat) {
@@ -999,7 +1049,7 @@ impl UploadStore {
         pts: i64,
         planar: &[f32],
     ) {
-        self.audio.lock().expect("audio").ingest_audio(
+        self.audio.lock_or_recover().ingest_audio(
             id,
             AudioPacket {
                 timestamp: pts,
@@ -1013,21 +1063,21 @@ impl UploadStore {
 
     #[cfg(test)]
     pub fn ingest_audio(&mut self, id: u64, packet: AudioPacket) {
-        self.audio.lock().expect("audio").ingest_audio(id, packet);
+        self.audio.lock_or_recover().ingest_audio(id, packet);
     }
 
     #[cfg(test)]
     pub fn pop_frames(&mut self, id: u64, frames: usize) -> Vec<(f32, f32)> {
-        self.audio.lock().expect("audio").pop_frames(id, frames)
+        self.audio.lock_or_recover().pop_frames(id, frames)
     }
 
     #[allow(dead_code)]
     pub fn skip_audio_frames(&mut self, frames: usize) {
-        self.audio.lock().expect("audio").skip_audio_frames(frames);
+        self.audio.lock_or_recover().skip_audio_frames(frames);
     }
 
     pub fn flush_audio(&mut self, id: u64) {
-        self.audio.lock().expect("audio").flush_audio(id);
+        self.audio.lock_or_recover().flush_audio(id);
     }
 
     pub fn flush_video(&mut self, id: u64) {
@@ -1044,7 +1094,7 @@ impl UploadStore {
     }
 
     pub fn fifo_frames(&self, id: u64) -> usize {
-        self.audio.lock().expect("audio").fifo_frames(id)
+        self.audio.lock_or_recover().fifo_frames(id)
     }
 
     pub fn get(&self, id: u64) -> Option<&SourceRing> {
@@ -1056,26 +1106,35 @@ impl UploadStore {
     }
 }
 
+/// Live sources (NDI, OMT, capture devices) must never wait on the mixer: the receive
+/// thread also carries the video. When the consumer is behind, the ring drops the oldest
+/// audio instead.
+pub fn ingest_audio_live(uploads: &Mutex<UploadStore>, id: u64, packet: AudioPacket) {
+    let audio = uploads.lock_or_recover().audio_store();
+    audio.lock_or_recover().ingest_audio(id, packet);
+}
+
+/// Decoder-driven sources may run ahead of the mix, so they wait (bounded) for room.
 pub fn ingest_audio_throttled(uploads: &Mutex<UploadStore>, id: u64, packet: AudioPacket) {
-    let audio = uploads.lock().expect("uploads").audio_store();
+    let audio = uploads.lock_or_recover().audio_store();
     wait_fifo_below(&audio, id, AUDIO_FIFO_HIGH_FRAMES);
-    audio.lock().expect("audio").ingest_audio(id, packet);
+    audio.lock_or_recover().ingest_audio(id, packet);
 }
 
 /// File pumps are clocked by video PTS. Keep only a short audio lead so the
 /// mix does not play 400–500 ms of already-decoded sound behind the current frame.
 pub fn ingest_audio_clocked(uploads: &Mutex<UploadStore>, id: u64, packet: AudioPacket) {
-    let audio = uploads.lock().expect("uploads").audio_store();
+    let audio = uploads.lock_or_recover().audio_store();
     wait_fifo_below(&audio, id, AUDIO_LIVE_FRAMES);
-    audio.lock().expect("audio").ingest_audio(id, packet);
+    audio.lock_or_recover().ingest_audio(id, packet);
 }
 
 fn wait_fifo_below(audio: &Mutex<AudioInputStore>, id: u64, limit: usize) {
-    let mut guard = audio.lock().expect("audio");
+    let mut guard = audio.lock_or_recover();
     while guard.fifo_frames(id) >= limit {
         let (next, timeout) = fifo_cond()
             .wait_timeout(guard, Duration::from_millis(50))
-            .expect("fifo wait");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard = next;
         if timeout.timed_out() {
             break;
@@ -1083,36 +1142,56 @@ fn wait_fifo_below(audio: &Mutex<AudioInputStore>, id: u64, limit: usize) {
     }
 }
 
-fn resample_to_stereo_48k(packet: &AudioPacket) -> Vec<f32> {
-    let channels = packet.channels.max(1) as usize;
-    let src_rate = packet.sample_rate.max(1) as usize;
-    let values = &packet.pcm_planar_f32;
-    if values.is_empty() {
-        return Vec::new();
-    }
-    let src_frames = if packet.samples_per_channel > 0 {
-        packet.samples_per_channel as usize
-    } else {
-        values.len() / channels
-    }
-    .max(1)
-    .min(values.len() / channels.max(1));
-    let mut out = Vec::new();
-    crate::simd::resample_planar_to_stereo(
-        values,
-        src_frames,
-        channels,
-        src_rate,
-        AUDIO_RATE as usize,
-        &mut out,
-    );
-    out
+fn packet_to_stereo_48k(
+    resampler: &mut StreamResampler,
+    packet: &AudioPacket,
+) -> Result<Vec<f32>, PacketError> {
+    let (frames, channels, rate) = audio_in::validate(
+        packet.sample_rate,
+        packet.channels,
+        packet.samples_per_channel,
+        packet.pcm_planar_f32.len(),
+    )?;
+    let mut stereo = Vec::new();
+    audio_in::planar_to_stereo(&packet.pcm_planar_f32, frames, channels, &mut stereo);
+    let mut out = Vec::with_capacity(stereo.len() + 8);
+    resampler.process(&stereo, rate, &mut out);
+    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn upload_ring_keeps_referenced_textures_and_grows_then_errors() {
+        let device = crate::device::GpuDevice::with_backend(crate::device::BackendRequest::Auto)
+            .expect("gpu");
+        let gpu = GpuIngest {
+            device: device.device.clone(),
+            queue: device.queue.clone(),
+            ndi_gpu: Arc::new(AtomicBool::new(false)),
+            use_rebar: Arc::new(AtomicBool::new(false)),
+            rebar_available: false,
+        };
+        let data = vec![0u8; 4 * 4 * 4];
+        let mut ring = GpuUploadRing::new();
+        let mut held = Vec::new();
+        for _ in 0..UPLOAD_RING_MAX_SLOTS {
+            held.push(
+                ring.upload(&gpu, &data, 16, 4, 4, CpuFormat::Rgba, 0)
+                    .expect("slot available"),
+            );
+        }
+        let error = ring
+            .upload(&gpu, &data, 16, 4, 4, CpuFormat::Rgba, 0)
+            .expect_err("every slot is referenced");
+        assert!(error.contains("exhausted"), "{error}");
+        held.pop();
+        ring.upload(&gpu, &data, 16, 4, 4, CpuFormat::Rgba, 0)
+            .expect("released slot is reused");
+    }
 
     #[test]
     fn linear_resample_48k_passthrough() {
@@ -1124,7 +1203,7 @@ mod tests {
             samples_per_channel: 3,
             pcm_planar_f32: pcm,
         };
-        let out = resample_to_stereo_48k(&packet);
+        let out = packet_to_stereo_48k(&mut StreamResampler::default(), &packet).unwrap();
         assert_eq!(out.len(), 6);
         assert!((out[0] - 0.0).abs() < 1e-6);
         assert!((out[2] - 0.5).abs() < 1e-6);
@@ -1238,28 +1317,6 @@ mod tests {
             store.fifo_frames(1)
         );
     }
-}
-
-fn peak_planar(audio: &AudioPacket) -> (f32, f32) {
-    let channels = audio.channels.max(1) as usize;
-    if audio.pcm_planar_f32.is_empty() {
-        return (0.0, 0.0);
-    }
-    let samples = if audio.samples_per_channel > 0 {
-        audio.samples_per_channel as usize
-    } else {
-        (audio.pcm_planar_f32.len() / channels).max(1)
-    };
-    let plane = samples.min(audio.pcm_planar_f32.len());
-    let left = crate::simd::peak_f32(&audio.pcm_planar_f32[..plane]);
-    let right = if channels > 1 {
-        let start = plane.min(audio.pcm_planar_f32.len());
-        let end = (start + plane).min(audio.pcm_planar_f32.len());
-        crate::simd::peak_f32(&audio.pcm_planar_f32[start..end])
-    } else {
-        left
-    };
-    (left.min(1.0), right.min(1.0))
 }
 
 fn slot_bytes(width: u32, height: u32, format: CpuFormat) -> usize {

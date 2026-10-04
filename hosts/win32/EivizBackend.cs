@@ -41,6 +41,16 @@ internal interface IEivizBackend
     bool VideoSeek(ulong inputId, long positionHns);
     bool Mutate(string json, ulong expectedRevision, out string error);
     bool UploadMedia(string path, string kind, string name, bool videoLoop, ulong expectedRevision, out string error);
+
+    /// Blocking network I/O must not run on the UI thread; implementations that talk to a remote
+    /// mixer override this to move the transfer to the thread pool.
+    async Task<(bool Ok, string Error)> UploadMediaAsync(
+        string path, string kind, string name, bool videoLoop, ulong expectedRevision)
+    {
+        var ok = UploadMedia(path, kind, name, videoLoop, expectedRevision, out var error);
+        return (ok, error);
+    }
+
     string Discover(string kind, string query);
     bool TryGetMix(ulong unitId, out float mix);
     void BusSources(ulong unitId, out ulong previewGpuId, out ulong programGpuId);
@@ -511,9 +521,11 @@ internal sealed class RemoteEivizBackend : IEivizBackend
     public string RemoteVideoWarn => _presenter.VideoWarn;
     public event Action? Changed;
 
-    public static RemoteEivizBackend Open(string url, string token)
+    /// The connect handshake can block for several seconds, so it runs on the thread pool. The
+    /// backend itself is built and pulled on the caller's (UI) thread after the await.
+    public static async Task<RemoteEivizBackend> OpenAsync(string url, string token)
     {
-        var handle = MixerRemote.Open(url, token ?? "");
+        var handle = await Task.Run(() => MixerRemote.Open(url, token ?? ""));
         if (handle <= 0)
             throw new InvalidOperationException(I18n.Loc.T("msg.remoteConnectFailed"));
         var backend = new RemoteEivizBackend(handle);
@@ -677,6 +689,17 @@ internal sealed class RemoteEivizBackend : IEivizBackend
         }
         error = I18n.Loc.T("msg.uploadFailed");
         return false;
+    }
+
+    public async Task<(bool Ok, string Error)> UploadMediaAsync(
+        string path, string kind, string name, bool videoLoop, ulong expectedRevision)
+    {
+        var code = await Task.Run(() =>
+            MixerRemote.Upload(_handle, path, kind, name, videoLoop ? 1u : 0u, expectedRevision));
+        if (code != 0)
+            return (false, I18n.Loc.T("msg.uploadFailed"));
+        Pull(force: true);
+        return (true, "");
     }
 
     public string Discover(string kind, string query) =>

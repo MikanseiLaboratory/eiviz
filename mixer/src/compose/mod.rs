@@ -5,7 +5,7 @@ use crate::abi::{
     GEN_BARS, GEN_SOLID, LABEL_BASE, OUTPUT_PREVIEW, OverlayDesc, Rect, SRC_BARS, SRC_BLACK,
     SRC_BLUE, SRC_COLOR, SourceUsage, TRANSITION_BLOOM, TRANSITION_CUSTOM, TRANSITION_DATAMOSH,
     TRANSITION_FILM_BURN, TRANSITION_OPTICAL_FLOW, TRANSITION_PIXEL_SORT, TRANSITION_STINGER,
-    UnitState, is_multiview, is_scene, mixing_unit_bus, mixing_unit_from_source,
+    UnitState, is_composed_surface, is_multiview, mixing_unit_bus, mixing_unit_from_source,
     mixing_unit_preview, mixing_unit_source,
 };
 use crate::device::GpuDevice;
@@ -59,20 +59,35 @@ fn generator_needs_draw_update(spec: &Generator, last: Option<&Generator>, size_
 
 const FULL_UV: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
+fn validate_wgsl_module(source: &str) -> Result<(), String> {
+    let module = naga::front::wgsl::parse_str(source).map_err(|error| error.to_string())?;
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::default(),
+    )
+    .validate(&module)
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 fn crop_uv(crop: Rect) -> [f32; 4] {
     const MIN: f32 = 0.001;
-    if crop.width <= 0.0 || crop.height <= 0.0 {
-        FULL_UV
-    } else {
-        let x = crop.x.clamp(0.0, 1.0 - MIN);
-        let y = crop.y.clamp(0.0, 1.0 - MIN);
-        [
-            x,
-            y,
-            crop.width.clamp(MIN, 1.0 - x),
-            crop.height.clamp(MIN, 1.0 - y),
-        ]
+    let finite = crop.x.is_finite()
+        && crop.y.is_finite()
+        && crop.width.is_finite()
+        && crop.height.is_finite();
+    if !finite || crop.width <= 0.0 || crop.height <= 0.0 {
+        return FULL_UV;
     }
+    // `f32::clamp` panics when min > max, which `1.0 - x` can produce next to MIN.
+    let x = crop.x.max(0.0).min(1.0 - 2.0 * MIN);
+    let y = crop.y.max(0.0).min(1.0 - 2.0 * MIN);
+    [
+        x,
+        y,
+        crop.width.max(MIN).min((1.0 - x).max(MIN)),
+        crop.height.max(MIN).min((1.0 - y).max(MIN)),
+    ]
 }
 
 fn crop_blit(rect: [f32; 4], crop: Rect) -> ([f32; 4], [f32; 4]) {
@@ -116,6 +131,19 @@ struct MixParams {
     resolution: [f32; 2],
 }
 
+struct LabelTexture {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    last_used: u64,
+}
+
+/// Rasterized labels kept before the least recently used ones are dropped.
+const LABEL_CACHE_MAX: usize = 256;
+
+fn is_builtin_source(id: u64) -> bool {
+    matches!(id, SRC_COLOR | SRC_BLACK | SRC_BLUE | SRC_BARS)
+}
+
 struct SourceGpu {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
@@ -126,6 +154,8 @@ struct SourceGpu {
     uploaded_pts: i64,
     direct: bool,
     owned: bool,
+    /// Keeps the ingest ring slot behind `texture` reserved while this source samples it.
+    lease: Option<crate::upload::FrameLease>,
 }
 
 mod cache;
@@ -156,7 +186,6 @@ pub struct Composer {
     scenes: HashMap<u64, SceneGpu>,
     generators: HashMap<u64, Generator>,
     generator_bake: HashMap<u64, Generator>,
-    input_packed: HashMap<u64, wgpu::Texture>,
     output_scaled: HashMap<u64, wgpu::Texture>,
     output_packed: HashMap<u64, wgpu::Texture>,
     scroll_phase: f32,
@@ -166,13 +195,15 @@ pub struct Composer {
     preview_rgb: [u8; 3],
     program_rgb: [u8; 3],
     inactive_rgb: [u8; 3],
-    label_cache: HashMap<LabelTexKey, (wgpu::Texture, wgpu::TextureView)>,
+    label_cache: HashMap<LabelTexKey, LabelTexture>,
+    frame: u64,
     pool: UniformPool,
     blit_groups: HashMap<u64, wgpu::BindGroup>,
     uyvy_groups: HashMap<u64, wgpu::BindGroup>,
     mix_groups: HashMap<u64, wgpu::BindGroup>,
     custom_mix: HashMap<u64, wgpu::RenderPipeline>,
     custom_mix_src: HashMap<u64, String>,
+    custom_mix_failed: HashMap<u64, String>,
     custom_compute: HashMap<u64, wgpu::ComputePipeline>,
     sort_cs: wgpu::ComputePipeline,
     flow_cs: wgpu::ComputePipeline,
@@ -395,7 +426,6 @@ impl Composer {
             scenes: HashMap::new(),
             generators: HashMap::new(),
             generator_bake: HashMap::new(),
-            input_packed: HashMap::new(),
             output_scaled: HashMap::new(),
             output_packed: HashMap::new(),
             scroll_phase: 0.0,
@@ -406,12 +436,14 @@ impl Composer {
             program_rgb: [255, 0, 0],
             inactive_rgb: [64, 64, 64],
             label_cache: HashMap::new(),
+            frame: 0,
             pool,
             blit_groups: HashMap::new(),
             uyvy_groups: HashMap::new(),
             mix_groups: HashMap::new(),
             custom_mix: HashMap::new(),
             custom_mix_src: HashMap::new(),
+            custom_mix_failed: HashMap::new(),
             custom_compute: HashMap::new(),
             sort_cs,
             flow_cs,
@@ -431,8 +463,91 @@ impl Composer {
         })
     }
 
+    fn push_uniform<T: bytemuck::Pod>(&mut self, device: &GpuDevice, value: &T) -> u32 {
+        if self.pool.is_full() && self.pool.can_grow() {
+            self.grow_uniform_pool(device);
+        }
+        self.pool.push(&device.queue, value)
+    }
+
+    fn grow_uniform_pool(&mut self, device: &GpuDevice) {
+        self.pool.grow(device);
+        self.blit_groups.clear();
+        self.uyvy_groups.clear();
+        self.mix_groups.clear();
+        self.pack_groups.clear();
+        self.color_group = device.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("color pool"),
+            layout: &self.color.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.pool.slot_binding(),
+            }],
+        });
+        self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
+    }
+
+    /// Drops GPU state for sources, units and outputs that no longer exist.
+    pub fn retain_live(
+        &mut self,
+        sources: &HashSet<u64>,
+        units: &HashSet<u64>,
+        outputs: &HashSet<u64>,
+    ) {
+        let generators = &self.generators;
+        let stale_sources: Vec<u64> = self
+            .sources
+            .keys()
+            .copied()
+            .filter(|id| {
+                !sources.contains(id) && !is_builtin_source(*id) && !generators.contains_key(id)
+            })
+            .collect();
+        for id in stale_sources {
+            self.sources.remove(&id);
+            self.blit_groups.remove(&id);
+            self.uyvy_groups.remove(&id);
+            self.pack_groups.remove(&(0x4000_0000_0000_0000 | id));
+            self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
+        }
+        let stale_units: Vec<u64> = self
+            .units
+            .keys()
+            .copied()
+            .filter(|id| !units.contains(id))
+            .collect();
+        for id in stale_units {
+            self.units.remove(&id);
+            self.mix_groups.remove(&id);
+            self.pack_groups.remove(&id);
+            self.pack_groups.remove(&mixing_unit_preview(id));
+            self.blit_groups.remove(&mixing_unit_source(id));
+            self.blit_groups.remove(&mixing_unit_preview(id));
+            self.custom_mix.remove(&id);
+            self.custom_mix_src.remove(&id);
+            self.custom_mix_failed.remove(&id);
+            self.custom_compute.remove(&id);
+            self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
+        }
+        let stale_outputs: Vec<u64> = self
+            .output_scaled
+            .keys()
+            .chain(self.output_packed.keys())
+            .copied()
+            .filter(|id| !outputs.contains(id))
+            .collect();
+        for id in stale_outputs {
+            self.output_scaled.remove(&id);
+            self.output_packed.remove(&id);
+            self.blit_groups.remove(&(0x5100_0000_0000_0000 | id));
+            self.uyvy_groups.remove(&(0x5100_0000_0000_0000 | id));
+            self.pack_groups.remove(&(0x5200_0000_0000_0000 | id));
+        }
+    }
+
     pub fn begin_frame(&mut self, dt: f32) {
         self.pool.reset();
+        self.frame = self.frame.wrapping_add(1);
         self.mix_time += dt;
     }
 
@@ -538,7 +653,8 @@ impl Composer {
         snaps: &[CpuFrameSnap],
         use_rebar: bool,
         direct_sample: bool,
-    ) {
+    ) -> Option<String> {
+        let mut first_error = None;
         let needed: HashSet<u64> = snaps.iter().map(|snap| snap.id).collect();
         if let Some(uploader) = self.uploader.as_mut() {
             uploader.retain_direct(&needed, direct_sample);
@@ -578,6 +694,7 @@ impl Composer {
                         uploaded_pts: frame.pts,
                         direct: false,
                         owned: false,
+                        lease: frame.lease.clone(),
                     },
                 );
                 continue;
@@ -592,6 +709,7 @@ impl Composer {
                     || gpu.packed != packed
                     || gpu.bgra != bgra
                     || gpu.direct != direct_sample
+                    || !gpu.owned
             });
             if !needs_new
                 && self
@@ -639,6 +757,7 @@ impl Composer {
                                 uploaded_pts: snap.last_pts,
                                 direct: true,
                                 owned: true,
+                                lease: None,
                             },
                         );
                         continue;
@@ -673,6 +792,7 @@ impl Composer {
                         uploaded_pts: i64::MIN,
                         direct: false,
                         owned: true,
+                        lease: None,
                     },
                 );
             }
@@ -682,7 +802,7 @@ impl Composer {
                 .expect("source inserted")
                 .texture
                 .clone();
-            write_aligned_texture(
+            let written = write_aligned_texture(
                 device,
                 &texture,
                 pixels,
@@ -696,13 +816,21 @@ impl Composer {
                 format,
                 self.uploader.as_mut().filter(|_| use_rebar),
             );
-            if let Some(gpu) = self.sources.get_mut(&id) {
-                gpu.uploaded_pts = snap.last_pts;
+            match written {
+                Ok(()) => {
+                    if let Some(gpu) = self.sources.get_mut(&id) {
+                        gpu.uploaded_pts = snap.last_pts;
+                    }
+                }
+                Err(error) => {
+                    first_error.get_or_insert(format!("source {id} upload: {error}"));
+                }
             }
         }
         if let Some(uploader) = self.uploader.as_mut() {
             uploader.flush(device);
         }
+        first_error
     }
 
     pub fn set_bus_colors(&mut self, preview: [u8; 3], program: [u8; 3], inactive: [u8; 3]) {
@@ -717,7 +845,32 @@ impl Composer {
         self.inactive_rgb = inactive;
         self.tally_red = None;
         self.tally_green = None;
+        self.blit_groups.remove(&KEY_TALLY_RED);
+        self.blit_groups.remove(&KEY_TALLY_GREEN);
         self.clear_labels();
+    }
+
+    fn evict_labels(&mut self) {
+        if self.label_cache.len() < LABEL_CACHE_MAX {
+            return;
+        }
+        let mut ages: Vec<u64> = self
+            .label_cache
+            .values()
+            .map(|entry| entry.last_used)
+            .collect();
+        ages.sort_unstable();
+        let cutoff = ages[ages.len() / 4];
+        let stale: Vec<LabelTexKey> = self
+            .label_cache
+            .iter()
+            .filter(|(_, entry)| entry.last_used <= cutoff)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in stale {
+            self.blit_groups.remove(&label_cache_key(&key));
+            self.label_cache.remove(&key);
+        }
     }
 
     fn clear_labels(&mut self) {
@@ -842,7 +995,7 @@ impl Composer {
         }
         if let Some(scene) = self.scenes.get(&id) {
             for layer in scene.layers.iter() {
-                if is_scene(layer.source_id) {
+                if is_composed_surface(layer.source_id) {
                     self.visit_scene(layer.source_id, used, visited, order);
                 }
             }
@@ -948,9 +1101,11 @@ impl Composer {
             );
             let text = labels.get(index).map(String::as_str).unwrap_or("");
             let tile_h = layer.rect.height * canvas_h.max(1) as f32;
-            let dest_w = (layer.rect.width * canvas_w.max(1) as f32).round().max(1.0) as u32;
+            let dest_w = (layer.rect.width * canvas_w.max(1) as f32)
+                .round()
+                .clamp(1.0, canvas_w.max(1) as f32) as u32;
             let font_px = crate::labels::font_px(label_size, label_percent, tile_h);
-            let dest_h = crate::labels::band_height(font_px);
+            let dest_h = crate::labels::band_height(font_px).clamp(1, canvas_h.max(1));
             let Some(view) = self.ensure_label_texture(device, text, rgb, font_px, dest_w, dest_h)
             else {
                 continue;
@@ -977,9 +1132,12 @@ impl Composer {
         dest_h: u32,
     ) -> Option<wgpu::TextureView> {
         let key = LabelTexKey::new(text, rgb, font_px, dest_w);
-        if let Some((_, view)) = self.label_cache.get(&key) {
-            return Some(view.clone());
+        let frame = self.frame;
+        if let Some(entry) = self.label_cache.get_mut(&key) {
+            entry.last_used = frame;
+            return Some(entry.view.clone());
         }
+        self.evict_labels();
         let raster = crate::labels::raster(text, rgb, font_px, dest_w, dest_h);
         let texture = make_texture(
             device,
@@ -995,11 +1153,19 @@ impl Composer {
             raster.height,
             raster.width,
             wgpu::TextureFormat::Rgba8Unorm,
-            self.uploader.as_mut(),
-        );
+            None,
+        )
+        .ok()?;
         let view = texture.create_view(&Default::default());
         self.blit_groups.remove(&label_cache_key(&key));
-        self.label_cache.insert(key, (texture, view.clone()));
+        self.label_cache.insert(
+            key,
+            LabelTexture {
+                texture,
+                view: view.clone(),
+                last_used: frame,
+            },
+        );
         Some(view)
     }
 
@@ -1104,11 +1270,40 @@ impl Composer {
             self.custom_mix.remove(&unit_id);
             self.custom_mix_src.remove(&unit_id);
             self.custom_compute.remove(&unit_id);
+            self.custom_mix_failed.remove(&unit_id);
             return Ok(());
         }
         if self.custom_mix_src.get(&unit_id).map(String::as_str) == Some(trimmed) {
             return Ok(());
         }
+        // A rejected source is reported once, not on every frame.
+        if self.custom_mix_failed.get(&unit_id).map(String::as_str) == Some(trimmed) {
+            return Ok(());
+        }
+        match self.build_custom_mix(device, user_wgsl) {
+            Ok((pipeline, compute)) => {
+                match compute {
+                    Some(compute) => self.custom_compute.insert(unit_id, compute),
+                    None => self.custom_compute.remove(&unit_id),
+                };
+                self.custom_mix_src.insert(unit_id, trimmed.to_string());
+                self.custom_mix.insert(unit_id, pipeline);
+                self.custom_mix_failed.remove(&unit_id);
+                Ok(())
+            }
+            Err(error) => {
+                self.custom_mix_failed.insert(unit_id, trimmed.to_string());
+                Err(error)
+            }
+        }
+    }
+
+    fn build_custom_mix(
+        &self,
+        device: &GpuDevice,
+        user_wgsl: &str,
+    ) -> Result<(wgpu::RenderPipeline, Option<wgpu::ComputePipeline>), String> {
+        Self::validate_custom_wgsl(user_wgsl)?;
         let source = custom_mix_source(user_wgsl);
         let pipeline = pipeline(
             device,
@@ -1118,25 +1313,19 @@ impl Composer {
             wgpu::TextureFormat::Rgba8Unorm,
             false,
         )?;
-        if trimmed.contains("fn user_compute") {
-            let cs = custom_compute_source(user_wgsl);
-            self.custom_compute.insert(
-                unit_id,
-                compute_pipeline(
-                    device,
-                    "mix-custom-cs",
-                    &cs,
-                    &self.user_cs_layout,
-                    "cs_user",
-                    true,
-                )?,
-            );
+        let compute = if user_wgsl.contains("fn user_compute") {
+            Some(compute_pipeline(
+                device,
+                "mix-custom-cs",
+                &custom_compute_source(user_wgsl),
+                &self.user_cs_layout,
+                "cs_user",
+                true,
+            )?)
         } else {
-            self.custom_compute.remove(&unit_id);
-        }
-        self.custom_mix_src.insert(unit_id, trimmed.to_string());
-        self.custom_mix.insert(unit_id, pipeline);
-        Ok(())
+            None
+        };
+        Ok((pipeline, compute))
     }
 
     pub fn validate_custom_wgsl(user_wgsl: &str) -> Result<(), String> {
@@ -1147,11 +1336,9 @@ impl Composer {
         if !trimmed.contains("fn user_transition") {
             return Err("Define fn user_transition(uv: vec2<f32>, t: f32) -> vec4<f32>".into());
         }
-        let source = custom_mix_source(user_wgsl);
-        naga::front::wgsl::parse_str(&source).map_err(|error| error.to_string())?;
+        validate_wgsl_module(&custom_mix_source(user_wgsl))?;
         if trimmed.contains("fn user_compute") {
-            naga::front::wgsl::parse_str(&custom_compute_source(user_wgsl))
-                .map_err(|error| error.to_string())?;
+            validate_wgsl_module(&custom_compute_source(user_wgsl))?;
         }
         Ok(())
     }
@@ -1429,13 +1616,13 @@ impl Composer {
                 }
                 let mut params = Self::mix_params(state, self.mix_time, width, height, None);
                 params.mix = amount;
-                let offset = self.pool.push(&device.queue, &params);
+                let offset = self.push_uniform(device, &params);
                 self.dispatch_fx1(device, encoder, program, unit_id, offset, segments, lines);
             }
         }
         if need_flow {
-            let offset = self.pool.push(
-                &device.queue,
+            let offset = self.push_uniform(
+                device,
                 &Self::mix_params(state, self.mix_time, half_w, half_h, None),
             );
             self.dispatch_fx2(
@@ -1449,8 +1636,8 @@ impl Composer {
             );
         }
         if need_mosh {
-            let offset = self.pool.push(
-                &device.queue,
+            let offset = self.push_uniform(
+                device,
                 &Self::mix_params(state, self.mix_time, width, height, None),
             );
             let blocks_w = (width as u32).div_ceil(MOSH_BLOCK) as f32;
@@ -1466,8 +1653,8 @@ impl Composer {
             );
         }
         if need_bloom {
-            let extract = self.pool.push(
-                &device.queue,
+            let extract = self.push_uniform(
+                device,
                 &Self::mix_params(state, self.mix_time, half_w, half_h, None),
             );
             self.dispatch_fx2(
@@ -1479,20 +1666,20 @@ impl Composer {
                 half_w,
                 half_h,
             );
-            let blur_h = self.pool.push(
-                &device.queue,
+            let blur_h = self.push_uniform(
+                device,
                 &Self::mix_params(state, self.mix_time, half_w, half_h, Some(0)),
             );
             self.dispatch_bloom_blur(device, encoder, unit_id, true, blur_h, half_w, half_h);
-            let blur_v = self.pool.push(
-                &device.queue,
+            let blur_v = self.push_uniform(
+                device,
                 &Self::mix_params(state, self.mix_time, half_w, half_h, Some(1)),
             );
             self.dispatch_bloom_blur(device, encoder, unit_id, false, blur_v, half_w, half_h);
         }
         if need_user {
-            let offset = self.pool.push(
-                &device.queue,
+            let offset = self.push_uniform(
+                device,
                 &Self::mix_params(state, self.mix_time, width, height, None),
             );
             self.dispatch_user_compute(device, encoder, unit_id, offset, width, height);
@@ -1729,8 +1916,8 @@ impl Composer {
             .map(|unit| (unit.width as f32, unit.height as f32))
             .unwrap_or((1920.0, 1080.0));
         self.prepare_mix_fx(device, encoder, unit_id, state, width, height)?;
-        let offset = self.pool.push(
-            &device.queue,
+        let offset = self.push_uniform(
+            device,
             &MixParams {
                 mix: state.mix,
                 kind: if state.transition_kind == TRANSITION_STINGER {
@@ -1810,7 +1997,7 @@ impl Composer {
             self.blit_uv(device, pass, source_id, &view, dst, crop, opacity, false);
             return Ok(());
         }
-        if is_scene(source_id) {
+        if is_composed_surface(source_id) {
             if let Some(view) = self.scenes.get(&source_id).map(|scene| scene.view.clone()) {
                 self.blit_uv(device, pass, source_id, &view, dst, crop, opacity, false);
                 return Ok(());
@@ -1921,8 +2108,8 @@ impl Composer {
         opacity: f32,
         uyvy: bool,
     ) {
-        let offset = self.pool.push(
-            &device.queue,
+        let offset = self.push_uniform(
+            device,
             &BlitParams {
                 dst,
                 src: uv,
@@ -2074,8 +2261,8 @@ impl Composer {
         bars: bool,
         scroll: bool,
     ) {
-        let offset = self.pool.push(
-            &device.queue,
+        let offset = self.push_uniform(
+            device,
             &ColorParams {
                 color,
                 scroll: if scroll { self.scroll_phase } else { 0.0 },
@@ -2127,6 +2314,7 @@ impl Composer {
                     uploaded_pts: i64::MIN,
                     direct: false,
                     owned: true,
+                    lease: None,
                 },
             );
         }
@@ -2173,6 +2361,7 @@ impl Composer {
                         uploaded_pts: i64::MIN,
                         direct: false,
                         owned: true,
+                        lease: None,
                     },
                 );
                 self.blit_groups.remove(&id);
@@ -2382,16 +2571,13 @@ impl Composer {
         for texture in self.mix_textures.values() {
             total += texture_bytes(texture);
         }
-        for texture in self.input_packed.values() {
-            total += texture_bytes(texture);
-        }
         for texture in self.output_scaled.values() {
             total += texture_bytes(texture);
         }
         for texture in self.output_packed.values() {
             total += texture_bytes(texture);
         }
-        for (texture, _) in self.label_cache.values() {
+        for LabelTexture { texture, .. } in self.label_cache.values() {
             total += texture_bytes(texture);
         }
         if let Some((texture, _)) = &self.tally_red {
@@ -2457,7 +2643,7 @@ impl Composer {
     ) -> Option<&wgpu::Texture> {
         let width = width.max(2);
         let height = height.max(1);
-        if src.size().width == width && src.size().height == height {
+        if !packed_src && src.size().width == width && src.size().height == height {
             return None;
         }
         let key = 0x5100_0000_0000_0000 | output_id;
@@ -2548,84 +2734,6 @@ impl Composer {
         self.output_packed.get(&output_id)
     }
 
-    pub fn pack_source(
-        &mut self,
-        device: &GpuDevice,
-        encoder: &mut wgpu::CommandEncoder,
-        source_id: u64,
-        width: u32,
-        height: u32,
-    ) -> Option<&wgpu::Texture> {
-        let view = self.view_for_source(source_id)?;
-        let packed_w = (width / 2).max(1);
-        let packed_h = height.max(1);
-        let reuse = self
-            .input_packed
-            .get(&source_id)
-            .is_some_and(|tex| tex.size().width == packed_w && tex.size().height == packed_h);
-        if !reuse {
-            let packed = make_texture(
-                device,
-                packed_w,
-                packed_h,
-                wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-            );
-            self.input_packed.insert(source_id, packed);
-            self.pack_groups
-                .remove(&(0x4000_0000_0000_0000 | source_id));
-        }
-        let dest = self
-            .input_packed
-            .get(&source_id)?
-            .create_view(&Default::default());
-        self.pack_to(
-            device,
-            encoder,
-            0x4000_0000_0000_0000 | source_id,
-            &view,
-            &dest,
-        );
-        self.input_packed.get(&source_id)
-    }
-
-    pub fn pack_scene(
-        &mut self,
-        device: &GpuDevice,
-        encoder: &mut wgpu::CommandEncoder,
-        scene_id: u64,
-    ) -> Option<&wgpu::Texture> {
-        self.ensure_scene_packed(device, scene_id);
-        let (src, dest) = {
-            let scene = self.scenes.get(&scene_id)?;
-            (scene.view.clone(), scene.packed_view.clone()?)
-        };
-        self.pack_to(device, encoder, scene_id, &src, &dest);
-        self.scenes
-            .get(&scene_id)
-            .and_then(|scene| scene.packed.as_ref())
-    }
-
-    fn ensure_scene_packed(&mut self, device: &GpuDevice, scene_id: u64) {
-        let Some(scene) = self.scenes.get_mut(&scene_id) else {
-            return;
-        };
-        if scene.packed.is_some() {
-            return;
-        }
-        let packed = make_texture(
-            device,
-            scene.width / 2,
-            scene.height,
-            wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
-        );
-        scene.packed_view = Some(packed.create_view(&Default::default()));
-        scene.packed = Some(packed);
-    }
-
     fn pack_to(
         &mut self,
         device: &GpuDevice,
@@ -2668,8 +2776,48 @@ impl Composer {
 
 #[cfg(test)]
 mod tests {
-    use super::{FULL_UV, crop_blit};
+    use super::{FULL_UV, crop_blit, crop_uv, validate_wgsl_module};
     use crate::abi::Rect;
+
+    #[test]
+    fn crop_uv_never_panics_on_extreme_input() {
+        let values = [
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            -1.0,
+            0.0,
+            0.0005,
+            0.999,
+            1.0,
+            2.0,
+            1.0e30,
+        ];
+        for &x in &values {
+            for &w in &values {
+                let uv = crop_uv(Rect {
+                    x,
+                    y: x,
+                    width: w,
+                    height: w,
+                });
+                assert!(uv.iter().all(|v| v.is_finite()));
+                assert!(uv[0] + uv[2] <= 1.0 + 1e-3);
+                assert!(uv[2] > 0.0 && uv[3] > 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn wgsl_validation_rejects_broken_source() {
+        assert!(validate_wgsl_module("fn main( {").is_err());
+        assert!(
+            validate_wgsl_module(
+                "@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }"
+            )
+            .is_ok()
+        );
+    }
 
     #[test]
     fn full_crop_keeps_dest_and_uv() {

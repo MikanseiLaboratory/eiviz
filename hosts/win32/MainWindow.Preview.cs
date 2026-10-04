@@ -55,7 +55,7 @@ public partial class MainWindow
                 foreach (var url in remotes)
                 {
                     var item = new MenuItem { Header = RemoteEndpoint.Display(url), Tag = url };
-                    item.Click += (_, _) => ConnectTo(url, CredentialStore.Load(url));
+                    item.Click += (_, _) => _ = ConnectTo(url, CredentialStore.Load(url));
                     menu.Items.Add(item);
                 }
             }

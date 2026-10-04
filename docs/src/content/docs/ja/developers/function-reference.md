@@ -5,29 +5,31 @@ description: eivizの関数リファレンス
 
 ## vMix互換API
 
-vMix互換HTTP API（`GET /api?Function=...`）と、同じShortcutを載せるTCP API（ポート`8099`、`FUNCTION Cut Input=3`）で使えるShortcutです。`Input`はSceneのフラット番号、名前、GUIDのいずれかです。  
-Cut/Fadeなど`Input`とMixing Unitが関連する一部のAPI操作では`Input`クエリにSceneのみ指定可能となり、Inputが指定された場合はエラーを返します。  
-Inputの値は`0`で現在のPreview、`-1`で現在のProgramを指定可能です。`Mix`を省略するか`0`にすると選択中のMixing Unit、`1`以降はMixing Unitの番号と紐づきます。
+vMix互換HTTP APIおよびTCP APIで使用できる主なFunction（Shortcut）の一覧です。
 
-保存パス`Value`の拡張子が`.jpg`/`.jpeg`ならJPEG、それ以外（省略時を含む）はPNGです。省略時はPictures（無ければ一時ディレクトリ）へ日時付きファイルを書きます。
+- `Input`: Scene番号、名前、またはGUIDを指定します。CutやFadeなどMixing Unitを伴う操作ではSceneのみ指定可能です。`0`で現在のPreview、`-1`で現在のProgramを指定できます。
+- `Mix`: 操作対象のMixing Unit番号を指定します（省略時または`0`は選択中のユニット）。
+- `Value`: 保存先ファイルパスを指定します（拡張子が`.jpg`/`.jpeg`ならJPEG、それ以外はPNG）。省略時はピクチャフォルダまたは一時ディレクトリに日時付きで保存されます。
 
 | Function | 引数 | 動作 |
 | --- | --- | --- |
-| `Cut` | `Input`, `Mix` | PreviewをProgramへ切る。`Input`があればそのSceneをProgramへ直載せし、Previewは変えない |
-| `CutDirect` | `Input`（必須）, `Mix` | 指定InputをProgramへ直載せする。Previewは変えない |
-| `Fade` | `Input`, `Mix`, `Duration` | Cutと同じ対象選択のあとFadeする。`Input`があればPreviewは変えずProgramへFadeする。`Duration`はミリ秒。省略時は当該Mixing UnitのFadeプリセット、無ければ1000 |
-| `PreviewInput` | `Input`（必須）, `Mix` | Previewを指定Inputにする。 |
-| `ActiveInput` | `Input`（必須）, `Mix` | Programを指定Inputにする。 |
-| `Snapshot` | `Value`, `Mix` | 指定Mixing UnitのProgramをスクリーンショットで保存する。 |
-| `SnapshotInput` | `Input`（必須）, `Value`, `Mix` | 指定Inputのスクリーンショットを保存する。 |
+| `Cut` | `Input`, `Mix` | PreviewとProgramをCutで切り替えます。`Input`指定時は該当Sceneを直接Programへ送り、Previewは維持します。 |
+| `CutDirect` | `Input`（必須）, `Mix` | 指定したInputを直接Programへ送ります（Previewは維持）。 |
+| `Fade` | `Input`, `Mix`, `Duration` | Fadeトランジションを実行します。`Duration`はミリ秒単位（省略時は該当ユニットのプリセット値、未設定時は1000ms）。 |
+| `PreviewInput` | `Input`（必須）, `Mix` | 指定したInputをPreviewに設定します。 |
+| `ActiveInput` | `Input`（必須）, `Mix` | 指定したInputをProgramに設定します。 |
+| `Snapshot` | `Value`, `Mix` | 指定Mixing UnitのProgram映像をスクリーンショットとして保存します。 |
+| `SnapshotInput` | `Input`（必須）, `Value`, `Mix` | 指定したInputの映像をスクリーンショットとして保存します。 |
 
-例:
+### 実行例
 
-- `http://127.0.0.1:8088/api?Function=Fade&Duration=500`
-- `http://127.0.0.1:8088/api?Function=Cut&Input=3`
-- `http://127.0.0.1:8088/api?Function=CutDirect&Input=3`
-- `http://127.0.0.1:8088/api?Function=Snapshot&Mix=1&Value=C:/Temp/eiviz.png`
-- `http://127.0.0.1:8088/api?Function=SnapshotInput&Input=3&Value=C:/Temp/scene.jpg`
-- TCP: `FUNCTION Fade Duration=500`
-- TCP: `FUNCTION Cut Input=3`
+```text
+# HTTP API
+http://127.0.0.1:8088/api?Function=Fade&Duration=500
+http://127.0.0.1:8088/api?Function=Cut&Input=3
+http://127.0.0.1:8088/api?Function=Snapshot&Mix=1&Value=C:/Temp/eiviz.png
 
+# TCP API
+FUNCTION Fade Duration=500
+FUNCTION Cut Input=3
+```

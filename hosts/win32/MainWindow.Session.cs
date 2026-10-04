@@ -18,8 +18,12 @@ namespace Eiviz.Host;
 
 public partial class MainWindow
 {
-    private void AddInput_Click(object sender, RoutedEventArgs e)
+    private bool _uploadingMedia;
+
+    private async void AddInput_Click(object sender, RoutedEventArgs e)
     {
+        if (_uploadingMedia)
+            return;
         var dialog = new AddInputWindow { Owner = this };
         dialog.BindTags(_session);
         if (dialog.ShowDialog() != true)
@@ -38,15 +42,27 @@ public partial class MainWindow
         {
             if (App.IsRemote && dialog.Kind is InputKind.Still or InputKind.Video)
             {
-                if (!((App)Application.Current).Backend.UploadMedia(
-                    dialog.ResultPath!,
-                    dialog.Kind == InputKind.Still ? "still" : "video",
-                    dialog.ResultName ?? "",
-                    dialog.ResultVideoLoop,
-                    ((App)Application.Current).Backend.Revision,
-                    out var error))
+                var backend = ((App)Application.Current).Backend;
+                _uploadingMedia = true;
+                (bool Ok, string Error) upload;
+                try
                 {
-                    MessageBox.Show(this, error, Loc.T("msg.addInput"));
+                    Mouse.OverrideCursor = Cursors.Wait;
+                    upload = await backend.UploadMediaAsync(
+                        dialog.ResultPath!,
+                        dialog.Kind == InputKind.Still ? "still" : "video",
+                        dialog.ResultName ?? "",
+                        dialog.ResultVideoLoop,
+                        backend.Revision);
+                }
+                finally
+                {
+                    Mouse.OverrideCursor = null;
+                    _uploadingMedia = false;
+                }
+                if (!upload.Ok)
+                {
+                    MessageBox.Show(this, upload.Error, Loc.T("msg.addInput"));
                     return;
                 }
                 RefreshInputList();

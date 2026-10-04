@@ -9,7 +9,6 @@ use eiviz_control::{Command, Incoming};
 
 use crate::abi::{
     ERR_BUFFER_TOO_SMALL, ERR_INVALID_ARGUMENT, GEN_BARS, GEN_SOLID, OK, OverlayDesc, Rect,
-    UnitState,
 };
 use crate::{
     mixer_api_configure, mixer_audio_bus_remove, mixer_audio_bus_upsert, mixer_audio_capture_start,
@@ -20,8 +19,7 @@ use crate::{
     mixer_omt_set_quality, mixer_output_add, mixer_output_remove, mixer_set_bus_colors,
     mixer_set_frame_buffer, mixer_set_live_save, mixer_set_master_fps, mixer_set_mv_label,
     mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_configure,
-    mixer_unit_get_state, mixer_video_seek, mixer_video_set_loop, mixer_video_set_playing,
-    mixer_video_start,
+    mixer_video_seek, mixer_video_set_loop, mixer_video_set_playing, mixer_video_start,
 };
 
 pub(crate) fn control() -> &'static Mutex<ControlService> {
@@ -431,17 +429,15 @@ impl MixerPort for ProcessMixer {
     }
 
     fn unit_set_preview(&mut self, unit_id: u64, scene_gpu_id: u64) -> ControlResult<()> {
-        let mut state = UnitState::default();
-        map_abi(unsafe { mixer_unit_get_state(unit_id, &mut state) })?;
-        state.preview_source = scene_gpu_id;
-        map_abi(crate::unit_set_state_inner(unit_id, &state))
+        map_abi(crate::unit_update_state_inner(unit_id, |state| {
+            state.preview_source = scene_gpu_id;
+        }))
     }
 
     fn unit_set_mix(&mut self, unit_id: u64, mix: f32) -> ControlResult<()> {
-        let mut state = UnitState::default();
-        map_abi(unsafe { mixer_unit_get_state(unit_id, &mut state) })?;
-        state.mix = mix;
-        map_abi(crate::unit_set_state_inner(unit_id, &state))
+        map_abi(crate::unit_update_state_inner(unit_id, |state| {
+            state.mix = mix;
+        }))
     }
 
     fn overlay_auto(&mut self, spec: OverlayAutoApply) -> ControlResult<()> {
@@ -475,11 +471,10 @@ impl MixerPort for ProcessMixer {
         preview: u64,
         _mix: f32,
     ) -> ControlResult<()> {
-        let mut state = UnitState::default();
-        map_abi(unsafe { mixer_unit_get_state(unit_id, &mut state) })?;
-        state.program_source = program;
-        state.preview_source = preview;
-        map_abi(crate::unit_set_state_inner(unit_id, &state))
+        map_abi(crate::unit_update_state_inner(unit_id, |state| {
+            state.program_source = program;
+            state.preview_source = preview;
+        }))
     }
 
     fn unit_live(&self, unit_id: u64) -> ControlResult<UnitLiveState> {

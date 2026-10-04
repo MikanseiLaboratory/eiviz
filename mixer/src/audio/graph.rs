@@ -1,13 +1,14 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use crate::abi::{MixInputSpec, OverlayDesc, UnitState, is_scene, mixing_unit_from_source};
-use crate::upload::{AUDIO_FIFO_FRAMES, AUDIO_RATE, AudioInputStore, SampleRing};
+use crate::upload::{AUDIO_FIFO_FRAMES, AUDIO_RATE, AudioInputStore};
 
 use super::AUDIO_PRIME_FRAMES;
 use super::AudioDelay;
 use super::DeviceKey;
+use super::rt::SpscF32;
 
 pub const MASTER_BUS: u64 = 1;
 pub const HEADPHONE_BUS: u64 = 2;
@@ -57,59 +58,128 @@ pub const LINK_FOLLOW: u32 = 0;
 #[allow(dead_code)]
 pub const LINK_INDEPENDENT: u32 = 1;
 
+/// Mixer-thread to device-callback hand-off for one bus. Lock-free: the mixer thread is the
+/// only producer and the device callback the only consumer.
 pub struct BusRing {
-    pcm: Mutex<SampleRing>,
+    pcm: SpscF32,
     primed: AtomicBool,
-    last: Mutex<(f32, f32)>,
+    last: [AtomicU32; 2],
+    skip_request: AtomicUsize,
+    overruns: AtomicU64,
 }
 
 impl BusRing {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            pcm: Mutex::new(SampleRing::new(AUDIO_FIFO_FRAMES * 2)),
+            pcm: SpscF32::new(AUDIO_FIFO_FRAMES * 2),
             primed: AtomicBool::new(false),
-            last: Mutex::new((0.0, 0.0)),
+            last: [AtomicU32::new(0), AtomicU32::new(0)],
+            skip_request: AtomicUsize::new(0),
+            overruns: AtomicU64::new(0),
         })
     }
 
+    /// Drops queued audio and leaves the ring unprimed. A bus with no output device
+    /// calls this instead of [`Self::push`], so a device attached later does not play
+    /// the samples that piled up while nothing was listening.
+    pub fn release(&self) {
+        loop {
+            let queued = self.pcm.len();
+            if queued == 0 || self.pcm.discard(queued) == 0 {
+                break;
+            }
+        }
+        self.primed.store(false, Ordering::Relaxed);
+    }
+
+    /// Producer side. Samples that do not fit are dropped (counted in `overruns`).
     pub fn push(&self, interleaved: &[f32]) {
-        let mut pcm = self.pcm.lock().expect("bus ring");
-        pcm.extend(interleaved.iter().copied());
-        if pcm.len() >= AUDIO_PRIME_FRAMES * 2 {
+        let even = interleaved.len() & !1;
+        let stored = self.pcm.push_slice(&interleaved[..even]) & !1;
+        if stored < even {
+            let count = self.overruns.fetch_add(1, Ordering::Relaxed) + 1;
+            if count.is_power_of_two() {
+                crate::diag::warn(&format!(
+                    "audio bus ring overrun (consumer stalled), {count} dropped blocks so far"
+                ));
+            }
+        }
+        if self.pcm.len() >= AUDIO_PRIME_FRAMES * 2 {
             self.primed.store(true, Ordering::Relaxed);
         }
     }
 
+    /// Asks the consumer to drop the oldest `frames`; applied on its next pop.
     #[allow(dead_code)]
     pub fn skip_frames(&self, frames: usize) {
-        if frames == 0 {
-            return;
-        }
-        let mut pcm = self.pcm.lock().expect("bus ring");
-        let n = frames.saturating_mul(2).min(pcm.len());
-        if n > 0 {
-            pcm.drain_front(n);
+        if frames > 0 {
+            self.skip_request.fetch_add(frames, Ordering::Relaxed);
         }
     }
 
-    pub fn pop_interleaved(&self, frames: usize) -> Vec<f32> {
-        let mut out = Vec::with_capacity(frames * 2);
-        if !self.primed.load(Ordering::Relaxed) {
-            out.resize(frames * 2, 0.0);
-            return out;
-        }
-        let mut pcm = self.pcm.lock().expect("bus ring");
-        pcm.pop_into(frames * 2, &mut out);
-        let hold = *self.last.lock().expect("bus last");
-        while out.len() < frames * 2 {
-            out.push(hold.0);
-            out.push(hold.1);
-        }
-        if out.len() >= 2 {
-            *self.last.lock().expect("bus last") = (out[out.len() - 2], out[out.len() - 1]);
-        }
-        out
+    pub fn fill_frames(&self) -> usize {
+        self.pcm.len() / 2
     }
+
+    pub fn is_primed(&self) -> bool {
+        self.primed.load(Ordering::Relaxed)
+    }
+
+    /// Consumer side: drops queued audio beyond `keep_frames`, newest kept.
+    pub fn trim_to(&self, keep_frames: usize) {
+        let excess = self.fill_frames().saturating_sub(keep_frames);
+        if excess > 0 {
+            self.pcm.discard(excess * 2);
+        }
+    }
+
+    /// Consumer side. Fills `out` (interleaved stereo) without allocating. Before the ring
+    /// has primed it yields silence; if the ring runs dry it fades out and the ring re-primes.
+    pub fn pop_into(&self, out: &mut [f32]) {
+        let out_len = out.len() & !1;
+        let (out, _) = out.split_at_mut(out_len);
+        let skip = self.skip_request.swap(0, Ordering::Relaxed);
+        if skip > 0 {
+            self.pcm.discard(skip.saturating_mul(2));
+        }
+        if !self.primed.load(Ordering::Relaxed) {
+            out.fill(0.0);
+            return;
+        }
+        let got = self.pcm.pop_slice(out) & !1;
+        let last = if got >= 2 {
+            (out[got - 2], out[got - 1])
+        } else {
+            (
+                f32::from_bits(self.last[0].load(Ordering::Relaxed)),
+                f32::from_bits(self.last[1].load(Ordering::Relaxed)),
+            )
+        };
+        if got < out.len() {
+            // Ran dry: ramp down and wait for the ring to refill to the priming level so
+            // playback restarts from a safe cushion instead of stuttering.
+            crate::audio_in::fill_underrun(&mut out[got..], last);
+            self.primed.store(false, Ordering::Relaxed);
+            self.last[0].store(0, Ordering::Relaxed);
+            self.last[1].store(0, Ordering::Relaxed);
+        } else {
+            self.last[0].store(last.0.to_bits(), Ordering::Relaxed);
+            self.last[1].store(last.1.to_bits(), Ordering::Relaxed);
+        }
+    }
+}
+
+/// Same predicate as [`AudioGraph::device_groups`]: a bus is armed when a real
+/// output callback will pop its ring. Master WASAPI may use the default device
+/// (empty id). Other WASAPI buses need an explicit device id.
+fn bus_output_armed(bus: &AudioBus) -> bool {
+    if bus.device_kind == DEVICE_NONE {
+        return false;
+    }
+    if bus.role != ROLE_MASTER && bus.device_id.is_empty() && bus.device_kind == DEVICE_WASAPI {
+        return false;
+    }
+    true
 }
 
 pub struct AudioBus {
@@ -211,9 +281,14 @@ impl AudioGraph {
         } else if role == ROLE_HEADPHONE {
             1
         } else {
-            (2..32)
-                .find(|bit| self.buses.iter().all(|bus| bus.bit != *bit))
-                .unwrap_or(31)
+            // Input routing is a 32-bit mask; sharing a bit would silently feed two buses.
+            let Some(bit) = (2..32).find(|bit| self.buses.iter().all(|bus| bus.bit != *bit)) else {
+                crate::diag::error(&format!(
+                    "audio: bus '{name}' rejected, all 30 aux bus slots are in use"
+                ));
+                return;
+            };
+            bit
         };
         self.buses.push(AudioBus {
             id,
@@ -273,13 +348,7 @@ impl AudioGraph {
     pub fn device_groups(&self) -> Vec<(super::DeviceKey, Vec<(Arc<BusRing>, i32, i32)>)> {
         let mut groups: HashMap<DeviceKey, Vec<(Arc<BusRing>, i32, i32)>> = HashMap::new();
         for bus in &self.buses {
-            if bus.device_kind == DEVICE_NONE {
-                continue;
-            }
-            if bus.role != ROLE_MASTER
-                && bus.device_id.is_empty()
-                && bus.device_kind == DEVICE_WASAPI
-            {
+            if !bus_output_armed(bus) {
                 continue;
             }
             let key = DeviceKey {
@@ -385,14 +454,18 @@ impl AudioGraph {
             }
         }
         let mut by_bus = HashMap::new();
-        let bus_ids: Vec<(u64, u32, Arc<BusRing>)> = self
+        let bus_ids: Vec<(u64, bool, Arc<BusRing>)> = self
             .buses
             .iter()
-            .map(|bus| (bus.id, bus.role, Arc::clone(&bus.ring)))
+            .map(|bus| (bus.id, bus_output_armed(bus), Arc::clone(&bus.ring)))
             .collect();
-        for (bus_id, _role, ring) in bus_ids {
+        for (bus_id, armed, ring) in bus_ids {
             let delayed = delay.pop(bus_id, frames, !produce);
-            ring.push(&delayed);
+            if armed {
+                ring.push(&delayed);
+            } else {
+                ring.release();
+            }
             by_bus.insert(bus_id, delayed);
         }
         let master = by_bus
@@ -804,6 +877,73 @@ mod tests {
     use super::*;
     use crate::audio::AudioDelay;
     use crate::upload::AudioInputStore;
+
+    #[test]
+    fn idle_bus_does_not_fill_its_ring() {
+        let mut graph = AudioGraph::with_defaults();
+        let mut uploads = AudioInputStore::default();
+        let mut delay = AudioDelay::new();
+        let mixed = graph.mix(
+            &mut uploads,
+            &[],
+            &[],
+            64,
+            &mut delay,
+            true,
+            &HashMap::new(),
+            60,
+            1,
+        );
+        assert_eq!(mixed.master.len(), 128);
+        for bus in &graph.buses {
+            assert_eq!(bus.ring.fill_frames(), 0, "bus {}", bus.id);
+            assert!(!bus.ring.is_primed(), "bus {}", bus.id);
+        }
+    }
+
+    #[test]
+    fn armed_bus_queues_mixed_audio() {
+        let mut graph = AudioGraph::with_defaults();
+        graph.upsert_bus(MASTER_BUS, "Master", ROLE_MASTER, DEVICE_WASAPI, "", 0, 1);
+        let mut uploads = AudioInputStore::default();
+        let mut delay = AudioDelay::new();
+        graph.mix(
+            &mut uploads,
+            &[],
+            &[],
+            64,
+            &mut delay,
+            true,
+            &HashMap::new(),
+            60,
+            1,
+        );
+        let master = graph.buses.iter().find(|bus| bus.id == MASTER_BUS).unwrap();
+        assert_eq!(master.ring.fill_frames(), 64);
+        let headphone = graph
+            .buses
+            .iter()
+            .find(|bus| bus.id == HEADPHONE_BUS)
+            .unwrap();
+        assert_eq!(headphone.ring.fill_frames(), 0);
+    }
+
+    #[test]
+    fn aux_buses_never_share_a_routing_bit() {
+        let mut graph = AudioGraph::with_defaults();
+        for id in 100..140u64 {
+            graph.upsert_bus(id, "aux", ROLE_AUX, DEVICE_NONE, "", 0, 1);
+        }
+        let aux: Vec<u32> = graph
+            .buses
+            .iter()
+            .filter(|bus| bus.role == ROLE_AUX)
+            .map(|bus| bus.bit)
+            .collect();
+        assert_eq!(aux.len(), 30);
+        let unique: std::collections::HashSet<u32> = aux.iter().copied().collect();
+        assert_eq!(unique.len(), aux.len());
+    }
 
     #[test]
     fn resolve_output_audio_bus_keeps_none() {

@@ -239,6 +239,25 @@ pub struct OverlayDesc {
     pub label: *const std::ffi::c_char,
 }
 
+impl OverlayDesc {
+    /// NaN and infinite geometry would reach GPU uniforms and clamp/range calls.
+    pub fn is_finite(&self) -> bool {
+        [
+            self.rect.x,
+            self.rect.y,
+            self.rect.width,
+            self.rect.height,
+            self.crop.x,
+            self.crop.y,
+            self.crop.width,
+            self.crop.height,
+            self.opacity,
+        ]
+        .iter()
+        .all(|value| value.is_finite())
+    }
+}
+
 impl Default for OverlayDesc {
     fn default() -> Self {
         Self {
@@ -362,6 +381,11 @@ impl MixInputSpec {
 
 pub fn is_scene(source_id: u64) -> bool {
     source_id >= SCENE_BASE && source_id < MULTIVIEW_BASE
+}
+
+/// Scenes and multiview surfaces are both composed from layers into their own texture.
+pub fn is_composed_surface(source_id: u64) -> bool {
+    is_scene(source_id) || is_multiview(source_id)
 }
 
 pub fn is_multiview(source_id: u64) -> bool {

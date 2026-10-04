@@ -3,160 +3,84 @@ title: 設定
 description: セッションに保存される設定ウィンドウの項目
 ---
 
-メインウィンドウの「設定」から開きます。Remoteからも同じウィンドウで接続先のセッションを編集できます。
+メインウィンドウの「設定」ボタンから開きます。リモート接続中も同様のウィンドウで接続先のセッション設定を編集できます。
 
 ## 表示
 
-GUI上の表示を調整します。
+画面表示や基本解像度、フレームレートを設定します。
 
 <img src="/eiviz/images/ja/introduction/settings/setting_ui.jpg" alt="設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
-### 色設定
-
-Preview色、Program色、非アクティブ色は、ボタンやシーンタイルの縁に使います。折り畳んだシーンタイルとスイッチャーのシーンボタンも同じ色で面を塗ります。既定は緑、赤、灰色です。
-
-### マスターフレームレート
-
-セッションで共通で使われるフレームレートです。既定はNTSC 59.94pです。23.976p、24p、25p、29.97p、30p、50p、60p、119.88p、120pも選べます。  
-この値はMixer生成時に渡すので、変えたあとはセッションを保存して開き直すか、アプリを再起動してください。  
-各Mixing Unitは、ユニットのダイアログから出力フレームレートを上書きできます。
-
-### Mixing Unitの規定サイズ
-
-これから追加で作成するMixing Unitの規定解像度です。既定は1920x1080。既にあるユニットは変わりません。この項目はWindowsの表示タブにあります。
-
-### フレームバッファ
-
-完成したフレームをメモリ上に保持する枚数です。既定は3フレーム保持します。  
-映像処理が遅れても出力が止まらないためのバッファリングとして機能し、音声も同じフレーム数だけ遅れます。  
-このフレーム数中に処理が追い付かなかった場合、リアルタイムに追いつくまでフレームをスキップします。仕組みは[システムアーキテクチャ](/eiviz/ja/introduction/architecture/)です。
-
-
-### 内部カラーフォーマット
-
-RAM上とGPUへ上げるときの画素の持ち方です。既定のUYVY 4:2:2はBGRAの半分のサイズで、実際に合成するフレームだけRGBへ変換します。BGRA 8-bit 4:4:4は変換を省きたいとき用です。変えるとファイル入力などのポンプを作り直します。この項目もWindowsの表示タブにあります。
+- **色設定**: Preview色、Program色、非アクティブ色の枠線やボタン表示色を設定します（既定: 緑、赤、グレー）。
+- **マスターフレームレート**: セッション共通の基本フレームレートです（既定: 59.94p）。変更後はセッションを保存して再起動するか、セッションを再度開き直してください。各Mixing Unitで個別に上書きも可能です。
+- **Mixing Unitの規定サイズ**: 新規作成するMixing Unitの解像度です（既定: 1920x1080）。
+- **フレームバッファ**: 映像処理の遅延を吸収し出力を安定させるためのバッファ枚数です（既定: 3フレーム）。音声も同一フレーム数分だけ遅延同期されます。
+- **内部カラーフォーマット**: 内部処理のピクセルフォーマットです（既定: UYVY 4:2:2）。RGB変換の負荷を削減しています。
 
 ## パフォーマンス
 
-映像合成処理に関わるパフォーマンス設定です。
+ハードウェアアクセラレーションに関する設定です。
 
 <img src="/eiviz/images/ja/introduction/settings/performance.jpg" alt="パフォーマンス設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
-## グラフィックスアダプター
-
-いま使っているグラフィックスアダプター名を表示します。
-
-### Resizable Bar / Unified Memory
-
-WindowsではResizable BARの可否と、BAR窓/VRAM、GPU upload heapの有無を出します。  
-「ReBAR最適化を使う」は、映像のアップロード時にGPUのVRAM領域へ直接書き込みます。内蔵GPUや、GPUがupload heapを出さない環境では選べません。ちらつきやティアリングが出たらオフにしてください。ReBAR自体の前提は[eivizについて](/eiviz/ja/introduction/about/)をご参照ください。
-
-Resizable BAR対応環境でも、Windows 11 24H2以前など一部の環境ではGPU upload heapsに非対応の為、この最適化が利用できない場合があります。
-
-macOS（Apple Silicon）ではUnified Memory向けの最適化を導入しています。ライブ入力を`MTLStorageModeShared`の共有テクスチャ領域へ書き、そのままサンプルします。オフにすると通常のMetalアップロードに戻ります。
-
-### NDIを取り込みスレッドでアップロード
-
-既定はオンです。オンのときは、受信した各フレームを専用のCPUスレッドからGPUへアップロードします。オフのときは、共有の描画スレッドで転送します。
+- **グラフィックスアダプター**: 使用中のGPU名を表示します。
+- **Resizable BAR / Unified Memory**: 
+  - Windows: ReBAR最適化を有効にすると、CPUからVRAMへの直接転送を行います。画面のちらつきが発生する場合は無効にしてください。
+  - macOS: Apple SiliconのUnified Memory最適化を使用し、共有テクスチャ領域経由で効率的に転送します。
+- **NDIを取り込みスレッドでアップロード**: オン（既定）の場合、NDI受信スレッドからGPUへ直接アップロードし、描画スレッドの負荷を軽減します。
 
 ## 出力
 
-映像の出力先設定です。
+ネットワーク（OMT/NDI）への映像・音声送出を設定します。
 
 <img src="/eiviz/images/ja/introduction/settings/outputs.jpg" alt="出力設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
-各行は名前、転送方式、On/Off切り替え、映像ソース、音声、解像度、フレームレートです。  
-転送方式にはOMTとNDIに対応しています。Decklinkなどのハードウェア出力は現在実装中です。  
-映像ソースはInput、Scene、MU PRV、MU PGM、Multiviewから選択が可能です。  
-音声はMaster, Headphone, 各Audio Aux、またはNone(音声なし)から選択可能です。  
-Multiviewを映像ソースに選択した場合、音声の送出は出来ません。  
-解像度とフレームレートは出力ごとに選べます。「セッション設定を使用」はMixing Unit（無ければセッションのマスターフレームレートと既定サイズ）を使います。映像は、描画完了のたびに送らず、そのフレームレートで送ります。
-
-OMTはエンコード方式を選択可能です。既定はCPU(推奨)です。CPU(推奨)はOMTデフォルトのエンコーダーです。Mixing Unitのプログラムや映像本線など、ミッションクリティカルな映像にはこちらを使用してください。CPU encodeを選択した場合、UYVY形式で読み出し、CPU上の送出専用スレッドでVMXコーデックへの変換・送信を行います。GPUは補助的なOMTエンコーダーです。GPUに負荷を逃がす役割がありますが、CPUよりロスが多い為マルチビューなど補助的な用途の映像に使用してください。  
-NDIは常にCPU encodeです。
-
-各出力毎に1スレッド割り当てられます。[NDI/OMT](/eiviz/ja/features/outputs/ndi-omt/)をご確認ください。
-
-Windowsは設定をOKしたときに適用され、macOSは行のApplyでも適用可能です。
+- **映像ソース**: Input、Scene、MU PRV、MU PGM、Multiviewから選択できます。
+- **音声ソース**: Master、Headphone、各Audio AUX、またはNone（音声なし）から選択します（Multiview選択時は音声なし固定）。
+- **解像度・フレームレート**: 出力ごとに個別に指定するか、「セッション設定を使用」を選択します。
+- **エンコード方式（OMT）**:
+  - **CPU（推奨）**: 高品質な標準エンコーダー。本線配信やプログラム出力に使用します。
+  - **GPU**: GPU負荷を活用する補助エンコーダー。マルチビューなどの監視用途に適しています。
+  - ※NDIは常にCPUでエンコードされます。
 
 ## Multiview
 
+マルチビュー機能の動作を設定します。詳細は[Multiviews](/eiviz/ja/concepts/multiviews/)を参照してください。
+
 <img src="/eiviz/images/ja/introduction/settings/multiview.jpg" alt="Multiview設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
-マルチビューの設定と追加制御です。[Multiviews](/eiviz/ja/concepts/multiviews/)をご確認ください。
-
-### 新規Multiviewの既定Mixing Unit
-
-マルチビューを新規作成した際の規定Preview/Programの対象Mixing Unitです。
-
-### プロジェクト既定のプレビュー更新間隔
-
-プロジェクトデフォルトのフレーム更新間隔です。パフォーマンスへの影響を防ぐため、PCスペックが十分ではない環境では更新間隔を下げることを推奨します。    
-毎フレームから8フレームおきまで設定可能です。既定は3フレームごとで、59.94ではおよそ20 fpsです。  
+- **新規Multiviewの既定Mixing Unit**: マルチビュー作成時にPreview/Programとして割り当てる既定のユニットを指定します。
+- **プレビュー更新間隔**: タイルの更新頻度を設定します（既定: 3フレームごと、約20 fps）。スペックが不足する場合は間隔を広げることで描画負荷を軽減できます。
 
 ## 音声AUX
 
 <img src="/eiviz/images/ja/introduction/settings/audio-aux.jpg" alt="音声AUX設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
-内部ミックスは48 kHzステレオです。A〜HのAudio AUXを最大8本足せます。  
-[Audio Auxs](/eiviz/ja/concepts/audio-auxs/)と[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)をご確認ください。
+内部ミックスは48 kHzステレオで動作します。Master、Headphoneのほか、最大8本のAUXバス（A〜H）を追加できます。
 
-Enabledを選択時は、出力デバイスを設定せずに内部でのミックス処理のみ動かします。実機へ出すときはWASAPI共有かASIOです。
-
-「HeadphoneはMasterをコピー」を入れると、HeadphoneバスはMasterと同じ中身になります。キュー用に別内容を流したいときは外します。
+- **Enabled**: 出力デバイスを割り当てず、内部ミックスのみを有効化します。実機デバイスへの出力にはWASAPI共有またはASIOを使用します。
+- **HeadphoneはMasterをコピー**: チェックを入れると、HeadphoneバスへMasterと同じ音声が常時ミラーリングされます。個別にモニターしたい場合は無効にします。
 
 ## Web API
 
-vMix互換HTTP、vMix互換TCP、Protobuf WebSocketの待ち受けです。HTTPとTCPはセッションファイルに保存されます。WebSocketのbindアドレス、token、最大role、メディア保存先はホストの環境設定（またはheadlessのCLI/環境変数）です。設定の有効/ポートもホスト待ち受けに使います。プロトコルは[eiviz API](/eiviz/ja/developers/api/)をご確認ください。
+外部制御用のAPIサーバーを設定します。設定の詳細は[eiviz API](/eiviz/ja/developers/api/)および[互換API](/eiviz/ja/developers/compatibility/)を参照してください。
 
-- HTTP: Mixer起動時にHTTPサーバーを開く。既定はオン。ポートの既定は8088
-- TCP: [vMix TCP API](https://www.vmix.com/help29/TCPAPI.html)をポート8099で開く。既定はオン。ポートは固定
-- WebSocket: Protobuf制御API。既定はオン。ポートの既定は9400、subprotocolは`eiviz.protobuf.v1`。既定bindはloopbackです。loopback以外はtoken必須です。このリリースは信頼できるLANまたはVPN上の認証付き`ws://`のみで、TLSは含みません
-- ユーザー名/パスワード: どちらか入っていればHTTPのBasicAuth。両方空なら認証なし。TCPには認証を掛けません。WebSocketのtokenは環境設定の待ち受けtoken、headlessでは`EIVIZ_API_TOKEN`です
+- **HTTP**: vMix互換HTTPサーバー（既定ポート: 8088）。Basic認証のユーザー名・パスワードを設定可能です。
+- **TCP**: vMix互換TCPサーバー（既定ポート: 8099）。認証には対応していません。
+- **WebSocket**: eivizネイティブのProtobuf制御API（既定ポート: 9400）。loopback以外へのbindには認証tokenが必須です。
+- **ブラウザのOrigin制限**: WebブラウザからWebSocketに接続する場合は、環境変数`EIVIZ_API_ALLOWED_ORIGINS`に対象のOriginまたは`*`を指定する必要があります。
 
-HTTPポートが使われているときはHTTPだけオフ扱いにして警告を出します。TCPの8099が使われていてもHTTPは継続し、TCP側だけ警告します。WebSocketの待ち受け失敗も同じで、その面だけオフにして警告します。起動・停止とFunctionはMixerログ（ヘルプ→ログ）に出ます。
+## 詳細設定
 
-エンドポイントとFunctionは[互換API](/eiviz/ja/developers/compatibility/)と[Function Reference](/eiviz/ja/developers/function-reference/)です。
+- **映像出力先ウィンドウの上限**: PreviewやProgram、Multiviewをリアルタイム表示するための描画スロット数の上限です（既定: 6）。上限に達すると新規プレビューウィンドウが開けなくなります。不要なウィンドウを閉じるとスロットが解放されます。
 
-## 詳細
+## 環境設定（Preferences）
 
-### 映像出力先ウィンドウの上限
-
-Preview/Program/Multiviewをリアルタイムに表示するのに使います。  
-たとえばSwitcher UIはPreviewとProgramを出すので、2スロット使います。本体のPreview/Program、開いているMultiview、Scene Editor、Overlay窓も同様に数えます。シーンタイルと入力プレビューのサムネは数えません。
-
-自動は6からです。設定から上げられますが、不安定になる可能性があります。  
-上限に達すると新しい窓は開きません。どれかを閉じると枠が空きます。技術的な背景は[システムアーキテクチャ](/eiviz/ja/introduction/architecture/)のホストです。
-
-## 環境設定
+PC全体で共有されるグローバル設定です。
 
 <img src="/eiviz/images/ja/introduction/settings/preferences.jpg" alt="環境設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
-グローバルなeivizの設定です。　　
-
-### 言語
-
-英語/日本語に対応しています。
-
-### テーマ
-
-ダーク、ライト、OS設定を選択可能です。
-
-### 接続
-
-このコンピューターのMixerは`Eiviz.Host.exe`、別のeivizを操作するクライアントは`Eiviz.Remote.exe`です。Remoteは左上のConnectから接続します。手順と映像の扱いは[リモート接続](/eiviz/ja/features/remote/)をご確認ください。
-
-### API待ち受け（ホスト）
-
-bindアドレス、待ち受けtoken、アップロード保存先です。loopback以外はtoken必須です。未指定の保存先は`%LOCALAPPDATA%\eiviz\media`（Windows）または各OSの同等パスです。リモートクライアントから追加したStill/Videoはこのディレクトリへ保存されます。
-
-### headless
-
-GUIのない運用は[headless](/eiviz/ja/features/headless/)です。待ち受けは`eivizctl prefs`で編集します。
-
-### ヘルプ
-
-使っている言語の公式ドキュメントを開きます。
-
-- 日本語: https://mikanseilaboratory.github.io/eiviz/ja/
-- English: https://mikanseilaboratory.github.io/eiviz/en/
+- **言語**: 日本語/英語の切り替え
+- **テーマ**: ダーク、ライト、OS連動
+- **API待ち受け**: ホスト側のbindアドレス、認証token、メディア保存ディレクトリの設定
+- **ヘルプ**: 公式ドキュメントの表示

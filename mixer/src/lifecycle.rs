@@ -15,7 +15,7 @@ pub(crate) fn mixer_slot() -> &'static Mutex<MixerSlot> {
 
 pub(crate) fn with_mixer<T>(f: impl FnOnce(&mut Mixer) -> T) -> Result<T, i32> {
     let start = Instant::now();
-    let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
+    let mut slot = mixer_slot().lock_or_recover();
     let result = match &mut *slot {
         MixerSlot::Running(mixer) => Ok(f(mixer)),
         _ => Err(ERR_NOT_CREATED),
@@ -24,7 +24,7 @@ pub(crate) fn with_mixer<T>(f: impl FnOnce(&mut Mixer) -> T) -> Result<T, i32> {
 }
 
 pub(crate) fn reserve_mixer_create() -> i32 {
-    let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
+    let mut slot = mixer_slot().lock_or_recover();
     match *slot {
         MixerSlot::Empty => {
             *slot = MixerSlot::Initializing;
@@ -35,7 +35,7 @@ pub(crate) fn reserve_mixer_create() -> i32 {
 }
 
 pub(crate) fn commit_mixer_create(mixer: Mixer) -> i32 {
-    let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
+    let mut slot = mixer_slot().lock_or_recover();
     match *slot {
         MixerSlot::Initializing => {
             *slot = MixerSlot::Running(mixer);
@@ -46,7 +46,7 @@ pub(crate) fn commit_mixer_create(mixer: Mixer) -> i32 {
 }
 
 pub(crate) fn abort_mixer_create() {
-    let mut slot = mixer_slot().lock().expect("mixer mutex poisoned");
+    let mut slot = mixer_slot().lock_or_recover();
     if matches!(*slot, MixerSlot::Initializing) {
         *slot = MixerSlot::Empty;
     }

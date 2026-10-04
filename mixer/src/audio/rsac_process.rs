@@ -1,3 +1,4 @@
+use crate::guard::LockExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -38,6 +39,7 @@ pub fn run(
     let map_right = spec.map_right.max(0) as usize;
     let mut first = true;
     let mut pts = 0i64;
+    let mut backoff = REOPEN_BACKOFF_MIN;
     while !stop.load(Ordering::Relaxed) {
         let Some(pid) = super::process::resolve_pid(&spec.process_exe, &spec.process_aumid) else {
             if first {
@@ -64,6 +66,7 @@ pub fn run(
         send_ready(ready, signaled, Ok(()))?;
         first = false;
 
+        let session_start = Instant::now();
         let mut follow_check = Instant::now();
         while !stop.load(Ordering::Relaxed) {
             match capture.read_buffer() {
@@ -79,7 +82,7 @@ pub fn run(
                         map_left,
                         map_right,
                     );
-                    uploads.lock().expect("audio").ingest_audio(spec.id, packet);
+                    uploads.lock_or_recover().ingest_audio(spec.id, packet);
                     pts = pts.saturating_add(frames * 10_000_000 / i64::from(rate));
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(5)),
@@ -96,8 +99,26 @@ pub fn run(
             }
         }
         let _ = capture.stop();
+        // A session that dies right away (process exiting, device change) must not
+        // become a tight open/close loop.
+        if session_start.elapsed() < Duration::from_secs(1) {
+            sleep_unless_stopped(stop, backoff);
+            backoff = (backoff * 2).min(REOPEN_BACKOFF_MAX);
+        } else {
+            backoff = REOPEN_BACKOFF_MIN;
+        }
     }
     Ok(())
+}
+
+const REOPEN_BACKOFF_MIN: Duration = Duration::from_millis(250);
+const REOPEN_BACKOFF_MAX: Duration = Duration::from_secs(4);
+
+fn sleep_unless_stopped(stop: &AtomicBool, total: Duration) {
+    let deadline = Instant::now() + total;
+    while Instant::now() < deadline && !stop.load(Ordering::Relaxed) {
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn open_capture(pid: u32) -> Result<AudioCapture, String> {

@@ -95,6 +95,8 @@ final class MixerController: ObservableObject {
     let multiviewCloser = SwitcherCloser()
     var videoRoles: [UInt64: (program: Bool, preview: Bool)] = [:]
     var remoteHandle: Int32 = 0
+    var remoteConnecting = false
+    var remoteUploading = false
     var remoteReceiveIds: [UInt64: UInt64] = [:]
     var remoteReceiveKeys: [UInt64: String] = [:]
     var remoteEpoch = ""
@@ -221,7 +223,7 @@ final class MixerController: ObservableObject {
 
     func connectRemote(url: String, token: String) {
         let endpoint = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !endpoint.isEmpty else { return }
+        guard !endpoint.isEmpty, !remoteConnecting else { return }
         if remoteHandle != 0 {
             _ = mixer_remote_close(remoteHandle)
             remoteHandle = 0
@@ -236,23 +238,31 @@ final class MixerController: ObservableObject {
         remoteEpoch = ""
         remotePulledDocumentRevision = 0
         remoteLiveSequence = 0
-        let handle = MixerFFI.withCString(endpoint) { urlPtr in
-            MixerFFI.withCString(token) { tokenPtr in
-                mixer_remote_open(urlPtr, tokenPtr)
+        remoteConnecting = true
+        // The handshake blocks for up to several seconds, so it must not run on the main actor.
+        Task { [weak self] in
+            let handle = await Task.detached(priority: .userInitiated) {
+                MixerFFI.withCString(endpoint) { urlPtr in
+                    MixerFFI.withCString(token) { tokenPtr in
+                        mixer_remote_open(urlPtr, tokenPtr)
+                    }
+                }
+            }.value
+            guard let self else { return }
+            self.remoteConnecting = false
+            if handle <= 0 {
+                self.presentError(L10n.t("msg.remoteConnectFailed"), title: L10n.t("chrome.connect"))
+                self.refreshRemoteWarn()
+                return
             }
+            self.remoteHandle = handle
+            KeychainStore.save(account: endpoint, token: token)
+            AppPrefs.shared.remoteUrl = endpoint
+            AppPrefs.shared.rememberRemote(endpoint)
+            self.pollRemote(force: true)
+            self.bumpSurfaceEpoch()
+            self.refreshRemoteWarn()
         }
-        if handle <= 0 {
-            presentError(L10n.t("msg.remoteConnectFailed"), title: L10n.t("chrome.connect"))
-            refreshRemoteWarn()
-            return
-        }
-        remoteHandle = handle
-        KeychainStore.save(account: endpoint, token: token)
-        AppPrefs.shared.remoteUrl = endpoint
-        AppPrefs.shared.rememberRemote(endpoint)
-        pollRemote(force: true)
-        bumpSurfaceEpoch()
-        refreshRemoteWarn()
     }
 
     func disconnectRemote() {

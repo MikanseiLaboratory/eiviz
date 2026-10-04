@@ -7,7 +7,9 @@ use std::mem::ManuallyDrop;
 use crate::device::GpuDevice;
 use crate::rebar::RebarSnapshot;
 
-const STAGING_SLOTS: usize = 3;
+const MAX_STAGING_SLOTS: usize = 6;
+
+type StagingKey = (u32, u32, wgpu::TextureFormat);
 
 struct HostMap {
     ptr: *mut u8,
@@ -64,7 +66,7 @@ fn host_visible_device_local(
     props: &ash::vk::PhysicalDeviceMemoryProperties,
 ) -> Option<(u32, ash::vk::MemoryPropertyFlags)> {
     use ash::vk::MemoryPropertyFlags as Flags;
-    let all = (1u32 << props.memory_type_count) - 1;
+    let all = u32::MAX;
     find_memory_type(
         props,
         all,
@@ -105,10 +107,12 @@ pub fn probe(device: &GpuDevice) -> RebarSnapshot {
     }
 }
 
+/// Compose-side uploader: CPU writes into a host-visible VRAM buffer, then a buffer→texture copy
+/// moves the pixels into the source texture. Buffers are pooled per frame size and only reused
+/// once the GPU has finished the copy that reads them.
 pub struct VulkanUploader {
     handles: VkHandles,
-    slots: Vec<UploadSlot>,
-    next: usize,
+    pool: crate::staging::StagingPool<StagingKey, UploadSlot>,
     pending: Option<wgpu::CommandEncoder>,
 }
 
@@ -118,9 +122,6 @@ struct UploadSlot {
     vk: ash::Device,
     imported: ManuallyDrop<wgpu::Buffer>,
     row_pitch: u32,
-    width: u32,
-    height: u32,
-    format: wgpu::TextureFormat,
 }
 
 impl Drop for UploadSlot {
@@ -141,8 +142,7 @@ impl VulkanUploader {
         host_visible_device_local(&memory_properties(&handles))?;
         Some(Self {
             handles,
-            slots: Vec::new(),
-            next: 0,
+            pool: crate::staging::StagingPool::new(MAX_STAGING_SLOTS),
             pending: None,
         })
     }
@@ -157,82 +157,66 @@ impl VulkanUploader {
         tex_width: u32,
         format: wgpu::TextureFormat,
     ) -> Result<(), String> {
-        let slot_i = self.ensure_slot(device, tex_width, height, format)?;
-        {
-            let slot = &self.slots[slot_i];
-            write_host(
-                &slot.map,
-                &slot.vk,
-                slot.memory,
-                data,
-                row_bytes as usize,
-                row_bytes as usize,
-                height,
-                slot.row_pitch,
-            )?;
-        }
-        let encoder = self.pending.get_or_insert_with(|| {
+        let key = (tex_width.max(1), height.max(1), format);
+        let Self {
+            handles,
+            pool,
+            pending,
+        } = self;
+        let index = pool.acquire(
+            &device.device,
+            key,
+            || create_upload_slot(handles, &device.device, key.0, key.1),
+            || {
+                pending
+                    .take()
+                    .map(|encoder| device.submit(Some(encoder.finish())))
+            },
+        )?;
+        let slot = pool.slot(key, index).ok_or("staging slot missing")?;
+        write_host(
+            &slot.map,
+            &slot.vk,
+            slot.memory,
+            data,
+            row_bytes as usize,
+            row_bytes as usize,
+            key.1,
+            slot.row_pitch,
+        )?;
+        let encoder = pending.get_or_insert_with(|| {
             device
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("eiviz vulkan upload"),
                 })
         });
-        let slot = &self.slots[slot_i];
         encoder.copy_buffer_to_texture(
             wgpu::TexelCopyBufferInfo {
                 buffer: &slot.imported,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(slot.row_pitch),
-                    rows_per_image: Some(height.max(1)),
+                    rows_per_image: Some(key.1),
                 },
             },
             dest.as_image_copy(),
             wgpu::Extent3d {
-                width: tex_width.max(1),
-                height: height.max(1),
+                width: key.0,
+                height: key.1,
                 depth_or_array_layers: 1,
             },
         );
-        self.next = (slot_i + 1) % STAGING_SLOTS;
+        pool.mark_pending(key, index);
         Ok(())
     }
 
     pub fn flush(&mut self, device: &GpuDevice) {
         if let Some(encoder) = self.pending.take() {
-            device.submit(Some(encoder.finish()));
+            let index = device.submit(Some(encoder.finish()));
+            self.pool.arm_pending(&index);
         }
-    }
-
-    fn ensure_slot(
-        &mut self,
-        device: &GpuDevice,
-        width: u32,
-        height: u32,
-        format: wgpu::TextureFormat,
-    ) -> Result<usize, String> {
-        let reuse = self.slots.get(self.next).is_some_and(|slot| {
-            slot.width == width && slot.height == height && slot.format == format
-        });
-        if reuse {
-            return Ok(self.next);
-        }
-        if self.slots.len() == STAGING_SLOTS {
-            self.flush(device);
-            self.slots.clear();
-            self.next = 0;
-        }
-        while self.slots.len() < STAGING_SLOTS {
-            self.slots.push(create_upload_slot(
-                &self.handles,
-                &device.device,
-                width,
-                height,
-                format,
-            )?);
-        }
-        Ok(self.next)
+        self.pool.end_frame();
     }
 }
 
@@ -242,35 +226,19 @@ pub struct VulkanIngestRing {
     device: wgpu::Device,
     queue: wgpu::Queue,
     slots: Vec<IngestSlot>,
-    next: usize,
     dead: bool,
 }
 
 #[cfg(windows)]
 struct IngestSlot {
-    map: HostMap,
-    memory: ash::vk::DeviceMemory,
-    vk: ash::Device,
-    imported: ManuallyDrop<wgpu::Buffer>,
+    staging: UploadSlot,
+    fence: crate::staging::Fence,
+    lease: crate::upload::FrameLease,
     dest: wgpu::Texture,
     dest_view: wgpu::TextureView,
-    row_pitch: u32,
     width: u32,
     height: u32,
     format: wgpu::TextureFormat,
-}
-
-#[cfg(windows)]
-impl Drop for IngestSlot {
-    fn drop(&mut self) {
-        unsafe {
-            if !self.map.ptr.is_null() {
-                self.vk.unmap_memory(self.memory);
-                self.map.ptr = std::ptr::null_mut();
-            }
-            ManuallyDrop::drop(&mut self.imported);
-        }
-    }
 }
 
 #[cfg(windows)]
@@ -283,7 +251,6 @@ impl VulkanIngestRing {
             device: device.clone(),
             queue: queue.clone(),
             slots: Vec::new(),
-            next: 0,
             dead: false,
         })
     }
@@ -295,7 +262,7 @@ impl VulkanIngestRing {
     pub fn vram_bytes(&self) -> u64 {
         self.slots
             .iter()
-            .map(|slot| crate::upload::texture_bytes(&slot.dest) + slot.imported.size())
+            .map(|slot| crate::upload::texture_bytes(&slot.dest) + slot.staging.imported.size())
             .sum()
     }
 
@@ -319,7 +286,9 @@ impl VulkanIngestRing {
         ) {
             Ok(frame) => Ok(frame),
             Err(error) => {
-                self.dead = true;
+                if !crate::staging::is_exhausted(&error) {
+                    self.dead = true;
+                }
                 Err(error)
             }
         }
@@ -343,9 +312,9 @@ impl VulkanIngestRing {
             width.max(1)
         };
         let tex_h = height.max(1);
-        let slot_i = self.ensure(tex_w, tex_h, format)?;
+        let slot_i = self.acquire(tex_w, tex_h, format)?;
         {
-            let slot = &self.slots[slot_i];
+            let slot = &self.slots[slot_i].staging;
             write_host(
                 &slot.map,
                 &slot.vk,
@@ -365,10 +334,10 @@ impl VulkanIngestRing {
             });
         encoder.copy_buffer_to_texture(
             wgpu::TexelCopyBufferInfo {
-                buffer: &slot.imported,
+                buffer: &slot.staging.imported,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(slot.row_pitch),
+                    bytes_per_row: Some(slot.staging.row_pitch),
                     rows_per_image: Some(tex_h),
                 },
             },
@@ -379,12 +348,11 @@ impl VulkanIngestRing {
                 depth_or_array_layers: 1,
             },
         );
-        {
+        let index = {
             let _guard = crate::device::lock_gpu_queue();
-            self.queue.submit(Some(encoder.finish()));
-        }
-        self.next = (slot_i + 1) % STAGING_SLOTS;
-        Ok(crate::upload::GpuVideoFrame {
+            self.queue.submit(Some(encoder.finish()))
+        };
+        let frame = crate::upload::GpuVideoFrame {
             pts,
             width,
             height,
@@ -392,29 +360,40 @@ impl VulkanIngestRing {
             bgra,
             texture: slot.dest.clone(),
             view: slot.dest_view.clone(),
-        })
+            lease: Some(std::sync::Arc::clone(&slot.lease)),
+        };
+        self.slots[slot_i].fence.arm(index);
+        Ok(frame)
     }
 
-    fn ensure(
+    /// A slot is free once its texture is no longer referenced by any frame and the GPU has
+    /// finished the copy that reads its staging buffer.
+    fn acquire(
         &mut self,
         width: u32,
         height: u32,
         format: wgpu::TextureFormat,
     ) -> Result<usize, String> {
-        if self.slots.get(self.next).is_some_and(|slot| {
-            slot.width == width && slot.height == height && slot.format == format
-        }) {
-            return Ok(self.next);
+        if self
+            .slots
+            .iter()
+            .any(|slot| slot.width != width || slot.height != height || slot.format != format)
+        {
+            self.slots.clear();
         }
-        self.slots.clear();
-        self.next = 0;
-        while self.slots.len() < STAGING_SLOTS {
-            let mapped = create_mapped_buffer(&self.handles, &self.device, width, height)?;
+        let device = &self.device;
+        if let Some(index) = self.slots.iter().position(|slot| {
+            std::sync::Arc::strong_count(&slot.lease) == 1 && slot.fence.is_idle(device)
+        }) {
+            return Ok(index);
+        }
+        if self.slots.len() < MAX_STAGING_SLOTS {
+            let staging = create_upload_slot(&self.handles, &self.device, width, height)?;
             let dest = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("eiviz ndi vulkan dest"),
                 size: wgpu::Extent3d {
-                    width: width.max(1),
-                    height: height.max(1),
+                    width,
+                    height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -428,19 +407,22 @@ impl VulkanIngestRing {
             });
             let dest_view = dest.create_view(&Default::default());
             self.slots.push(IngestSlot {
-                map: mapped.map,
-                memory: mapped.memory,
-                vk: self.handles.device.clone(),
-                imported: mapped.imported,
+                staging,
+                fence: crate::staging::Fence::default(),
+                lease: std::sync::Arc::new(()),
                 dest,
                 dest_view,
-                row_pitch: mapped.row_pitch,
                 width,
                 height,
                 format,
             });
+            return Ok(self.slots.len() - 1);
         }
-        Ok(self.next)
+        Err(format!(
+            "{}: all {} slots are still in use",
+            crate::staging::EXHAUSTED,
+            self.slots.len()
+        ))
     }
 }
 
@@ -449,7 +431,6 @@ fn create_upload_slot(
     device: &wgpu::Device,
     width: u32,
     height: u32,
-    format: wgpu::TextureFormat,
 ) -> Result<UploadSlot, String> {
     let created = create_mapped_buffer(handles, device, width, height)?;
     Ok(UploadSlot {
@@ -458,9 +439,6 @@ fn create_upload_slot(
         vk: handles.device.clone(),
         imported: created.imported,
         row_pitch: created.row_pitch,
-        width,
-        height,
-        format,
     })
 }
 
@@ -590,14 +568,19 @@ fn write_host(
     if needed > map.size {
         return Err("host-visible slot too small".into());
     }
-    unsafe {
-        for y in 0..height as usize {
-            let src = y * stride;
-            let dst = y * pitch;
-            if src + row_bytes > data.len() {
-                break;
-            }
-            std::ptr::copy_nonoverlapping(data.as_ptr().add(src), map.ptr.add(dst), row_bytes);
+    let copy = row_bytes.min(pitch);
+    for y in 0..height as usize {
+        let src = y * stride;
+        let dst = y * pitch;
+        if src + copy > data.len() {
+            return Err(format!(
+                "frame data too short: row {y} needs {} bytes, buffer has {}",
+                src + copy,
+                data.len()
+            ));
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr().add(src), map.ptr.add(dst), copy);
         }
     }
     if !map.coherent {

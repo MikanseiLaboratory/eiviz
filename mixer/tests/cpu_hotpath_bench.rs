@@ -89,21 +89,6 @@ fn cpu_hotpath_kernels() {
     }
     report("sine_fill 1kHz 1601", SINE_ITERS, start.elapsed());
 
-    let planar: Vec<f32> = (0..FRAMES * 2).map(|i| i as f32 * 0.001).collect();
-    let mut stereo = Vec::new();
-    let start = Instant::now();
-    const RES_ITERS: u32 = 400;
-    for _ in 0..RES_ITERS {
-        simd::resample_planar_to_stereo(&planar, FRAMES, 2, 48_000, 48_000, &mut stereo);
-    }
-    report("resample 48k passthrough", RES_ITERS, start.elapsed());
-
-    let start = Instant::now();
-    for _ in 0..RES_ITERS {
-        simd::resample_planar_to_stereo(&planar, FRAMES, 2, 44_100, 48_000, &mut stereo);
-    }
-    report("resample 44k1->48k", RES_ITERS, start.elapsed());
-
     let start = Instant::now();
     const COPY_ITERS: u32 = 20;
     let mut packed = vec![0u8; packed_len];

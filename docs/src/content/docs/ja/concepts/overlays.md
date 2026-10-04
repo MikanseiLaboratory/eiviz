@@ -3,10 +3,14 @@ title: Overlays
 description: Mixing UnitのProgramに載せるDSK
 ---
 
-他スイッチャーのDSK、ダウンストリームキー、vMixのOverlayです。  
-[Mixing Unit](/eiviz/ja/concepts/mixing-unit/)ごとに最大8本です。ソースは[Scene](/eiviz/ja/concepts/scenes/)またはInputです。
+Overlayは、一般的なスイッチャーにおけるDSK（ダウンストリームキー）に相当し、Program映像の上にテロップやロゴ、ワイプ画面などを重ねて合成する機能です。
 
-Program出力の上に合成されます。メインウィンドウのOverlayから位置と大きさを決め、本体のトグルでON/OFFします。  
-Overlay窓はProgramをリアルタイムに出すので、映像出力先ウィンドウを1スロット使います。閉じると枠が空きます。
-トランジションにはCut,またはFadeが使用可能です。
+各[Mixing Unit](/eiviz/ja/concepts/mixing-unit/)ごとに最大8系統まで設定でき、ソースには[Scene](/eiviz/ja/concepts/scenes/)またはInputを指定できます。
 
+## 操作と設定
+
+- **配置とサイズ**: メインウィンドウのOverlay設定から、画面上の表示位置（X/Y座標）やサイズを指定します。
+- **切り替え効果**: CutまたはFadeによるトランジションに対応しています。
+- **オンエア制御**: スイッチャー画面のトグルボタンで即座にON/OFFが可能です。
+
+※Overlayプレビューウィンドウを表示する場合、映像出力スロットを1つ消費します（ウィンドウを閉じると解放されます）。
