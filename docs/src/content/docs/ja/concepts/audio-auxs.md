@@ -3,18 +3,21 @@ title: Audio Auxs
 description: Master、Headphone、AUXバス
 ---
 
-内部ミックスは48 kHzステレオです。MasterとHeadphoneは最初からあり、消せません。  
-AUXはA〜Hまで最大8本です。コンソールのAUX、ミックスマイナス、ISO送りに相当します。
+eiviz内部のオーディオミキサーは48 kHzステレオで動作します。
 
-## Mixing Unitからの送り
+## バス構成
 
-[Mixing Unit](/eiviz/ja/concepts/mixing-unit/)は、どのバスへ送るかを持ちます。  
-FollowはPreview/ProgramとTバーのmixに追従します。Independentは映像の切替を無視し、そのバスに割り当てたInputをそのまま混ぜます。
+- **Masterバス**: 配信や録音用のメイン音声バス（削除不可）
+- **Headphoneバス**: オペレーターのモニター用バス（Masterのコピー、または個別キュー出力）
+- **AUXバス（A〜H）**: 最大8系統まで追加可能な個別送出用バス。ミックスマイナスや同時通訳、個別送出（ISO）に利用できます。
 
-## デバイスへの割当
+## Mixing Unitとの連動
 
-実機への割当は[設定](/eiviz/ja/introduction/settings/)の音声AUXです。  
-Enabledを選択時は、出力デバイスを設定せずに内部でのミックス処理のみ動かします。実機へ出すときはWASAPI共有かASIOです。  
-「HeadphoneはMasterをコピー」を入れると、HeadphoneバスはMasterと同じ中身になります。
+各Mixing Unitは音声バスへのセンド設定を持ちます。
 
-デバイス側は[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)をご確認ください。
+- **Follow**: Preview/Programの切り替えやTバーのフェード動作に連動して音声が切り替わります（Audio Follow）。
+- **Independent**: 映像の切り替え状態に関わらず、割り当てられた入力を常に一定のレベルでミックスします。
+
+## 出力デバイスの割り当て
+
+[設定](/eiviz/ja/introduction/settings/)ウィンドウの「音声AUX」から、各バスを実際のオーディオインターフェース（WASAPI共有またはASIO）へルーティングできます。物理デバイスに出力せず内部ミックスのみを有効化することも可能です。詳細は[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)を参照してください。

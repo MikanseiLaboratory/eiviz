@@ -5,17 +5,15 @@ description: 複数ソースを一枚に並べた監視用モザイク
 
 <img src="/eiviz/images/ja/concepts/multiview.jpg" alt="Multiviews例" style="max-width: 100%; height: auto;" />
 
-複数ソースを一枚に並べたマルチビューです。ATEMのMultiview、TriCasterのマルチビューと同じ用途を担当します。  
-セッションへ置ける数に上限はありません。同時に開く監視窓は、[設定](/eiviz/ja/introduction/settings/)の映像出力先ウィンドウの上限に入ります。
+Multiviewは、複数の入力や出力映像を1つの画面に並べて監視できる機能です。セッション内に無制限に追加でき、個別のウィンドウとして表示したり、ネットワーク（NDI/OMT）へ送出したりできます。
 
-## レイアウトとタイル
+## レイアウトとタイル設定
 
-テンプレートはPreview+Programにグリッドを足したもの、または2×2/3×3/4×4などです。  
-映像にはInput、Scene、Mixing UnitのPreview/Programを使用可能です。  
+- **レイアウトテンプレート**: Preview+Programと周辺グリッドの構成や、2×2、3×3、4×4などの定型グリッドを選択できます。
+- **タイルへのソース割り当て**: 各タイルにはInput、Scene、Mixing UnitのPreview/Program出力を自由に配置できます。
 
-## 追加と更新間隔
+## 設定とパフォーマンス管理
 
-[設定](/eiviz/ja/introduction/settings/)、またはメインUI右下のMultiviewから追加が可能です。  
-プレビューの更新間隔を調整可能です。パフォーマンスへの影響を防ぐため、PCスペックが十分ではない環境では更新間隔を下げることを推奨します。
-
-開いているMultiview窓は、Preview/Program/Multiviewをリアルタイムに表示するための枠を1スロット使います。閉じると枠が空きます。本体ウィンドウを閉じるとMultiviewも閉じてプロセスを終了します。 
+- **追加と編集**: [設定](/eiviz/ja/introduction/settings/)ウィンドウまたはメイン画面右下のMultiviewメニューから追加・カスタマイズできます。
+- **更新レート調整**: タイルの更新頻度（毎フレーム〜数フレームおき）を調整可能です。マシンスペックが限られる環境では更新間隔を広げることでGPU負荷を軽減できます。
+- **ウィンドウ枠の消費**: Multiviewウィンドウを開くたびに映像出力スロットを1つ消費します（ウィンドウを閉じると解放されます）。

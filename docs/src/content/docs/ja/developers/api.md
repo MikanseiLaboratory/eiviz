@@ -3,97 +3,53 @@ title: eiviz API
 description: eiviz固有の制御APIとheadless運用
 ---
 
-eivizの制御面はMixer内の`ControlService`が担当しています。vMix互換HTTP/TCP、ProtobufのWebSocket、`eivizctl`はいずれも同じディスパッチャへ変換されます。vMix互換の待ち受けは[互換API](/eiviz/ja/developers/compatibility/)をご確認ください。このページはeiviz固有のProtobuf面です。
+eivizの各種操作は、Mixer内の`ControlService`を通じて処理されます。vMix互換HTTP/TCP、Protobuf WebSocket、CLIツール（`eivizctl`）からの要求はすべて同一のディスパッチャに集約されます。vMix互換APIについては[互換API](/eiviz/ja/developers/compatibility/)を参照してください。本ページではProtobufベースの制御APIについて解説します。
 
-## 公開契約
+## 基本仕様
 
 - プロトコル: `eiviz.control.v1`（`crates/eiviz-api/proto/eiviz/control/v1/control.proto`）
-- WebSocket: `ws://`、subprotocol `eiviz.protobuf.v1`、binary frame 1枚がEnvelope 1個
-- 既定の待ち受けはloopbackのポート9400です。bindアドレス、ポート、token、最大role、renderer、メディア保存先はホスト固有です（GUIの環境設定、`eivizctl prefs`、または`eiviz-headless --bind`/`--renderer`/`EIVIZ_MEDIA_DIRECTORY`）。headlessのtokenはprefsが正本です。セッションファイルには保存しません
-- このリリースは信頼できるLANまたはVPN上の認証付き`ws://`のみです。TLSは提供しません
-- 公開済みfield numberは変更・再利用しません。削除時は`reserved`へ入れます
-- `SaveSession`はホストの現在セッションファイルへ書き込みます。リクエストは空です。現在ファイルが無い場合は`UNAVAILABLE`です
-
-映像/音声フレーム、GPU texture、HWND/NSViewなどの描画・データ面はネットワーク公開対象外です。
+- 通信方式: WebSocket（`ws://`）、サブプロトコル`eiviz.protobuf.v1`（バイナリフレーム1枚につきEnvelope 1件）
+- 接続ポート: 既定はloopbackのポート9400。bindアドレスや認証tokenなどの接続設定はホスト固有で管理され、セッションファイルには保存されません。
+- セキュリティ: 暗号化（WSS/TLS）には対応していません。信頼できるLANまたはVPN環境で運用してください。
+- 映像や音声の実データ、GPUテクスチャ、ウィンドウハンドル（HWND/NSView）はAPIの対象外です。
 
 ## 認証と権限
 
-既定bindはloopbackです。headlessのtokenは`eivizctl prefs`から読みます。GUIの待ち受けとリモートクライアントのtokenはWindows Credential Manager/macOS Keychainに置きます。セッションファイルには保存しません。比較はconstant-timeです。
+loopback（127.0.0.1）以外のアドレスへbindする場合は、認証tokenの設定が必須です。tokenの照合には定数時間比較（constant-time）が使用されます。
 
-権限は`read`/`operate`/`configure`/`admin`です。サーバーが付与roleをホストの最大roleで打ち止めにし、クライアント自己申告では昇格できません。任意パスのload/save/shutdownはadmin限定です。ホストの現在ファイルへの`SaveSession`はconfigureです。セッション本体はbytesで送受信します。loopback以外へのbindは認証必須です。
+### ロールと権限
 
-ブラウザが付ける`Origin`は、環境変数`EIVIZ_API_ALLOWED_ORIGINS`（カンマ区切り）で許可します。`*`は任意の`Origin`を許可し、比較は大文字小文字を無視します。`Origin`ヘッダが無い接続は常に受けます。未設定のときは`Origin`付き接続を403で拒否します。別サイトのページが同じPCの`ws://127.0.0.1:9400`を開いて操作するのを止めるためです。GUIもheadlessも起動時にはこの変数をセットしないので、ブラウザから繋ぐときは起動前にページのオリジンか`*`を入れてください。
+操作権限は以下の4段階です。クライアント側の自己申告で権限を昇格することはできず、ホスト側で設定された最大ロール（maxRole）が上限となります。
 
-## Command
+- `read`: 状態取得、スナップショット取得、イベント購読
+- `operate`: カットやオート、Tバーなどのスイッチング操作、メディア再生、音声設定
+- `configure`: セッション変更（`MutateSession`）、現在ファイルへの保存（`SaveSession`）、メディアファイルのアップロード
+- `admin`: 任意パスの保存/読み込み、シャットダウン
 
-| Command | 権限 | 内容 |
+### ブラウザ接続（Origin制限）
+
+Webブラウザからの接続時は、環境変数`EIVIZ_API_ALLOWED_ORIGINS`にカンマ区切りで許可するOriginを指定します（`*`で全許可）。未設定の場合、悪意のある外部サイトからの不正操作を防ぐため、`Origin`ヘッダーを持つ接続は403エラーで拒否されます。
+
+## コマンド一覧
+
+| コマンド | 必要ロール | 説明 |
 | --- | --- | --- |
-| `GetCapabilities`/`GetSnapshot`/`Subscribe` | read | 能力、Document+LiveState、イベント購読 |
-| `Preview`/`Cut`/`Auto`/`SetMix`/`OverlayAuto` | operate | Mixing Unitのライブ操作 |
-| `VideoPlay`/`VideoLoop`/`VideoSeek` | operate | ビデオInput |
-| `AudioSetInput`/`AudioSetBus` | operate | 音声 |
-| `SnapshotCmd`/`Discover` | operate | スクリーンショットと発見 |
-| `ReplaceSession` | configure | 接続先Documentの置換（`expected_revision`でlost updateを拒否） |
-| `MutateSession` | configure | 型付きDocument変更（`expected_revision`が一致しない変更は拒否。クライアントは最新を読み直す） |
-| `SaveSession` | configure | ホストの現在セッションファイルへ保存 |
-| `BeginUpload`/`WriteChunk`/`CommitUpload`/`AbortUpload` | configure | ホスト保存先へのメディアupload。commit時だけStill/Video Inputを原子的に追加 |
-| `Shutdown` | admin | graceful停止 |
+| `GetCapabilities` / `GetSnapshot` / `Subscribe` | read | 機能取得、状態取得、イベント購読 |
+| `Preview` / `Cut` / `Auto` / `SetMix` / `OverlayAuto` | operate | スイッチングおよびトランジション操作 |
+| `VideoPlay` / `VideoLoop` / `VideoSeek` | operate | 動画Inputの再生制御 |
+| `AudioSetInput` / `AudioSetBus` | operate | 音声フェーダーおよびバス設定 |
+| `SnapshotCmd` / `Discover` | operate | スクリーンショット取得、ソース検出 |
+| `ReplaceSession` | configure | セッション全体の差し替え（リビジョン検証あり） |
+| `MutateSession` | configure | セッションの部分変更（リビジョン不整合時は拒否） |
+| `SaveSession` | configure | 現在のセッションファイルへの上書き保存 |
+| `BeginUpload` / `WriteChunk` / `CommitUpload` / `AbortUpload` | configure | メディアファイルのアップロード |
+| `Shutdown` | admin | デーモン/ホストの終了 |
 
-CutでInputを指定した場合はPreviewを変えません。未指定ならPreviewをtakeしてswapします。
+## エラーハンドリング
 
-購読が遅れた場合は`Lag`イベントが返り、snapshotを取り直したあと`after_sequence`から再開してください。sequence欠番とserver epoch変更もsnapshot再同期です。Subscribeは常駐で、購読直後はsnapshotとsequence barrierを一度に渡します。
+APIエラーコードは`INVALID_ARGUMENT`、`NOT_FOUND`、`AMBIGUOUS`、`CONFLICT`、`UNAVAILABLE`、`PERMISSION_DENIED`、`IO`、`INTERNAL`に分類されます。同名リソースが存在する場合は自動解決せず`AMBIGUOUS`を返します。
 
-## リモートGUI
+## CLIおよびデーモンの仕様
 
-オペレーター向けの接続手順は[リモート接続](/eiviz/ja/features/remote/)をご確認ください。Still/Videoは`BeginUpload`から`CommitUpload`まで、ホストのメディア保存先へ保存したあとInputを足します。パストラバーサル、上書き、symlink/junction先は拒否します。
-
-## エラー
-
-`INVALID_ARGUMENT`/`NOT_FOUND`/`AMBIGUOUS`/`CONFLICT`/`UNAVAILABLE`/`PERMISSION_DENIED`/`IO`/`INTERNAL`です。名前の重複は先勝ちにせず`AMBIGUOUS`です。
-
-## eivizctl
-
-```bash
-eivizctl --url ws://127.0.0.1:9400 --token YOUR_TOKEN status
-eivizctl mix cut --unit 1
-eivizctl session save
-eivizctl session show
-eivizctl input edit --id 2 --name CamA
-eivizctl shutdown
-eivizctl prefs
-eivizctl prefs get bind
-eivizctl prefs set bind 127.0.0.1:9400
-eivizctl --repl --url ws://127.0.0.1:9400 --token YOUR_TOKEN
-```
-
-既定はサブコマンドのCLIです。対話型は`--repl`のときだけです。接続先は`--url`、tokenは`--token`または`--token-file`です。REPL中はWebSocketを1本維持します。`prefs`と型付きCRUD/ライブ操作をそのまま打てます。rawな`mutate`はありません。
-
-`prefs`はheadlessの待ち受けファイルです。場所は`%LOCALAPPDATA%\eiviz\headless-prefs.json`（Windows）、または`$XDG_CONFIG_HOME/eiviz/headless-prefs.json`です。キーは`bind`、`token`、`mediaDirectory`、`maxRole`、`renderer`です。tokenの表示は`(set)`です。headlessのtokenはprefsが正本です。反映は次の`eiviz-headless run`です。
-
-部分更新はスナップショットのrevisionを`expected_revision`に使います。`--force`はrevision 0です。未指定欄は現状のまま残します。
-
-## headless daemon
-
-オペレーター向けの起動、REPL、Remote接続は[headless](/eiviz/ja/features/headless/)です。この節はdaemonの契約です。
-
-```bash
-eiviz-headless validate --session show.eivz
-eiviz-headless canonicalize --session show.eivz
-eiviz-headless export --session show.eivz --output show-portable.eivzx
-eiviz-headless history --session show.eivz
-eiviz-headless restore --session show.eivz --index 0 --output old.eivz
-eiviz-headless run --session show.eivz --bind 127.0.0.1:9400 --renderer auto
-eiviz-headless run --bind 127.0.0.1:9400
-```
-
-`validate`と`canonicalize`はGPUを初期化しません。`run`はセッションをparse/validateし、そのFPSでruntimeを作り、replace/reconcileしたあとAPI readinessを出して待機します。`--session`を省略すると、OSの`eiviz/sessions`配下へ日付付きの既定ファイルを作ります。`--bind`を省略すると`eivizctl prefs`のbind、それも無ければ`127.0.0.1:9400`です。rendererは`--renderer`→prefs→`auto`です。OSが受けない値はエラーです。Ctrl+C/SIGTERMとAPIの`shutdown`は同じ停止経路です。受付停止→接続待ち→Mixer停止→runtime停止の順に期限付きです。stdinは`eivizctl`と同じ構文です。GUIのMixerも、環境設定（bind/token/メディア保存先）または設定（有効/ポート）で待ち受けを有効にすると同じWebSocketを開きます。
-
-終了コードは引数/読込が2、セッション検証が3、GPU/runtimeが4、bindが5、その他runtime失敗が6です。
-
-## 運用
-
-- token rotation: headlessは`eivizctl prefs set token`を差し替え、GUIは環境設定の待ち受けtokenを変えて再起動します
-- loopback以外へbindする場合は認証必須です。このリリースは信頼できるLANまたはVPN上の認証付き`ws://`のみです。TLSが必要なら手前で終端してください
-- `--media-directory`/`EIVIZ_MEDIA_DIRECTORY`がホストのupload保存先です。未指定時はOSのローカルアプリデータ配下`eiviz/media`です
-- ログはstderrの構造化可能なテキストです
-- 調査用の正規化JSONは`eiviz-headless canonicalize`です。通常Saveは`.eivz`（履歴入り・メディアなし）です。Exportは`.eivzx`（メディア同梱・履歴なし）です。headlessで書き出しを読むときはファイルの隣へメディアを展開します。GUIで書き出しを開くときは、メディアの展開先と作業用`.eivz`を尋ねます
+- `eivizctl`: コマンドラインからAPIを呼び出すツールです。`--repl`で対話モードに対応します。詳細は[headless](/eiviz/ja/features/headless/)を参照してください。
+- `eiviz-headless`: GUIを持たないデーモン実行用バイナリです。Ctrl+C、SIGTERM、または`Shutdown`コマンドにより安全に終了処理を行います。

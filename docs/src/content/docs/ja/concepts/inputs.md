@@ -5,7 +5,7 @@ description: 映像ソースと、Input・Scene・Outputの関係
 
 <img src="/eiviz/images/ja/concepts/inputs.jpg" alt="Inputsの概念図" style="max-width: 100%; height: auto;" />
 
-他ソフトのInput、Source、カメラ入力に相当します。  
+Inputは、eivizに取り込まれるすべての映像・音声入力の基本要素です。一般的なスイッチャーにおけるソースやOBS Studioのソースに該当します。
 
 ```mermaid
 flowchart LR
@@ -14,52 +14,31 @@ flowchart LR
   MU --> Out["Output"]
 ```
 
-| | 役割 |
+| 要素 | 役割 |
 | --- | --- |
-| Input | カメラ、ファイル、NDI/OMT、カラーなどの映像ソース |
-| Scene | Inputをレイヤーとして重ねた合成 |
-| Mixing Unit | SceneをPreview/Programに載せ、CUT/AUTO/Tバーで切替 |
-| Output | 選んだソースをNDI/OMTへ送出 |
+| Input | カメラ、ファイル、ネットワーク伝送等の入力ソース |
+| Scene | 複数のInputを重ね合わせた画面構成 |
+| Mixing Unit | SceneをPreview/Programで切り替えるM/E |
+| Output | 指定したソースを外部ネットワーク（NDI/OMT等）へ送出 |
 
-OutputのソースはInput、Scene、Mixing UnitのPreview/Program、Multiviewから選べます。既定はMixing UnitのProgramです。  
-InputはMixing UnitとOutputにも直接載せられます。
+InputはSceneの構成要素となるだけでなく、Mixing UnitやOutputへ直接割り当てることも可能です。
 
-## 種類
+## サポートする入力ソース
 
-メインウィンドウのInputsから追加します。
+メインウィンドウの「Inputs」から追加できます。
 
-- カラー/バー/ブラック
-- 静止画
-- 動画ファイル
-- UVC（キャプチャデバイス）
-- NDI/OMT
-- Mix（Mixing UnitのPreview/Program、またはセッションMultiviewと、1–8フレームのFrame Buffer。音声は対象のAudio BusかNone）
+- **カラー/テストパターン**: 単色カラー、カラーバー、ブラック
+- **静止画**: PNG、JPEG等
+- **動画ファイル**: MP4等（ハードウェアデコード対応）
+- **UVCデバイス**: USBウェブカメラ、キャプチャカード
+- **ネットワーク受信**: NDI、OMT（OpenMediaTransport）
+- **Mix**: 既存のMixing Unit出力やMultiviewをバッファ付き入力として再利用（多段M/E用）
+- **Audio**: マイク入力やアプリケーション音声の単独取り込み
 
-Sceneのレイヤー、Mixing Unitのバス、Multiviewのタイル、Outputのソースとして使います。  
-入力プレビューはGPUから読み戻したサムネで、映像出力先ウィンドウの枠は使いません。
+## タグとフィルタリング
 
-## タグ
+Inputには複数のタグを設定でき、種別（Kind）やカスタムタグによる絞り込み表示が可能です。
 
-Inputには複数のタグを付けられます。タグはセッションのカタログに残り、どのInputにも付いていないタグもタブとして出ます。
-
-### 付け方
-
-Inputsの追加/編集ダイアログで、タグをチェックして付けます。同じダイアログから新しいタグを追加できます。  
-1つのInputに複数付けられます。
-
-### 一覧の絞り込み
-
-Inputs一覧の上にタブが並んでいます。どれか1つを選ぶと、その条件に合うInputだけが出ます。
-
-- **すべて** — 全部
-- **各タグ** — そのタグが付いたもの
-- **Kind** — Colours / Still / Video / OMT / NDI® / UVC / Mix
-
-### タグの管理
-
-タブ帯を右クリックして、タグの追加、名前変更、削除ができます。
-
-- 改名すると、付いているInputも新しい名前に追従します
-- 削除すると、各Inputから外れます。表示中のタブを消した場合は「すべて」に戻ります
-
-[Scenes](/eiviz/ja/concepts/scenes/)、[Mixing Unit](/eiviz/ja/concepts/mixing-unit/)、[Outputs](/eiviz/ja/concepts/outputs/)をご確認ください。
+- **タグの付与**: Input追加・編集画面のチェックボックスから設定します。
+- **絞り込み**: 一覧上部のタブからタグや入力種別（Colours、Still、Video、OMT、NDI、UVC、Mix等）を選択して表示を絞り込めます。
+- **タグの管理**: タブ領域を右クリックすることで、タグの新規作成、名前変更、削除を行えます。

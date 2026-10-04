@@ -3,15 +3,15 @@ title: Mixing Unit
 description: PreviewとProgramでSceneを切り替える単位
 ---
 
-他スイッチャーのM/Eに該当する機能です。vMixのMix Input、TriCasterやATEMのM/E、Kairosのシーンに相当します。  
-メインの映像スイッチングオペレーションを担う根幹機能です。 Previewに次の絵、Programに現在使用する映像が表示されます。
+Mixing Unitは、一般的なスイッチャーにおけるM/E（Mix/Effects）に相当する映像切り替えの基本単位です。vMixのMix Input、TriCasterやATEMのM/E、Kairosのシーンに該当します。
 
-セッションあたりの数に上限はありません。マシンの性能が許す限り上限なしで追加可能です。  
-解像度と出力フレームレートはユニットごとに持てます。  
+Preview（スタンバイ映像）とProgram（本線出力映像）の2系統のバスを持ち、CUTやAUTO、Tバー操作によって映像を切り替えます。
 
-[Overlay](/eiviz/ja/concepts/overlays/)はこのユニットのProgramに載ります。あるユニットのProgramを、別ユニットの入力やOutputのソースにもできます。
+## 主な特徴
 
-切替用の映像バスはPreviewとProgramです。  
-Switcher UIはPreviewとProgramを表示するので、映像出力先ウィンドウを2スロット使います。閉じると枠が空きます。
+- **無制限の追加**: PCスペックの許す限り、1つのセッション内に複数のMixing Unitを自由に追加できます。
+- **独立した解像度・フレームレート**: ユニットごとに個別の解像度や出力フレームレートを設定可能です。
+- **オーバーレイ（DSK）**: 各ユニットのProgram出力に対して最大8系統の[Overlay](/eiviz/ja/concepts/overlays/)を重畳できます。
+- **M/Eの多段構成（入れ子）**: あるMixing Unitの出力を「Mix Input」として別のMixing Unitの入力レイヤーに配置することで、複雑な多段M/Eを構築できます（同一ユニットへの循環参照は防止されます）。
 
-Add Inputから、このユニットのPreviewまたはProgramをMix Inputとして追加できます。既存のFrameDelayリング（1–8フレーム）を参照し、swapchainは増やしません。別のMixing Unitに載せると入れ子のM/Eになります。同じユニットへの自己配線は拒否されます。音声は対象のAudio BusかNoneを指定します。
+※Switcherウィンドウを開くとPreviewとProgramの表示用に映像出力スロットを2つ消費します。ウィンドウを閉じるとスロットは解放されます。

@@ -3,29 +3,21 @@ title: eivizについて
 description: 開発モチベーションと技術選定
 ---
 
-## 開発モチベーション
+## 開発の背景
 
-eivizは有志コミュニティおよび個人が開発・保守するアプリケーションです。  
-[PolyForm Shield 1.0.0](https://github.com/MikanseiLaboratory/eiviz/blob/main/LICENSE)のもと、営利目的を含めて無料で利用できます。ソースコードは[GitHub](https://github.com/MikanseiLaboratory/eiviz)で公開しています。
+eivizは有志コミュニティおよび個人開発者によって開発・保守されているソフトウェアスイッチャーです。[PolyForm Shield 1.0.0](https://github.com/MikanseiLaboratory/eiviz/blob/main/LICENSE)ライセンスのもと、商用利用を含めて無料で利用できます。ソースコードは[GitHub](https://github.com/MikanseiLaboratory/eiviz)で公開されています。
 
-開発の目的は、既存の映像配信ツールにはない機能や拡張を動く実装として示し、ソフトウェアスイッチャーの可能性を現場に伝えることです。導入のハードルを下げるため、無償で公開しています。
-
-vMixやOBS Studioといった既存ソフトウェアの代替を目指してはいません。  
-長年磨き込まれた製品と比べ、eivizは新しい機能の投入を優先しています。品質やプロダクション向けの安定性でそれらを上回ることは、当初から想定していません。
-
-そのため、2026年9月現在、eivizの**プロダクション環境・本番配信での利用は非推奨**です。  
-試験環境や、クラッシュしても差し支えない用途でのテストを前提にしてください。
+本プロジェクトは、vMixやOBS Studioなどの既存ソフトウェアを直接置き換えるものではなく、モダンな技術スタックを用いた新しいアーキテクチャや機能の可能性を検証・提示することを目的としています。現時点では実験的な実装が多く含まれるため、**本番配信環境での利用は非推奨**です。検証環境やテスト用途での利用を前提としています。
 
 ## 技術選定
 
-モダンな技術で、性能・操作感・クロスプラットフォームの可搬性を両立することを目標にしています。
+高いパフォーマンス、操作性、クロスプラットフォーム対応の両立を目指して技術選定を行っています。
 
-映像合成の本体はMixer（コア）に集約し、各OSのUIから内部のC ABIで呼び出します。ホスト実装は`hosts/win32`、`hosts/macos`、`hosts/linux`です。  
-GPU経路はOSごとに、wgpuの下にあるネイティブAPIを使って最適化しています。制御はMixer内の`ControlService`が担当しています。外部APIはvMix互換HTTP/TCPとProtobuf WebSocketです。Windows/macOSからの遠隔操作は[リモート接続](/eiviz/ja/features/remote/)をご確認ください。
+映像合成の中核処理はMixer（コア）に集約し、各OS向けのUIホストからC ABI経由で呼び出します。GPUパイプラインはwgpuを基盤としつつ、OSごとのネイティブAPIを活用して最適化しています。
 
-| 層 | 技術 |
+| レイヤー | 採用技術 |
 | --- | --- |
-| Mixer（コア） | Rust 1.97、wgpu 30 |
+| Mixer（コア） | Rust、wgpu |
 | Windows UI | .NET 10、C# 14、WPF |
 | Windows GPU | Direct3D 12、Resizable BAR |
 | macOS UI | Swift 6、SwiftUI |
@@ -34,54 +26,26 @@ GPU経路はOSごとに、wgpuの下にあるネイティブAPIを使って最�
 
 ### Mixer
 
-映像合成の中核をMixer（コア）と呼びます。Rust + wgpu 30で、クロスプラットフォームのGPUリアルタイム処理を行います。  
-セッションファイルはMixerが所有します。保存は、現在の`.eivz`パスが決まっていればそのファイルへ上書きします（履歴入り・メディアなし）。名前を付けて保存は新しい`.eivz`を選びます。書き出しは保存メニューから`.eivzx`を書き（メディア同梱・履歴なし）、開くときはメディアの展開先と作業用`.eivz`の保存先を尋ねます。「前回」は最近使ったファイルのうち存在するものを開きます。OSをまたいでも同じセッションとして開けます。
+映像合成と音声処理、入出力管理を担うコアエンジンです。Rustとwgpuを用いてGPUを活用したリアルタイム処理を行います。セッションデータや外部制御API（vMix互換HTTP/TCP、Protobuf WebSocket）もMixer側で管理され、OS間で共通のセッションを扱えます。
 
 ### Windows: .NET 10 / C# 14 / WPF / D3D12
 
-Windowsホストは`hosts/win32`にあり、.NET 10とC# 14、UIはWPFです。映像処理はGPU側で行い、wgpuの抽象の下からDirect3D 12を使って最適化しています。
+Windows向けUIホストはWPFで実装されています。GPUへの映像フレーム転送にはResizable BAR（ReBAR）を活用し、VRAM領域へ直接書き込むことで低遅延・高パフォーマンスを実現します。
 
-CPUからGPUへのフレーム転送には、NVIDIAなどが提供するResizable BAR（ReBAR）を使い、映像のアップロード時にGPUのVRAM領域へ直接書き込みます。  
-ReBAR非対応環境では性能が大きく落ちるため、基本的には非推奨です。Windows on ARMには未対応です（[GitHub issue #80](https://github.com/MikanseiLaboratory/eiviz/issues/80)）。
-
-Resizable BAR対応環境でも、Windows 11 24H2以前など一部の環境ではGPU upload heapsに非対応の為、この最適化が利用できない場合があります。
+※ReBAR非対応環境ではパフォーマンスが大幅に低下する場合があります。また、Windows on ARMには未対応です（[#80](https://github.com/MikanseiLaboratory/eiviz/issues/80)）。Windows 11 24H2以前の一部環境ではGPU upload heapsに対応していないため、この最適化が利用できない場合があります。
 
 ### macOS: Swift 6 / SwiftUI / Metal
 
-macOSホストはSwift 6/SwiftUIで、`hosts/macos`からMixerの`dylib`を内部のC ABI経由で呼び出します。描画はMetalです。  
-Apple SiliconのUnified Memoryと組み合わせると、WindowsのReBARに近い転送特性が得られます。
+macOS向けUIホストはSwiftUIで実装され、描画にはMetalを使用します。Apple SiliconのUnified Memoryアーキテクチャを活用し、メモリコピーのオーバーヘッドを削減しています。
 
 :::note
-開発チームにApple Silicon Macの常用者がいないため、実機での性能は未検証です。開発はIntel世代のMacBookで行っています。
+現在実機検証はIntel世代のMacBookを中心に行っており、Apple Silicon環境での動作確認は進行中です。ディスクリートGPU搭載Macのサポートは予定していません。
 :::
-
-MacのディスクリートGPUサポートは、現時点では予定していません。
 
 ### Linux（実験的）: Rust/GTK 4/Vulkan
 
 :::caution
-開発中の機能です。優先度はWindows/macOSより低く、本番利用は想定していません。
+開発中の実験的プラットフォームです。
 :::
 
-Linuxでは`hosts/linux`をRustとGTK 4（gtk4-rs）、描画はVulkanで進める想定です。  
-Vulkanのhost-visibleメモリで、WindowsのReBARに近いアップロード経路を取る方針です。  
-利用者と、Linuxを主戦場にする映像オペレーターがチーム内に少ないため、サポート優先度は他プラットフォームより低くしています。
-
-## 類似ソフトウェアの技術選定
-
-業界で使われているソフトウェアスイッチャーのスタックを、参考までに短く挙げます。
-
-:::note
-2026年9月時点の公開情報に基づきます。
-:::
-
-### vMix
-
-.NET Framework 4.8とSlimDX（Direct3D 9）を使っているとみられます。  
-現行の.NET/DirectX世代と比べると、レガシーな資産に寄った構成です。Windows専用です。
-
-### OBS Studio
-
-コアはC17のlibobs、UIはC++17とQt 6です。  
-合成レンダラはWindowsがDirect3D 11、LinuxとmacOSの既定がOpenGL 3.3以上、macOS Apple SiliconではMetal 3が実験的に入ります。  
-キャプチャや音声はOSごとの実装を抽象し、近い操作感を出しています。GPLのためFFmpegやx264も積極的に使い、エンコードとメディア処理は既存資産に大きく依存しています。
+GTK 4とVulkanを用いた実装を進めています。Vulkanのhost-visibleメモリを活用し、WindowsのReBARと同様の効率的な転送経路を目指しています。
