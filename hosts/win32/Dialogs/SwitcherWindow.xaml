@@ -88,6 +88,7 @@
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
                         <Button DockPanel.Dock="Right" Content="{Binding [switcher.manageScenes], Source={x:Static i18n:Loc.Source}}"
                                 Height="22" Padding="8,0" Click="ManageScenes_Click"/>
+                        <Button DockPanel.Dock="Right" Content="Animation" Height="22" Padding="8,0" Margin="0,0,6,0" Click="Animation_Click"/>
                         <TextBlock Text="{Binding [chrome.scenes], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>
                     </DockPanel>
                     <ScrollViewer DockPanel.Dock="Top" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"

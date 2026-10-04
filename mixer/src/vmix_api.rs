@@ -440,10 +440,15 @@ fn fade(unit_id: u64, duration_ms: u32, swap: bool, incoming: u64) -> Result<(),
     execute_live(eiviz_control::Command::Auto {
         unit_id,
         kind: TRANSITION_FADE,
-        duration_ms: duration_ms.max(1),
+        duration_value: duration_ms.max(1),
+        duration_unit: 1,
         swap,
         keep_preview: true,
         easing: 0,
+        bezier_x1: 0.0,
+        bezier_y1: 0.0,
+        bezier_x2: 1.0,
+        bezier_y2: 1.0,
         direction: 0,
         dip_r: 0.0,
         dip_g: 0.0,
@@ -732,7 +737,11 @@ mod tests {
         params.insert("Input".into(), "3".into());
         params.insert("Duration".into(), "1".into());
         dispatch_function("Fade", &params).expect("fade");
-        thread::sleep(Duration::from_millis(200));
+        // Transitions run on the master frame clock, which only the render loop advances.
+        crate::lifecycle::with_mixer(|mixer| {
+            mixer.shared.lock_or_recover().composed_frame += 1;
+        })
+        .expect("mixer");
         let out = unit_state();
         assert_eq!(out.program_source, incoming);
         assert_eq!(out.preview_source, preview);

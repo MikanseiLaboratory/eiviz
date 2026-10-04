@@ -46,6 +46,44 @@ pub struct LiveState {
     pub units: HashMap<u64, UnitLiveState>,
     #[serde(default)]
     pub peaks: Vec<LivePeak>,
+    /// Keyed by the scene GPU id. Playback is live-only and is not part of the saved layout.
+    #[serde(default)]
+    pub scenes: HashMap<u64, SceneAnimLive>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReachedLayer {
+    pub layer_id: u64,
+    pub state_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveMoveLive {
+    pub move_id: u64,
+    pub state_id: u64,
+    pub sequence_id: u64,
+    pub progress: f32,
+    pub layer_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveSequenceLive {
+    pub sequence_id: u64,
+    pub step_index: u32,
+    pub reverse: bool,
+    pub holding: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneAnimLive {
+    pub reached: Vec<ReachedLayer>,
+    pub moves: Vec<ActiveMoveLive>,
+    pub sequences: Vec<ActiveSequenceLive>,
+    pub takeovers: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

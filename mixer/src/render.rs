@@ -210,9 +210,11 @@ pub(crate) fn render_loop(
         frame_i = master_cursor.idx.saturating_sub(1);
         {
             let mut guard = shared.lock_or_recover();
+            guard.composed_frame = frame_i;
             for unit in guard.units.values_mut() {
-                tick_unit_transitions(unit);
+                tick_unit_transitions(unit, frame_i);
             }
+            tick_scene_anims(&mut guard, frame_i);
             snapshot.clear();
             snapshot.extend(guard.units.iter().map(|(id, unit)| {
                 let mix_preview = snapshot_mix_preview(unit);

@@ -37,6 +37,8 @@ internal interface IEivizBackend
     bool Auto(ulong unitId, MixingUnitEntry unit, TransitionPreset preset);
     bool SetMix(ulong unitId, float mix, TransitionPreset? preset);
     bool OverlayAuto(ulong unitId, ulong overlayId, uint durationMs, bool toOn);
+    bool SceneGoTo(ulong sceneId, ulong stateId);
+    bool SceneSequence(ulong sceneId, ulong sequenceId, uint op);
     bool VideoPlay(ulong inputId, bool playing);
     bool VideoLoop(ulong inputId, bool looping);
     bool VideoSeek(ulong inputId, long positionHns);
@@ -113,7 +115,9 @@ internal static class MutationJson
                 cropX = slot.CropX,
                 cropY = slot.CropY,
                 cropWidth = slot.CropWidth,
-                cropHeight = slot.CropHeight
+                cropHeight = slot.CropHeight,
+                easing = slot.Easing,
+                bezier = slot.Bezier
             }
         }, Json);
 
@@ -289,13 +293,17 @@ internal static class MutationJson
         public string Name { get; set; } = "";
         public List<SceneLayer> Layers { get; set; } = [];
         public List<string> Tags { get; set; } = [];
+        public List<SceneState> States { get; set; } = [];
+        public List<SceneSequence> Sequences { get; set; } = [];
 
         public static SceneDto FromPublic(SceneEntry scene) => new()
         {
             Id = scene.Id,
             Name = scene.Name,
             Layers = [.. scene.Layers],
-            Tags = [.. scene.Tags]
+            Tags = [.. scene.Tags],
+            States = [.. scene.States],
+            Sequences = [.. scene.Sequences]
         };
     }
 }
@@ -378,9 +386,24 @@ internal sealed class LocalEivizBackend : IEivizBackend
         unsafe
         {
             var desc = OverlayDescFrom(slot);
-            return MixerNative.OverlayAuto(unitId, toOn ? 1u : 0u, durationMs, &desc) == 0;
+            var frames = app.Session.Settings.FramesFor(durationMs, MixerNative.DurationMs);
+            var curve = new EivizCurve
+            {
+                Kind = slot.Easing,
+                X1 = slot.Bezier?.X1 ?? 0,
+                Y1 = slot.Bezier?.Y1 ?? 0,
+                X2 = slot.Bezier?.X2 ?? 1,
+                Y2 = slot.Bezier?.Y2 ?? 1
+            };
+            return MixerNative.OverlayAuto(unitId, toOn ? 1u : 0u, frames, &desc, &curve) == 0;
         }
     }
+
+    public bool SceneGoTo(ulong sceneId, ulong stateId) =>
+        MixerNative.SceneGoTo(MixerNative.SceneGpuId(sceneId), stateId) == 0;
+
+    public bool SceneSequence(ulong sceneId, ulong sequenceId, uint op) =>
+        MixerNative.SceneSequence(MixerNative.SceneGpuId(sceneId), sequenceId, op) == 0;
 
     public bool VideoPlay(ulong inputId, bool playing) =>
         MixerNative.VideoSetPlaying(inputId, playing ? 1u : 0u) == 0;
@@ -613,11 +636,14 @@ internal sealed class RemoteEivizBackend : IEivizBackend
 
     public bool Auto(ulong unitId, MixingUnitEntry unit, TransitionPreset preset)
     {
+        var settings = Application.Current is App app ? app.Session.Settings : new SessionSettings();
+        var curve = preset.Curve();
         var code = MixerRemote.Auto(
-            _handle, unitId, preset.Kind, preset.DurationMsFor(unit),
+            _handle, unitId, preset.Kind, preset.DurationMsForMaster(settings),
             preset.Swap ? 1u : 0u, preset.KeepPreview ? 1u : 0u,
             preset.Easing, preset.Direction, preset.DipR, preset.DipG, preset.DipB,
-            preset.DipA <= 0 ? 1 : preset.DipA, preset.Softness, preset.Param);
+            preset.DipA <= 0 ? 1 : preset.DipA, preset.Softness, preset.Param,
+            curve.X1, curve.Y1, curve.X2, curve.Y2);
         return code == 0;
     }
 
@@ -630,6 +656,12 @@ internal sealed class RemoteEivizBackend : IEivizBackend
 
     public bool OverlayAuto(ulong unitId, ulong overlayId, uint durationMs, bool toOn) =>
         MixerRemote.OverlayAuto(_handle, unitId, overlayId, durationMs, toOn ? 1u : 0u) == 0;
+
+    public bool SceneGoTo(ulong sceneId, ulong stateId) =>
+        MixerRemote.SceneGoTo(_handle, sceneId, stateId) == 0;
+
+    public bool SceneSequence(ulong sceneId, ulong sequenceId, uint op) =>
+        MixerRemote.SceneSequence(_handle, sceneId, sequenceId, op) == 0;
 
     public bool VideoPlay(ulong inputId, bool playing) =>
         MixerRemote.VideoPlay(_handle, inputId, playing ? 1u : 0u) == 0;
@@ -1242,6 +1274,8 @@ internal sealed class DisconnectedRemoteBackend : IEivizBackend
     public bool Auto(ulong unitId, MixingUnitEntry unit, TransitionPreset preset) { _ = (unitId, unit, preset); return false; }
     public bool SetMix(ulong unitId, float mix, TransitionPreset? preset) { _ = (unitId, mix, preset); return false; }
     public bool OverlayAuto(ulong unitId, ulong overlayId, uint durationMs, bool toOn) { _ = (unitId, overlayId, durationMs, toOn); return false; }
+    public bool SceneGoTo(ulong sceneId, ulong stateId) { _ = (sceneId, stateId); return false; }
+    public bool SceneSequence(ulong sceneId, ulong sequenceId, uint op) { _ = (sceneId, sequenceId, op); return false; }
     public bool VideoPlay(ulong inputId, bool playing) { _ = (inputId, playing); return false; }
     public bool VideoLoop(ulong inputId, bool looping) { _ = (inputId, looping); return false; }
     public bool VideoSeek(ulong inputId, long positionHns) { _ = (inputId, positionHns); return false; }

@@ -17,6 +17,12 @@ public partial class SceneEditorWindow : Window
     private readonly uint _width;
     private readonly uint _height;
     private readonly List<SceneLayer> _original;
+    private readonly string _animSnapshot;
+    private static readonly System.Text.Json.JsonSerializerOptions AnimJson = new()
+    {
+        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+    };
     private SceneLayer? _selected;
     private bool _dragging;
     private bool _resizing;
@@ -51,6 +57,9 @@ public partial class SceneEditorWindow : Window
         _width = width;
         _height = height;
         _original = scene.Layers.Select(Clone).ToList();
+        _animSnapshot = System.Text.Json.JsonSerializer.Serialize(
+            new AnimSnapshot(scene.States, scene.Sequences),
+            AnimJson);
         _selected = scene.Layers.FirstOrDefault();
         NameBox.Text = scene.Name;
         _tags = new TagCheckPanel(TagPanel, session.SceneTags, scene.Tags, this);
@@ -118,7 +127,8 @@ public partial class SceneEditorWindow : Window
         CropX = layer.CropX,
         CropY = layer.CropY,
         CropWidth = layer.CropWidth,
-        CropHeight = layer.CropHeight
+        CropHeight = layer.CropHeight,
+        LayerId = layer.LayerId
     };
 
     private void NormalizeOrder()
@@ -416,6 +426,7 @@ public partial class SceneEditorWindow : Window
             Z = _scene.Layers.Count == 0 ? 0 : _scene.Layers.Max(item => item.Z) + 1
         };
         _scene.Layers.Add(layer);
+        _scene.AssignLayerIds();
         _selected = layer;
         RefreshLayers();
         PushGpu();
@@ -975,8 +986,17 @@ public partial class SceneEditorWindow : Window
             return;
         }
         MixerApply.DefineScene(_scene, _width, _height);
+        MixerApply.DefineSceneAnim(_scene);
+        if (_scene.States.Count > 0 || _scene.Sequences.Count > 0)
+            SessionStore.Publish(_session);
         ReleaseDraft();
         DialogResult = true;
+    }
+
+    private void Animation_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SceneAnimWindow(_scene, persist: false) { Owner = this };
+        dialog.ShowDialog();
     }
 
     private void AddTag_Click(object sender, RoutedEventArgs e) => _tags?.PromptAdd();
@@ -988,10 +1008,37 @@ public partial class SceneEditorWindow : Window
         {
             _scene.Layers.Clear();
             _scene.Layers.AddRange(_original);
+            var saved = System.Text.Json.JsonSerializer.Deserialize<AnimSnapshot>(_animSnapshot, AnimJson);
+            _scene.States.Clear();
+            _scene.Sequences.Clear();
+            if (saved is not null)
+            {
+                _scene.States.AddRange(saved.States);
+                _scene.Sequences.AddRange(saved.Sequences);
+            }
             if (!App.IsRemote)
                 MixerApply.DefineScene(_scene, _width, _height);
+            else if (Application.Current is App app)
+            {
+                var json = MutationJson.UpsertScene(_scene);
+                var revision = app.Backend.Revision;
+                var backend = app.Backend;
+                Task.Run(() => backend.Mutate(json, revision, out _));
+            }
         }
         ReleaseDraft();
         base.OnClosed(e);
+    }
+}
+
+file sealed class AnimSnapshot
+{
+    public List<SceneState> States { get; set; } = [];
+    public List<SceneSequence> Sequences { get; set; } = [];
+    public AnimSnapshot() { }
+    public AnimSnapshot(List<SceneState> states, List<SceneSequence> sequences)
+    {
+        States = states;
+        Sequences = sequences;
     }
 }

@@ -233,10 +233,15 @@ impl ControlService {
             Command::Auto {
                 unit_id,
                 kind,
-                duration_ms,
+                duration_value,
+                duration_unit,
                 swap,
                 keep_preview,
                 easing,
+                bezier_x1,
+                bezier_y1,
+                bezier_x2,
+                bezier_y2,
                 direction,
                 dip_r,
                 dip_g,
@@ -246,13 +251,23 @@ impl ControlService {
                 softness,
                 param,
             } => {
+                let (fps_num, fps_den) = self.master_rate();
                 self.port.unit_auto(AutoApply {
                     unit_id,
                     kind,
-                    duration_ms,
+                    duration_frames: crate::session::duration_to_frames(
+                        duration_value,
+                        duration_unit,
+                        fps_num,
+                        fps_den,
+                    ),
                     swap,
                     keep_preview,
                     easing,
+                    bezier_x1,
+                    bezier_y1,
+                    bezier_x2,
+                    bezier_y2,
                     direction,
                     dip_r,
                     dip_g,
@@ -341,11 +356,26 @@ impl ControlService {
             Command::OverlayAuto {
                 unit_id,
                 overlay_id,
-                duration_ms,
+                duration_value,
+                duration_unit,
                 to_on,
             } => {
-                self.apply_overlay_auto(unit_id, overlay_id, duration_ms, to_on)?;
+                self.apply_overlay_auto(unit_id, overlay_id, duration_value, duration_unit, to_on)?;
                 self.after_live("OverlayAuto", request_id, Some(unit_id), true)
+            }
+            Command::SceneGoTo { scene_id, state_id } => {
+                let gpu = crate::ids::scene_gpu_id(scene_id);
+                self.port.scene_go_to(gpu, state_id)?;
+                self.after_live("SceneGoTo", request_id, None, false)
+            }
+            Command::SceneSequence {
+                scene_id,
+                sequence_id,
+                op,
+            } => {
+                let gpu = crate::ids::scene_gpu_id(scene_id);
+                self.port.scene_sequence(gpu, sequence_id, op)?;
+                self.after_live("SceneSequence", request_id, None, false)
             }
             Command::Shutdown => {
                 self.destroy_runtime()?;
@@ -464,11 +494,19 @@ impl ControlService {
         self.replace_session(document.canonicalize(), expected_revision, request_id)
     }
 
+    fn master_rate(&self) -> (u32, u32) {
+        self.store
+            .document()
+            .map(|doc| (doc.settings.master_fps_num, doc.settings.master_fps_den))
+            .unwrap_or((60_000, 1_001))
+    }
+
     fn apply_overlay_auto(
         &mut self,
         unit_id: u64,
         overlay_id: u64,
-        duration_ms: u32,
+        duration_value: u32,
+        duration_unit: u32,
         to_on: bool,
     ) -> ControlResult<()> {
         let slot = {
@@ -497,10 +535,25 @@ impl ControlService {
             }
             self.store.set_document_keep_revision(doc);
         }
+        let (fps_num, fps_den) = self.master_rate();
+        let handles = slot
+            .bezier
+            .map(|item| item.as_array())
+            .unwrap_or([0.0, 0.0, 1.0, 1.0]);
         self.port.overlay_auto(OverlayAutoApply {
             unit_id,
             to_on,
-            duration_ms,
+            duration_frames: crate::session::duration_to_frames(
+                duration_value,
+                duration_unit,
+                fps_num,
+                fps_den,
+            ),
+            easing: slot.easing,
+            bezier_x1: handles[0],
+            bezier_y1: handles[1],
+            bezier_x2: handles[2],
+            bezier_y2: handles[3],
             source_id: slot.scene_gpu_id,
             x: slot.x,
             y: slot.y,
@@ -587,10 +640,15 @@ impl ControlService {
             Command::Auto {
                 unit_id,
                 kind: 1,
-                duration_ms: duration_ms.max(1),
+                duration_value: duration_ms.max(1),
+                duration_unit: 1,
                 swap: !named_input,
                 keep_preview: true,
                 easing: 0,
+                bezier_x1: 0.0,
+                bezier_y1: 0.0,
+                bezier_x2: 1.0,
+                bezier_y2: 1.0,
                 direction: 0,
                 dip_r: 0.0,
                 dip_g: 0.0,
@@ -830,8 +888,25 @@ mod tests {
             self.push_op(format!("define_scene {}", spec.id));
             Ok(())
         }
+        fn define_scene_anim(&mut self, spec: crate::port::SceneAnimApply) -> ControlResult<()> {
+            self.push_op(format!("define_scene_anim {}", spec.id));
+            Ok(())
+        }
         fn destroy_scene(&mut self, id: u64) -> ControlResult<()> {
             self.push_op(format!("destroy_scene {id}"));
+            Ok(())
+        }
+        fn scene_go_to(&mut self, scene_gpu_id: u64, state_id: u64) -> ControlResult<()> {
+            self.push_op(format!("scene_go_to {scene_gpu_id} {state_id}"));
+            Ok(())
+        }
+        fn scene_sequence(
+            &mut self,
+            scene_gpu_id: u64,
+            sequence_id: u64,
+            op: u32,
+        ) -> ControlResult<()> {
+            self.push_op(format!("scene_sequence {scene_gpu_id} {sequence_id} {op}"));
             Ok(())
         }
         fn define_generator(&mut self, spec: GeneratorApply) -> ControlResult<()> {
@@ -1248,7 +1323,8 @@ mod tests {
                 Command::OverlayAuto {
                     unit_id: 1,
                     overlay_id: 1,
-                    duration_ms: 200,
+                    duration_value: 200,
+                    duration_unit: 1,
                     to_on: true,
                 },
             )

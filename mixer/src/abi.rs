@@ -81,9 +81,38 @@ pub const EASING_IN: u32 = 1;
 pub const EASING_OUT: u32 = 2;
 pub const EASING_IN_OUT: u32 = 3;
 pub const EASING_SMOOTHSTEP: u32 = 4;
+pub const EASING_BEZIER: u32 = 5;
+pub const EASING_HOLD: u32 = 6;
+
+/// Cubic Bezier handles. `x1` and `x2` must lie in `[0, 1]`. `y` may overshoot.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct EivizCurve {
+    pub kind: u32,
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
+}
+
+impl Default for EivizCurve {
+    fn default() -> Self {
+        Self {
+            kind: EASING_LINEAR,
+            x1: 0.0,
+            y1: 0.0,
+            x2: 1.0,
+            y2: 1.0,
+        }
+    }
+}
 
 pub const DURATION_FRAMES: u32 = 0;
 pub const DURATION_MS: u32 = 1;
+
+pub const SCENE_SEQ_PLAY: u32 = 1;
+pub const SCENE_SEQ_REVERSE: u32 = 2;
+pub const SCENE_SEQ_STOP: u32 = 3;
 
 pub const OUTPUT_PROGRAM: u32 = 0;
 pub const OUTPUT_PREVIEW: u32 = 1;
@@ -220,7 +249,7 @@ impl Default for MixerRebarInfo {
 
 /// The ABI intentionally consists of fixed-width plain data only.
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rect {
     pub x: f32,
     pub y: f32,
@@ -239,6 +268,7 @@ pub struct OverlayDesc {
     pub audio_follow: u32,
     pub hidden: u32,
     pub label: *const std::ffi::c_char,
+    pub layer_id: u64,
 }
 
 impl OverlayDesc {
@@ -271,6 +301,7 @@ impl Default for OverlayDesc {
             audio_follow: 0,
             hidden: 0,
             label: std::ptr::null(),
+            layer_id: 0,
         }
     }
 }
@@ -279,6 +310,72 @@ impl Default for OverlayDesc {
 /// Stored overlays never dereference this pointer.
 unsafe impl Send for OverlayDesc {}
 unsafe impl Sync for OverlayDesc {}
+
+/// Arrival motion for a Scene state. Bezier handles are read only when `easing` is bezier.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct EivizMotion {
+    pub duration_frames: u32,
+    pub easing: u32,
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
+    pub has_bezier: u32,
+}
+
+/// One named Scene state. `layers` are full overlay descriptors keyed by `layer_id`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct EivizSceneStateDesc {
+    pub id: u64,
+    pub layers: *const OverlayDesc,
+    pub layer_count: u32,
+    pub enter: EivizMotion,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct EivizSequenceStepDesc {
+    pub state_id: u64,
+    pub motion: EivizMotion,
+    pub has_motion: u32,
+    pub hold_frames: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct EivizSceneSequenceDesc {
+    pub id: u64,
+    pub steps: *const EivizSequenceStepDesc,
+    pub step_count: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EivizReachedLayer {
+    pub layer_id: u64,
+    pub state_id: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EivizActiveMove {
+    pub move_id: u64,
+    pub state_id: u64,
+    pub sequence_id: u64,
+    pub progress: f32,
+    pub layer_count: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EivizActiveSequence {
+    pub sequence_id: u64,
+    pub step_index: u32,
+    pub reverse: u32,
+    pub holding: u32,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]

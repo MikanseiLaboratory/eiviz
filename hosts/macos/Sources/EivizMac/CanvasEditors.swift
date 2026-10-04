@@ -17,6 +17,9 @@ struct SceneEditorView: View {
     @State private var draftGpuId: UInt64 = 0
     @State private var previewSource: UInt64 = 0
     @State private var committed = false
+    @State private var showAnim = false
+    @State private var originalStates: [SceneState] = []
+    @State private var originalSequences: [SceneSequence] = []
 
     private var sceneIndex: Int? {
         mixer.session.scenes.firstIndex { $0.id == mixer.editingScene?.id }
@@ -88,6 +91,7 @@ struct SceneEditorView: View {
                     }
                 }
                 Button("Add layer") { addLayer() }
+                Button("Animation") { showAnim = true }
                 HStack {
                 Button("Z up") { shiftZ(-1) }
                 Button("Z down") { shiftZ(1) }
@@ -182,6 +186,10 @@ struct SceneEditorView: View {
                                 _ = mixer.commitRemoteScene(scene)
                             } else {
                                 mixer.pushScene(scene)
+                                mixer.pushSceneAnim(scene)
+                                if !scene.states.isEmpty || !scene.sequences.isEmpty {
+                                    mixer.publishSession()
+                                }
                             }
                         }
                         releaseDraft()
@@ -197,6 +205,12 @@ struct SceneEditorView: View {
         }
         .padding(12)
         .frame(minWidth: 1400, minHeight: 720)
+        .sheet(isPresented: $showAnim) {
+            if let id = current?.id {
+                SceneAnimView(sceneId: id, persist: false)
+                    .environmentObject(mixer)
+            }
+        }
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
         .onAppear {
@@ -206,6 +220,8 @@ struct SceneEditorView: View {
                 editorMonitor = mixer.allocateMonitorId()
             }
             original = current?.layers ?? []
+            originalStates = current?.states ?? []
+            originalSequences = current?.sequences ?? []
             name = current?.name ?? ""
             selectedTags = current?.tags ?? []
             selectedLayer = current?.layers.first?.id
@@ -218,8 +234,11 @@ struct SceneEditorView: View {
             guard !committed else { return }
             if let i = sceneIndex {
                 mixer.session.scenes[i].layers = original
+                mixer.session.scenes[i].states = originalStates
+                mixer.session.scenes[i].sequences = originalSequences
                 if !mixer.isRemote {
                     mixer.pushScene(mixer.session.scenes[i])
+                    mixer.pushSceneAnim(mixer.session.scenes[i])
                 }
             }
             releaseDraft()
@@ -301,8 +320,10 @@ struct SceneEditorView: View {
 
     private func addLayer() {
         mutate { scene in
+            scene.assignLayerIds()
+            let next = (scene.layers.map(\.layerId).max() ?? 0) + 1
             let z = scene.layers.map(\.z).max().map { $0 + 1 } ?? 0
-            let layer = SceneLayer(inputId: mixer.selectedInputId ?? EIVIZ_SRC_BARS, z: z)
+            let layer = SceneLayer(inputId: mixer.selectedInputId ?? EIVIZ_SRC_BARS, z: z, layerId: next)
             scene.layers.append(layer)
             selectedLayer = layer.id
         }

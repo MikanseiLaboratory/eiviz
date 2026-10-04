@@ -13,6 +13,13 @@
             <Setter Property="Margin" Value="1,0,0,0"/>
         </Style>
     </UserControl.Resources>
+    <DockPanel>
+    <Border x:Name="AnimPanel" DockPanel.Dock="Right" Width="128" Margin="2,0,0,0" Background="#1C1C1C"
+            BorderBrush="#444" BorderThickness="1" Visibility="Collapsed">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel x:Name="AnimButtons" Margin="3"/>
+        </ScrollViewer>
+    </Border>
     <Border x:Name="Chrome" BorderThickness="3" BorderBrush="#555" Background="#111" Cursor="Hand"
             PreviewMouseRightButtonDown="Chrome_RightClick">
         <Grid>
@@ -20,6 +27,7 @@
                 <Border x:Name="TitleBar" DockPanel.Dock="Top" Background="#333" Padding="6,3">
                     <DockPanel>
                         <Button x:Name="CloseExpandedButton" DockPanel.Dock="Right" Style="{StaticResource TileBtn}" Content="X" Click="Close_Click"/>
+                        <Button x:Name="AnimExpandedButton" DockPanel.Dock="Right" Style="{StaticResource TileBtn}" Content="▸" Click="Anim_Click"/>
                         <TextBlock x:Name="Number" Text="1" Foreground="#EEE" FontWeight="Bold"
                                    Margin="0,0,6,0" VerticalAlignment="Center"/>
                         <TextBlock x:Name="Title" Foreground="#EEE" TextTrimming="CharacterEllipsis"
@@ -42,6 +50,8 @@
                         HorizontalAlignment="Center" Margin="0,4,0,2" Click="Close_Click"/>
                 <TextBlock x:Name="CollapsedNumber" DockPanel.Dock="Top" Text="1"
                            Foreground="#EEE" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,0,0,4"/>
+                <Button x:Name="AnimCollapsedButton" DockPanel.Dock="Bottom" Style="{StaticResource TileBtn}" Content="▸"
+                        MinWidth="22" HorizontalAlignment="Center" Margin="0,2,0,4" Click="Anim_Click"/>
                 <Viewbox Stretch="Uniform" Margin="4,0,4,6">
                     <TextBlock x:Name="CollapsedTitle" Foreground="#EEE" FontSize="12">
                         <TextBlock.LayoutTransform>
@@ -52,4 +62,5 @@
             </DockPanel>
         </Grid>
     </Border>
+    </DockPanel>
 </UserControl>

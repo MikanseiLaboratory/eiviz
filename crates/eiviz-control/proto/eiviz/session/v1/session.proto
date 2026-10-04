@@ -147,6 +147,7 @@ message SceneLayer {
   float crop_width = 13;
   float crop_height = 14;
   bool hidden = 15;
+  uint64 layer_id = 16;
 }
 
 message Scene {
@@ -156,6 +157,38 @@ message Scene {
   repeated SceneLayer layers = 4;
   repeated string tags = 5;
   bool preview_collapsed = 6;
+  repeated SceneState states = 7;
+  repeated SceneSequence sequences = 8;
+}
+
+message Motion {
+  uint32 duration_frames = 1;
+  uint32 easing = 2;
+  optional BezierHandles bezier = 3;
+}
+
+message LayerKey {
+  uint64 layer_id = 1;
+  SceneLayerGeom geom = 2;
+}
+
+message SceneState {
+  uint64 id = 1;
+  string name = 2;
+  repeated LayerKey layers = 3;
+  Motion enter = 4;
+}
+
+message SequenceStep {
+  uint64 state_id = 1;
+  optional Motion motion = 2;
+  uint32 hold_frames = 3;
+}
+
+message SceneSequence {
+  uint64 id = 1;
+  string name = 2;
+  repeated SequenceStep steps = 3;
 }
 
 message SceneLayoutPreset {
@@ -192,6 +225,14 @@ message TransitionPreset {
   float param = 13;
   optional string custom_wgsl = 14;
   optional string label = 15;
+  optional BezierHandles bezier = 16;
+}
+
+message BezierHandles {
+  float x1 = 1;
+  float y1 = 2;
+  float x2 = 3;
+  float y2 = 4;
 }
 
 message OverlaySlot {
@@ -217,6 +258,8 @@ message OverlaySlot {
   float crop_width = 19;
   float crop_height = 20;
   uint64 id = 21;
+  uint32 easing = 22;
+  optional BezierHandles bezier = 23;
 }
 
 message MixingUnit {

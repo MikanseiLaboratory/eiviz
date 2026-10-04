@@ -206,6 +206,99 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
     if !valid_rate(doc.settings.master_fps_num, doc.settings.master_fps_den) {
         return Err(ValidationError::new("master fps is invalid"));
     }
+    for preset in &doc.transitions {
+        check_curve(preset.easing, preset.bezier.as_ref(), false, "transition")?;
+    }
+    for overlay in &doc.overlays {
+        check_curve(overlay.easing, overlay.bezier.as_ref(), false, "overlay")?;
+    }
+    for scene in &doc.scenes {
+        let layer_ids: Vec<u64> = scene.layers.iter().map(|layer| layer.layer_id).collect();
+        let state_ids: Vec<u64> = scene.states.iter().map(|state| state.id).collect();
+        for state in &scene.states {
+            if state.id == 0 {
+                return Err(ValidationError::new(format!(
+                    "scene {} state id 0 is reserved for the saved layout",
+                    scene.id
+                )));
+            }
+            for key in &state.layers {
+                if !layer_ids.contains(&key.layer_id) {
+                    return Err(ValidationError::new(format!(
+                        "scene {} state {} references missing layer {}",
+                        scene.id, state.id, key.layer_id
+                    )));
+                }
+            }
+            check_curve(
+                state.enter.easing,
+                state.enter.bezier.as_ref(),
+                true,
+                "state",
+            )?;
+            if state.enter.duration_frames == 0 {
+                return Err(ValidationError::new(format!(
+                    "scene {} state {} duration is zero",
+                    scene.id, state.id
+                )));
+            }
+        }
+        for seq in &scene.sequences {
+            if seq.steps.len() < 2 {
+                return Err(ValidationError::new(format!(
+                    "scene {} sequence {} needs at least two steps",
+                    scene.id, seq.id
+                )));
+            }
+            for step in &seq.steps {
+                if !state_ids.contains(&step.state_id) {
+                    return Err(ValidationError::new(format!(
+                        "scene {} sequence {} references missing state {}",
+                        scene.id, seq.id, step.state_id
+                    )));
+                }
+                if let Some(motion) = &step.motion {
+                    check_curve(motion.easing, motion.bezier.as_ref(), true, "sequence step")?;
+                    if motion.duration_frames == 0 {
+                        return Err(ValidationError::new(format!(
+                            "scene {} sequence {} step duration is zero",
+                            scene.id, seq.id
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_curve(
+    easing: u32,
+    bezier: Option<&crate::session::BezierHandles>,
+    allow_hold: bool,
+    what: &str,
+) -> Result<(), ValidationError> {
+    let max = if allow_hold { 6 } else { 5 };
+    if easing > max {
+        return Err(ValidationError::new(format!(
+            "{what} easing {easing} is not supported"
+        )));
+    }
+    if easing == 5 {
+        let Some(handles) = bezier else {
+            return Err(ValidationError::new(format!(
+                "{what} bezier easing requires handles"
+            )));
+        };
+        let finite = [handles.x1, handles.y1, handles.x2, handles.y2]
+            .iter()
+            .all(|value| value.is_finite());
+        if !finite || !handles.x_in_range() {
+            return Err(ValidationError::new(format!(
+                "{what} bezier handles are outside the supported range"
+            )));
+        }
+    }
     Ok(())
 }
 

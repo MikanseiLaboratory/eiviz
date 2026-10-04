@@ -431,6 +431,8 @@ fn dispatch(state: &State, instance: &str, role: Role, request: crate::proto::Re
         | Some(request::Payload::Auto(_))
         | Some(request::Payload::SetMix(_))
         | Some(request::Payload::OverlayAuto(_))
+        | Some(request::Payload::SceneGoTo(_))
+        | Some(request::Payload::SceneSequence(_))
         | Some(request::Payload::VideoPlay(_))
         | Some(request::Payload::VideoLoop(_))
         | Some(request::Payload::VideoSeek(_))
@@ -500,10 +502,15 @@ fn dispatch(state: &State, instance: &str, role: Role, request: crate::proto::Re
                 Command::Auto {
                     unit_id,
                     kind: auto.kind,
-                    duration_ms: auto.duration_ms,
+                    duration_value: auto.duration_ms,
+                    duration_unit: 1,
                     swap: auto.swap,
                     keep_preview: auto.keep_preview,
                     easing: auto.easing,
+                    bezier_x1: auto.bezier_x1,
+                    bezier_y1: auto.bezier_y1,
+                    bezier_x2: auto.bezier_x2,
+                    bezier_y2: auto.bezier_y2,
                     direction: auto.direction,
                     dip_r: auto.dip_r,
                     dip_g: auto.dip_g,
@@ -538,7 +545,8 @@ fn dispatch(state: &State, instance: &str, role: Role, request: crate::proto::Re
             Command::OverlayAuto {
                 unit_id: overlay.unit.as_ref().map(|item| item.id).unwrap_or(0),
                 overlay_id: overlay.overlay_id,
-                duration_ms: overlay.duration_ms,
+                duration_value: overlay.duration_ms,
+                duration_unit: 1,
                 to_on: overlay.to_on,
             },
         ),
@@ -671,6 +679,25 @@ fn dispatch(state: &State, instance: &str, role: Role, request: crate::proto::Re
                 .snapshot()
                 .map(|snap| proto_snapshot(snap, request_id.clone()))
         }
+        Some(request::Payload::SceneGoTo(go)) => exec_cmd(
+            state,
+            instance,
+            &request_id,
+            Command::SceneGoTo {
+                scene_id: go.scene_id,
+                state_id: go.state_id,
+            },
+        ),
+        Some(request::Payload::SceneSequence(seq)) => exec_cmd(
+            state,
+            instance,
+            &request_id,
+            Command::SceneSequence {
+                scene_id: seq.scene_id,
+                sequence_id: seq.sequence_id,
+                op: seq.op,
+            },
+        ),
         Some(request::Payload::SaveSession(_)) => {
             exec_cmd(state, instance, &request_id, Command::SaveSession)
         }

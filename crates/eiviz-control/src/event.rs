@@ -99,6 +99,8 @@ pub fn command_name(command: &Command) -> &'static str {
         Command::Auto { .. } => "Auto",
         Command::SetMix { .. } => "SetMix",
         Command::OverlayAuto { .. } => "OverlayAuto",
+        Command::SceneGoTo { .. } => "SceneGoTo",
+        Command::SceneSequence { .. } => "SceneSequence",
         Command::VideoPlay { .. } => "VideoPlay",
         Command::VideoLoop { .. } => "VideoLoop",
         Command::VideoSeek { .. } => "VideoSeek",

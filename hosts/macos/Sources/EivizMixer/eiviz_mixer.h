@@ -89,6 +89,11 @@ extern "C" {
 #define EIVIZ_EASING_OUT 2u
 #define EIVIZ_EASING_IN_OUT 3u
 #define EIVIZ_EASING_SMOOTHSTEP 4u
+#define EIVIZ_EASING_BEZIER 5u
+#define EIVIZ_EASING_HOLD 6u
+#define EIVIZ_SCENE_SEQ_PLAY 1u
+#define EIVIZ_SCENE_SEQ_REVERSE 2u
+#define EIVIZ_SCENE_SEQ_STOP 3u
 #define EIVIZ_DIR_LEFT 0u
 #define EIVIZ_DIR_RIGHT 1u
 #define EIVIZ_DIR_UP 2u
@@ -124,6 +129,14 @@ typedef struct EivizRect {
     float height;
 } EivizRect;
 
+typedef struct EivizCurve {
+    uint32_t kind;
+    float x1;
+    float y1;
+    float x2;
+    float y2;
+} EivizCurve;
+
 typedef struct EivizOverlayDesc {
     uint64_t source_id;
     EivizRect rect;
@@ -133,7 +146,58 @@ typedef struct EivizOverlayDesc {
     uint32_t audio_follow;
     uint32_t hidden;
     const char *label;
+    uint64_t layer_id;
 } EivizOverlayDesc;
+
+typedef struct EivizMotion {
+    uint32_t duration_frames;
+    uint32_t easing;
+    float x1;
+    float y1;
+    float x2;
+    float y2;
+    uint32_t has_bezier;
+} EivizMotion;
+
+typedef struct EivizSceneStateDesc {
+    uint64_t id;
+    const EivizOverlayDesc *layers;
+    uint32_t layer_count;
+    EivizMotion enter;
+} EivizSceneStateDesc;
+
+typedef struct EivizSequenceStepDesc {
+    uint64_t state_id;
+    EivizMotion motion;
+    uint32_t has_motion;
+    uint32_t hold_frames;
+} EivizSequenceStepDesc;
+
+typedef struct EivizSceneSequenceDesc {
+    uint64_t id;
+    const EivizSequenceStepDesc *steps;
+    uint32_t step_count;
+} EivizSceneSequenceDesc;
+
+typedef struct EivizReachedLayer {
+    uint64_t layer_id;
+    uint64_t state_id;
+} EivizReachedLayer;
+
+typedef struct EivizActiveMove {
+    uint64_t move_id;
+    uint64_t state_id;
+    uint64_t sequence_id;
+    float progress;
+    uint32_t layer_count;
+} EivizActiveMove;
+
+typedef struct EivizActiveSequence {
+    uint64_t sequence_id;
+    uint32_t step_index;
+    uint32_t reverse;
+    uint32_t holding;
+} EivizActiveSequence;
 
 typedef struct EivizUnitState {
     uint64_t program_source;
@@ -268,6 +332,21 @@ int32_t mixer_create_unit(uint64_t unit_id, uint32_t width, uint32_t height);
 int32_t mixer_destroy_unit(uint64_t unit_id);
 int32_t mixer_unit_configure(uint64_t unit_id, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den);
 int32_t mixer_define_scene(uint64_t scene_id, uint32_t width, uint32_t height, uint32_t count, const EivizOverlayDesc *layers);
+int32_t mixer_scene_states_define(uint64_t scene_id, const EivizSceneStateDesc *states, uint32_t count);
+int32_t mixer_scene_sequences_define(uint64_t scene_id, const EivizSceneSequenceDesc *sequences, uint32_t count);
+int32_t mixer_scene_go_to(uint64_t scene_id, uint64_t state_id);
+int32_t mixer_scene_sequence(uint64_t scene_id, uint64_t sequence_id, uint32_t op);
+int32_t mixer_scene_anim_state(
+    uint64_t scene_id,
+    EivizReachedLayer *reached,
+    uint32_t reached_cap,
+    uint32_t *reached_count,
+    EivizActiveMove *moves,
+    uint32_t moves_cap,
+    uint32_t *moves_count,
+    EivizActiveSequence *sequences,
+    uint32_t sequences_cap,
+    uint32_t *sequences_count);
 int32_t mixer_destroy_scene(uint64_t scene_id);
 int32_t mixer_define_generator(uint64_t id, uint32_t kind, float r, float g, float b, float a, uint32_t scroll);
 int32_t mixer_define_mix_input(uint64_t id, uint64_t target_id, uint32_t source_kind, uint32_t delay);
@@ -283,8 +362,8 @@ int32_t mixer_unit_set_state(uint64_t unit_id, const EivizUnitState *state);
 int32_t mixer_unit_set_overlays(uint64_t unit_id, const EivizOverlayDesc *overlays, uint32_t count);
 int32_t mixer_unit_get_state(uint64_t unit_id, EivizUnitState *out);
 int32_t mixer_unit_cut(uint64_t unit_id, uint32_t swap, uint64_t incoming_source);
-int32_t mixer_unit_auto(uint64_t unit_id, uint32_t kind, uint32_t duration_ms, uint32_t swap, uint32_t keep_preview, uint32_t easing, uint32_t direction, float dip_r, float dip_g, float dip_b, float dip_a, uint64_t incoming_source, float softness, float param);
-int32_t mixer_unit_overlay_auto(uint64_t unit_id, uint32_t target_enabled, uint32_t duration_ms, const EivizOverlayDesc *desc);
+int32_t mixer_unit_auto(uint64_t unit_id, uint32_t kind, uint32_t duration_frames, uint32_t swap, uint32_t keep_preview, const EivizCurve *curve, uint32_t direction, float dip_r, float dip_g, float dip_b, float dip_a, uint64_t incoming_source, float softness, float param);
+int32_t mixer_unit_overlay_auto(uint64_t unit_id, uint32_t target_enabled, uint32_t duration_frames, const EivizOverlayDesc *desc, const EivizCurve *curve);
 int32_t mixer_unit_set_custom_wgsl(uint64_t unit_id, const char *wgsl);
 int32_t mixer_validate_custom_wgsl(const char *wgsl);
 int32_t mixer_register_source(uint64_t id, uint32_t width, uint32_t height, uint32_t format);

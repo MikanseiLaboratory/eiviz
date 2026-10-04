@@ -528,6 +528,7 @@ public sealed class SceneLayer
     public float CropY { get; set; }
     public float CropWidth { get; set; } = 1;
     public float CropHeight { get; set; } = 1;
+    public ulong LayerId { get; set; }
 
     public void SetCropInset(CropEdit edit, float value)
     {
@@ -582,10 +583,103 @@ public sealed class SceneEntry
     public required string Name { get; set; }
     public ulong MonitorId { get; set; }
     public List<SceneLayer> Layers { get; } = [];
+    public List<SceneState> States { get; } = [];
+    public List<SceneSequence> Sequences { get; } = [];
     public List<string> Tags { get; set; } = [];
     public bool PreviewCollapsed { get; set; }
     public ulong GpuId => MixerNative.SceneBase | Id;
     public override string ToString() => Name;
+
+    public void AssignLayerIds()
+    {
+        ulong next = 0;
+        foreach (var layer in Layers)
+        {
+            if (layer.LayerId > next)
+                next = layer.LayerId;
+        }
+        var seen = new HashSet<ulong>();
+        foreach (var layer in Layers)
+        {
+            if (layer.LayerId == 0 || !seen.Add(layer.LayerId))
+            {
+                next++;
+                layer.LayerId = next;
+                seen.Add(layer.LayerId);
+            }
+        }
+    }
+}
+
+public sealed class BezierHandles
+{
+    public float X1 { get; set; }
+    public float Y1 { get; set; }
+    public float X2 { get; set; } = 1;
+    public float Y2 { get; set; } = 1;
+}
+
+public sealed class SceneLayerGeom
+{
+    public float X { get; set; }
+    public float Y { get; set; }
+    public float Width { get; set; } = 1;
+    public float Height { get; set; } = 1;
+    public float Opacity { get; set; } = 1;
+    public int Z { get; set; }
+    public float CropX { get; set; }
+    public float CropY { get; set; }
+    public float CropWidth { get; set; } = 1;
+    public float CropHeight { get; set; } = 1;
+
+    public static SceneLayerGeom From(SceneLayer layer) => new()
+    {
+        X = layer.X,
+        Y = layer.Y,
+        Width = layer.Width,
+        Height = layer.Height,
+        Opacity = layer.Opacity,
+        Z = layer.Z,
+        CropX = layer.CropX,
+        CropY = layer.CropY,
+        CropWidth = layer.CropWidth,
+        CropHeight = layer.CropHeight
+    };
+}
+
+public sealed class LayerKey
+{
+    public ulong LayerId { get; set; }
+    public SceneLayerGeom Geom { get; set; } = new();
+}
+
+public sealed class Motion
+{
+    public uint DurationFrames { get; set; } = 15;
+    public uint Easing { get; set; }
+    public BezierHandles? Bezier { get; set; }
+}
+
+public sealed class SceneState
+{
+    public ulong Id { get; set; }
+    public string Name { get; set; } = "";
+    public List<LayerKey> Layers { get; set; } = [];
+    public Motion Enter { get; set; } = new();
+}
+
+public sealed class SequenceStep
+{
+    public ulong StateId { get; set; }
+    public Motion? Motion { get; set; }
+    public uint HoldFrames { get; set; }
+}
+
+public sealed class SceneSequence
+{
+    public ulong Id { get; set; }
+    public string Name { get; set; } = "";
+    public List<SequenceStep> Steps { get; set; } = [];
 }
 
 public sealed class TransitionPreset
@@ -596,6 +690,7 @@ public sealed class TransitionPreset
     public bool Swap { get; set; } = true;
     public bool KeepPreview { get; set; } = true;
     public uint Easing { get; set; }
+    public BezierHandles? Bezier { get; set; }
     public uint Direction { get; set; }
     public float DipR { get; set; }
     public float DipG { get; set; }
@@ -618,6 +713,27 @@ public sealed class TransitionPreset
         DurationUnit == MixerNative.DurationMs
             ? Math.Max(1, DurationValue)
             : unit.DurationMs(DurationValue);
+
+    public uint DurationFrames(SessionSettings settings) =>
+        settings.FramesFor(DurationValue, DurationUnit);
+
+    public uint DurationMsForMaster(SessionSettings settings) =>
+        DurationUnit == MixerNative.DurationMs
+            ? Math.Max(1, DurationValue)
+            : settings.WallMs(Math.Max(1, DurationValue));
+
+    internal EivizCurve Curve()
+    {
+        var bezier = Bezier;
+        return new EivizCurve
+        {
+            Kind = Easing,
+            X1 = bezier?.X1 ?? 0,
+            Y1 = bezier?.Y1 ?? 0,
+            X2 = bezier?.X2 ?? 1,
+            Y2 = bezier?.Y2 ?? 1
+        };
+    }
 
     internal bool ApplyAuto(ulong unitId, MixingUnitEntry unit) =>
         MixerApply.Auto(unitId, unit, this);
@@ -644,6 +760,8 @@ public sealed class OverlaySlot
     public uint TransitionKind { get; set; } = MixerNative.TransitionFade;
     public uint DurationValue { get; set; } = 15;
     public uint DurationUnit { get; set; }
+    public uint Easing { get; set; }
+    public BezierHandles? Bezier { get; set; }
     public bool AudioFollow { get; set; } = true;
     public bool Locked { get; set; }
     public bool Hidden { get; set; }
@@ -974,6 +1092,14 @@ public sealed class SessionSettings
 {
     public uint MasterFpsNum { get; set; } = 60_000;
     public uint MasterFpsDen { get; set; } = 1_001;
+
+    public uint FramesFor(uint value, uint unit) =>
+        unit == MixerNative.DurationMs
+            ? (uint)Math.Max(1, Math.Round(value * (double)MasterFpsNum / Math.Max(1, MasterFpsDen) / 1000.0))
+            : Math.Max(1, value);
+
+    public uint WallMs(uint frames) =>
+        (uint)Math.Max(1, Math.Round(frames * 1000.0 * MasterFpsDen / Math.Max(1, MasterFpsNum)));
     public uint DefaultWidth { get; set; } = 1920;
     public uint DefaultHeight { get; set; } = 1080;
     public string Theme { get; set; } = "Charcoal";
@@ -1084,6 +1210,7 @@ public sealed class Session
         session.Units.Add(unit);
         session.NextUnitId = 2;
         session.AddScene("Scene 1", MixerNative.Bars);
+        SeedPreviewAnimation(session.Scenes[0]);
         session.AddScene("Scene 2", MixerNative.Color);
         unit.PreviewSceneId = session.Scenes[0].Id;
         unit.ProgramSceneId = session.Scenes[1].Id;
@@ -1126,6 +1253,56 @@ public sealed class Session
         Scenes.Add(scene);
         return scene;
     }
+
+    /// Blue plate on the bars scene. Play walks it to the lower third, then back to the corner.
+    private static void SeedPreviewAnimation(SceneEntry scene)
+    {
+        if (scene.Layers.Count == 0)
+            return;
+        scene.Layers[0].LayerId = 1;
+        scene.Layers[0].Z = 0;
+        scene.Layers.Add(new SceneLayer
+        {
+            InputId = MixerNative.Blue,
+            X = 0.72f,
+            Y = 0.06f,
+            Width = 0.22f,
+            Height = 0.16f,
+            Opacity = 1,
+            Z = 1,
+            LayerId = 2
+        });
+        scene.States.Add(new SceneState
+        {
+            Id = 1,
+            Name = "Lower third",
+            Enter = new Motion { DurationFrames = 45, Easing = MixerNative.EasingOut },
+            Layers = [PlateKey(0.06f, 0.72f, 0.55f, 0.2f)]
+        });
+        scene.States.Add(new SceneState
+        {
+            Id = 2,
+            Name = "Bug",
+            Enter = new Motion { DurationFrames = 30, Easing = MixerNative.EasingInOut },
+            Layers = [PlateKey(0.72f, 0.06f, 0.22f, 0.16f)]
+        });
+        scene.Sequences.Add(new SceneSequence
+        {
+            Id = 1,
+            Name = "Lower third",
+            Steps =
+            [
+                new SequenceStep { StateId = 1, HoldFrames = 20 },
+                new SequenceStep { StateId = 2, HoldFrames = 20 }
+            ]
+        });
+    }
+
+    private static LayerKey PlateKey(float x, float y, float width, float height) => new()
+    {
+        LayerId = 2,
+        Geom = new SceneLayerGeom { X = x, Y = y, Width = width, Height = height, Opacity = 1, Z = 1 }
+    };
 
     public MultiviewLayout AddMultiview(string? name = null, ulong? unitId = null)
     {

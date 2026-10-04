@@ -289,9 +289,15 @@ extension MixerController {
         else { return }
         let unit = session.units[unitIndex]
         var desc = overlayDesc(slot)
-        let ms = slot.durationUnit == EIVIZ_DURATION_MS
-            ? max(1, slot.durationValue)
-            : unit.durationMs(slot.durationValue)
+        let frames = session.settings.frames(for: slot.durationValue, unit: slot.durationUnit)
+        let ms = session.settings.wallMs(frames)
+        var curve = EivizCurve(
+            kind: slot.easing,
+            x1: slot.bezier?.x1 ?? 0,
+            y1: slot.bezier?.y1 ?? 0,
+            x2: slot.bezier?.x2 ?? 1,
+            y2: slot.bezier?.y2 ?? 1
+        )
         if slot.transitionKind == EIVIZ_TRANSITION_CUT || ms <= 1 {
             setOverlayOn(unitIndex, id, enabled)
             if isRemote {
@@ -308,7 +314,7 @@ extension MixerController {
                 return
             }
             pushOverlays(unitId: unit.id)
-            fail(mixer_unit_overlay_auto(unit.id, 1, ms, &desc), "overlay auto")
+            fail(mixer_unit_overlay_auto(unit.id, 1, frames, &desc, &curve), "overlay auto")
             return
         }
         setOverlayOn(unitIndex, id, false)
@@ -317,7 +323,7 @@ extension MixerController {
             return
         }
         pushOverlays(forceEnabled: id, unitId: unit.id)
-        fail(mixer_unit_overlay_auto(unit.id, 0, ms, &desc), "overlay auto")
+        fail(mixer_unit_overlay_auto(unit.id, 0, frames, &desc, &curve), "overlay auto")
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(ms))) { [weak self] in
             guard let self,
                   let ui = self.session.units.firstIndex(where: { $0.id == unit.id })

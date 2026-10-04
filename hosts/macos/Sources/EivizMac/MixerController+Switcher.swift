@@ -17,12 +17,22 @@ extension MixerController {
     }
 
     private func fireAuto(_ preset: TransitionPreset, unit: MixingUnitEntry, reason: String) {
+        var curve = EivizCurve(
+            kind: preset.easing,
+            x1: preset.bezier?.x1 ?? 0,
+            y1: preset.bezier?.y1 ?? 0,
+            x2: preset.bezier?.x2 ?? 1,
+            y2: preset.bezier?.y2 ?? 1
+        )
         if isRemote {
+            let ms = preset.durationUnit == EIVIZ_DURATION_MS
+                ? max(1, preset.durationValue)
+                : session.settings.wallMs(max(1, preset.durationValue))
             _ = mixer_remote_auto(
                 remoteHandle,
                 unit.id,
                 preset.kind,
-                unit.durationMs(for: preset),
+                ms,
                 preset.swap ? 1 : 0,
                 preset.keepPreview ? 1 : 0,
                 preset.easing,
@@ -32,7 +42,11 @@ extension MixerController {
                 preset.dipB,
                 preset.dipA <= 0 ? 1 : preset.dipA,
                 preset.softness,
-                preset.param
+                preset.param,
+                curve.x1,
+                curve.y1,
+                curve.x2,
+                curve.y2
             )
             return
         }
@@ -46,10 +60,10 @@ extension MixerController {
             mixer_unit_auto(
                 unit.id,
                 preset.kind,
-                unit.durationMs(for: preset),
+                session.settings.frames(for: preset.durationValue, unit: preset.durationUnit),
                 preset.swap ? 1 : 0,
                 preset.keepPreview ? 1 : 0,
-                preset.easing,
+                &curve,
                 preset.direction,
                 preset.dipR,
                 preset.dipG,

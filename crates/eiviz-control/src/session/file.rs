@@ -7,12 +7,12 @@ use std::path::{Path, PathBuf};
 use prost::Message;
 
 use super::{
-    AudioCaptureMode, AudioDeviceKind, AudioLinkMode, BandwidthSave, Document, HeadphoneDto,
-    InputDto, InputKind, InternalColorFormat, MixSource, MuBusDto, MultiviewDto, MultiviewTemplate,
-    MvLabelAnchor, MvLabelUnit, MvSlot, MvSlotKind, NdiBandwidth, OmtQuality, OutputDto,
-    OutputSourceKind, OutputTransport, OverlaySlot, RgbColor, SceneDto, SceneLayer, SceneLayerGeom,
-    SceneLayoutPreset, SessionSettings, SwitcherSceneFilter, TransitionPreset, UnitDto,
-    VideoPlayWhen, VideoTriggerWhen,
+    AudioCaptureMode, AudioDeviceKind, AudioLinkMode, BandwidthSave, BezierHandles, Document,
+    HeadphoneDto, InputDto, InputKind, InternalColorFormat, MixSource, MuBusDto, MultiviewDto,
+    MultiviewTemplate, MvLabelAnchor, MvLabelUnit, MvSlot, MvSlotKind, NdiBandwidth, OmtQuality,
+    OutputDto, OutputSourceKind, OutputTransport, OverlaySlot, RgbColor, SceneDto, SceneLayer,
+    SceneLayerGeom, SceneLayoutPreset, SessionSettings, SwitcherSceneFilter, TransitionPreset,
+    UnitDto, VideoPlayWhen, VideoTriggerWhen,
 };
 
 mod pb {
@@ -623,6 +623,8 @@ fn scene_to_pb(scene: &SceneDto) -> pb::Scene {
         layers: scene.layers.iter().map(layer_to_pb).collect(),
         tags: scene.tags.clone(),
         preview_collapsed: scene.preview_collapsed,
+        states: scene.states.iter().map(state_to_pb).collect(),
+        sequences: scene.sequences.iter().map(sequence_to_pb).collect(),
     }
 }
 
@@ -634,6 +636,8 @@ fn scene_from_pb(scene: pb::Scene) -> SceneDto {
         layers: scene.layers.into_iter().map(layer_from_pb).collect(),
         tags: scene.tags,
         preview_collapsed: scene.preview_collapsed,
+        states: scene.states.into_iter().map(state_from_pb).collect(),
+        sequences: scene.sequences.into_iter().map(sequence_from_pb).collect(),
     }
 }
 
@@ -654,6 +658,7 @@ fn layer_to_pb(layer: &SceneLayer) -> pb::SceneLayer {
         crop_width: layer.crop_width,
         crop_height: layer.crop_height,
         hidden: layer.hidden,
+        layer_id: layer.layer_id,
     }
 }
 
@@ -682,6 +687,91 @@ fn layer_from_pb(layer: pb::SceneLayer) -> SceneLayer {
         crop_width: layer.crop_width,
         crop_height: layer.crop_height,
         hidden: layer.hidden,
+        layer_id: layer.layer_id,
+    }
+}
+
+fn motion_to_pb(motion: &super::Motion) -> pb::Motion {
+    pb::Motion {
+        duration_frames: motion.duration_frames,
+        easing: motion.easing,
+        bezier: motion.bezier.map(bezier_to_pb),
+    }
+}
+
+fn motion_from_pb(motion: pb::Motion) -> super::Motion {
+    super::Motion {
+        duration_frames: if motion.duration_frames == 0 {
+            15
+        } else {
+            motion.duration_frames
+        },
+        easing: motion.easing,
+        bezier: motion.bezier.map(bezier_from_pb),
+    }
+}
+
+fn state_to_pb(state: &super::SceneState) -> pb::SceneState {
+    pb::SceneState {
+        id: state.id,
+        name: state.name.clone(),
+        layers: state
+            .layers
+            .iter()
+            .map(|key| pb::LayerKey {
+                layer_id: key.layer_id,
+                geom: Some(geom_to_pb(&key.geom)),
+            })
+            .collect(),
+        enter: Some(motion_to_pb(&state.enter)),
+    }
+}
+
+fn state_from_pb(state: pb::SceneState) -> super::SceneState {
+    super::SceneState {
+        id: state.id,
+        name: state.name,
+        layers: state
+            .layers
+            .into_iter()
+            .map(|key| super::LayerKey {
+                layer_id: key.layer_id,
+                geom: geom_from_pb(key.geom.unwrap_or_default()),
+            })
+            .collect(),
+        enter: state.enter.map(motion_from_pb).unwrap_or_default(),
+    }
+}
+
+fn sequence_to_pb(seq: &super::SceneSequence) -> pb::SceneSequence {
+    pb::SceneSequence {
+        id: seq.id,
+        name: seq.name.clone(),
+        steps: seq
+            .steps
+            .iter()
+            .map(|step| pb::SequenceStep {
+                state_id: step.state_id,
+                motion: step.motion.as_ref().map(motion_to_pb),
+                hold_frames: step.hold_frames,
+            })
+            .collect(),
+    }
+}
+
+fn sequence_from_pb(seq: pb::SceneSequence) -> super::SceneSequence {
+    super::SceneSequence {
+        id: seq.id,
+        name: seq.name,
+        steps: seq
+            .steps
+            .into_iter()
+            .map(|step| super::SequenceStep {
+                state_id: step.state_id,
+                motion: step.motion.map(motion_from_pb),
+                hold_frames: step.hold_frames,
+            })
+            .collect(),
     }
 }
 
@@ -796,6 +886,7 @@ fn transition_to_pb(preset: &TransitionPreset) -> pb::TransitionPreset {
         param: preset.param,
         custom_wgsl: preset.custom_wgsl.clone(),
         label: preset.label.clone(),
+        bezier: preset.bezier.map(bezier_to_pb),
     }
 }
 
@@ -824,6 +915,25 @@ fn transition_from_pb(preset: pb::TransitionPreset) -> TransitionPreset {
         param: preset.param,
         custom_wgsl: preset.custom_wgsl,
         label: preset.label,
+        bezier: preset.bezier.map(bezier_from_pb),
+    }
+}
+
+fn bezier_to_pb(handles: BezierHandles) -> pb::BezierHandles {
+    pb::BezierHandles {
+        x1: handles.x1,
+        y1: handles.y1,
+        x2: handles.x2,
+        y2: handles.y2,
+    }
+}
+
+fn bezier_from_pb(handles: pb::BezierHandles) -> BezierHandles {
+    BezierHandles {
+        x1: handles.x1,
+        y1: handles.y1,
+        x2: handles.x2,
+        y2: handles.y2,
     }
 }
 
@@ -840,6 +950,8 @@ fn overlay_to_pb(slot: &OverlaySlot) -> pb::OverlaySlot {
         transition_kind: slot.transition_kind,
         duration_value: slot.duration_value,
         duration_unit: slot.duration_unit,
+        easing: slot.easing,
+        bezier: slot.bezier.map(bezier_to_pb),
         audio_follow: slot.audio_follow,
         source_kind: slot.source_kind,
         locked: slot.locked,
@@ -865,6 +977,8 @@ fn overlay_from_pb(slot: pb::OverlaySlot) -> OverlaySlot {
         transition_kind: slot.transition_kind,
         duration_value: slot.duration_value,
         duration_unit: slot.duration_unit,
+        easing: slot.easing,
+        bezier: slot.bezier.map(bezier_from_pb),
         audio_follow: slot.audio_follow,
         source_kind: slot.source_kind,
         locked: slot.locked,

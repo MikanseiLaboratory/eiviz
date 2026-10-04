@@ -79,6 +79,11 @@ internal static partial class MixerNative
     internal const uint EasingOut = 2;
     internal const uint EasingInOut = 3;
     internal const uint EasingSmoothstep = 4;
+    internal const uint EasingBezier = 5;
+    internal const uint EasingHold = 6;
+    internal const uint SceneSeqPlay = 1;
+    internal const uint SceneSeqReverse = 2;
+    internal const uint SceneSeqStop = 3;
 
     internal static string TransitionLabel(uint kind) => TransitionCatalog.Label(kind);
     internal const int ErrBufferTooSmall = 6;
@@ -170,13 +175,13 @@ internal static partial class MixerNative
     internal static partial int Cut(ulong unitId, uint swap, ulong incomingSource);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_unit_auto")]
-    internal static partial int Auto(
+    internal static unsafe partial int Auto(
         ulong unitId,
         uint kind,
-        uint durationMs,
+        uint durationFrames,
         uint swap,
         uint keepPreview,
-        uint easing,
+        EivizCurve* curve,
         uint direction,
         float dipR,
         float dipG,
@@ -187,7 +192,32 @@ internal static partial class MixerNative
         float param);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_unit_overlay_auto")]
-    internal static unsafe partial int OverlayAuto(ulong unitId, uint targetEnabled, uint durationMs, OverlayDesc* desc);
+    internal static unsafe partial int OverlayAuto(ulong unitId, uint targetEnabled, uint durationFrames, OverlayDesc* desc, EivizCurve* curve);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_scene_states_define")]
+    internal static unsafe partial int SceneStatesDefine(ulong sceneId, EivizSceneStateDesc* states, uint count);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_scene_sequences_define")]
+    internal static unsafe partial int SceneSequencesDefine(ulong sceneId, EivizSceneSequenceDesc* sequences, uint count);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_scene_go_to")]
+    internal static partial int SceneGoTo(ulong sceneId, ulong stateId);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_scene_sequence")]
+    internal static partial int SceneSequence(ulong sceneId, ulong sequenceId, uint op);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_scene_anim_state")]
+    internal static unsafe partial int SceneAnimState(
+        ulong sceneId,
+        EivizReachedLayer* reached,
+        uint reachedCap,
+        uint* reachedCount,
+        EivizActiveMove* moves,
+        uint movesCap,
+        uint* movesCount,
+        EivizActiveSequence* sequences,
+        uint sequencesCap,
+        uint* sequencesCount);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_unit_set_custom_wgsl", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int SetCustomWgsl(ulong unitId, string? wgsl);
@@ -803,6 +833,81 @@ internal struct OverlayDesc
     public uint AudioFollow;
     public uint Hidden;
     public nint Label;
+    public ulong LayerId;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct EivizCurve
+{
+    public uint Kind;
+    public float X1;
+    public float Y1;
+    public float X2;
+    public float Y2;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct EivizMotion
+{
+    public uint DurationFrames;
+    public uint Easing;
+    public float X1;
+    public float Y1;
+    public float X2;
+    public float Y2;
+    public uint HasBezier;
+}
+
+[StructLayout(LayoutKind.Explicit, Size = 48)]
+internal struct EivizSceneStateDesc
+{
+    [FieldOffset(0)] public ulong Id;
+    [FieldOffset(8)] public nint Layers;
+    [FieldOffset(16)] public uint LayerCount;
+    [FieldOffset(20)] public EivizMotion Enter;
+}
+
+[StructLayout(LayoutKind.Explicit, Size = 48)]
+internal struct EivizSequenceStepDesc
+{
+    [FieldOffset(0)] public ulong StateId;
+    [FieldOffset(8)] public EivizMotion Motion;
+    [FieldOffset(36)] public uint HasMotion;
+    [FieldOffset(40)] public uint HoldFrames;
+}
+
+[StructLayout(LayoutKind.Explicit, Size = 24)]
+internal struct EivizSceneSequenceDesc
+{
+    [FieldOffset(0)] public ulong Id;
+    [FieldOffset(8)] public nint Steps;
+    [FieldOffset(16)] public uint StepCount;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct EivizReachedLayer
+{
+    public ulong LayerId;
+    public ulong StateId;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct EivizActiveMove
+{
+    public ulong MoveId;
+    public ulong StateId;
+    public ulong SequenceId;
+    public float Progress;
+    public uint LayerCount;
+}
+
+[StructLayout(LayoutKind.Explicit, Size = 24)]
+internal struct EivizActiveSequence
+{
+    [FieldOffset(0)] public ulong SequenceId;
+    [FieldOffset(8)] public uint StepIndex;
+    [FieldOffset(12)] public uint Reverse;
+    [FieldOffset(16)] public uint Holding;
 }
 
 [StructLayout(LayoutKind.Sequential)]

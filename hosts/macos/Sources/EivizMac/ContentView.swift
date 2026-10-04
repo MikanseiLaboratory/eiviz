@@ -225,6 +225,52 @@ struct ContentView: View {
         body(&mixer.session.transitions[index])
     }
 
+    private func setBezier(_ index: Int, _ x1: Float, _ y1: Float, _ x2: Float, _ y2: Float) {
+        updateTransition(index) {
+            $0.easing = EIVIZ_EASING_BEZIER
+            $0.bezier = BezierHandles(x1: x1, y1: y1, x2: x2, y2: y2)
+        }
+    }
+
+    private func bezierPresets(index: Int) -> some View {
+        HStack(spacing: 4) {
+            Button("Ease") { setBezier(index, 0.25, 0.1, 0.25, 1) }
+            Button("In") { setBezier(index, 0.42, 0, 1, 1) }
+            Button("Out") { setBezier(index, 0, 0, 0.58, 1) }
+            Button("In Out") { setBezier(index, 0.42, 0, 0.58, 1) }
+        }
+    }
+
+    private func bezierField(
+        _ title: String,
+        index: Int,
+        _ keyPath: WritableKeyPath<BezierHandles, Float>,
+        clampX: Bool
+    ) -> some View {
+        HStack {
+            Text(title).font(.system(size: 11)).foregroundStyle(EivizTheme.dim).frame(width: 24, alignment: .leading)
+            TextField(
+                title,
+                value: Binding(
+                    get: {
+                        Double(mixer.session.transitions[safe: index]?.bezier?[keyPath: keyPath] ?? (clampX ? 0.42 : 0))
+                    },
+                    set: { raw in
+                        updateTransition(index) { preset in
+                            if preset.bezier == nil {
+                                preset.bezier = BezierHandles(x1: 0.42, y1: 0, x2: 0.58, y2: 1)
+                            }
+                            let next = clampX ? min(1, max(0, raw)) : raw
+                            preset.bezier?[keyPath: keyPath] = Float(next)
+                        }
+                    }
+                ),
+                format: .number
+            )
+            .frame(width: 72)
+        }
+    }
+
     private func transitionKindGrid(index: Int, preset: TransitionPreset) -> some View {
         let selected = mixer.session.transitions[safe: index]?.kind ?? preset.kind
         let open = mixer.kindMenuGroup[preset.id] ?? TransitionCatalog.info(selected).group
@@ -316,13 +362,28 @@ struct ContentView: View {
                         Text("Easing").font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
                         Picker("", selection: Binding(
                             get: { mixer.session.transitions[safe: index]?.easing ?? preset.easing },
-                            set: { value in updateTransition(index) { $0.easing = value } }
+                            set: { value in
+                                updateTransition(index) {
+                                    $0.easing = value
+                                    if value == EIVIZ_EASING_BEZIER, $0.bezier == nil {
+                                        $0.bezier = BezierHandles(x1: 0.42, y1: 0, x2: 0.58, y2: 1)
+                                    }
+                                }
+                            }
                         )) {
                             Text("Linear").tag(EIVIZ_EASING_LINEAR)
                             Text("EaseIn").tag(EIVIZ_EASING_IN)
                             Text("EaseOut").tag(EIVIZ_EASING_OUT)
                             Text("EaseInOut").tag(EIVIZ_EASING_IN_OUT)
                             Text("Smoothstep").tag(EIVIZ_EASING_SMOOTHSTEP)
+                            Text("Bezier").tag(EIVIZ_EASING_BEZIER)
+                        }
+                        if (mixer.session.transitions[safe: index] ?? preset).easing == EIVIZ_EASING_BEZIER {
+                            bezierPresets(index: index)
+                            bezierField("X1", index: index, \.x1, clampX: true)
+                            bezierField("Y1", index: index, \.y1, clampX: false)
+                            bezierField("X2", index: index, \.x2, clampX: true)
+                            bezierField("Y2", index: index, \.y2, clampX: false)
                         }
                     }
                     if (mixer.session.transitions[safe: index] ?? preset).hasDirection {

@@ -57,6 +57,8 @@ message Request {
     AbortMediaUpload abort_media_upload = 37;
     Shutdown shutdown = 40;
     SaveSession save_session = 41;
+    SceneGoTo scene_go_to = 42;
+    SceneSequence scene_sequence = 43;
   }
 }
 
@@ -135,6 +137,10 @@ message Auto {
   float dip_a = 12;
   float softness = 13;
   float param = 14;
+  float bezier_x1 = 15;
+  float bezier_y1 = 16;
+  float bezier_x2 = 17;
+  float bezier_y2 = 18;
 }
 
 message SetMix {
@@ -230,6 +236,17 @@ message OverlayAuto {
   uint64 overlay_id = 2;
   uint32 duration_ms = 3;
   bool to_on = 4;
+}
+
+message SceneGoTo {
+  uint64 scene_id = 1;
+  uint64 state_id = 2;
+}
+
+message SceneSequence {
+  uint64 scene_id = 1;
+  uint64 sequence_id = 2;
+  uint32 op = 3;
 }
 
 message MutateSession {
