@@ -224,10 +224,6 @@ public partial class SceneTile : UserControl
             var id = state.Id;
             AnimButtons.Children.Add(AnimButton(LabelOf(state.Name, id), ("state", id), () => SceneAnimPlayback.GoTo(scene, id)));
         }
-        var saved = AnimButton(Loc.T("anim.saved"), ("state", 0UL), () => SceneAnimPlayback.GoTo(scene, 0));
-        saved.ToolTip = Loc.T("anim.savedHelp");
-        saved.Foreground = Brushes.Silver;
-        AnimButtons.Children.Add(saved);
         if (scene.Sequences.Count == 0)
         {
             PaintAnim();

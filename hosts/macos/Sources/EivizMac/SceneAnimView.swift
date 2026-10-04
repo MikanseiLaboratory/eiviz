@@ -13,6 +13,7 @@ struct SceneAnimView: View {
     @State private var lastPose = Date.distantPast
     @State private var live = SceneAnimLive.idle
     @State private var status = ""
+    @State private var viewZoom: CGFloat = 0.8
 
     private let tally = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
     private static let easings: [(String, UInt32)] = [
@@ -67,10 +68,6 @@ struct SceneAnimView: View {
             }
             selectedState = scene?.states.first?.id ?? 0
             selectedSequence = scene?.sequences.first?.id ?? 0
-            showSelectedPose(force: true)
-        }
-        .onChange(of: selectedState) { _, _ in
-            showSelectedPose(force: true)
         }
         .onReceive(tally) { _ in
             if let scene {
@@ -87,19 +84,28 @@ struct SceneAnimView: View {
     private var poseStage: some View {
         let aspect = CGFloat(mixer.selectedUnit.width) / max(1, CGFloat(mixer.selectedUnit.height))
         return HStack(alignment: .center, spacing: 12) {
-            WireCanvasView(
-                items: poseItems,
-                aspect: aspect,
-                snapEnabled: true,
-                selected: $selectedLayer,
-                onChange: { id, x, y, width, height, ended in
-                    applyPose(id, x: x, y: y, width: width, height: height, ended: ended)
-                },
-                camera: poseCamera,
-                onCamera: { camera, ended in
-                    applyPoseCamera(camera, ended: ended)
+            ZStack(alignment: .topTrailing) {
+                WireCanvasView(
+                    items: poseItems,
+                    aspect: aspect,
+                    snapEnabled: true,
+                    selected: $selectedLayer,
+                    onChange: { id, x, y, width, height, ended in
+                        applyPose(id, x: x, y: y, width: width, height: height, ended: ended)
+                    },
+                    camera: poseCamera,
+                    onCamera: { camera, ended in
+                        applyPoseCamera(camera, ended: ended)
+                    },
+                    viewZoom: viewZoom
+                )
+                HStack(spacing: 4) {
+                    Button("−") { viewZoom = min(1, max(0.5, viewZoom - 0.1)) }
+                    Button("+") { viewZoom = min(1, max(0.5, viewZoom + 0.1)) }
                 }
-            )
+                .help(L10n.t("editor.viewZoomHelp"))
+                .padding(4)
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if !mixer.isRemote, poseMonitor != 0, let gpuId = scene?.gpuId, gpuId != 0 {
                 let previewWidth = min(360, 250 * aspect)
@@ -142,14 +148,19 @@ struct SceneAnimView: View {
         VStack(alignment: .leading, spacing: 6) {
             heading(L10n.t("anim.states"), L10n.t("anim.statesHelp"))
             listBox {
-                ForEach(scene?.states ?? []) { state in
+                let states = scene?.states ?? []
+                ForEach(Array(states.enumerated()), id: \.element.id) { index, state in
                     row(
                         title: displayName(state.name, state.id),
                         detail: motionSummary(state.enter),
                         selected: selectedState == state.id,
                         lit: live.litState == state.id,
                         action: L10n.t("anim.goTo"),
+                        canUp: index > 0,
+                        canDown: index < states.count - 1,
                         onSelect: { selectedState = state.id },
+                        onUp: { moveState(index, -1) },
+                        onDown: { moveState(index, 1) },
                         onAction: { go(state.id) }
                     )
                 }
@@ -158,8 +169,6 @@ struct SceneAnimView: View {
                 Button(L10n.t("anim.newState")) { addState() }
                 Button(L10n.t("anim.updateState")) { capture() }
                 Button(L10n.t("anim.delete")) { deleteState() }
-                Button(L10n.t("anim.saved")) { go(0) }
-                    .help(L10n.t("anim.savedHelp"))
             }
             ScrollView {
                 if let state = scene?.states.first(where: { $0.id == selectedState }) {
@@ -198,14 +207,19 @@ struct SceneAnimView: View {
         VStack(alignment: .leading, spacing: 6) {
             heading(L10n.t("anim.sequences"), L10n.t("anim.sequencesHelp"))
             listBox {
-                ForEach(scene?.sequences ?? []) { sequence in
+                let sequences = scene?.sequences ?? []
+                ForEach(Array(sequences.enumerated()), id: \.element.id) { index, sequence in
                     row(
                         title: displayName(sequence.name, sequence.id),
                         detail: L10n.format("anim.stepCount", "\(sequence.steps.count)", seconds(totalFrames(sequence))),
                         selected: selectedSequence == sequence.id,
                         lit: live.sequenceId == sequence.id,
                         action: "▶",
+                        canUp: index > 0,
+                        canDown: index < sequences.count - 1,
                         onSelect: { selectedSequence = sequence.id },
+                        onUp: { moveSequence(index, -1) },
+                        onDown: { moveSequence(index, 1) },
                         onAction: { run(sequence, EIVIZ_SCENE_SEQ_PLAY) }
                     )
                 }
@@ -484,7 +498,11 @@ struct SceneAnimView: View {
         selected: Bool,
         lit: Bool,
         action: String,
+        canUp: Bool,
+        canDown: Bool,
         onSelect: @escaping () -> Void,
+        onUp: @escaping () -> Void,
+        onDown: @escaping () -> Void,
         onAction: @escaping () -> Void
     ) -> some View {
         HStack {
@@ -493,6 +511,12 @@ struct SceneAnimView: View {
                 Text(detail).font(.system(size: 11)).foregroundStyle(EivizTheme.dim)
             }
             Spacer()
+            Button("↑", action: onUp)
+                .disabled(!canUp)
+                .help(L10n.t("anim.moveUp"))
+            Button("↓", action: onDown)
+                .disabled(!canDown)
+                .help(L10n.t("anim.moveDown"))
             Button(action, action: onAction)
         }
         .padding(.horizontal, 6)
@@ -671,6 +695,22 @@ struct SceneAnimView: View {
         let last = sequence.steps.last?.stateId ?? 0
         let pick = states.first { $0.id != last } ?? first
         updateSequence(sequence.id) { $0.steps.append(SequenceStep(stateId: pick.id)) }
+    }
+
+    private func moveState(_ index: Int, _ delta: Int) {
+        update { scene in
+            let next = index + delta
+            guard scene.states.indices.contains(index), scene.states.indices.contains(next) else { return }
+            scene.states.swapAt(index, next)
+        }
+    }
+
+    private func moveSequence(_ index: Int, _ delta: Int) {
+        update { scene in
+            let next = index + delta
+            guard scene.sequences.indices.contains(index), scene.sequences.indices.contains(next) else { return }
+            scene.sequences.swapAt(index, next)
+        }
     }
 
     private func moveStep(_ sequenceId: UInt64, _ index: Int, _ delta: Int) {

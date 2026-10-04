@@ -222,10 +222,6 @@ struct SceneAnimPanel: View {
                     mixer.sceneGo(to: state.id, scene: scene)
                 }
             }
-            button(L10n.t("anim.saved"), on: live.litState == 0, dim: true) {
-                mixer.sceneGo(to: 0, scene: scene)
-            }
-            .help(L10n.t("anim.savedHelp"))
             if !scene.sequences.isEmpty {
                 Divider().padding(.vertical, 2)
                 heading(L10n.t("anim.sequences"))
@@ -253,13 +249,13 @@ struct SceneAnimPanel: View {
             .padding(.vertical, 2)
     }
 
-    private func button(_ title: String, on: Bool, dim: Bool = false, action: @escaping () -> Void) -> some View {
+    private func button(_ title: String, on: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 11))
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .foregroundStyle(dim ? EivizTheme.dim : EivizTheme.text)
+                .foregroundStyle(EivizTheme.text)
                 .padding(.horizontal, 4)
                 .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
                 .background(on ? Self.liveFill : EivizTheme.list)

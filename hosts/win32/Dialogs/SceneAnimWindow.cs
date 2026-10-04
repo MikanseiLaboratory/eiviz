@@ -54,6 +54,7 @@ internal sealed class SceneAnimWindow : Window
     private float _grabY;
     private float? _snapX;
     private float? _snapY;
+    private float _viewZoom = 0.8f;
     private DateTime _lastShow;
 
     public SceneAnimWindow(SceneEntry scene, bool persist)
@@ -153,9 +154,6 @@ internal sealed class SceneAnimWindow : Window
         bar.Children.Add(Button(Loc.T("anim.newState"), (_, _) => AddState()));
         bar.Children.Add(Button(Loc.T("anim.updateState"), (_, _) => Capture()));
         bar.Children.Add(Button(Loc.T("anim.delete"), (_, _) => DeleteState()));
-        var saved = Button(Loc.T("anim.saved"), (_, _) => Go(0));
-        saved.ToolTip = Loc.T("anim.savedHelp");
-        bar.Children.Add(saved);
         return bar;
     }
 
@@ -176,12 +174,7 @@ internal sealed class SceneAnimWindow : Window
         var stateId = SelectedState()?.Id;
         var sequenceId = SelectedSequence()?.Id;
         _filling = true;
-        _states.Items.Clear();
-        foreach (var state in _scene.States)
-            _states.Items.Add(StateRow(state));
-        _sequences.Items.Clear();
-        foreach (var sequence in _scene.Sequences)
-            _sequences.Items.Add(SequenceRow(sequence));
+        FillLists();
         Select(_states, stateId);
         Select(_sequences, sequenceId);
         _filling = false;
@@ -195,37 +188,66 @@ internal sealed class SceneAnimWindow : Window
         var stateId = SelectedState()?.Id;
         var sequenceId = SelectedSequence()?.Id;
         _filling = true;
-        _states.Items.Clear();
-        foreach (var state in _scene.States)
-            _states.Items.Add(StateRow(state));
-        _sequences.Items.Clear();
-        foreach (var sequence in _scene.Sequences)
-            _sequences.Items.Add(SequenceRow(sequence));
+        FillLists();
         Select(_states, stateId);
         Select(_sequences, sequenceId);
         _filling = false;
         PaintTally();
     }
 
-    private ListBoxItem StateRow(SceneState state)
+    private void FillLists()
     {
-        var row = new DockPanel();
-        var go = SmallButton(Loc.T("anim.goTo"), (_, _) => Go(state.Id));
-        DockPanel.SetDock(go, Dock.Right);
-        row.Children.Add(go);
-        row.Children.Add(TwoLines(DisplayName(state.Name, state.Id), MotionSummary(state.Enter)));
-        return new ListBoxItem { Content = row, Tag = state.Id, Foreground = Brushes.White, Padding = new Thickness(6, 3, 6, 3) };
+        _states.Items.Clear();
+        for (var i = 0; i < _scene.States.Count; i++)
+            _states.Items.Add(StateRow(_scene.States[i], i));
+        _sequences.Items.Clear();
+        for (var i = 0; i < _scene.Sequences.Count; i++)
+            _sequences.Items.Add(SequenceRow(_scene.Sequences[i], i));
     }
 
-    private ListBoxItem SequenceRow(SceneSequence sequence)
+    private ListBoxItem StateRow(SceneState state, int index)
+    {
+        var go = SmallButton(Loc.T("anim.goTo"), (_, _) => Go(state.Id));
+        var row = Row(go, DisplayName(state.Name, state.Id), MotionSummary(state.Enter), index, _scene.States.Count, MoveState);
+        row.Tag = state.Id;
+        return row;
+    }
+
+    private ListBoxItem SequenceRow(SceneSequence sequence, int index)
+    {
+        var play = SmallButton("▶", (_, _) => Run(sequence, MixerNative.SceneSeqPlay));
+        var summary = Loc.Format("anim.stepCount", sequence.Steps.Count, Seconds(TotalFrames(sequence)));
+        var row = Row(play, DisplayName(sequence.Name, sequence.Id), summary, index, _scene.Sequences.Count, MoveSequence);
+        row.Tag = sequence.Id;
+        return row;
+    }
+
+    private ListBoxItem Row(Button action, string title, string detail, int index, int count, Action<int, int> move)
     {
         var row = new DockPanel();
-        var play = SmallButton("▶", (_, _) => Run(sequence, MixerNative.SceneSeqPlay));
-        DockPanel.SetDock(play, Dock.Right);
-        row.Children.Add(play);
-        var summary = Loc.Format("anim.stepCount", sequence.Steps.Count, Seconds(TotalFrames(sequence)));
-        row.Children.Add(TwoLines(DisplayName(sequence.Name, sequence.Id), summary));
-        return new ListBoxItem { Content = row, Tag = sequence.Id, Foreground = Brushes.White, Padding = new Thickness(6, 3, 6, 3) };
+        action.Margin = new Thickness(2, 0, 0, 0);
+        var tools = new StackPanel { Orientation = Orientation.Horizontal };
+        tools.Children.Add(IconButton("↑", Loc.T("anim.moveUp"), index > 0, () => move(index, -1)));
+        tools.Children.Add(IconButton("↓", Loc.T("anim.moveDown"), index < count - 1, () => move(index, 1)));
+        tools.Children.Add(action);
+        DockPanel.SetDock(tools, Dock.Right);
+        row.Children.Add(tools);
+        row.Children.Add(TwoLines(title, detail));
+        return new ListBoxItem { Content = row, Foreground = Brushes.White, Padding = new Thickness(6, 3, 6, 3) };
+    }
+
+    private void MoveState(int index, int delta) => Move(_scene.States, index, delta);
+
+    private void MoveSequence(int index, int delta) => Move(_scene.Sequences, index, delta);
+
+    private void Move<T>(IList<T> items, int index, int delta)
+    {
+        var next = index + delta;
+        if (next < 0 || next >= items.Count)
+            return;
+        (items[index], items[next]) = (items[next], items[index]);
+        Persist();
+        Reload();
     }
 
     private static StackPanel TwoLines(string title, string detail)
@@ -268,7 +290,6 @@ internal sealed class SceneAnimWindow : Window
     {
         _stateForm.Children.Clear();
         DrawWire();
-        ShowPose(true);
         var state = SelectedState();
         if (state is null)
             return;
@@ -838,6 +859,7 @@ internal sealed class SceneAnimWindow : Window
         _wire.MouseLeftButtonDown += WireDown;
         _wire.MouseMove += WireMove;
         _wire.MouseLeftButtonUp += WireUp;
+        _wire.PreviewMouseWheel += WireWheel;
         var (width, height) = ProjectSize();
         _wire.Width = width;
         _wire.Height = height;
@@ -847,6 +869,30 @@ internal sealed class SceneAnimWindow : Window
             Child = _wire,
             Margin = new Thickness(0, 0, 8, 0)
         };
+        var zoomOut = new Button { Content = "−", Width = 26, Height = 26, Tag = "-", ToolTip = Loc.T("editor.viewZoomHelp") };
+        var zoomIn = new Button
+        {
+            Content = "+",
+            Width = 26,
+            Height = 26,
+            Margin = new Thickness(4, 0, 0, 0),
+            Tag = "+",
+            ToolTip = Loc.T("editor.viewZoomHelp")
+        };
+        zoomOut.Click += ViewZoom_Click;
+        zoomIn.Click += ViewZoom_Click;
+        var zoomBar = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 4, 12, 0)
+        };
+        zoomBar.Children.Add(zoomOut);
+        zoomBar.Children.Add(zoomIn);
+        var stage = new Grid();
+        stage.Children.Add(view);
+        stage.Children.Add(zoomBar);
         var grid = new Grid { Height = 250, Margin = new Thickness(0, 0, 0, 10) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         if (_preview is not null)
@@ -864,8 +910,36 @@ internal sealed class SceneAnimWindow : Window
             Grid.SetColumn(aspect, 1);
             grid.Children.Add(aspect);
         }
-        grid.Children.Add(view);
+        grid.Children.Add(stage);
         return grid;
+    }
+
+    private double MapX(float scene) => (scene * _viewZoom + (1 - _viewZoom) / 2) * _wire.Width;
+
+    private double MapY(float scene) => (scene * _viewZoom + (1 - _viewZoom) / 2) * _wire.Height;
+
+    private double MapW(float scene) => scene * _viewZoom * _wire.Width;
+
+    private double MapH(float scene) => scene * _viewZoom * _wire.Height;
+
+    private float UnmapX(double canvas) =>
+        (float)((canvas / Math.Max(_wire.Width, 1) - (1 - _viewZoom) / 2) / _viewZoom);
+
+    private float UnmapY(double canvas) =>
+        (float)((canvas / Math.Max(_wire.Height, 1) - (1 - _viewZoom) / 2) / _viewZoom);
+
+    private void ViewZoom_Click(object sender, RoutedEventArgs e)
+    {
+        var step = sender is Button { Tag: "+" } ? 0.1f : -0.1f;
+        _viewZoom = Math.Clamp(_viewZoom + step, 0.5f, 1f);
+        DrawWire();
+    }
+
+    private void WireWheel(object sender, MouseWheelEventArgs e)
+    {
+        _viewZoom = Math.Clamp(_viewZoom + (e.Delta > 0 ? 0.1f : -0.1f), 0.5f, 1f);
+        DrawWire();
+        e.Handled = true;
     }
 
     private static (uint Width, uint Height) ProjectSize()
@@ -895,9 +969,30 @@ internal sealed class SceneAnimWindow : Window
 
     private SceneCamera CameraOf(SceneState state) => state.Camera ?? _scene.Camera;
 
+    private static void CameraSceneRect(SceneCamera camera, out float left, out float top, out float width, out float height)
+    {
+        var zoom = Math.Clamp(camera.Zoom, 1f, 8f);
+        width = 1f / zoom;
+        height = 1f / zoom;
+        left = camera.X - width / 2f;
+        top = camera.Y - height / 2f;
+    }
+
     private void DrawWire()
     {
         _wire.Children.Clear();
+        var output = new Rectangle
+        {
+            Width = Math.Max(8, MapW(1)),
+            Height = Math.Max(8, MapH(1)),
+            Fill = new SolidColorBrush(Color.FromRgb(0x14, 0x14, 0x14)),
+            Stroke = new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66)),
+            StrokeThickness = 1,
+            IsHitTestVisible = false
+        };
+        Canvas.SetLeft(output, MapX(0));
+        Canvas.SetTop(output, MapY(0));
+        _wire.Children.Add(output);
         var state = SelectedState();
         var ordered = _scene.Layers.OrderBy(layer => state is null ? layer.Z : GeomOf(state, layer).Z).ToList();
         for (var i = 0; i < ordered.Count; i++)
@@ -907,15 +1002,15 @@ internal sealed class SceneAnimWindow : Window
             var color = WireColor(i);
             var box = new Rectangle
             {
-                Width = Math.Max(8, geom.Width * _wire.Width),
-                Height = Math.Max(8, geom.Height * _wire.Height),
+                Width = Math.Max(8, MapW(geom.Width)),
+                Height = Math.Max(8, MapH(geom.Height)),
                 Stroke = new SolidColorBrush(color),
                 StrokeThickness = layer == _picked ? 4 : 2,
                 Fill = new SolidColorBrush(Color.FromArgb(0x28, color.R, color.G, color.B)),
                 IsHitTestVisible = false
             };
-            Canvas.SetLeft(box, geom.X * _wire.Width);
-            Canvas.SetTop(box, geom.Y * _wire.Height);
+            Canvas.SetLeft(box, MapX(geom.X));
+            Canvas.SetTop(box, MapY(geom.Y));
             _wire.Children.Add(box);
             if (layer == _picked && !layer.Locked)
             {
@@ -926,19 +1021,19 @@ internal sealed class SceneAnimWindow : Window
                     Fill = new SolidColorBrush(color),
                     IsHitTestVisible = false
                 };
-                Canvas.SetLeft(handle, (geom.X + geom.Width) * _wire.Width - 16);
-                Canvas.SetTop(handle, (geom.Y + geom.Height) * _wire.Height - 16);
+                Canvas.SetLeft(handle, MapX(geom.X + geom.Width) - 16);
+                Canvas.SetTop(handle, MapY(geom.Y + geom.Height) - 16);
                 _wire.Children.Add(handle);
             }
         }
         if (state is null || _wire.Width <= 0)
             return;
         var camera = CameraOf(state);
-        var zoom = Math.Clamp(camera.Zoom, 1f, 8f);
-        var width = _wire.Width / zoom;
-        var height = _wire.Height / zoom;
-        var left = camera.X * _wire.Width - width / 2;
-        var top = camera.Y * _wire.Height - height / 2;
+        CameraSceneRect(camera, out var sceneLeft, out var sceneTop, out var sceneWidth, out var sceneHeight);
+        var width = MapW(sceneWidth);
+        var height = MapH(sceneHeight);
+        var left = MapX(sceneLeft);
+        var top = MapY(sceneTop);
         var frame = new Rectangle
         {
             Width = Math.Max(8, width),
@@ -1001,8 +1096,8 @@ internal sealed class SceneAnimWindow : Window
         if (_moving && _picked is not null)
         {
             var geom = EnsureGeom(state, _picked);
-            _grabX = (float)(pos.X / _wire.Width) - geom.X;
-            _grabY = (float)(pos.Y / _wire.Height) - geom.Y;
+            _grabX = UnmapX(pos.X) - geom.X;
+            _grabY = UnmapY(pos.Y) - geom.Y;
             _wire.CaptureMouse();
         }
         DrawWire();
@@ -1024,10 +1119,10 @@ internal sealed class SceneAnimWindow : Window
         if (_sizing && _picked is { Locked: false } sized)
         {
             var geom = EnsureGeom(state, sized);
-            var width = Math.Max(0.02f, (float)(pos.X / _wire.Width) - geom.X);
+            var width = Math.Max(0.02f, UnmapX(pos.X) - geom.X);
             var height = sized.SizeLinked && geom.Width > 0
                 ? width * (geom.Height / geom.Width)
-                : Math.Max(0.02f, (float)(pos.Y / _wire.Height) - geom.Y);
+                : Math.Max(0.02f, UnmapY(pos.Y) - geom.Y);
             var x = geom.X;
             var y = geom.Y;
             var (px, py) = WirePixels();
@@ -1053,8 +1148,8 @@ internal sealed class SceneAnimWindow : Window
         if (_moving && _picked is { Locked: false } moving)
         {
             var geom = EnsureGeom(state, moving);
-            var x = (float)(pos.X / _wire.Width) - _grabX;
-            var y = (float)(pos.Y / _wire.Height) - _grabY;
+            var x = UnmapX(pos.X) - _grabX;
+            var y = UnmapY(pos.Y) - _grabY;
             var (px, py) = WirePixels();
             var boxes = PoseBoxes(state, moving);
             geom.X = SceneSnap.LatchMoveAxis(x, geom.Width, boxes, true, px, ref _snapX);
@@ -1067,7 +1162,7 @@ internal sealed class SceneAnimWindow : Window
     private (double X, double Y) WirePixels()
     {
         var rendered = SceneSnap.RenderedSize(this, _wire);
-        return (Math.Max(rendered.Width, 1), Math.Max(rendered.Height, 1));
+        return (Math.Max(rendered.Width, 1) * _viewZoom, Math.Max(rendered.Height, 1) * _viewZoom);
     }
 
     private List<SceneSnap.Box> PoseBoxes(SceneState state, SceneLayer self) =>
@@ -1105,19 +1200,19 @@ internal sealed class SceneAnimWindow : Window
         if (_picked is not { Locked: false } layer)
             return false;
         var geom = GeomOf(state, layer);
-        var x = (geom.X + geom.Width) * _wire.Width;
-        var y = (geom.Y + geom.Height) * _wire.Height;
+        var x = MapX(geom.X + geom.Width);
+        var y = MapY(geom.Y + geom.Height);
         return pos.X >= x - 20 && pos.X <= x + 4 && pos.Y >= y - 20 && pos.Y <= y + 4;
     }
 
     private bool BeginCamera(SceneState state, Point pos)
     {
         var camera = CameraOf(state);
-        var zoom = Math.Clamp(camera.Zoom, 1f, 8f);
-        var width = _wire.Width / zoom;
-        var height = _wire.Height / zoom;
-        var left = camera.X * _wire.Width - width / 2;
-        var top = camera.Y * _wire.Height - height / 2;
+        CameraSceneRect(camera, out var sceneLeft, out var sceneTop, out var sceneWidth, out var sceneHeight);
+        var width = MapW(sceneWidth);
+        var height = MapH(sceneHeight);
+        var left = MapX(sceneLeft);
+        var top = MapY(sceneTop);
         var onZoom = pos.X >= left + width - 20 && pos.X <= left + width + 4
             && pos.Y >= top + height - 20 && pos.Y <= top + height + 4;
         if (onZoom)
@@ -1132,8 +1227,8 @@ internal sealed class SceneAnimWindow : Window
             return false;
         _panning = true;
         _zooming = false;
-        _grabX = (float)(pos.X / _wire.Width) - camera.X;
-        _grabY = (float)(pos.Y / _wire.Height) - camera.Y;
+        _grabX = UnmapX(pos.X) - camera.X;
+        _grabY = UnmapY(pos.Y) - camera.Y;
         return true;
     }
 
@@ -1142,15 +1237,15 @@ internal sealed class SceneAnimWindow : Window
         var camera = state.Camera ??= _scene.Camera.Clone();
         if (_zooming)
         {
-            var dx = Math.Abs((float)(pos.X / _wire.Width) - camera.X);
-            var dy = Math.Abs((float)(pos.Y / _wire.Height) - camera.Y);
+            var dx = Math.Abs(UnmapX(pos.X) - camera.X);
+            var dy = Math.Abs(UnmapY(pos.Y) - camera.Y);
             var half = Math.Max(dx, dy);
             camera.Zoom = half < 1e-3f ? 8f : 0.5f / half;
         }
         else
         {
-            camera.X = (float)(pos.X / _wire.Width) - _grabX;
-            camera.Y = (float)(pos.Y / _wire.Height) - _grabY;
+            camera.X = UnmapX(pos.X) - _grabX;
+            camera.Y = UnmapY(pos.Y) - _grabY;
         }
         camera.Zoom = Math.Clamp(camera.Zoom, 1f, 8f);
         var margin = 0.5f / camera.Zoom;
@@ -1165,10 +1260,10 @@ internal sealed class SceneAnimWindow : Window
         var hits = _scene.Layers.Where(layer =>
         {
             var geom = GeomOf(state, layer);
-            return pos.X >= geom.X * _wire.Width
-                && pos.X <= (geom.X + geom.Width) * _wire.Width
-                && pos.Y >= geom.Y * _wire.Height
-                && pos.Y <= (geom.Y + geom.Height) * _wire.Height;
+            var x = UnmapX(pos.X);
+            var y = UnmapY(pos.Y);
+            return x >= geom.X && x <= geom.X + geom.Width
+                && y >= geom.Y && y <= geom.Y + geom.Height;
         }).ToList();
         if (hits.Count == 0)
             return null;
