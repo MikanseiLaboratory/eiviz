@@ -49,14 +49,17 @@ internal static class SceneAnimPlayback
             fixed (EivizActiveSequence* sequencePtr = sequences)
             {
                 uint reachedCount, moveCount, sequenceCount;
+                ulong cameraState;
                 if (MixerNative.SceneAnimState(
                         scene.GpuId,
                         reachedPtr, 64, &reachedCount,
                         movePtr, 16, &moveCount,
-                        sequencePtr, 16, &sequenceCount) != 0)
+                        sequencePtr, 16, &sequenceCount,
+                        &cameraState) != 0)
                     return SceneAnimLive.Idle;
                 var moving = moveCount > 0 ? moves[0].StateId : (ulong?)null;
-                var shown = SameState(reached.AsSpan(0, (int)Math.Min(reachedCount, 64u)));
+                var span = reached.AsSpan(0, (int)Math.Min(reachedCount, 64u));
+                var shown = WithCamera(scene, SameState(span), span.Length == 0, cameraState);
                 if (sequenceCount == 0)
                     return new SceneAnimLive(shown, moving, null, -1, false);
                 var active = sequences[0];
@@ -78,6 +81,26 @@ internal static class SceneAnimPlayback
         return id;
     }
 
+    /// <summary>A state lights only once its camera has arrived too, when it carries one.</summary>
+    private static ulong? WithCamera(SceneEntry scene, ulong? shown, bool noLayers, ulong cameraState)
+    {
+        if (shown is null && noLayers && cameraState != 0)
+            shown = cameraState;
+        if (shown is ulong id && StateHasCamera(scene, id) && cameraState != id)
+            return null;
+        return shown;
+    }
+
+    private static bool StateHasCamera(SceneEntry scene, ulong id)
+    {
+        foreach (var state in scene.States)
+        {
+            if (state.Id == id)
+                return state.Camera is not null;
+        }
+        return false;
+    }
+
     private static SceneAnimLive ReadRemote(RemoteEivizBackend remote, SceneEntry scene)
     {
         var json = MixerRemote.LiveText(remote.Handle, ref _liveBuf);
@@ -94,10 +117,12 @@ internal static class SceneAnimPlayback
                 && moves[0].TryGetProperty("stateId", out var movingState))
                 moving = movingState.GetUInt64();
             ulong? shown = null;
+            var reachedCount = 0;
             if (live.TryGetProperty("reached", out var reached))
             {
                 foreach (var layer in reached.EnumerateArray())
                 {
+                    reachedCount++;
                     var next = layer.GetProperty("stateId").GetUInt64();
                     if (shown is ulong current && current != next)
                     {
@@ -107,6 +132,8 @@ internal static class SceneAnimPlayback
                     shown = next;
                 }
             }
+            var cameraState = live.TryGetProperty("cameraState", out var cameraProp) ? cameraProp.GetUInt64() : 0UL;
+            shown = WithCamera(scene, shown, reachedCount == 0, cameraState);
             if (!live.TryGetProperty("sequences", out var sequences) || sequences.GetArrayLength() == 0)
                 return new SceneAnimLive(shown, moving, null, -1, false);
             var active = sequences[0];

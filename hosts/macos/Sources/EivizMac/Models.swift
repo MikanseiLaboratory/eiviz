@@ -624,10 +624,29 @@ struct Motion: Codable, Equatable, Hashable {
     var bezier: BezierHandles?
 }
 
+struct SceneCamera: Codable, Equatable, Hashable {
+    var x: Float = 0.5
+    var y: Float = 0.5
+    var zoom: Float = 1
+
+    static let identity = SceneCamera()
+
+    func clamped() -> SceneCamera {
+        let zoom = min(8, max(1, zoom))
+        let margin = 0.5 / zoom
+        return SceneCamera(
+            x: min(1 - margin, max(margin, x)),
+            y: min(1 - margin, max(margin, y)),
+            zoom: zoom
+        )
+    }
+}
+
 struct SceneState: Identifiable, Codable, Equatable, Hashable {
     var id: UInt64
     var name: String = ""
     var layers: [LayerKey] = []
+    var camera: SceneCamera?
     var enter: Motion = Motion()
 }
 
@@ -659,6 +678,18 @@ struct SceneAnimLive: Equatable {
         guard let first = ids.first, ids.allSatisfy({ $0 == first }) else { return nil }
         return first
     }
+
+    /// A state lights only once its camera has arrived too, when it carries one.
+    static func shown(_ ids: [UInt64], cameraState: UInt64, states: [SceneState]) -> UInt64? {
+        var agreed = sameState(ids)
+        if agreed == nil && ids.isEmpty && cameraState != 0 {
+            agreed = cameraState
+        }
+        if let id = agreed, states.first(where: { $0.id == id })?.camera != nil, cameraState != id {
+            return nil
+        }
+        return agreed
+    }
 }
 
 struct SceneEntry: Identifiable, Codable {
@@ -671,10 +702,11 @@ struct SceneEntry: Identifiable, Codable {
     var sequences: [SceneSequence] = []
     var tags: [String] = []
     var previewCollapsed: Bool = false
+    var camera: SceneCamera = .identity
     var gpuId: UInt64 { EIVIZ_SCENE_BASE | id }
 
     enum CodingKeys: String, CodingKey {
-        case id, guid, name, layers, tags, previewCollapsed, states, sequences
+        case id, guid, name, layers, tags, previewCollapsed, states, sequences, camera
     }
 
     init(
@@ -705,6 +737,7 @@ struct SceneEntry: Identifiable, Codable {
         sequences = try container.decodeIfPresent([SceneSequence].self, forKey: .sequences) ?? []
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         previewCollapsed = try container.decodeIfPresent(Bool.self, forKey: .previewCollapsed) ?? false
+        camera = try container.decodeIfPresent(SceneCamera.self, forKey: .camera) ?? .identity
     }
 
     func encode(to encoder: Encoder) throws {
@@ -717,6 +750,7 @@ struct SceneEntry: Identifiable, Codable {
         try container.encode(sequences, forKey: .sequences)
         try container.encode(tags, forKey: .tags)
         try container.encode(previewCollapsed, forKey: .previewCollapsed)
+        try container.encode(camera, forKey: .camera)
     }
 
     mutating func assignLayerIds() {

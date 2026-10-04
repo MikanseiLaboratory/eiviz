@@ -24,6 +24,9 @@ struct WireCanvasView<ID: Hashable>: View {
     var onCrop: ((ID, Float, Float, Float, Float, Bool) -> Void)?
     @Binding var selected: ID?
     var onChange: (ID, Float, Float, Float, Float, Bool) -> Void
+    var camera: SceneCamera? = nil
+    var cameraEditing = false
+    var onCamera: ((SceneCamera, Bool) -> Void)? = nil
 
     @State private var dragging = false
     @State private var resizing = false
@@ -38,6 +41,10 @@ struct WireCanvasView<ID: Hashable>: View {
     @State private var snapY: Float?
     @State private var draft: (ID, Float, Float, Float, Float)?
     @State private var cropDraft: (ID, Float, Float, Float, Float)?
+    @State private var cameraDragging = false
+    @State private var cameraZooming = false
+    @State private var camGrab: CGPoint = .zero
+    @State private var camDraft: SceneCamera?
 
     private let hues: [Color] = [
         Color(red: 0xE8 / 255, green: 0x77 / 255, blue: 0x22 / 255),
@@ -56,6 +63,9 @@ struct WireCanvasView<ID: Hashable>: View {
                 ForEach(Array(items.enumerated().reversed()), id: \.element.id) { index, item in
                     itemMarks(index: index, item: item, origin: origin, canvas: size)
                 }
+                if let camera {
+                    cameraMarks(camera, origin: origin, canvas: size)
+                }
             }
             .clipped()
             .contentShape(Rectangle())
@@ -63,6 +73,10 @@ struct WireCanvasView<ID: Hashable>: View {
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
                         let local = CGPoint(x: value.location.x - origin.x, y: value.location.y - origin.y)
+                        if cameraEditing, camera != nil {
+                            dragCamera(at: local, canvas: size)
+                            return
+                        }
                         if !dragging && !resizing && !cropping {
                             begin(at: local, canvas: size)
                             last = local
@@ -97,6 +111,12 @@ struct WireCanvasView<ID: Hashable>: View {
                         }
                     }
                     .onEnded { _ in
+                        if cameraEditing, cameraDragging || cameraZooming, let camDraft {
+                            onCamera?(camDraft, true)
+                        }
+                        cameraDragging = false
+                        cameraZooming = false
+                        camDraft = nil
                         if cropping, let crop = cropDraft {
                             onCrop?(crop.0, crop.1, crop.2, crop.3, crop.4, true)
                         } else if let draft, dragging || resizing {
@@ -163,6 +183,64 @@ struct WireCanvasView<ID: Hashable>: View {
                 .frame(width: 16, height: 16)
                 .position(x: frame.maxX - 8, y: frame.maxY - 8)
         }
+    }
+
+    @ViewBuilder
+    private func cameraMarks(_ camera: SceneCamera, origin: CGPoint, canvas: CGSize) -> some View {
+        let frame = cameraRect(camera, canvas: canvas)
+        let color = cameraEditing ? Color(red: 1, green: 0xE0 / 255, blue: 0x82 / 255) : EivizTheme.dim
+        Rectangle()
+            .stroke(color, style: StrokeStyle(lineWidth: cameraEditing ? 3 : 1.5, dash: [8, 4]))
+            .frame(width: frame.width, height: frame.height)
+            .position(x: origin.x + frame.midX, y: origin.y + frame.midY)
+        if cameraEditing {
+            Rectangle()
+                .fill(color)
+                .frame(width: 16, height: 16)
+                .position(x: origin.x + frame.maxX - 8, y: origin.y + frame.maxY - 8)
+        }
+    }
+
+    private func cameraRect(_ camera: SceneCamera, canvas: CGSize) -> CGRect {
+        let zoom = CGFloat(max(1, min(8, camera.zoom)))
+        let width = canvas.width / zoom
+        let height = canvas.height / zoom
+        return CGRect(
+            x: CGFloat(camera.x) * canvas.width - width / 2,
+            y: CGFloat(camera.y) * canvas.height - height / 2,
+            width: width,
+            height: height
+        )
+    }
+
+    private func dragCamera(at local: CGPoint, canvas: CGSize) {
+        guard var camera else { return }
+        if !cameraDragging && !cameraZooming {
+            let frame = cameraRect(camera, canvas: canvas)
+            let handle = CGRect(x: frame.maxX - 20, y: frame.maxY - 20, width: 24, height: 24)
+            if handle.contains(local) {
+                cameraZooming = true
+            } else if frame.contains(local) {
+                cameraDragging = true
+                camGrab = CGPoint(
+                    x: local.x / canvas.width - CGFloat(camera.x),
+                    y: local.y / canvas.height - CGFloat(camera.y)
+                )
+            }
+            return
+        }
+        if cameraZooming {
+            let dx = abs(Float(local.x / canvas.width) - camera.x)
+            let dy = abs(Float(local.y / canvas.height) - camera.y)
+            let half = max(dx, dy)
+            camera.zoom = half < 1e-3 ? 8 : 0.5 / half
+        } else if cameraDragging {
+            camera.x = Float(local.x / canvas.width) - Float(camGrab.x)
+            camera.y = Float(local.y / canvas.height) - Float(camGrab.y)
+        }
+        camera = camera.clamped()
+        camDraft = camera
+        onCamera?(camera, false)
     }
 
     private func fitted(_ size: CGSize) -> CGSize {

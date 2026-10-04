@@ -7,10 +7,12 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::abi::{
-    EivizActiveMove, EivizActiveSequence, EivizMotion, EivizReachedLayer, EivizSceneSequenceDesc,
-    EivizSceneStateDesc, EivizSequenceStepDesc, OverlayDesc, Rect, SCENE_SEQ_PLAY,
-    SCENE_SEQ_REVERSE, SCENE_SEQ_STOP,
+    validate_camera, EivizActiveMove, EivizActiveSequence, EivizMotion, EivizReachedLayer,
+    EivizSceneCamera, EivizSceneSequenceDesc, EivizSceneStateDesc, EivizSequenceStepDesc,
+    OverlayDesc, Rect, SCENE_SEQ_PLAY, SCENE_SEQ_REVERSE, SCENE_SEQ_STOP,
 };
+
+pub(crate) type SceneCamera = EivizSceneCamera;
 
 use super::{AnimClock, Curve};
 
@@ -26,6 +28,7 @@ struct MotionDef {
 #[derive(Clone, Debug)]
 struct StateDef {
     layers: HashMap<u64, OverlayDesc>,
+    camera: Option<SceneCamera>,
     enter: MotionDef,
 }
 
@@ -47,8 +50,15 @@ struct Move {
     sequence_id: u64,
     from: HashMap<u64, OverlayDesc>,
     to: HashMap<u64, OverlayDesc>,
+    camera: Option<(SceneCamera, SceneCamera)>,
     clock: AnimClock,
     curve: Curve,
+}
+
+/// Layers and camera the composer should draw for one frame.
+pub(crate) struct Pose {
+    pub layers: Vec<OverlayDesc>,
+    pub camera: SceneCamera,
 }
 
 enum Phase {
@@ -72,6 +82,11 @@ pub(crate) struct SceneRuntime {
     reached: HashMap<u64, u64>,
     /// Frozen pose for layers that have moved and are not owned by a move.
     presented: HashMap<u64, OverlayDesc>,
+    /// Move that currently owns the camera, mirroring `owner` for layers.
+    camera_owner: Option<u64>,
+    presented_camera: Option<SceneCamera>,
+    /// Last state the camera arrived at. `0` is the saved camera.
+    reached_camera: Option<u64>,
     playing: HashMap<u64, Playing>,
     next_move: u64,
     dirty: bool,
@@ -87,6 +102,9 @@ impl Default for SceneRuntime {
             owner: HashMap::new(),
             reached: HashMap::new(),
             presented: HashMap::new(),
+            camera_owner: None,
+            presented_camera: None,
+            reached_camera: None,
             playing: HashMap::new(),
             next_move: 1,
             dirty: false,
@@ -122,24 +140,26 @@ impl SceneRuntime {
         }
     }
 
-    /// `state_id == 0` returns every layer to the saved layout.
+    /// `state_id == 0` returns every layer and the camera to the saved layout.
     pub(crate) fn go_to(
         &mut self,
         state_id: u64,
         base: &[OverlayDesc],
+        base_camera: SceneCamera,
         frame: u64,
     ) -> Result<(), &'static str> {
-        self.go_toward(state_id, base, frame, None)
+        self.go_toward(state_id, base, base_camera, frame, None)
     }
 
     fn go_toward(
         &mut self,
         state_id: u64,
         base: &[OverlayDesc],
+        base_camera: SceneCamera,
         frame: u64,
         motion: Option<MotionDef>,
     ) -> Result<(), &'static str> {
-        let (targets, motion) = if state_id == 0 {
+        let (targets, camera, motion) = if state_id == 0 {
             let targets = base
                 .iter()
                 .filter(|layer| layer.layer_id != 0)
@@ -149,19 +169,20 @@ impl SceneRuntime {
                 duration_frames: RETURN_FRAMES,
                 curve: Curve::Linear,
             });
-            (targets, motion)
+            (targets, Some(base_camera), motion)
         } else {
             let state = self
                 .states
                 .get(&state_id)
                 .ok_or("scene state does not exist")?;
             let targets = state.layers.clone();
-            if targets.is_empty() {
+            let camera = state.camera;
+            if targets.is_empty() && camera.is_none() {
                 return Ok(());
             }
-            (targets, motion.unwrap_or(state.enter))
+            (targets, camera, motion.unwrap_or(state.enter))
         };
-        self.start_move(state_id, 0, targets, motion, base, frame);
+        self.start_move(state_id, 0, targets, camera, motion, base, base_camera, frame);
         Ok(())
     }
 
@@ -170,6 +191,7 @@ impl SceneRuntime {
         sequence_id: u64,
         op: u32,
         base: &[OverlayDesc],
+        base_camera: SceneCamera,
         frame: u64,
     ) -> Result<(), &'static str> {
         match op {
@@ -200,7 +222,7 @@ impl SceneRuntime {
                         phase: Phase::Holding { until_frame: frame },
                     },
                 );
-                self.begin_step(sequence_id, base, frame)?;
+                self.begin_step(sequence_id, base, base_camera, frame)?;
                 Ok(())
             }
             _ => Err("unknown scene sequence operation"),
@@ -233,12 +255,17 @@ impl SceneRuntime {
         }
     }
 
-    /// Samples this frame. `None` means the published layers can stay as they are.
-    pub fn tick(&mut self, base: &[OverlayDesc], frame: u64) -> Option<Vec<OverlayDesc>> {
+    /// Samples this frame. `None` means the published pose can stay as it is.
+    pub fn tick(
+        &mut self,
+        base: &[OverlayDesc],
+        base_camera: SceneCamera,
+        frame: u64,
+    ) -> Option<Pose> {
         if self.moves.is_empty() && self.playing.is_empty() && !self.dirty {
             return None;
         }
-        let sampled = self.sample(base, frame);
+        let sampled = self.sample(base, base_camera, frame);
         self.store_presented(&sampled);
         let done: Vec<u64> = self
             .moves
@@ -249,9 +276,14 @@ impl SceneRuntime {
         for id in done {
             self.complete_move(id);
         }
-        self.advance(base, frame);
+        self.advance(base, base_camera, frame);
         self.dirty = !self.moves.is_empty() || !self.playing.is_empty();
         Some(sampled)
+    }
+
+    /// State the camera last arrived at. `0` means the saved camera.
+    pub fn camera_reached(&self) -> u64 {
+        self.reached_camera.unwrap_or(0)
     }
 
     pub fn fill_status(
@@ -332,11 +364,31 @@ impl SceneRuntime {
     }
 
     /// Pose to publish after a saved-layout edit. `None` when playback is untouched.
-    pub fn republish(&self, base: &[OverlayDesc], frame: u64) -> Option<Vec<OverlayDesc>> {
-        if !self.dirty && self.moves.is_empty() && self.presented.is_empty() {
+    pub fn republish(
+        &self,
+        base: &[OverlayDesc],
+        base_camera: SceneCamera,
+        frame: u64,
+    ) -> Option<Pose> {
+        if !self.dirty
+            && self.moves.is_empty()
+            && self.presented.is_empty()
+            && self.presented_camera.is_none()
+        {
             return None;
         }
-        Some(self.sample(base, frame))
+        Some(self.sample(base, base_camera, frame))
+    }
+
+    /// Drops camera playback when the saved camera changed.
+    pub fn note_camera_edit(&mut self, previous: SceneCamera, next: SceneCamera) {
+        if previous == next {
+            return;
+        }
+        self.dirty = true;
+        self.release_camera();
+        self.presented_camera = None;
+        self.reached_camera = None;
     }
 
     fn start_move(
@@ -344,16 +396,18 @@ impl SceneRuntime {
         state_id: u64,
         sequence_id: u64,
         targets: HashMap<u64, OverlayDesc>,
+        camera: Option<SceneCamera>,
         motion: MotionDef,
         base: &[OverlayDesc],
+        base_camera: SceneCamera,
         frame: u64,
     ) {
-        let current = self.sample(base, frame);
-        let current = index_layers(&current);
+        let current = self.sample(base, base_camera, frame);
+        let current_layers = index_layers(&current.layers);
         let mut from = HashMap::new();
         let mut to = HashMap::new();
         for (id, target) in targets {
-            let Some(now) = current
+            let Some(now) = current_layers
                 .get(&id)
                 .copied()
                 .or_else(|| base.iter().find(|layer| layer.layer_id == id).copied())
@@ -364,13 +418,20 @@ impl SceneRuntime {
             from.insert(id, now);
             to.insert(id, target);
         }
-        if from.is_empty() {
+        let camera_move = camera.map(|target| (current.camera, target));
+        if from.is_empty() && camera_move.is_none() {
             return;
+        }
+        if camera_move.is_some() {
+            self.steal_camera(true);
         }
         let id = self.next_move;
         self.next_move = self.next_move.saturating_add(1);
         for layer_id in from.keys() {
             self.owner.insert(*layer_id, id);
+        }
+        if camera_move.is_some() {
+            self.camera_owner = Some(id);
         }
         self.moves.push(Move {
             id,
@@ -378,6 +439,7 @@ impl SceneRuntime {
             sequence_id,
             from,
             to,
+            camera: camera_move,
             clock: AnimClock::new(frame, motion.duration_frames),
             curve: motion.curve,
         });
@@ -393,7 +455,7 @@ impl SceneRuntime {
         };
         mv.from.remove(&layer_id);
         mv.to.remove(&layer_id);
-        let emptied = mv.from.is_empty();
+        let emptied = mv.from.is_empty() && mv.camera.is_none();
         let sequence_id = mv.sequence_id;
         if log {
             self.note_takeover(layer_id, old_id);
@@ -414,9 +476,42 @@ impl SceneRuntime {
             .push_back(format!("layer {layer_id} left move {move_id}"));
     }
 
+    fn steal_camera(&mut self, log: bool) {
+        let Some(old_id) = self.camera_owner.take() else {
+            return;
+        };
+        let Some(mv) = self.moves.iter_mut().find(|mv| mv.id == old_id) else {
+            return;
+        };
+        mv.camera = None;
+        let emptied = mv.from.is_empty();
+        let sequence_id = mv.sequence_id;
+        if log {
+            self.note_camera_takeover(old_id);
+        }
+        if emptied {
+            self.moves.retain(|mv| mv.id != old_id);
+            if sequence_id != 0 {
+                self.playing.remove(&sequence_id);
+            }
+        }
+    }
+
+    fn note_camera_takeover(&mut self, move_id: u64) {
+        if self.takeovers.len() >= TAKEOVER_LOG {
+            self.takeovers.pop_front();
+        }
+        self.takeovers
+            .push_back(format!("camera left move {move_id}"));
+    }
+
     fn release_layer(&mut self, layer_id: u64) {
         self.steal_layer(layer_id, false);
         self.owner.remove(&layer_id);
+    }
+
+    fn release_camera(&mut self) {
+        self.steal_camera(false);
     }
 
     fn complete_move(&mut self, move_id: u64) {
@@ -430,6 +525,10 @@ impl SceneRuntime {
                 self.reached.insert(*id, mv.state_id);
             }
         }
+        if self.camera_owner == Some(move_id) {
+            self.camera_owner = None;
+            self.reached_camera = Some(mv.state_id);
+        }
     }
 
     fn cancel_move(&mut self, move_id: u64) {
@@ -441,6 +540,9 @@ impl SceneRuntime {
             if self.owner.get(id) == Some(&move_id) {
                 self.owner.remove(id);
             }
+        }
+        if self.camera_owner == Some(move_id) {
+            self.camera_owner = None;
         }
         if mv.sequence_id != 0 {
             self.playing.remove(&mv.sequence_id);
@@ -461,6 +563,7 @@ impl SceneRuntime {
         &mut self,
         sequence_id: u64,
         base: &[OverlayDesc],
+        base_camera: SceneCamera,
         frame: u64,
     ) -> Result<(), &'static str> {
         let Some(play) = self.playing.get(&sequence_id) else {
@@ -490,15 +593,34 @@ impl SceneRuntime {
                 duration_frames: RETURN_FRAMES,
                 curve: Curve::Linear,
             });
-            self.start_move(0, sequence_id, targets, motion, base, frame);
+            self.start_move(
+                0,
+                sequence_id,
+                targets,
+                Some(base_camera),
+                motion,
+                base,
+                base_camera,
+                frame,
+            );
         } else if !self.states.contains_key(&state_id) {
             self.playing.remove(&sequence_id);
             return Err("scene sequence references a missing state");
         } else {
             let state = &self.states[&state_id];
             let targets = state.layers.clone();
+            let camera = state.camera;
             let motion = motion.unwrap_or(state.enter);
-            self.start_move(state_id, sequence_id, targets, motion, base, frame);
+            self.start_move(
+                state_id,
+                sequence_id,
+                targets,
+                camera,
+                motion,
+                base,
+                base_camera,
+                frame,
+            );
         }
         if let Some(mv) = self.moves.last() {
             let move_id = mv.id;
@@ -511,7 +633,7 @@ impl SceneRuntime {
         Ok(())
     }
 
-    fn advance(&mut self, base: &[OverlayDesc], frame: u64) {
+    fn advance(&mut self, base: &[OverlayDesc], base_camera: SceneCamera, frame: u64) {
         let ids: Vec<u64> = self.playing.keys().copied().collect();
         for id in ids {
             let Some(play) = self.playing.get(&id) else {
@@ -558,14 +680,35 @@ impl SceneRuntime {
                 play.index = next;
                 play.dir = dir;
             }
-            let _ = self.begin_step(id, base, frame);
+            let _ = self.begin_step(id, base, base_camera, frame);
         }
     }
 
-    fn sample(&self, base: &[OverlayDesc], frame: u64) -> Vec<OverlayDesc> {
-        base.iter()
-            .map(|layer| self.sample_layer(*layer, frame))
-            .collect()
+    fn sample(&self, base: &[OverlayDesc], base_camera: SceneCamera, frame: u64) -> Pose {
+        Pose {
+            layers: base
+                .iter()
+                .map(|layer| self.sample_layer(*layer, frame))
+                .collect(),
+            camera: self.sample_camera(base_camera, frame),
+        }
+    }
+
+    fn sample_camera(&self, base: SceneCamera, frame: u64) -> SceneCamera {
+        if let Some(move_id) = self.camera_owner {
+            if let Some(mv) = self.moves.iter().find(|mv| mv.id == move_id) {
+                if let Some((from, to)) = mv.camera {
+                    let done = mv.clock.finished(frame);
+                    let t = if done {
+                        1.0
+                    } else {
+                        mv.curve.eval(mv.clock.progress(frame))
+                    };
+                    return lerp_camera(from, to, t);
+                }
+            }
+        }
+        self.presented_camera.unwrap_or(base)
     }
 
     fn sample_layer(&self, base: OverlayDesc, frame: u64) -> OverlayDesc {
@@ -591,11 +734,14 @@ impl SceneRuntime {
         base
     }
 
-    fn store_presented(&mut self, sampled: &[OverlayDesc]) {
-        for layer in sampled {
+    fn store_presented(&mut self, sampled: &Pose) {
+        for layer in &sampled.layers {
             if layer.layer_id != 0 && self.owner.contains_key(&layer.layer_id) {
                 self.presented.insert(layer.layer_id, *layer);
             }
+        }
+        if self.camera_owner.is_some() {
+            self.presented_camera = Some(sampled.camera);
         }
     }
 }
@@ -633,6 +779,21 @@ fn blend(from: OverlayDesc, to: OverlayDesc, t: f32, done: bool) -> OverlayDesc 
         hidden: from.hidden,
         label: std::ptr::null(),
         layer_id: from.layer_id,
+    }
+}
+
+fn lerp_camera(from: SceneCamera, to: SceneCamera, t: f32) -> SceneCamera {
+    if t >= 1.0 {
+        return to;
+    }
+    if t <= 0.0 {
+        return from;
+    }
+    let zoom = (from.zoom.ln() + (to.zoom.ln() - from.zoom.ln()) * t).exp();
+    SceneCamera {
+        x: from.x + (to.x - from.x) * t,
+        y: from.y + (to.y - from.y) * t,
+        zoom,
     }
 }
 
@@ -705,10 +866,17 @@ unsafe fn states_from_ffi(
             return Err("duplicate scene state id");
         }
         let layers = unsafe { layers_from_ffi(desc.layers, desc.layer_count)? };
+        let camera = if desc.has_camera == 0 {
+            None
+        } else {
+            validate_camera(desc.camera)?;
+            Some(desc.camera)
+        };
         out.insert(
             desc.id,
             StateDef {
                 layers,
+                camera,
                 enter: motion_from_ffi(desc.enter)?,
             },
         );
@@ -811,6 +979,8 @@ mod tests {
     use super::*;
     use crate::abi::Rect;
 
+    const CAM: SceneCamera = SceneCamera::IDENTITY;
+
     fn layer(id: u64, x: f32) -> OverlayDesc {
         OverlayDesc {
             source_id: 10 + id,
@@ -850,6 +1020,7 @@ mod tests {
                     .iter()
                     .map(|(layer_id, x)| (*layer_id, layer(*layer_id, *x)))
                     .collect(),
+                camera: None,
                 enter: linear(frames),
             },
         )
@@ -871,11 +1042,11 @@ mod tests {
         let (id_b, b) = state(2, &[(1, 0.0)], 10);
         rt.define_states(HashMap::from([(id_a, a), (id_b, b)]));
         let base = vec![layer(1, 0.0)];
-        rt.go_to(1, &base, 100).unwrap();
-        let mid = rt.tick(&base, 115).unwrap();
+        rt.go_to(1, &base, CAM, 100).unwrap();
+        let mid = rt.tick(&base, CAM, 115).unwrap().layers;
         assert!((x_of(&mid, 1) - 0.5).abs() < 1e-4);
-        rt.go_to(2, &base, 115).unwrap();
-        let next = rt.tick(&base, 116).unwrap();
+        rt.go_to(2, &base, CAM, 115).unwrap();
+        let next = rt.tick(&base, CAM, 116).unwrap().layers;
         let jumped = (x_of(&next, 1) - 0.0).abs() < 1e-3;
         assert!(!jumped, "x snapped to the base instead of leaving 0.5");
         assert!(x_of(&next, 1) < 0.5);
@@ -890,9 +1061,9 @@ mod tests {
             state(2, &[(1, 1.0)], 30),
         ]));
         let base = vec![layer(1, 0.0)];
-        rt.go_to(1, &base, 0).unwrap();
-        let _ = rt.tick(&base, 2);
-        rt.go_to(2, &base, 2).unwrap();
+        rt.go_to(1, &base, CAM, 0).unwrap();
+        let _ = rt.tick(&base, CAM, 2);
+        rt.go_to(2, &base, CAM, 2).unwrap();
         assert_eq!(rt.moves[0].clock.duration_frames, 30);
     }
 
@@ -904,17 +1075,17 @@ mod tests {
             state(2, &[(2, 1.0)], 10),
         ]));
         let base = vec![layer(1, 0.0), layer(2, 0.0)];
-        rt.go_to(1, &base, 0).unwrap();
-        rt.go_to(2, &base, 0).unwrap();
+        rt.go_to(1, &base, CAM, 0).unwrap();
+        rt.go_to(2, &base, CAM, 0).unwrap();
         assert_eq!(rt.moves.len(), 2);
-        let frame = rt.tick(&base, 5).unwrap();
+        let frame = rt.tick(&base, CAM, 5).unwrap().layers;
         assert!((x_of(&frame, 1) - 0.5).abs() < 1e-4);
         assert!((x_of(&frame, 2) - 0.5).abs() < 1e-4);
 
-        rt.go_toward(1, &base, 5, Some(linear(10))).unwrap();
+        rt.go_toward(1, &base, CAM, 5, Some(linear(10))).unwrap();
         assert_eq!(rt.moves.len(), 2);
         assert!(rt.takeover_log().any(|line| line.contains("layer 1")));
-        let frame = rt.tick(&base, 6).unwrap();
+        let frame = rt.tick(&base, CAM, 6).unwrap().layers;
         assert!(x_of(&frame, 2) > 0.5);
     }
 
@@ -949,14 +1120,14 @@ mod tests {
             },
         )]));
         let base = vec![layer(1, 0.5)];
-        rt.sequence(7, SCENE_SEQ_PLAY, &base, 0).unwrap();
-        let at_hold = rt.tick(&base, 2).unwrap();
+        rt.sequence(7, SCENE_SEQ_PLAY, &base, CAM, 0).unwrap();
+        let at_hold = rt.tick(&base, CAM, 2).unwrap().layers;
         assert!((x_of(&at_hold, 1) - 0.0).abs() < 1e-4);
-        let still = rt.tick(&base, 4).unwrap();
+        let still = rt.tick(&base, CAM, 4).unwrap().layers;
         assert!((x_of(&still, 1) - 0.0).abs() < 1e-4);
-        let held = rt.tick(&base, 7).unwrap();
+        let held = rt.tick(&base, CAM, 7).unwrap().layers;
         assert!((x_of(&held, 1) - 0.0).abs() < 1e-4);
-        let leaving = rt.tick(&base, 8).unwrap();
+        let leaving = rt.tick(&base, CAM, 8).unwrap().layers;
         assert!(x_of(&leaving, 1) > 0.0);
 
         rt.define_sequences(HashMap::from([(
@@ -976,13 +1147,13 @@ mod tests {
                 ],
             },
         )]));
-        rt.sequence(8, SCENE_SEQ_REVERSE, &base, 10).unwrap();
+        rt.sequence(8, SCENE_SEQ_REVERSE, &base, CAM, 10).unwrap();
         assert_eq!(rt.playing[&8].index, 1);
         assert_eq!(rt.playing[&8].dir, -1);
-        let _ = rt.tick(&base, 12);
+        let _ = rt.tick(&base, CAM, 12);
         assert_eq!(rt.playing[&8].index, 0);
         assert_eq!(rt.playing[&8].dir, -1);
-        let _ = rt.tick(&base, 14);
+        let _ = rt.tick(&base, CAM, 14);
         assert!(rt.playing.get(&8).is_none());
 
         let mut rt = SceneRuntime::default();
@@ -1008,10 +1179,10 @@ mod tests {
             },
         )]));
         let base = vec![layer(1, 0.25)];
-        rt.sequence(9, SCENE_SEQ_PLAY, &base, 0).unwrap();
-        let _ = rt.tick(&base, 2);
+        rt.sequence(9, SCENE_SEQ_PLAY, &base, CAM, 0).unwrap();
+        let _ = rt.tick(&base, CAM, 2);
         assert_eq!(rt.playing[&9].index, 1);
-        let _ = rt.tick(&base, 4);
+        let _ = rt.tick(&base, CAM, 4);
         assert!(rt.playing.get(&9).is_none());
     }
 
@@ -1020,8 +1191,8 @@ mod tests {
         let mut rt = SceneRuntime::default();
         rt.define_states(HashMap::from([state(1, &[(1, 1.0), (2, 1.0)], 10)]));
         let base = vec![layer(1, 0.0), layer(2, 0.0)];
-        rt.go_to(1, &base, 0).unwrap();
-        let _ = rt.tick(&base, 10);
+        rt.go_to(1, &base, CAM, 0).unwrap();
+        let _ = rt.tick(&base, CAM, 10);
         assert_eq!(rt.reached.get(&1), Some(&1));
         let mut edited = base.clone();
         edited[0].rect.x = 0.25;
@@ -1030,7 +1201,7 @@ mod tests {
         assert_eq!(rt.reached.get(&2), Some(&1));
         assert!(rt.owner.get(&1).is_none());
         assert!(rt.owner.get(&2).is_none() || rt.moves.iter().any(|mv| mv.from.contains_key(&2)));
-        let shown = rt.sample(&edited, 10);
+        let shown = rt.sample(&edited, CAM, 10).layers;
         assert!((x_of(&shown, 1) - 0.25).abs() < 1e-4);
     }
 
@@ -1039,12 +1210,12 @@ mod tests {
         let mut rt = SceneRuntime::default();
         rt.define_states(HashMap::from([state(1, &[(1, 1.0)], 30)]));
         let base = vec![layer(1, 0.0)];
-        rt.go_to(1, &base, 100).unwrap();
+        rt.go_to(1, &base, CAM, 100).unwrap();
         let mut frame = 101u64;
         let mut ticks = 0u32;
         loop {
             ticks += 1;
-            let _ = rt.tick(&base, frame);
+            let _ = rt.tick(&base, CAM, frame);
             if rt.moves.is_empty() {
                 break;
             }
@@ -1054,5 +1225,133 @@ mod tests {
         assert_eq!(ticks, 30);
         assert_eq!(frame, 130);
         assert_eq!(rt.reached.get(&1), Some(&1));
+    }
+
+    fn camera(zoom: f32, x: f32) -> SceneCamera {
+        SceneCamera { x, y: 0.5, zoom }
+    }
+
+    #[test]
+    fn camera_zoom_interpolates_on_a_log_scale_and_layers_stay() {
+        let mut rt = SceneRuntime::default();
+        rt.define_states(HashMap::from([(
+            1,
+            StateDef {
+                layers: HashMap::new(),
+                camera: Some(camera(4.0, 0.75)),
+                enter: linear(30),
+            },
+        )]));
+        let base = vec![layer(1, 0.0)];
+        rt.go_to(1, &base, CAM, 0).unwrap();
+        let mid = rt.tick(&base, CAM, 15).unwrap();
+        assert!((mid.camera.zoom - 2.0).abs() < 1.0e-3, "zoom {}", mid.camera.zoom);
+        assert!((mid.camera.x - 0.625).abs() < 1.0e-3);
+        assert!((x_of(&mid.layers, 1) - 0.0).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn camera_takeover_continues_from_the_value_on_screen() {
+        let mut rt = SceneRuntime::default();
+        rt.define_states(HashMap::from([
+            (
+                1,
+                StateDef {
+                    layers: HashMap::new(),
+                    camera: Some(camera(4.0, 0.5)),
+                    enter: linear(30),
+                },
+            ),
+            (
+                2,
+                StateDef {
+                    layers: HashMap::new(),
+                    camera: Some(camera(1.0, 0.5)),
+                    enter: linear(30),
+                },
+            ),
+        ]));
+        let base = vec![layer(1, 0.0)];
+        rt.go_to(1, &base, CAM, 0).unwrap();
+        let mid = rt.tick(&base, CAM, 15).unwrap();
+        assert!((mid.camera.zoom - 2.0).abs() < 1.0e-3);
+        rt.go_to(2, &base, CAM, 15).unwrap();
+        let next = rt.tick(&base, CAM, 16).unwrap();
+        assert!(next.camera.zoom < mid.camera.zoom);
+        assert!(next.camera.zoom > 1.9, "zoom {}", next.camera.zoom);
+        assert!(rt.takeover_log().any(|line| line.contains("camera")));
+    }
+
+    #[test]
+    fn returning_to_the_saved_layout_restores_the_camera() {
+        let mut rt = SceneRuntime::default();
+        rt.define_states(HashMap::from([(
+            1,
+            StateDef {
+                layers: HashMap::new(),
+                camera: Some(camera(4.0, 0.5)),
+                enter: linear(10),
+            },
+        )]));
+        let base = vec![layer(1, 0.0)];
+        rt.go_to(1, &base, CAM, 0).unwrap();
+        let _ = rt.tick(&base, CAM, 10);
+        assert_eq!(rt.camera_reached(), 1);
+        rt.go_to(0, &base, CAM, 10).unwrap();
+        let back = rt.tick(&base, CAM, 25).unwrap();
+        assert!((back.camera.zoom - 1.0).abs() < 1.0e-3);
+        assert_eq!(rt.camera_reached(), 0);
+    }
+
+    #[test]
+    fn editing_the_saved_camera_drops_camera_playback() {
+        let mut rt = SceneRuntime::default();
+        rt.define_states(HashMap::from([(
+            1,
+            StateDef {
+                layers: HashMap::new(),
+                camera: Some(camera(4.0, 0.5)),
+                enter: linear(10),
+            },
+        )]));
+        let base = vec![layer(1, 0.0)];
+        rt.go_to(1, &base, CAM, 0).unwrap();
+        let _ = rt.tick(&base, CAM, 10);
+        assert_eq!(rt.camera_reached(), 1);
+        let edited = camera(2.0, 0.5);
+        rt.note_camera_edit(CAM, edited);
+        assert_eq!(rt.camera_reached(), 0);
+        let shown = rt.sample(&base, edited, 10);
+        assert!((shown.camera.zoom - 2.0).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn a_layer_only_move_leaves_the_camera_running() {
+        let mut rt = SceneRuntime::default();
+        rt.define_states(HashMap::from([
+            (
+                1,
+                StateDef {
+                    layers: HashMap::from([(1, layer(1, 1.0))]),
+                    camera: Some(camera(4.0, 0.5)),
+                    enter: linear(30),
+                },
+            ),
+            (
+                2,
+                StateDef {
+                    layers: HashMap::from([(1, layer(1, 0.0))]),
+                    camera: None,
+                    enter: linear(30),
+                },
+            ),
+        ]));
+        let base = vec![layer(1, 0.0)];
+        rt.go_to(1, &base, CAM, 0).unwrap();
+        let _ = rt.tick(&base, CAM, 10);
+        rt.go_to(2, &base, CAM, 10).unwrap();
+        let next = rt.tick(&base, CAM, 15).unwrap();
+        assert!((next.camera.zoom - 2.0).abs() < 1.0e-3, "zoom {}", next.camera.zoom);
+        assert!(x_of(&next.layers, 1) < 0.5);
     }
 }

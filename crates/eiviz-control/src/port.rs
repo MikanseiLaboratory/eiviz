@@ -174,12 +174,30 @@ pub struct OverlayLayer {
     pub layer_id: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CameraApply {
+    pub x: f32,
+    pub y: f32,
+    pub zoom: f32,
+}
+
+impl Default for CameraApply {
+    fn default() -> Self {
+        Self {
+            x: 0.5,
+            y: 0.5,
+            zoom: 1.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneApply {
     pub id: u64,
     pub width: u32,
     pub height: u32,
     pub layers: Vec<OverlayLayer>,
+    pub camera: CameraApply,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -193,6 +211,7 @@ pub struct MotionApply {
 pub struct StateApply {
     pub id: u64,
     pub layers: Vec<OverlayLayer>,
+    pub camera: Option<CameraApply>,
     pub enter: MotionApply,
 }
 

@@ -84,6 +84,9 @@ pub struct SceneAnimLive {
     pub moves: Vec<ActiveMoveLive>,
     pub sequences: Vec<ActiveSequenceLive>,
     pub takeovers: Vec<String>,
+    /// State the camera last arrived at. `0` is the saved camera.
+    #[serde(default)]
+    pub camera_state: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

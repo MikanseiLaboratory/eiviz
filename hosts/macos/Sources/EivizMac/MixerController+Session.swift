@@ -787,6 +787,14 @@ extension MixerController {
                 "Define scene"
             )
         }
+        let camera = scene.camera
+        fail(
+            mixer_scene_camera_define(
+                gpuId ?? scene.gpuId,
+                EivizSceneCamera(x: camera.x, y: camera.y, zoom: camera.zoom)
+            ),
+            "Define scene camera"
+        )
     }
 
     func pushSceneAnim(_ scene: SceneEntry) {
@@ -822,7 +830,13 @@ extension MixerController {
                     id: state.id,
                     layers: layerPtrs[index].map(UnsafePointer.init),
                     layer_count: UInt32(layerBufs[index].count),
-                    enter: sceneMotion(state.enter)
+                    enter: sceneMotion(state.enter),
+                    camera: EivizSceneCamera(
+                        x: state.camera?.x ?? 0.5,
+                        y: state.camera?.y ?? 0.5,
+                        zoom: state.camera?.zoom ?? 1
+                    ),
+                    has_camera: state.camera == nil ? 0 : 1
                 )
             }
             states.withUnsafeBufferPointer { ptr in
@@ -876,6 +890,7 @@ extension MixerController {
         var reachedCount: UInt32 = 0
         var moveCount: UInt32 = 0
         var sequenceCount: UInt32 = 0
+        var cameraState: UInt64 = 0
         let code = reached.withUnsafeMutableBufferPointer { reachedBuf in
             moves.withUnsafeMutableBufferPointer { moveBuf in
                 sequences.withUnsafeMutableBufferPointer { sequenceBuf in
@@ -883,13 +898,15 @@ extension MixerController {
                         scene.gpuId,
                         reachedBuf.baseAddress, 64, &reachedCount,
                         moveBuf.baseAddress, 16, &moveCount,
-                        sequenceBuf.baseAddress, 16, &sequenceCount
+                        sequenceBuf.baseAddress, 16, &sequenceCount,
+                        &cameraState
                     )
                 }
             }
         }
         guard code == EIVIZ_OK else { return .idle }
-        let shown = SceneAnimLive.sameState(reached.prefix(Int(min(reachedCount, 64))).map(\.state_id))
+        let ids = Array(reached.prefix(Int(min(reachedCount, 64))).map(\.state_id))
+        let shown = SceneAnimLive.shown(ids, cameraState: cameraState, states: scene.states)
         let moving = moveCount > 0 ? moves[0].state_id : nil
         guard sequenceCount > 0 else {
             return SceneAnimLive(shownState: shown, movingState: moving, sequenceId: nil, stepIndex: -1, holding: false)
@@ -912,7 +929,8 @@ extension MixerController {
         else { return .idle }
         let reached = (live["reached"] as? [[String: Any]] ?? []).compactMap { ($0["stateId"] as? NSNumber)?.uint64Value }
         let moving = ((live["moves"] as? [[String: Any]])?.first?["stateId"] as? NSNumber)?.uint64Value
-        let shown = SceneAnimLive.sameState(reached)
+        let cameraState = (live["cameraState"] as? NSNumber)?.uint64Value ?? 0
+        let shown = SceneAnimLive.shown(reached, cameraState: cameraState, states: scene.states)
         guard let active = (live["sequences"] as? [[String: Any]])?.first,
               let sequenceId = (active["sequenceId"] as? NSNumber)?.uint64Value
         else {

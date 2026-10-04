@@ -625,6 +625,7 @@ fn scene_to_pb(scene: &SceneDto) -> pb::Scene {
         preview_collapsed: scene.preview_collapsed,
         states: scene.states.iter().map(state_to_pb).collect(),
         sequences: scene.sequences.iter().map(sequence_to_pb).collect(),
+        camera: Some(camera_to_pb(&scene.camera)),
     }
 }
 
@@ -638,6 +639,7 @@ fn scene_from_pb(scene: pb::Scene) -> SceneDto {
         preview_collapsed: scene.preview_collapsed,
         states: scene.states.into_iter().map(state_from_pb).collect(),
         sequences: scene.sequences.into_iter().map(sequence_from_pb).collect(),
+        camera: scene.camera.map(camera_from_pb).unwrap_or_default(),
     }
 }
 
@@ -724,6 +726,7 @@ fn state_to_pb(state: &super::SceneState) -> pb::SceneState {
             })
             .collect(),
         enter: Some(motion_to_pb(&state.enter)),
+        camera: state.camera.as_ref().map(camera_to_pb),
     }
 }
 
@@ -740,6 +743,26 @@ fn state_from_pb(state: pb::SceneState) -> super::SceneState {
             })
             .collect(),
         enter: state.enter.map(motion_from_pb).unwrap_or_default(),
+        camera: state.camera.map(camera_from_pb),
+    }
+}
+
+fn camera_to_pb(camera: &super::SceneCamera) -> pb::SceneCamera {
+    pb::SceneCamera {
+        x: camera.x,
+        y: camera.y,
+        zoom: camera.zoom,
+    }
+}
+
+fn camera_from_pb(camera: pb::SceneCamera) -> super::SceneCamera {
+    if camera.zoom == 0.0 {
+        return super::SceneCamera::default();
+    }
+    super::SceneCamera {
+        x: camera.x,
+        y: camera.y,
+        zoom: camera.zoom,
     }
 }
 

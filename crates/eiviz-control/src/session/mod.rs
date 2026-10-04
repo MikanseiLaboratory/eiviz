@@ -679,6 +679,9 @@ fn one_u32() -> u32 {
 fn one_f32() -> f32 {
     1.0
 }
+fn half_f32() -> f32 {
+    0.5
+}
 fn tone_level() -> f32 {
     -20.0
 }
@@ -727,6 +730,28 @@ fn true_bool() -> bool {
     true
 }
 
+/// Scene camera. `x` and `y` are the center in scene coordinates and `zoom` is the magnification.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneCamera {
+    #[serde(default = "half_f32")]
+    pub x: f32,
+    #[serde(default = "half_f32")]
+    pub y: f32,
+    #[serde(default = "one_f32")]
+    pub zoom: f32,
+}
+
+impl Default for SceneCamera {
+    fn default() -> Self {
+        Self {
+            x: 0.5,
+            y: 0.5,
+            zoom: 1.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneState {
@@ -736,6 +761,8 @@ pub struct SceneState {
     pub name: String,
     #[serde(default)]
     pub layers: Vec<LayerKey>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<SceneCamera>,
     #[serde(default = "default_motion")]
     pub enter: Motion,
 }
@@ -825,6 +852,8 @@ pub struct SceneDto {
     pub tags: Vec<String>,
     #[serde(default)]
     pub preview_collapsed: bool,
+    #[serde(default)]
+    pub camera: SceneCamera,
     #[serde(default)]
     pub states: Vec<SceneState>,
     #[serde(default)]

@@ -2143,6 +2143,77 @@ fn snapshot_writes_png() {
     mixer_destroy();
 }
 
+fn snap_pixel(scene: u64, x: u32, y: u32) -> [u8; 3] {
+    let path = std::env::temp_dir().join(format!("eiviz-camera-{scene}-{x}-{y}.png"));
+    let _ = std::fs::remove_file(&path);
+    let cpath = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+    let mut code = unsafe { mixer_snapshot(scene, 0, cpath.as_ptr()) };
+    if code != OK {
+        thread::sleep(Duration::from_millis(250));
+        code = unsafe { mixer_snapshot(scene, 0, cpath.as_ptr()) };
+    }
+    assert_eq!(code, OK);
+    let image = image::open(&path).expect("decode scene snapshot").to_rgb8();
+    let _ = std::fs::remove_file(&path);
+    let pixel = image.get_pixel(x, y);
+    [pixel[0], pixel[1], pixel[2]]
+}
+
+fn is_red(pixel: [u8; 3]) -> bool {
+    pixel[0] > 200 && pixel[1] < 40 && pixel[2] < 40
+}
+
+fn is_black(pixel: [u8; 3]) -> bool {
+    pixel[0] < 40 && pixel[1] < 40 && pixel[2] < 40
+}
+
+#[test]
+fn scene_camera_zoom_fills_the_frame_from_the_center() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    let scene = scene_id(1);
+    let center = OverlayDesc {
+        source_id: SRC_COLOR,
+        rect: Rect {
+            x: 0.25,
+            y: 0.25,
+            width: 0.5,
+            height: 0.5,
+        },
+        opacity: 1.0,
+        ..OverlayDesc::default()
+    };
+    unsafe {
+        assert_eq!(mixer_define_scene(scene, 320, 180, 1, &center), OK);
+    }
+    thread::sleep(Duration::from_millis(300));
+    let corner = snap_pixel(scene, 4, 4);
+    let middle = snap_pixel(scene, 160, 90);
+    assert!(is_black(corner), "corner {corner:?} should be the empty background");
+    assert!(is_red(middle), "center {middle:?} should be the color layer");
+
+    let zoomed = eiviz_mixer::EivizSceneCamera {
+        x: 0.5,
+        y: 0.5,
+        zoom: 2.0,
+    };
+    assert_eq!(unsafe { eiviz_mixer::mixer_scene_camera_define(scene, zoomed) }, OK);
+    thread::sleep(Duration::from_millis(300));
+    let corner = snap_pixel(scene, 4, 4);
+    assert!(is_red(corner), "zoomed corner {corner:?} should show the center layer");
+
+    let too_wide = eiviz_mixer::EivizSceneCamera {
+        x: 0.5,
+        y: 0.5,
+        zoom: 0.5,
+    };
+    assert_eq!(
+        unsafe { eiviz_mixer::mixer_scene_camera_define(scene, too_wide) },
+        ERR_INVALID_ARGUMENT
+    );
+    mixer_destroy();
+}
+
 #[test]
 fn unsupported_backend_create_returns_within_timeout() {
     mixer_destroy();

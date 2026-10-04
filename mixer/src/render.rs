@@ -32,6 +32,7 @@ pub(crate) fn render_loop(
     let mut snapshot = Vec::new();
     let mut scene_specs = Vec::new();
     let mut scene_labels = HashMap::new();
+    let mut scene_cameras = HashMap::new();
     let mut generators = Vec::new();
     let mut outputs_snap = Vec::new();
     let mut cached_mem = (0u64, 0u64);
@@ -249,6 +250,8 @@ pub(crate) fn render_loop(
                     .iter()
                     .map(|(id, spec)| (*id, Arc::clone(&spec.labels))),
             );
+            scene_cameras.clear();
+            scene_cameras.extend(guard.scenes.iter().map(|(id, spec)| (*id, spec.camera)));
             let bus_colors = guard.bus_colors;
             generators.clear();
             generators.extend(guard.generators.iter().map(|(id, spec)| (*id, *spec)));
@@ -527,7 +530,7 @@ pub(crate) fn render_loop(
             }
             frame_delay.consume_display(false);
             composer.set_bus_colors(bus_colors.preview, bus_colors.program, bus_colors.inactive);
-            composer.sync_scenes(&device, &scene_specs, &scene_labels);
+            composer.sync_scenes(&device, &scene_specs, &scene_labels, &scene_cameras);
             let mut encoder =
                 device
                     .device

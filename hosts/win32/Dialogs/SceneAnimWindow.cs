@@ -630,7 +630,8 @@ internal sealed class SceneAnimWindow : Window
             Id = id,
             Name = $"State {_scene.States.Count + 1}",
             Enter = new Motion(),
-            Layers = CurrentLayout()
+            Layers = CurrentLayout(),
+            Camera = _scene.Camera.Clone()
         });
         Persist();
         Reload();
@@ -655,6 +656,7 @@ internal sealed class SceneAnimWindow : Window
         if (state is null)
             return;
         state.Layers = CurrentLayout();
+        state.Camera = _scene.Camera.Clone();
         Persist();
         _status.Text = Loc.T("anim.captured");
     }

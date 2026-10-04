@@ -194,6 +194,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_unit_overlay_auto")]
     internal static unsafe partial int OverlayAuto(ulong unitId, uint targetEnabled, uint durationFrames, OverlayDesc* desc, EivizCurve* curve);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_scene_camera_define")]
+    internal static partial int SceneCameraDefine(ulong sceneId, EivizSceneCamera camera);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_scene_states_define")]
     internal static unsafe partial int SceneStatesDefine(ulong sceneId, EivizSceneStateDesc* states, uint count);
 
@@ -217,7 +220,8 @@ internal static partial class MixerNative
         uint* movesCount,
         EivizActiveSequence* sequences,
         uint sequencesCap,
-        uint* sequencesCount);
+        uint* sequencesCount,
+        ulong* cameraState);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_unit_set_custom_wgsl", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int SetCustomWgsl(ulong unitId, string? wgsl);
@@ -858,13 +862,23 @@ internal struct EivizMotion
     public uint HasBezier;
 }
 
-[StructLayout(LayoutKind.Explicit, Size = 48)]
+[StructLayout(LayoutKind.Sequential)]
+internal struct EivizSceneCamera
+{
+    public float X;
+    public float Y;
+    public float Zoom;
+}
+
+[StructLayout(LayoutKind.Explicit, Size = 64)]
 internal struct EivizSceneStateDesc
 {
     [FieldOffset(0)] public ulong Id;
     [FieldOffset(8)] public nint Layers;
     [FieldOffset(16)] public uint LayerCount;
     [FieldOffset(20)] public EivizMotion Enter;
+    [FieldOffset(48)] public EivizSceneCamera Camera;
+    [FieldOffset(60)] public uint HasCamera;
 }
 
 [StructLayout(LayoutKind.Explicit, Size = 48)]

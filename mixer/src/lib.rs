@@ -61,7 +61,8 @@ pub use abi::{
     AudioPeak, BACKEND_AUTO, BACKEND_DX12, BACKEND_METAL, BACKEND_VULKAN, DURATION_FRAMES,
     DURATION_MS, EASING_BEZIER, EASING_HOLD, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT,
     EASING_SMOOTHSTEP, ERR_ALREADY_CREATED, ERR_BUFFER_TOO_SMALL, ERR_DEVICE, ERR_INVALID_ARGUMENT,
-    ERR_IO, ERR_NOT_CREATED, EivizCurve, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM,
+    ERR_IO, ERR_NOT_CREATED, EivizCurve, EivizSceneCamera, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW,
+    INCOMING_PROGRAM,
     InputRuntimeStats, MULTIVIEW_BASE, MixerRebarInfo, MixerRuntimeStats, MixerSourceStatus,
     MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI,
     OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE, OutputRuntimeStats, OverlayDesc, Rect,
@@ -331,6 +332,10 @@ pub(crate) struct SceneSpec {
     base_layers: Arc<[crate::abi::OverlayDesc]>,
     /// Layers the composer draws. Stays equal to `base_layers` until a move publishes a pose.
     layers: Arc<[crate::abi::OverlayDesc]>,
+    /// Saved camera. Playback never writes this.
+    base_camera: crate::abi::EivizSceneCamera,
+    /// Camera the composer draws.
+    camera: crate::abi::EivizSceneCamera,
     labels: Arc<[String]>,
     mv_label: MvLabelStyle,
 }
@@ -1177,6 +1182,7 @@ fn scene_anim_live(shared: &Shared) -> HashMap<u64, eiviz_control::live::SceneAn
                         holding: item.holding != 0,
                     })
                     .collect(),
+                camera_state: runtime.camera_reached(),
                 takeovers: runtime.takeover_log().map(str::to_string).collect(),
             },
         );
@@ -1416,29 +1422,41 @@ unsafe fn mixer_define_scene_ffi(
             .get(&scene_id)
             .map(|spec| spec.mv_label)
             .unwrap_or(shared.mv_label);
-        let previous = shared
-            .scenes
-            .get(&scene_id)
-            .map(|spec| Arc::clone(&spec.base_layers));
+        let (previous, kept_camera) = match shared.scenes.get(&scene_id) {
+            Some(spec) => (
+                Some(Arc::clone(&spec.base_layers)),
+                (spec.base_camera, spec.camera),
+            ),
+            None => (
+                None,
+                (
+                    abi::EivizSceneCamera::IDENTITY,
+                    abi::EivizSceneCamera::IDENTITY,
+                ),
+            ),
+        };
         if let Some(runtime) = shared.scene_anims.get_mut(&scene_id) {
             if let Some(previous) = previous.as_deref() {
                 runtime.note_base_edit(previous, copied.as_ref());
             }
         }
         let frame = shared.composed_frame;
-        let drawn = shared
+        let (base_camera, camera) = kept_camera;
+        let (layers, camera) = shared
             .scene_anims
             .get(&scene_id)
-            .and_then(|runtime| runtime.republish(copied.as_ref(), frame))
-            .map(Arc::from)
-            .unwrap_or_else(|| Arc::clone(&copied));
+            .and_then(|runtime| runtime.republish(copied.as_ref(), base_camera, frame))
+            .map(|pose| (Arc::from(pose.layers), pose.camera))
+            .unwrap_or_else(|| (Arc::clone(&copied), camera));
         shared.scenes.insert(
             scene_id,
             SceneSpec {
                 width,
                 height,
                 base_layers: Arc::clone(&copied),
-                layers: drawn,
+                layers,
+                base_camera,
+                camera,
                 labels,
                 mv_label,
             },
@@ -1470,13 +1488,45 @@ fn mixer_destroy_scene_ffi(scene_id: u64) -> i32 {
     .unwrap_or_else(|code| code)
 }
 
+/// Sets the saved camera and the camera on screen. A camera edit ends camera playback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_scene_camera_define(
+    scene_id: u64,
+    camera: abi::EivizSceneCamera,
+) -> i32 {
+    ffi_guard("mixer_scene_camera_define", ERR_DEVICE, || {
+        if let Err(message) = abi::validate_camera(camera) {
+            report_session_error(message);
+            return ERR_INVALID_ARGUMENT;
+        }
+        with_mixer(|mixer| {
+            let mut shared = mixer.shared.lock_or_recover();
+            let previous = {
+                let Some(spec) = shared.scenes.get_mut(&scene_id) else {
+                    return scene_anim_error("scene does not exist");
+                };
+                let previous = spec.base_camera;
+                spec.base_camera = camera;
+                spec.camera = camera;
+                previous
+            };
+            if let Some(runtime) = shared.scene_anims.get_mut(&scene_id) {
+                runtime.note_camera_edit(previous, camera);
+            }
+            shared.compose_dirty = true;
+            OK
+        })
+        .unwrap_or_else(|code| code)
+    })
+}
+
 pub(crate) fn tick_scene_anims(shared: &mut Shared, frame: u64) {
     let ids: Vec<u64> = shared.scene_anims.keys().copied().collect();
     for id in ids {
-        let Some(base) = shared
+        let Some((base, base_camera)) = shared
             .scenes
             .get(&id)
-            .map(|spec| Arc::clone(&spec.base_layers))
+            .map(|spec| (Arc::clone(&spec.base_layers), spec.base_camera))
         else {
             continue;
         };
@@ -1484,11 +1534,12 @@ pub(crate) fn tick_scene_anims(shared: &mut Shared, frame: u64) {
             let Some(runtime) = shared.scene_anims.get_mut(&id) else {
                 continue;
             };
-            runtime.tick(base.as_ref(), frame)
+            runtime.tick(base.as_ref(), base_camera, frame)
         };
         if let Some(drawn) = drawn {
             if let Some(spec) = shared.scenes.get_mut(&id) {
-                spec.layers = Arc::from(drawn);
+                spec.layers = Arc::from(drawn.layers);
+                spec.camera = drawn.camera;
             }
             shared.compose_dirty = true;
         }
@@ -1551,10 +1602,10 @@ pub unsafe extern "C" fn mixer_scene_go_to(scene_id: u64, state_id: u64) -> i32 
     ffi_guard("mixer_scene_go_to", ERR_DEVICE, || {
         with_mixer(|mixer| {
             let mut shared = mixer.shared.lock_or_recover();
-            let Some(base) = shared
+            let Some((base, base_camera)) = shared
                 .scenes
                 .get(&scene_id)
-                .map(|spec| Arc::clone(&spec.base_layers))
+                .map(|spec| (Arc::clone(&spec.base_layers), spec.base_camera))
             else {
                 return scene_anim_error("scene does not exist");
             };
@@ -1562,6 +1613,7 @@ pub unsafe extern "C" fn mixer_scene_go_to(scene_id: u64, state_id: u64) -> i32 
             match shared.scene_anims.entry(scene_id).or_default().go_to(
                 state_id,
                 base.as_ref(),
+                base_camera,
                 frame,
             ) {
                 Ok(()) => OK,
@@ -1577,10 +1629,10 @@ pub unsafe extern "C" fn mixer_scene_sequence(scene_id: u64, sequence_id: u64, o
     ffi_guard("mixer_scene_sequence", ERR_DEVICE, || {
         with_mixer(|mixer| {
             let mut shared = mixer.shared.lock_or_recover();
-            let Some(base) = shared
+            let Some((base, base_camera)) = shared
                 .scenes
                 .get(&scene_id)
-                .map(|spec| Arc::clone(&spec.base_layers))
+                .map(|spec| (Arc::clone(&spec.base_layers), spec.base_camera))
             else {
                 return scene_anim_error("scene does not exist");
             };
@@ -1589,6 +1641,7 @@ pub unsafe extern "C" fn mixer_scene_sequence(scene_id: u64, sequence_id: u64, o
                 sequence_id,
                 op,
                 base.as_ref(),
+                base_camera,
                 frame,
             ) {
                 Ok(()) => OK,
@@ -1611,9 +1664,14 @@ pub unsafe extern "C" fn mixer_scene_anim_state(
     sequences: *mut abi::EivizActiveSequence,
     sequences_cap: u32,
     sequences_count: *mut u32,
+    camera_state: *mut u64,
 ) -> i32 {
     ffi_guard("mixer_scene_anim_state", ERR_DEVICE, || {
-        if reached_count.is_null() || moves_count.is_null() || sequences_count.is_null() {
+        if reached_count.is_null()
+            || moves_count.is_null()
+            || sequences_count.is_null()
+            || camera_state.is_null()
+        {
             return ERR_INVALID_ARGUMENT;
         }
         if (reached_cap > 0 && reached.is_null())
@@ -1630,6 +1688,7 @@ pub unsafe extern "C" fn mixer_scene_anim_state(
                     *reached_count = 0;
                     *moves_count = 0;
                     *sequences_count = 0;
+                    *camera_state = 0;
                 }
                 return OK;
             };
@@ -1650,10 +1709,12 @@ pub unsafe extern "C" fn mixer_scene_anim_state(
             };
             let (reached_n, move_n, seq_n) =
                 runtime.fill_status(frame, reached_buf, moves_buf, seq_buf);
+            let camera_reached = runtime.camera_reached();
             unsafe {
                 *reached_count = reached_n;
                 *moves_count = move_n;
                 *sequences_count = seq_n;
+                *camera_state = camera_reached;
             }
             OK
         })
@@ -6057,6 +6118,8 @@ mod tests {
                 source_id: 20,
                 ..crate::abi::OverlayDesc::default()
             }]),
+            base_camera: crate::abi::EivizSceneCamera::IDENTITY,
+            camera: crate::abi::EivizSceneCamera::IDENTITY,
             labels: std::sync::Arc::from([]),
             mv_label: MvLabelStyle::default(),
         };
@@ -6071,6 +6134,8 @@ mod tests {
                 source_id: 21,
                 ..crate::abi::OverlayDesc::default()
             }]),
+            base_camera: crate::abi::EivizSceneCamera::IDENTITY,
+            camera: crate::abi::EivizSceneCamera::IDENTITY,
             labels: std::sync::Arc::from([]),
             mv_label: MvLabelStyle::default(),
         };

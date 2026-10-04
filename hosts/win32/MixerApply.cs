@@ -29,7 +29,17 @@ internal static class MixerApply
             Crop = new Rect { X = layer.CropX, Y = layer.CropY, Width = layer.CropWidth, Height = layer.CropHeight },
             LayerId = layer.LayerId
         }).ToArray());
+        MixerNative.ThrowIfFailed(
+            MixerNative.SceneCameraDefine(gpuId, CameraDesc(scene.Camera)),
+            "Define scene camera");
     }
+
+    private static EivizSceneCamera CameraDesc(SceneCamera camera) => new()
+    {
+        X = camera.X,
+        Y = camera.Y,
+        Zoom = camera.Zoom
+    };
 
     public static void DefineSceneAnim(SceneEntry scene)
     {
@@ -68,7 +78,9 @@ internal static class MixerApply
                         Id = scene.States[i].Id,
                         Layers = layers.Length == 0 ? 0 : layerPin.AddrOfPinnedObject(),
                         LayerCount = (uint)layers.Length,
-                        Enter = MotionDesc(scene.States[i].Enter)
+                        Enter = MotionDesc(scene.States[i].Enter),
+                        Camera = scene.States[i].Camera is { } camera ? CameraDesc(camera) : default,
+                        HasCamera = scene.States[i].Camera is null ? 0u : 1u
                     };
                 }
                 fixed (EivizSceneStateDesc* statePtr = states)

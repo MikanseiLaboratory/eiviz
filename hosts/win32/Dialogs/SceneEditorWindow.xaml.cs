@@ -42,6 +42,10 @@ public partial class SceneEditorWindow : Window
     private bool _live = true;
     private ulong _draftGpuId;
     private bool _draftDefined;
+    private bool _cameraDragging;
+    private bool _cameraZooming;
+    private float _camGrabX;
+    private float _camGrabY;
 
     public SceneEditorWindow(SceneEntry scene, Session session, uint width, uint height, ulong monitorId)
     {
@@ -50,6 +54,11 @@ public partial class SceneEditorWindow : Window
         LayoutSnapButton.ToolTip = $"{Loc.T("editor.layoutSnap")}\n{Loc.T("editor.layoutSnapHelp")}";
         LiveButton.Content = Loc.T("editor.live");
         LiveButton.ToolTip = Loc.T("editor.liveHelp");
+        CameraLabel.Text = Loc.T("scene.camera");
+        CameraEditButton.Content = Loc.T("scene.cameraEdit");
+        CameraEditButton.ToolTip = Loc.T("scene.cameraEditHelp");
+        CamZoomLabel.Text = Loc.T("scene.cameraZoom");
+        CameraResetButton.Content = Loc.T("scene.cameraReset");
         if (App.IsRemote)
             LiveButton.IsEnabled = false;
         _scene = scene;
@@ -79,6 +88,7 @@ public partial class SceneEditorWindow : Window
             _scene.Layers.Sort((a, b) => b.Z.CompareTo(a.Z));
             NormalizeOrder();
             RefreshLayers();
+            FillCamera();
             PushGpu();
             AttachDrags();
             ListReorder.Attach(LayerList, MoveLayer);
@@ -109,6 +119,14 @@ public partial class SceneEditorWindow : Window
         Bind(CropWLabel, CropWBox, 2);
         Bind(CropHLabel, CropHBox, 2);
         Bind(OpLabel, OpBox, 400, "0.###");
+        void PreviewCamera() => ApplyCamera(false);
+        void CommitCamera() => ApplyCamera(true);
+        NumericDrag.Attach(CamXLabel, CamXBox, 2, PreviewCamera, CommitCamera);
+        NumericDrag.AttachBox(CamXBox, 2, PreviewCamera, CommitCamera);
+        NumericDrag.Attach(CamYLabel, CamYBox, 2, PreviewCamera, CommitCamera);
+        NumericDrag.AttachBox(CamYBox, 2, PreviewCamera, CommitCamera);
+        NumericDrag.Attach(CamZoomLabel, CamZoomBox, 120, PreviewCamera, CommitCamera, "0.##");
+        NumericDrag.AttachBox(CamZoomBox, 120, PreviewCamera, CommitCamera, "0.##");
     }
 
     private static SceneLayer Clone(SceneLayer layer) => new()
@@ -307,6 +325,123 @@ public partial class SceneEditorWindow : Window
                 WireCanvas.Children.Add(handle);
             }
         }
+        DrawCameraFrame();
+    }
+
+    private bool CameraEdit => CameraEditButton.IsChecked == true;
+
+    /// <summary>The camera frame is the region of the scene that fills the output.</summary>
+    private void CameraFrame(out double left, out double top, out double width, out double height)
+    {
+        var camera = _scene.Camera;
+        var zoom = Math.Clamp(camera.Zoom, 1f, 8f);
+        width = WireCanvas.Width / zoom;
+        height = WireCanvas.Height / zoom;
+        left = camera.X * WireCanvas.Width - width / 2;
+        top = camera.Y * WireCanvas.Height - height / 2;
+    }
+
+    private void DrawCameraFrame()
+    {
+        CameraFrame(out var left, out var top, out var width, out var height);
+        var editing = CameraEdit;
+        var frame = new Rectangle
+        {
+            Width = Math.Max(8, width),
+            Height = Math.Max(8, height),
+            Stroke = new SolidColorBrush(editing ? Color.FromRgb(0xFF, 0xE0, 0x82) : Color.FromRgb(0x88, 0x88, 0x88)),
+            StrokeThickness = editing ? 3 : 1.5,
+            StrokeDashArray = new DoubleCollection { 8, 4 },
+            Fill = Brushes.Transparent,
+            IsHitTestVisible = false,
+            Tag = "camera"
+        };
+        Canvas.SetLeft(frame, left);
+        Canvas.SetTop(frame, top);
+        WireCanvas.Children.Add(frame);
+        if (!editing)
+            return;
+        var handle = new Rectangle
+        {
+            Width = 16,
+            Height = 16,
+            Fill = new SolidColorBrush(Color.FromRgb(0xFF, 0xE0, 0x82)),
+            Tag = "camera-zoom"
+        };
+        Canvas.SetLeft(handle, left + width - 16);
+        Canvas.SetTop(handle, top + height - 16);
+        WireCanvas.Children.Add(handle);
+    }
+
+    private void MoveCamera(Point pos)
+    {
+        var camera = _scene.Camera;
+        if (_cameraZooming)
+        {
+            var dx = Math.Abs((float)(pos.X / WireCanvas.Width) - camera.X);
+            var dy = Math.Abs((float)(pos.Y / WireCanvas.Height) - camera.Y);
+            var half = Math.Max(dx, dy);
+            camera.Zoom = half < 1e-3f ? 8f : 0.5f / half;
+        }
+        else
+        {
+            camera.X = (float)(pos.X / WireCanvas.Width) - _camGrabX;
+            camera.Y = (float)(pos.Y / WireCanvas.Height) - _camGrabY;
+        }
+        ClampCamera(camera);
+        DrawWireframe();
+        FillCamera();
+        if (DateTime.UtcNow - _lastGpuPush >= TimeSpan.FromMilliseconds(50))
+        {
+            _lastGpuPush = DateTime.UtcNow;
+            PushGpu();
+        }
+    }
+
+    private static void ClampCamera(SceneCamera camera)
+    {
+        camera.Zoom = Math.Clamp(camera.Zoom, 1f, 8f);
+        var margin = 0.5f / camera.Zoom;
+        camera.X = Math.Clamp(camera.X, margin, 1f - margin);
+        camera.Y = Math.Clamp(camera.Y, margin, 1f - margin);
+    }
+
+    private void FillCamera()
+    {
+        var camera = _scene.Camera;
+        CamXBox.Text = (camera.X * _width).ToString("0.#");
+        CamYBox.Text = (camera.Y * _height).ToString("0.#");
+        CamZoomBox.Text = camera.Zoom.ToString("0.##");
+    }
+
+    private void Camera_LostFocus(object sender, RoutedEventArgs e) => ApplyCamera(true);
+
+    private void ApplyCamera(bool push)
+    {
+        var camera = _scene.Camera;
+        if (float.TryParse(CamXBox.Text, out var x))
+            camera.X = x / _width;
+        if (float.TryParse(CamYBox.Text, out var y))
+            camera.Y = y / _height;
+        if (float.TryParse(CamZoomBox.Text, out var zoom))
+            camera.Zoom = zoom;
+        ClampCamera(camera);
+        DrawWireframe();
+        if (push)
+        {
+            FillCamera();
+            PushGpu();
+        }
+    }
+
+    private void CameraEdit_Click(object sender, RoutedEventArgs e) => DrawWireframe();
+
+    private void CameraReset_Click(object sender, RoutedEventArgs e)
+    {
+        _scene.Camera = new SceneCamera();
+        FillCamera();
+        DrawWireframe();
+        PushGpu();
     }
 
     private void WriteCropBoxes()
@@ -562,6 +697,11 @@ public partial class SceneEditorWindow : Window
         _last = pos;
         _snapX = null;
         _snapY = null;
+        if (CameraEdit && BeginCameraDrag(pos))
+        {
+            WireCanvas.CaptureMouse();
+            return;
+        }
         if (e.OriginalSource is Rectangle { Tag: "handle" } && _selected is { Locked: false }
             && !Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
         {
@@ -623,8 +763,28 @@ public partial class SceneEditorWindow : Window
         return hits.OrderByDescending(item => item.Z).First();
     }
 
+    private bool BeginCameraDrag(Point pos)
+    {
+        CameraFrame(out var left, out var top, out var width, out var height);
+        var onHandle = pos.X >= left + width - 20 && pos.X <= left + width + 4
+            && pos.Y >= top + height - 20 && pos.Y <= top + height + 4;
+        var inside = pos.X >= left && pos.X <= left + width && pos.Y >= top && pos.Y <= top + height;
+        if (!onHandle && !inside)
+            return false;
+        _cameraZooming = onHandle;
+        _cameraDragging = !onHandle;
+        _camGrabX = (float)(pos.X / WireCanvas.Width) - _scene.Camera.X;
+        _camGrabY = (float)(pos.Y / WireCanvas.Height) - _scene.Camera.Y;
+        return true;
+    }
+
     private void WireCanvas_MouseMove(object sender, MouseEventArgs e)
     {
+        if ((_cameraDragging || _cameraZooming) && e.LeftButton == MouseButtonState.Pressed)
+        {
+            MoveCamera(e.GetPosition(WireCanvas));
+            return;
+        }
         if (_selected is null || (!_dragging && !_resizing && !_cropping) || e.LeftButton != MouseButtonState.Pressed)
             return;
         var pos = e.GetPosition(WireCanvas);
@@ -720,11 +880,13 @@ public partial class SceneEditorWindow : Window
 
     private void WireCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        if (_dragging || _resizing || _cropping)
+        if (_dragging || _resizing || _cropping || _cameraDragging || _cameraZooming)
             PushGpu();
         _dragging = false;
         _resizing = false;
         _cropping = false;
+        _cameraDragging = false;
+        _cameraZooming = false;
         _snapX = null;
         _snapY = null;
         WireCanvas.ReleaseMouseCapture();

@@ -77,6 +77,28 @@
                     <WrapPanel x:Name="TagPanel" Margin="0,0,8,0"/>
                 </DockPanel>
                 <Button Content="Animation" Height="26" Margin="0,4,0,0" Click="Animation_Click"/>
+                <DockPanel Margin="0,10,0,0">
+                    <ToggleButton x:Name="CameraEditButton" DockPanel.Dock="Right"
+                                  Width="72" Height="22" Padding="0" Click="CameraEdit_Click"/>
+                    <TextBlock x:Name="CameraLabel" Text="Camera" FontWeight="Bold" VerticalAlignment="Center"/>
+                </DockPanel>
+                <Grid Margin="0,4,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="56"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="56"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="64"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="CamXLabel" Text="X" VerticalAlignment="Center"/>
+                    <TextBox x:Name="CamXBox" Grid.Column="1" Margin="0,0,8,0" LostFocus="Camera_LostFocus"/>
+                    <TextBlock x:Name="CamYLabel" Grid.Column="2" Text="Y" VerticalAlignment="Center"/>
+                    <TextBox x:Name="CamYBox" Grid.Column="3" Margin="0,0,8,0" LostFocus="Camera_LostFocus"/>
+                    <TextBlock x:Name="CamZoomLabel" Grid.Column="4" Text="Zoom" VerticalAlignment="Center"/>
+                    <TextBox x:Name="CamZoomBox" Grid.Column="5" LostFocus="Camera_LostFocus"/>
+                </Grid>
+                <Button x:Name="CameraResetButton" Content="Reset camera" Height="24" Margin="0,4,0,0" Click="CameraReset_Click"/>
                 <Grid Margin="0,12,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="56"/>

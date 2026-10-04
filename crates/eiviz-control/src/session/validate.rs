@@ -215,6 +215,7 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
     for scene in &doc.scenes {
         let layer_ids: Vec<u64> = scene.layers.iter().map(|layer| layer.layer_id).collect();
         let state_ids: Vec<u64> = scene.states.iter().map(|state| state.id).collect();
+        check_camera(&scene.camera, &format!("scene {}", scene.id))?;
         for state in &scene.states {
             if state.id == 0 {
                 return Err(ValidationError::new(format!(
@@ -242,6 +243,9 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
                     scene.id, state.id
                 )));
             }
+            if let Some(camera) = &state.camera {
+                check_camera(camera, &format!("scene {} state {}", scene.id, state.id))?;
+            }
         }
         for seq in &scene.sequences {
             if seq.steps.len() < 2 {
@@ -268,6 +272,27 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
                 }
             }
         }
+    }
+    Ok(())
+}
+
+fn check_camera(camera: &crate::session::SceneCamera, what: &str) -> Result<(), ValidationError> {
+    let finite = camera.x.is_finite() && camera.y.is_finite() && camera.zoom.is_finite();
+    if !finite {
+        return Err(ValidationError::new(format!("{what} camera is not finite")));
+    }
+    if !(1.0..=8.0).contains(&camera.zoom) {
+        return Err(ValidationError::new(format!(
+            "{what} camera zoom is out of range"
+        )));
+    }
+    let margin = 0.5 / camera.zoom;
+    let inside = (margin..=1.0 - margin).contains(&camera.x)
+        && (margin..=1.0 - margin).contains(&camera.y);
+    if !inside {
+        return Err(ValidationError::new(format!(
+            "{what} camera center is out of range"
+        )));
     }
     Ok(())
 }
@@ -541,5 +566,42 @@ mod tests {
         }"#;
         let err = validate(&parse(src).unwrap()).unwrap_err();
         assert!(err.message.contains("master fps"), "{}", err.message);
+    }
+
+    fn session_with_camera(camera: &str, state_camera: &str) -> String {
+        format!(
+            r#"{{
+              "version": 2,
+              "inputs": [{{ "id": 2, "name": "Bars", "kind": "Bars" }}],
+              "scenes": [{{ "id": 1, "name": "Scene 1", "camera": {camera},
+                "layers": [{{ "inputId": 2, "layerId": 1, "width": 1, "height": 1 }}],
+                "states": [{{ "id": 1, "name": "Close", "camera": {state_camera},
+                  "layers": [{{ "layerId": 1, "geom": {{ "width": 1, "height": 1 }} }}] }}] }}],
+              "units": [{{ "id": 1, "name": "MU 1" }}]
+            }}"#
+        )
+    }
+
+    #[test]
+    fn camera_out_of_range_is_rejected() {
+        let doc = parse(session_with_camera(r#"{"zoom": 0.5}"#, r#"{"zoom": 2}"#).as_bytes()).unwrap();
+        let err = validate(&doc).unwrap_err();
+        assert!(err.message.contains("zoom"), "{}", err.message);
+
+        let doc = parse(session_with_camera(r#"{"zoom": 2}"#, r#"{"x": 0.0, "zoom": 4}"#).as_bytes()).unwrap();
+        let err = validate(&doc).unwrap_err();
+        assert!(err.message.contains("center"), "{}", err.message);
+    }
+
+    #[test]
+    fn camera_round_trips_through_the_session_file() {
+        let doc = parse(session_with_camera(r#"{"x": 0.6, "y": 0.4, "zoom": 2}"#, r#"{"zoom": 4}"#).as_bytes()).unwrap();
+        validate(&doc).unwrap();
+        let bytes = crate::session::file::encode_file(&doc).unwrap();
+        let back = crate::session::file::decode_file(&bytes).unwrap();
+        assert_eq!(back.scenes[0].camera.zoom, 2.0);
+        assert_eq!(back.scenes[0].camera.x, 0.6);
+        let state = &back.scenes[0].states[0];
+        assert_eq!(state.camera.map(|camera| camera.zoom), Some(4.0));
     }
 }

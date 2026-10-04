@@ -324,7 +324,56 @@ pub struct EivizMotion {
     pub has_bezier: u32,
 }
 
+/// Scene camera. `x` and `y` are the center in scene coordinates, `zoom` is the magnification.
+/// The identity view is `(0.5, 0.5, 1.0)`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EivizSceneCamera {
+    pub x: f32,
+    pub y: f32,
+    pub zoom: f32,
+}
+
+impl EivizSceneCamera {
+    pub const IDENTITY: Self = Self {
+        x: 0.5,
+        y: 0.5,
+        zoom: 1.0,
+    };
+
+    pub fn is_identity(self) -> bool {
+        (self.x - 0.5).abs() < 1.0e-6
+            && (self.y - 0.5).abs() < 1.0e-6
+            && (self.zoom - 1.0).abs() < 1.0e-6
+    }
+}
+
+impl Default for EivizSceneCamera {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+/// Rejects a camera the compositor would not draw. Values are never clamped.
+pub fn validate_camera(camera: EivizSceneCamera) -> Result<(), &'static str> {
+    let finite = camera.x.is_finite() && camera.y.is_finite() && camera.zoom.is_finite();
+    if !finite {
+        return Err("scene camera is not finite");
+    }
+    if !(1.0..=8.0).contains(&camera.zoom) {
+        return Err("scene camera zoom is out of range");
+    }
+    let margin = 0.5 / camera.zoom;
+    let inside = (margin..=1.0 - margin).contains(&camera.x)
+        && (margin..=1.0 - margin).contains(&camera.y);
+    if !inside {
+        return Err("scene camera center is out of range");
+    }
+    Ok(())
+}
+
 /// One named Scene state. `layers` are full overlay descriptors keyed by `layer_id`.
+/// `camera` is read only when `has_camera` is set.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct EivizSceneStateDesc {
@@ -332,6 +381,8 @@ pub struct EivizSceneStateDesc {
     pub layers: *const OverlayDesc,
     pub layer_count: u32,
     pub enter: EivizMotion,
+    pub camera: EivizSceneCamera,
+    pub has_camera: u32,
 }
 
 #[repr(C)]

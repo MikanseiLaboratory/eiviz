@@ -159,6 +159,13 @@ message Scene {
   bool preview_collapsed = 6;
   repeated SceneState states = 7;
   repeated SceneSequence sequences = 8;
+  SceneCamera camera = 9;
+}
+
+message SceneCamera {
+  float x = 1;
+  float y = 2;
+  float zoom = 3;
 }
 
 message Motion {
@@ -177,6 +184,7 @@ message SceneState {
   string name = 2;
   repeated LayerKey layers = 3;
   Motion enter = 4;
+  SceneCamera camera = 5;
 }
 
 message SequenceStep {

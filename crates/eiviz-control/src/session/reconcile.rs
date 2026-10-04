@@ -888,6 +888,7 @@ fn scene_apply(scene: &SceneDto, width: u32, height: u32) -> SceneApply {
                 layer_id: layer.layer_id,
             })
             .collect(),
+        camera: camera_apply(scene.camera),
     }
 }
 
@@ -904,6 +905,7 @@ fn scene_anim_apply(scene: &SceneDto) -> SceneAnimApply {
                     .iter()
                     .map(|key| key_layer(scene, key))
                     .collect(),
+                camera: state.camera.map(camera_apply),
                 enter: motion_apply(&state.enter),
             })
             .collect(),
@@ -923,6 +925,14 @@ fn scene_anim_apply(scene: &SceneDto) -> SceneAnimApply {
                     .collect(),
             })
             .collect(),
+    }
+}
+
+fn camera_apply(camera: crate::session::SceneCamera) -> CameraApply {
+    CameraApply {
+        x: camera.x,
+        y: camera.y,
+        zoom: camera.zoom,
     }
 }
 
@@ -1062,6 +1072,7 @@ fn multiview_op(layout: &MultiviewDto, doc: &Document, width: u32, height: u32) 
             width,
             height,
             layers,
+            camera: CameraApply::default(),
         },
         preview_unit: preview,
         program_unit: program,

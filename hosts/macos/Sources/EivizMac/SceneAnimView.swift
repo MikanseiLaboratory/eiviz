@@ -493,7 +493,7 @@ struct SceneAnimView: View {
         update { scene in
             let id = (scene.states.map(\.id).max() ?? 0) + 1
             let layers = currentLayout(&scene)
-            scene.states.append(SceneState(id: id, name: "State \(scene.states.count + 1)", layers: layers))
+            scene.states.append(SceneState(id: id, name: "State \(scene.states.count + 1)", layers: layers, camera: scene.camera))
             selectedState = id
         }
     }
@@ -504,6 +504,7 @@ struct SceneAnimView: View {
             guard let index = scene.states.firstIndex(where: { $0.id == selectedState }) else { return }
             let layers = currentLayout(&scene)
             scene.states[index].layers = layers
+            scene.states[index].camera = scene.camera
         }
         status = L10n.t("anim.captured")
     }

@@ -159,11 +159,19 @@ typedef struct EivizMotion {
     uint32_t has_bezier;
 } EivizMotion;
 
+typedef struct EivizSceneCamera {
+    float x;
+    float y;
+    float zoom;
+} EivizSceneCamera;
+
 typedef struct EivizSceneStateDesc {
     uint64_t id;
     const EivizOverlayDesc *layers;
     uint32_t layer_count;
     EivizMotion enter;
+    EivizSceneCamera camera;
+    uint32_t has_camera;
 } EivizSceneStateDesc;
 
 typedef struct EivizSequenceStepDesc {
@@ -332,6 +340,7 @@ int32_t mixer_create_unit(uint64_t unit_id, uint32_t width, uint32_t height);
 int32_t mixer_destroy_unit(uint64_t unit_id);
 int32_t mixer_unit_configure(uint64_t unit_id, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den);
 int32_t mixer_define_scene(uint64_t scene_id, uint32_t width, uint32_t height, uint32_t count, const EivizOverlayDesc *layers);
+int32_t mixer_scene_camera_define(uint64_t scene_id, EivizSceneCamera camera);
 int32_t mixer_scene_states_define(uint64_t scene_id, const EivizSceneStateDesc *states, uint32_t count);
 int32_t mixer_scene_sequences_define(uint64_t scene_id, const EivizSceneSequenceDesc *sequences, uint32_t count);
 int32_t mixer_scene_go_to(uint64_t scene_id, uint64_t state_id);
@@ -346,7 +355,8 @@ int32_t mixer_scene_anim_state(
     uint32_t *moves_count,
     EivizActiveSequence *sequences,
     uint32_t sequences_cap,
-    uint32_t *sequences_count);
+    uint32_t *sequences_count,
+    uint64_t *camera_state);
 int32_t mixer_destroy_scene(uint64_t scene_id);
 int32_t mixer_define_generator(uint64_t id, uint32_t kind, float r, float g, float b, float a, uint32_t scroll);
 int32_t mixer_define_mix_input(uint64_t id, uint64_t target_id, uint32_t source_kind, uint32_t delay);

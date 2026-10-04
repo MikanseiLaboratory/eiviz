@@ -20,6 +20,8 @@ struct SceneEditorView: View {
     @State private var showAnim = false
     @State private var originalStates: [SceneState] = []
     @State private var originalSequences: [SceneSequence] = []
+    @State private var originalCamera: SceneCamera = .identity
+    @State private var cameraEditing = false
 
     private var sceneIndex: Int? {
         mixer.session.scenes.firstIndex { $0.id == mixer.editingScene?.id }
@@ -133,7 +135,10 @@ struct SceneEditorView: View {
                     onFit: fitLayerToScreen,
                     onCrop: applyCrop,
                     selected: $selectedLayer,
-                    onChange: applyWire
+                    onChange: applyWire,
+                    camera: current?.camera,
+                    cameraEditing: cameraEditing,
+                    onCamera: { camera, _ in setCamera(camera) }
                 )
                 .clipped()
             }
@@ -161,6 +166,7 @@ struct SceneEditorView: View {
                         .frame(maxWidth: .infinity)
                         .background(Color.black)
                 }
+                cameraFields
                 Text("Name").padding(.top, 8)
                 mixerTextField($name, placeholder: "Name")
                 TagCheckView(input: false, selected: $selectedTags)
@@ -223,6 +229,7 @@ struct SceneEditorView: View {
             originalStates = current?.states ?? []
             originalSequences = current?.sequences ?? []
             name = current?.name ?? ""
+            originalCamera = current?.camera ?? .identity
             selectedTags = current?.tags ?? []
             selectedLayer = current?.layers.first?.id
             previewSource = current?.gpuId ?? 0
@@ -236,6 +243,7 @@ struct SceneEditorView: View {
                 mixer.session.scenes[i].layers = original
                 mixer.session.scenes[i].states = originalStates
                 mixer.session.scenes[i].sequences = originalSequences
+                mixer.session.scenes[i].camera = originalCamera
                 if !mixer.isRemote {
                     mixer.pushScene(mixer.session.scenes[i])
                     mixer.pushSceneAnim(mixer.session.scenes[i])
@@ -404,6 +412,54 @@ struct SceneEditorView: View {
         var copy = scene
         copy.layers = working ?? scene.layers
         mixer.pushScene(copy, gpuId: draftGpuId)
+    }
+
+    private var cameraFields: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(L10n.t("scene.camera")).fontWeight(.bold)
+                Spacer()
+                Toggle(isOn: $cameraEditing) {
+                    Text(L10n.t("scene.cameraEdit"))
+                }
+                .toggleStyle(OnOffToggleStyle())
+                .help(L10n.t("scene.cameraEditHelp"))
+            }
+            HStack {
+                cameraBox(L10n.t("scene.cameraX"), (current?.camera.x ?? 0.5) * projectW) { value in
+                    var camera = current?.camera ?? .identity
+                    camera.x = value / projectW
+                    setCamera(camera)
+                }
+                cameraBox(L10n.t("scene.cameraY"), (current?.camera.y ?? 0.5) * projectH) { value in
+                    var camera = current?.camera ?? .identity
+                    camera.y = value / projectH
+                    setCamera(camera)
+                }
+                cameraBox(L10n.t("scene.cameraZoom"), current?.camera.zoom ?? 1) { value in
+                    var camera = current?.camera ?? .identity
+                    camera.zoom = value
+                    setCamera(camera)
+                }
+            }
+            Button(L10n.t("scene.cameraReset")) { setCamera(.identity) }
+        }
+        .padding(.top, 8)
+    }
+
+    private func cameraBox(_ title: String, _ value: Float, _ apply: @escaping (Float) -> Void) -> some View {
+        HStack(spacing: 4) {
+            Text(title).frame(width: 48, alignment: .leading)
+            TextField("", value: Binding(get: { value }, set: apply), format: .number)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 64)
+        }
+    }
+
+    private func setCamera(_ camera: SceneCamera) {
+        guard let i = sceneIndex else { return }
+        mixer.session.scenes[i].camera = camera.clamped()
+        push()
     }
 
     private func layerFields(_ index: Int) -> some View {

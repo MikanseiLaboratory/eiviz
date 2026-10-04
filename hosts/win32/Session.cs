@@ -587,6 +587,7 @@ public sealed class SceneEntry
     public List<SceneSequence> Sequences { get; } = [];
     public List<string> Tags { get; set; } = [];
     public bool PreviewCollapsed { get; set; }
+    public SceneCamera Camera { get; set; } = new();
     public ulong GpuId => MixerNative.SceneBase | Id;
     public override string ToString() => Name;
 
@@ -660,11 +661,21 @@ public sealed class Motion
     public BezierHandles? Bezier { get; set; }
 }
 
+public sealed class SceneCamera
+{
+    public float X { get; set; } = 0.5f;
+    public float Y { get; set; } = 0.5f;
+    public float Zoom { get; set; } = 1f;
+
+    public SceneCamera Clone() => new() { X = X, Y = Y, Zoom = Zoom };
+}
+
 public sealed class SceneState
 {
     public ulong Id { get; set; }
     public string Name { get; set; } = "";
     public List<LayerKey> Layers { get; set; } = [];
+    public SceneCamera? Camera { get; set; }
     public Motion Enter { get; set; } = new();
 }
 

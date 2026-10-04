@@ -295,6 +295,7 @@ internal static class MutationJson
         public List<string> Tags { get; set; } = [];
         public List<SceneState> States { get; set; } = [];
         public List<SceneSequence> Sequences { get; set; } = [];
+        public SceneCamera Camera { get; set; } = new();
 
         public static SceneDto FromPublic(SceneEntry scene) => new()
         {
@@ -303,7 +304,8 @@ internal static class MutationJson
             Layers = [.. scene.Layers],
             Tags = [.. scene.Tags],
             States = [.. scene.States],
-            Sequences = [.. scene.Sequences]
+            Sequences = [.. scene.Sequences],
+            Camera = scene.Camera
         };
     }
 }

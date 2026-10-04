@@ -82,6 +82,14 @@ fn motion_desc(motion: &MotionApply) -> crate::abi::EivizMotion {
     }
 }
 
+fn camera_desc(camera: CameraApply) -> crate::abi::EivizSceneCamera {
+    crate::abi::EivizSceneCamera {
+        x: camera.x,
+        y: camera.y,
+        zoom: camera.zoom,
+    }
+}
+
 pub struct ProcessMixer;
 
 impl MixerPort for ProcessMixer {
@@ -179,7 +187,8 @@ impl MixerPort for ProcessMixer {
                 },
             )
         };
-        map_abi(code)
+        map_abi(code)?;
+        map_abi(unsafe { crate::mixer_scene_camera_define(spec.id, camera_desc(spec.camera)) })
     }
 
     fn destroy_scene(&mut self, id: u64) -> ControlResult<()> {
@@ -201,6 +210,8 @@ impl MixerPort for ProcessMixer {
                 layers: layer_bufs[index].as_ptr(),
                 layer_count: layer_bufs[index].len() as u32,
                 enter: motion_desc(&state.enter),
+                camera: state.camera.map(camera_desc).unwrap_or_default(),
+                has_camera: u32::from(state.camera.is_some()),
             })
             .collect();
         map_abi(unsafe {
