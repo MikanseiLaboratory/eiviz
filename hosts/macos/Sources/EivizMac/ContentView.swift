@@ -554,7 +554,7 @@ struct ContentView: View {
                         )) {
                             Text(overlayName(slot))
                         }
-                        .toggleStyle(.checkbox)
+                        .toggleStyle(OnOffToggleStyle())
                     }
                 }
                 .frame(minWidth: 80)
@@ -643,12 +643,8 @@ struct ContentView: View {
                         mixer.applyInputAudio(id: input.id, units: routes, gain: input.gain, mute: input.mute)
                     } label: {
                         Text("MU\(unit.id)")
-                            .font(.system(size: 10, weight: on ? .bold : .regular))
-                            .foregroundStyle(on ? Color.white : EivizTheme.dim)
-                            .frame(width: 36, height: 18)
-                            .background(on ? Color(red: 0.18, green: 0.49, blue: 0.20) : Color(white: 0.16))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(OnOffButtonStyle(on: on, compact: true))
                     .help(L10n.format("audio.routeTip", unit.name))
                 }
             }
@@ -662,11 +658,8 @@ struct ContentView: View {
         Button(action: action) {
             Image(systemName: "headphones")
                 .font(.system(size: 11))
-                .foregroundStyle(on ? Color.white : EivizTheme.dim)
-                .frame(width: 22, height: 18)
-                .background(on ? Color(red: 0.18, green: 0.49, blue: 0.20) : Color(white: 0.16))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(OnOffButtonStyle(on: on, compact: true))
         .help(L10n.t(on ? "audio.listening" : "audio.listen"))
     }
 

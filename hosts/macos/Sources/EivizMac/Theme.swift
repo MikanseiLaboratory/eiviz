@@ -62,6 +62,11 @@ enum EivizTheme {
     nonisolated(unsafe) static let program = Color(red: 1, green: 0, blue: 0)
     static var button: Color { isDark ? rgb(58, 58, 58) : rgb(221, 221, 221) }
     static var stroke: Color { isDark ? Color(white: 0.27) : Color(white: 0.73) }
+    static let toggleOn = rgb(46, 125, 50)
+    static let toggleOnText = Color.white
+    static var toggleOff: Color { isDark ? rgb(42, 42, 42) : rgb(221, 221, 221) }
+    static var toggleOffText: Color { isDark ? rgb(158, 158, 158) : rgb(102, 102, 102) }
+    static var toggleOffBorder: Color { isDark ? rgb(102, 102, 102) : rgb(170, 170, 170) }
 
     private static func rgb(_ r: Double, _ g: Double, _ b: Double) -> Color {
         Color(red: r / 255, green: g / 255, blue: b / 255)
@@ -145,6 +150,43 @@ struct MixerButtonStyle: ButtonStyle {
             .padding(.vertical, 5)
             .background(EivizTheme.button)
             .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
+            .opacity(configuration.isPressed ? 0.7 : 1)
+    }
+}
+
+struct OnOffToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            configuration.isOn.toggle()
+        } label: {
+            configuration.label
+                .fontWeight(configuration.isOn ? .bold : .regular)
+                .foregroundStyle(configuration.isOn ? EivizTheme.toggleOnText : EivizTheme.toggleOffText)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .frame(minHeight: 22)
+                .background(configuration.isOn ? EivizTheme.toggleOn : EivizTheme.toggleOff)
+                .overlay(Rectangle().stroke(
+                    configuration.isOn ? EivizTheme.toggleOn : EivizTheme.toggleOffBorder,
+                    lineWidth: 1
+                ))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct OnOffButtonStyle: ButtonStyle {
+    var on: Bool
+    var compact = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: compact ? 10 : 12, weight: on ? .bold : .regular))
+            .foregroundStyle(on ? EivizTheme.toggleOnText : EivizTheme.toggleOffText)
+            .padding(.horizontal, compact ? 3 : 6)
+            .frame(minWidth: compact ? 26 : 22, minHeight: compact ? 18 : 22)
+            .background(on ? EivizTheme.toggleOn : EivizTheme.toggleOff)
+            .overlay(Rectangle().stroke(on ? EivizTheme.toggleOn : EivizTheme.toggleOffBorder, lineWidth: 1))
             .opacity(configuration.isPressed ? 0.7 : 1)
     }
 }

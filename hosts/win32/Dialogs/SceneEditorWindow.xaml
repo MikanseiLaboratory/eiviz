@@ -63,7 +63,7 @@
             <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6" LastChildFill="True">
                 <ToggleButton x:Name="LiveButton" DockPanel.Dock="Right"
                               IsChecked="True" Width="64" Height="26" Padding="0"
-                              FontWeight="Bold" VerticalAlignment="Center"
+                              VerticalAlignment="Center"
                               Click="Live_Click"/>
                 <TextBlock x:Name="PreviewLabel" Text="Live preview" FontWeight="Bold"
                            VerticalAlignment="Center"/>

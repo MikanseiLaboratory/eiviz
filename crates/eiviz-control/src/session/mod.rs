@@ -1161,7 +1161,10 @@ impl Document {
         }
         doc.settings.multiview_label_size = clamp_size(doc.settings.multiview_label_size);
         let listen_ok = match doc.headphone_listen_kind {
-            1 => doc.units.iter().any(|unit| unit.id == doc.headphone_listen_id),
+            1 => doc
+                .units
+                .iter()
+                .any(|unit| unit.id == doc.headphone_listen_id),
             2 => doc
                 .inputs
                 .iter()
@@ -1837,7 +1840,8 @@ mod tests {
 
     #[test]
     fn core_audio_enum_roundtrips() {
-        let src = r#"{ "version": 2, "units": [{ "id": 1, "audio": { "deviceKind": "CoreAudio" } }] }"#;
+        let src =
+            r#"{ "version": 2, "units": [{ "id": 1, "audio": { "deviceKind": "CoreAudio" } }] }"#;
         let doc = parse(src.as_bytes()).unwrap();
         assert_eq!(doc.units[0].audio.device_kind, AudioDeviceKind::CoreAudio);
         let text = String::from_utf8(to_vec(&doc).unwrap()).unwrap();

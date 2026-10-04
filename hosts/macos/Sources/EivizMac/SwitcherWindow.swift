@@ -205,7 +205,7 @@ struct SwitcherView: View {
                         )) {
                             Text(overlayName(slot))
                         }
-                        .toggleStyle(.checkbox)
+                        .toggleStyle(OnOffToggleStyle())
                     }
                 }
             }

@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use prost::Message;
 
 use super::{
-    AudioCaptureMode, AudioDeviceKind, AudioLinkMode, BandwidthSave, HeadphoneDto, MuBusDto,
-    Document, InputDto, InputKind, InternalColorFormat, MixSource, MultiviewDto, MultiviewTemplate,
+    AudioCaptureMode, AudioDeviceKind, AudioLinkMode, BandwidthSave, Document, HeadphoneDto,
+    InputDto, InputKind, InternalColorFormat, MixSource, MuBusDto, MultiviewDto, MultiviewTemplate,
     MvLabelAnchor, MvLabelUnit, MvSlot, MvSlotKind, NdiBandwidth, OmtQuality, OutputDto,
     OutputSourceKind, OutputTransport, OverlaySlot, RgbColor, SceneDto, SceneLayer, SceneLayerGeom,
     SceneLayoutPreset, SessionSettings, SwitcherSceneFilter, TransitionPreset, UnitDto,
@@ -380,7 +380,11 @@ fn document_from_pb(doc: pb::Document) -> Result<Document, String> {
             .into_iter()
             .map(unit_from_pb)
             .collect::<Result<_, _>>()?,
-        transitions: doc.transitions.into_iter().map(transition_from_pb).collect(),
+        transitions: doc
+            .transitions
+            .into_iter()
+            .map(transition_from_pb)
+            .collect(),
         overlays: doc.overlays.into_iter().map(overlay_from_pb).collect(),
         next_overlay_id: doc.next_overlay_id,
         outputs: doc
@@ -1346,10 +1350,7 @@ mod tests {
         assert_eq!(decoded.outputs[0].fps_num, 30);
         assert_eq!(decoded.outputs[0].fps_den, 1);
         assert_eq!(decoded.outputs[0].audio_unit_id, 1);
-        assert_eq!(
-            decoded.units[0].audio.device_kind,
-            AudioDeviceKind::Wasapi
-        );
+        assert_eq!(decoded.units[0].audio.device_kind, AudioDeviceKind::Wasapi);
         assert_eq!(decoded.units[0].audio.device_id, "out");
         assert!((decoded.units[0].audio.gain - 0.5).abs() < f32::EPSILON);
         assert_eq!(decoded.headphone.device_kind, AudioDeviceKind::CoreAudio);

@@ -192,6 +192,9 @@ public partial class SceneEditorWindow : Window
             Tag = layer,
             ToolTip = "Audio Follow"
         };
+        OnOffLook.Apply(hide, !layer.Hidden);
+        OnOffLook.Apply(lockBtn, layer.Locked);
+        OnOffLook.Apply(audio, layer.AudioFollow);
         hide.Click += LayerHide_Click;
         lockBtn.Click += LayerLock_Click;
         audio.Click += LayerAudioFollow_Click;

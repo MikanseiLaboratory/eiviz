@@ -54,49 +54,7 @@ struct WireCanvasView<ID: Hashable>: View {
             ZStack(alignment: .topLeading) {
                 Rectangle().fill(Color(red: 0.04, green: 0.04, blue: 0.04))
                 ForEach(Array(items.enumerated().reversed()), id: \.element.id) { index, item in
-                    let color = item.enabled ? hues[index % hues.count] : EivizTheme.dim
-                    let frame = CGRect(
-                        x: origin.x + CGFloat(item.x) * size.width,
-                        y: origin.y + CGFloat(item.y) * size.height,
-                        width: max(8, CGFloat(item.width) * size.width),
-                        height: max(8, CGFloat(item.height) * size.height)
-                    )
-                    Rectangle()
-                        .fill(color.opacity(0.16))
-                        .overlay(Rectangle().stroke(color, lineWidth: selected == item.id ? 4 : 2))
-                        .frame(width: frame.width, height: frame.height)
-                        .position(x: frame.midX, y: frame.midY)
-                        .contextMenu {
-                            if let onFit {
-                                Button(L10n.t("scene.fitToScreen")) {
-                                    selected = item.id
-                                    if !item.locked { onFit(item.id) }
-                                }
-                                .disabled(item.locked)
-                            }
-                        }
-                    if item.cropX > 0.001 || item.cropY > 0.001 || item.cropWidth < 0.999 || item.cropHeight < 0.999 {
-                        let crop = CGRect(
-                            x: frame.minX + frame.width * CGFloat(item.cropX),
-                            y: frame.minY + frame.height * CGFloat(item.cropY),
-                            width: max(4, frame.width * CGFloat(item.cropWidth)),
-                            height: max(4, frame.height * CGFloat(item.cropHeight))
-                        )
-                        Rectangle()
-                            .stroke(color, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
-                            .frame(width: crop.width, height: crop.height)
-                            .position(x: crop.midX, y: crop.midY)
-                    }
-                    Text("\(index + 1)")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(.white)
-                        .position(x: frame.minX + 14, y: frame.minY + 12)
-                    if selected == item.id && !item.locked {
-                        Rectangle()
-                            .fill(color)
-                            .frame(width: 16, height: 16)
-                            .position(x: frame.maxX - 8, y: frame.maxY - 8)
-                    }
+                    itemMarks(index: index, item: item, origin: origin, canvas: size)
                 }
             }
             .clipped()
@@ -160,6 +118,53 @@ struct WireCanvasView<ID: Hashable>: View {
         .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
     }
 
+    @ViewBuilder
+    private func itemMarks(index: Int, item: WireRect<ID>, origin: CGPoint, canvas: CGSize) -> some View {
+        let color = item.enabled ? hues[index % hues.count] : EivizTheme.dim
+        let frame = CGRect(
+            x: origin.x + CGFloat(item.x) * canvas.width,
+            y: origin.y + CGFloat(item.y) * canvas.height,
+            width: max(8, CGFloat(item.width) * canvas.width),
+            height: max(8, CGFloat(item.height) * canvas.height)
+        )
+        Rectangle()
+            .fill(color.opacity(0.16))
+            .overlay(Rectangle().stroke(color, lineWidth: selected == item.id ? 4 : 2))
+            .frame(width: frame.width, height: frame.height)
+            .position(x: frame.midX, y: frame.midY)
+            .contextMenu {
+                if let onFit {
+                    Button(L10n.t("scene.fitToScreen")) {
+                        selected = item.id
+                        if !item.locked { onFit(item.id) }
+                    }
+                    .disabled(item.locked)
+                }
+            }
+        if item.cropX > 0.001 || item.cropY > 0.001 || item.cropWidth < 0.999 || item.cropHeight < 0.999 {
+            let crop = CGRect(
+                x: frame.minX + frame.width * CGFloat(item.cropX),
+                y: frame.minY + frame.height * CGFloat(item.cropY),
+                width: max(4, frame.width * CGFloat(item.cropWidth)),
+                height: max(4, frame.height * CGFloat(item.cropHeight))
+            )
+            Rectangle()
+                .stroke(color, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                .frame(width: crop.width, height: crop.height)
+                .position(x: crop.midX, y: crop.midY)
+        }
+        Text("\(index + 1)")
+            .font(.system(size: 16, weight: .bold))
+            .foregroundStyle(.white)
+            .position(x: frame.minX + 14, y: frame.minY + 12)
+        if selected == item.id && !item.locked {
+            Rectangle()
+                .fill(color)
+                .frame(width: 16, height: 16)
+                .position(x: frame.maxX - 8, y: frame.maxY - 8)
+        }
+    }
+
     private func fitted(_ size: CGSize) -> CGSize {
         let ratio = max(aspect, 0.01)
         if size.width / size.height > ratio {
@@ -220,7 +225,7 @@ struct WireCanvasView<ID: Hashable>: View {
         cropping = false
     }
 
-    private func beginCrop(_ item: WireRect, pos: CGPoint, canvas: CGSize) -> Bool {
+    private func beginCrop(_ item: WireRect<ID>, pos: CGPoint, canvas: CGSize) -> Bool {
         let left = CGFloat(item.x) * canvas.width
         let top = CGFloat(item.y) * canvas.height
         let right = CGFloat(item.x + item.width) * canvas.width
@@ -232,7 +237,7 @@ struct WireCanvasView<ID: Hashable>: View {
         return cropLeft || cropRight || cropUp || cropDown
     }
 
-    private func applyCrop(_ item: inout WireRect, dx: Float, dy: Float) {
+    private func applyCrop(_ item: inout WireRect<ID>, dx: Float, dy: Float) {
         guard item.width > 0, item.height > 0 else { return }
         if cropLeft { item.setCrop(.left, item.cropX + dx / item.width) }
         if cropRight { item.setCrop(.right, 1 - item.cropX - item.cropWidth - dx / item.width) }

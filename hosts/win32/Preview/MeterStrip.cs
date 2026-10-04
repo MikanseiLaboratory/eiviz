@@ -21,11 +21,6 @@ internal sealed class MeterStrip : StackPanel
     private const string IconMute = "\uE74F";
     private const string IconSettings = "\uE713";
     private const string IconHeadphones = "\uE7F6";
-    private static readonly SolidColorBrush RouteOnFill = Freeze(Color.FromRgb(0x2E, 0x7D, 0x32));
-    private static readonly SolidColorBrush RouteOffFill = Freeze(Color.FromRgb(0x2A, 0x2A, 0x2A));
-    private static readonly SolidColorBrush RouteOffText = Freeze(Color.FromRgb(0x9E, 0x9E, 0x9E));
-    private static readonly SolidColorBrush RouteOffBorder = Freeze(Color.FromRgb(0x66, 0x66, 0x66));
-
     private readonly Rectangle _left = MakeBar();
     private readonly Rectangle _right = MakeBar();
     private readonly Slider _fader;
@@ -299,27 +294,15 @@ internal sealed class MeterStrip : StackPanel
 
     public void SetListening(bool on)
     {
-        _listen.Background = on ? RouteOnFill : RouteOffFill;
-        _listen.Foreground = on ? Brushes.White : RouteOffText;
-        _listen.BorderBrush = on ? RouteOnFill : RouteOffBorder;
+        OnOffLook.Apply(_listen, on);
         _listen.ToolTip = Loc.T(on ? "audio.listening" : "audio.listen");
     }
 
     private static void PaintRoute(Button button, bool on, ulong unitId)
     {
-        button.Background = on ? RouteOnFill : RouteOffFill;
-        button.BorderBrush = on ? RouteOnFill : RouteOffBorder;
-        button.Foreground = on ? Brushes.White : RouteOffText;
-        button.FontWeight = on ? FontWeights.Bold : FontWeights.Normal;
+        OnOffLook.Apply(button, on);
         button.FontSize = 11;
         button.Content = "MU" + unitId;
-    }
-
-    private static SolidColorBrush Freeze(Color color)
-    {
-        var brush = new SolidColorBrush(color);
-        brush.Freeze();
-        return brush;
     }
 
     private static object MuteGlyph(bool muted) => muted ? IconMute : IconSpeaker;

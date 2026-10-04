@@ -226,7 +226,10 @@ fn upsert_scene(document: &mut Document, scene: SceneDto) -> ControlResult<()> {
     Ok(())
 }
 
-fn upsert_overlay(document: &mut Document, mut slot: crate::session::OverlaySlot) -> ControlResult<()> {
+fn upsert_overlay(
+    document: &mut Document,
+    mut slot: crate::session::OverlaySlot,
+) -> ControlResult<()> {
     if slot.id == 0 {
         slot.id = document.next_overlay_id.max(1);
         document.next_overlay_id = slot.id.saturating_add(1);

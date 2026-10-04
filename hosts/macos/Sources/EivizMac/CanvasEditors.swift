@@ -32,15 +32,15 @@ struct SceneEditorView: View {
                             Button(layer.hidden ? "–" : "👁") {
                                 toggleLayer(layer.id, \.hidden)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(OnOffButtonStyle(on: !layer.hidden, compact: true))
                             Button(layer.audioFollow ? "🔊" : "🔇") {
                                 toggleLayer(layer.id, \.audioFollow)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(OnOffButtonStyle(on: layer.audioFollow, compact: true))
                             Button(layer.locked ? "🔒" : "🔓") {
                                 toggleLayer(layer.id, \.locked)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(OnOffButtonStyle(on: layer.locked, compact: true))
                             Text(label(layer))
                                 .lineLimit(1)
                                 .truncationMode(.tail)
@@ -104,7 +104,7 @@ struct SceneEditorView: View {
                     Toggle(isOn: $layoutSnap) {
                         Image(systemName: layoutSnap ? "magnet" : "magnet.slash")
                     }
-                    .toggleStyle(.button)
+                    .toggleStyle(OnOffToggleStyle())
                     .help("\(L10n.t("editor.layoutSnap"))\n\(L10n.t("editor.layoutSnapHelp"))")
                 }
                 WireCanvasView(
@@ -142,7 +142,7 @@ struct SceneEditorView: View {
                     Toggle(isOn: Binding(get: { live }, set: { setLive($0) })) {
                         Text(L10n.t("editor.live")).fontWeight(.bold)
                     }
-                    .toggleStyle(.button)
+                    .toggleStyle(OnOffToggleStyle())
                     .disabled(mixer.isRemote)
                     .help(L10n.t("editor.liveHelp"))
                 }

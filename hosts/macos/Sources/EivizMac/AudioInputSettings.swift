@@ -65,7 +65,7 @@ struct AudioInputSettingsView: View {
                         )) {
                             Text("Mute")
                         }
-                        .toggleStyle(.checkbox)
+                        .toggleStyle(OnOffToggleStyle())
                     }
                 }
                 if input.kind != .mix {
@@ -84,12 +84,8 @@ struct AudioInputSettingsView: View {
                                 mixer.applyInputAudio(id: input.id, units: routes, gain: input.gain, mute: input.mute)
                             } label: {
                                 Text("MU\(unit.id)")
-                                    .font(.system(size: 12, weight: sent ? .bold : .regular))
-                                    .foregroundStyle(sent ? Color.white : EivizTheme.dim)
-                                    .frame(minWidth: 44, minHeight: 24)
-                                    .background(sent ? Color(red: 0.18, green: 0.49, blue: 0.20) : Color(white: 0.16))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(OnOffButtonStyle(on: sent))
                             .help(L10n.format("audio.routeTip", unit.name))
                         }
                     }

@@ -184,6 +184,8 @@ public partial class OverlayWindow : Window
             Tag = slot,
             ToolTip = "Lock"
         };
+        OnOffLook.Apply(audio, slot.AudioFollow);
+        OnOffLook.Apply(lockBtn, slot.Locked);
         audio.Click += SlotAudio_Click;
         lockBtn.Click += SlotLock_Click;
         DockPanel.SetDock(audio, Dock.Left);

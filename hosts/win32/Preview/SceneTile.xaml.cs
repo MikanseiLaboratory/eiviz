@@ -90,9 +90,9 @@ public partial class SceneTile : UserControl
     {
         LoopButton.IsEnabled = hasVideo;
         PlayButton.IsEnabled = hasVideo;
-        LoopButton.Opacity = loop ? 1 : 0.55;
         PlayButton.Content = playing ? "❚❚" : "▶";
-        AudioButton.Opacity = muted ? 0.45 : 1;
+        OnOffLook.Apply(LoopButton, hasVideo && loop);
+        OnOffLook.Apply(AudioButton, !muted);
     }
 
     public void ApplyCollapsed()

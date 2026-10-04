@@ -102,7 +102,7 @@ struct OverlayView: View {
                 Toggle(isOn: $layoutSnap) {
                     Image(systemName: layoutSnap ? "magnet" : "magnet.slash")
                 }
-                .toggleStyle(.button)
+                .toggleStyle(OnOffToggleStyle())
                 .help("\(L10n.t("editor.layoutSnap"))\n\(L10n.t("editor.layoutSnapHelp"))")
             }
             WireCanvasView(
@@ -119,7 +119,7 @@ struct OverlayView: View {
         .clipped()
     }
 
-    private var overlayWireItems: [WireRect] {
+    private var overlayWireItems: [WireRect<UInt64>] {
         mixer.session.overlays.map {
             WireRect(
                 id: $0.id,
@@ -474,9 +474,9 @@ private struct OverlayListRow: View {
     var body: some View {
         HStack(spacing: 4) {
             Button(audioFollow ? "🔊" : "🔇", action: onToggleAudio)
-                .buttonStyle(.plain)
+                .buttonStyle(OnOffButtonStyle(on: audioFollow, compact: true))
             Button(locked ? "🔒" : "🔓", action: onToggleLock)
-                .buttonStyle(.plain)
+                .buttonStyle(OnOffButtonStyle(on: locked, compact: true))
             Text(title)
                 .lineLimit(1)
                 .truncationMode(.tail)

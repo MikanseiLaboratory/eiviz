@@ -289,11 +289,14 @@ impl ControlService {
                 gain,
                 mute,
             } => {
-                self.port
-                    .audio_set_input(input_id, &units, gain, mute)?;
+                self.port.audio_set_input(input_id, &units, gain, mute)?;
                 self.after_live("AudioSetInput", request_id, None, false)
             }
-            Command::AudioSetBus { unit_id, gain, mute } => {
+            Command::AudioSetBus {
+                unit_id,
+                gain,
+                mute,
+            } => {
                 self.port.audio_set_bus_gain(unit_id, gain, mute)?;
                 self.after_live("AudioSetBus", request_id, None, false)
             }

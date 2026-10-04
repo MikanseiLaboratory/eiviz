@@ -348,7 +348,13 @@ async fn flush_mix(session: Arc<ControlSession>, mix: Arc<MixCoalesce>) {
     }
 }
 
-pub fn overlay_auto(handle: i32, unit_id: u64, overlay_id: u64, duration_ms: u32, to_on: u32) -> i32 {
+pub fn overlay_auto(
+    handle: i32,
+    unit_id: u64,
+    overlay_id: u64,
+    duration_ms: u32,
+    to_on: u32,
+) -> i32 {
     let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
     };
@@ -445,13 +451,7 @@ pub fn video_seek(handle: i32, input_id: u64, position_hns: i64) -> i32 {
     })
 }
 
-pub fn audio_set_input(
-    handle: i32,
-    input_id: u64,
-    units: Vec<u64>,
-    gain: f32,
-    mute: u32,
-) -> i32 {
+pub fn audio_set_input(handle: i32, input_id: u64, units: Vec<u64>, gain: f32, mute: u32) -> i32 {
     let Some(session) = session(handle) else {
         return ERR_NOT_CREATED;
     };
