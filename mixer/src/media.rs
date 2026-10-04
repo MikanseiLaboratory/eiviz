@@ -779,6 +779,12 @@ fn stream(value: windows::Win32::Media::MediaFoundation::MF_SOURCE_READER_CONSTA
     value.0 as u32
 }
 
+/// Source reader that yields compressed samples. The video processor attributes
+/// make `MFCreateSourceReaderFromURL` return `E_INVALIDARG` for this output.
+fn open_compressed_reader(path: &str) -> Result<IMFSourceReader, String> {
+    open_reader(path, false, None, true)
+}
+
 fn open_reader(
     path: &str,
     capture: bool,
@@ -1525,7 +1531,10 @@ fn run_vulkan_h264_file(
     duration_hns: &AtomicI64,
     ready: &mut Option<mpsc::SyncSender<Result<(), String>>>,
 ) -> Result<VulkanFile, String> {
-    let reader = open_reader(path, false, None, false)?;
+    // Compressed H.264 for Vulkan Video. The software video processor attributes
+    // make MFCreateSourceReaderFromURL return E_INVALIDARG (0x80070057), so this
+    // reader is opened without them.
+    let reader = open_compressed_reader(path)?;
     if !first_video_is_h264(&reader)? {
         return Ok(VulkanFile::UnsupportedCodec);
     }
@@ -1924,5 +1933,75 @@ mod tests {
         assert_eq!(1u32.clamp(1, 8).max(3), 3);
         assert_eq!(3u32.clamp(1, 8).max(3), 3);
         assert_eq!(8u32.clamp(1, 8).max(3), 8);
+    }
+
+    /// Vulkan Video reads compressed H.264. Set EIVIZ_VIDEO_SAMPLE to a file path.
+    #[test]
+    fn vulkan_h264_file_decodes_a_frame() {
+        let Ok(path) = std::env::var("EIVIZ_VIDEO_SAMPLE") else {
+            return;
+        };
+        startup().expect("media foundation");
+        let reader = open_compressed_reader(&path).unwrap_or_else(|error| panic!("open: {error}"));
+        assert!(
+            first_video_is_h264(&reader).expect("native type"),
+            "sample is not H.264"
+        );
+        let (width, height, mut prefix, format) =
+            configure_h264_compressed(&reader, 0, 0, 0, 0)
+                .unwrap_or_else(|error| panic!("configure: {error}"));
+        assert!(width > 0 && height > 0);
+        let device = crate::device::GpuDevice::with_backend(crate::device::BackendRequest::Vulkan)
+            .expect("vulkan device");
+        let vulkan = device.vulkan.as_ref().expect("vulkan video device");
+        let mut decoder = vulkan
+            .create_wgpu_textures_decoder_h264(gpu_video::parameters::DecoderParameters::default())
+            .expect("h264 decoder");
+        let converter = crate::convert::Nv12Converter::new(&device.device);
+        let mut ring = VideoGpuRing::new(2);
+        let mut annexb = Vec::new();
+        let mut sent_prefix = false;
+        for _ in 0..80 {
+            let sample = match read_sample(&reader, None) {
+                Ok(Some(Decoded::Video { pts, sample })) => (pts, sample),
+                Ok(_) => continue,
+                Err(ReadStop::TypeChanged) => continue,
+                Err(ReadStop::End) => break,
+                Err(ReadStop::Failed(error)) => panic!("{error}"),
+            };
+            annexb.clear();
+            if !sent_prefix {
+                annexb.extend_from_slice(&prefix);
+                sent_prefix = true;
+                prefix.clear();
+            }
+            let payload = sample_bytes(&sample.1).expect("sample bytes");
+            crate::vk_video::append_annexb(&payload, format, &mut annexb).expect("annexb");
+            if annexb.is_empty() {
+                continue;
+            }
+            let frames = decoder
+                .decode(gpu_video::EncodedInputChunk {
+                    data: &annexb,
+                    pts: Some(sample.0.max(0) as u64),
+                })
+                .unwrap_or_else(|error| panic!("decode: {error}"));
+            if let Some(frame) = frames.into_iter().next() {
+                let size = frame.data.size();
+                converter
+                    .convert_nv12_texture(
+                        &device.device,
+                        &device.queue,
+                        &mut ring,
+                        &frame.data,
+                        if size.width > 0 { size.width } else { width },
+                        if size.height > 0 { size.height } else { height },
+                        sample.0,
+                    )
+                    .unwrap_or_else(|error| panic!("nv12: {error}"));
+                return;
+            }
+        }
+        panic!("decoder produced no frame");
     }
 }
