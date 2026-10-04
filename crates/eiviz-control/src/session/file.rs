@@ -295,9 +295,6 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     }
     let tmp = tmp_path(path);
     std::fs::write(&tmp, bytes).map_err(|error| error.to_string())?;
-    if path.exists() {
-        std::fs::remove_file(path).map_err(|error| error.to_string())?;
-    }
     match std::fs::rename(&tmp, path) {
         Ok(()) => Ok(()),
         Err(error) => {

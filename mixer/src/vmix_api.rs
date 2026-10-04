@@ -98,14 +98,16 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
         return OK;
     }
     slot.listen_owner = None;
+    let want_open_bind = !(config.user.is_empty() && config.pass.is_empty());
+    let bind_host = if want_open_bind { "0.0.0.0" } else { "127.0.0.1" };
     let reuse = slot
         .server
         .as_ref()
         .and_then(|server| server.server_addr().to_ip())
-        .is_some_and(|addr| addr.port() == config.port);
+        .is_some_and(|addr| addr.port() == config.port && !addr.ip().is_loopback() == want_open_bind);
     if !reuse {
         slot.server = None;
-        let addr = format!("0.0.0.0:{}", config.port);
+        let addr = format!("{bind_host}:{}", config.port);
         match Server::http(&addr) {
             Ok(server) => {
                 crate::diag::http_info(&format!("http listen {addr}"));
@@ -126,7 +128,7 @@ pub fn configure(enabled: bool, port: u32, user: &str, pass: &str) -> i32 {
             }
         }
     } else {
-        crate::diag::http_info(&format!("http restart 0.0.0.0:{}", config.port));
+        crate::diag::http_info(&format!("http restart {bind_host}:{}", config.port));
     }
     let server = slot.server.clone().expect("http listener");
     match spawn_worker(server, Arc::clone(&slot.stop), config) {
@@ -517,8 +519,19 @@ fn check_auth(request: &Request, config: &ApiConfig) -> bool {
                 .value
                 .as_str()
                 .strip_prefix("Basic ")
-                .is_some_and(|token| token.trim() == expected)
+                .is_some_and(|token| constant_time_eq(token.trim(), &expected))
     })
+}
+
+/// Constant-time string comparison. A plain `==` here would let a network
+/// attacker recover a configured Basic-Auth credential byte-by-byte via
+/// response timing (this project's own `crates/eiviz-api/src/auth.rs`
+/// already uses `subtle::ConstantTimeEq` for the analogous check on its
+/// WebSocket control API -- this brings the vMix-compatible HTTP API's
+/// independent auth implementation up to the same standard).
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    a.len() == b.len() && a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
 fn is_api_path(path: &str) -> bool {
@@ -545,9 +558,18 @@ pub(crate) fn parse_query(query: &str) -> HashMap<String, String> {
     map
 }
 
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn url_decode(input: &str) -> String {
-    let mut out = Vec::with_capacity(input.len());
     let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
@@ -556,13 +578,15 @@ fn url_decode(input: &str) -> String {
                 i += 1;
             }
             b'%' if i + 2 < bytes.len() => {
-                let hex = &input[i + 1..i + 3];
-                if let Ok(value) = u8::from_str_radix(hex, 16) {
-                    out.push(value);
-                    i += 3;
-                } else {
-                    out.push(bytes[i]);
-                    i += 1;
+                match (hex_digit(bytes[i + 1]), hex_digit(bytes[i + 2])) {
+                    (Some(hi), Some(lo)) => {
+                        out.push((hi << 4) | lo);
+                        i += 3;
+                    }
+                    _ => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
                 }
             }
             other => {
@@ -634,6 +658,63 @@ fn read_cstr(ptr: *const c_char) -> String {
 mod tests {
     use super::*;
     use serial_test::serial;
+
+    #[test]
+    fn url_decode_does_not_panic_on_percent_before_multibyte_boundary() {
+        // '%' followed by '1' and the first byte of a 3-byte UTF-8 character
+        // (`あ`) used to be sliced with a raw byte range (`&input[i+1..i+3]`),
+        // which panics because index 3 falls inside `あ`'s byte sequence.
+        let input = "%1あ";
+        let decoded = url_decode(input);
+        assert_eq!(decoded, "%1あ");
+    }
+
+    #[test]
+    fn url_decode_decodes_percent_encoded_multibyte_utf8() {
+        // "%E3%81%82" is the UTF-8 encoding of `あ`.
+        assert_eq!(url_decode("%E3%81%82"), "あ");
+    }
+
+    #[test]
+    fn constant_time_eq_matches_string_equality() {
+        assert!(constant_time_eq("secret", "secret"));
+        assert!(!constant_time_eq("secret", "wrong"));
+        assert!(!constant_time_eq("secret", "secrets"));
+    }
+
+    #[test]
+    #[serial(mixer)]
+    fn configure_without_credentials_binds_loopback_only() {
+        let port = 18722;
+        assert_eq!(configure(true, port, "", ""), crate::abi::OK);
+        std::thread::sleep(Duration::from_millis(80));
+        let bound_ip = {
+            let slot = api_slot().lock().unwrap();
+            slot.server
+                .as_ref()
+                .and_then(|server| server.server_addr().to_ip())
+                .map(|addr| addr.ip())
+        };
+        assert_eq!(bound_ip, Some(std::net::IpAddr::from([127, 0, 0, 1])));
+        shutdown();
+    }
+
+    #[test]
+    #[serial(mixer)]
+    fn configure_with_credentials_binds_all_interfaces() {
+        let port = 18723;
+        assert_eq!(configure(true, port, "user", "secret"), crate::abi::OK);
+        std::thread::sleep(Duration::from_millis(80));
+        let bound_ip = {
+            let slot = api_slot().lock().unwrap();
+            slot.server
+                .as_ref()
+                .and_then(|server| server.server_addr().to_ip())
+                .map(|addr| addr.ip())
+        };
+        assert_eq!(bound_ip, Some(std::net::IpAddr::from([0, 0, 0, 0])));
+        shutdown();
+    }
 
     #[test]
     fn query_and_path() {

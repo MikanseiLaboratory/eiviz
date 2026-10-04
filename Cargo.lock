@@ -679,6 +679,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "subtle",
  "thiserror 2.0.20",
  "tiny_http",
  "tokio",
