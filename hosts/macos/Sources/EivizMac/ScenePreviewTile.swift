@@ -227,6 +227,7 @@ struct SceneAnimPanel: View {
             }
             .help(L10n.t("anim.savedHelp"))
             if !scene.sequences.isEmpty {
+                Divider().padding(.vertical, 2)
                 heading(L10n.t("anim.sequences"))
                 ForEach(scene.sequences) { sequence in
                     HStack(spacing: 2) {

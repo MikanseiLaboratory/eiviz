@@ -76,6 +76,14 @@ internal sealed class SceneAnimWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(16) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(3, GridUnitType.Star) });
         grid.Children.Add(Column(Loc.T("anim.states"), Loc.T("anim.statesHelp"), _states, StateButtons(), _stateForm));
+        var divider = new Border
+        {
+            Width = 1,
+            Background = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55)),
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        Grid.SetColumn(divider, 1);
+        grid.Children.Add(divider);
         var right = Column(Loc.T("anim.sequences"), Loc.T("anim.sequencesHelp"), _sequences, SequenceButtons(), _sequenceForm);
         Grid.SetColumn(right, 2);
         grid.Children.Add(right);

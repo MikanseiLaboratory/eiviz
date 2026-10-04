@@ -9,7 +9,7 @@ eivizの各種操作は、Mixer内の`ControlService`を通じて処理されま
 
 - プロトコル: `eiviz.control.v1`（`crates/eiviz-api/proto/eiviz/control/v1/control.proto`）
 - 通信方式: WebSocket（`ws://`）、サブプロトコル`eiviz.protobuf.v1`（バイナリフレーム1枚につきEnvelope 1件）
-- 接続ポート: 既定はloopbackのポート9400。bindアドレスや認証tokenなどの接続設定はホスト固有で管理され、セッションファイルには保存されません。
+- 接続ポート: 既定はloopbackのポート9400です。bindアドレスや認証tokenなどの接続設定はホスト固有で管理され、セッションファイルには保存されません。
 - セキュリティ: 暗号化（WSS/TLS）には対応していません。信頼できるLANまたはVPN環境で運用してください。
 - 映像や音声の実データ、GPUテクスチャ、ウィンドウハンドル（HWND/NSView）はAPIの対象外です。
 
@@ -22,8 +22,8 @@ loopback（127.0.0.1）以外のアドレスへbindする場合は、認証token
 操作権限は以下の4段階です。クライアント側の自己申告で権限を昇格することはできず、ホスト側で設定された最大ロール（maxRole）が上限となります。
 
 - `read`: 状態取得、スナップショット取得、イベント購読
-- `operate`: カットやオート、Tバーなどのスイッチング操作、メディア再生、音声設定
-- `configure`: セッション変更（`MutateSession`）、現在ファイルへの保存（`SaveSession`）、メディアファイルのアップロード
+- `operate`: CUTやAuto、T-Barなどのスイッチング操作、メディア再生、音声設定
+- `configure`: セッション変更（`MutateSession`）、現在のファイルへの保存（`SaveSession`）、メディアファイルのアップロード
 - `admin`: 任意パスの保存/読み込み、シャットダウン
 
 ### ブラウザ接続（Origin制限）
@@ -47,9 +47,9 @@ Webブラウザからの接続時は、環境変数`EIVIZ_API_ALLOWED_ORIGINS`�
 
 ## エラーハンドリング
 
-APIエラーコードは`INVALID_ARGUMENT`、`NOT_FOUND`、`AMBIGUOUS`、`CONFLICT`、`UNAVAILABLE`、`PERMISSION_DENIED`、`IO`、`INTERNAL`に分類されます。同名リソースが存在する場合は自動解決せず`AMBIGUOUS`を返します。
+APIエラーコードは`INVALID_ARGUMENT`、`NOT_FOUND`、`AMBIGUOUS`、`CONFLICT`、`UNAVAILABLE`、`PERMISSION_DENIED`、`IO`、`INTERNAL`に分類されます。同名のリソースが存在する場合は先勝ちで解決せず、`AMBIGUOUS`を返します。
 
 ## CLIおよびデーモンの仕様
 
 - `eivizctl`: コマンドラインからAPIを呼び出すツールです。`--repl`で対話モードに対応します。詳細は[headless](/eiviz/ja/features/headless/)を参照してください。
-- `eiviz-headless`: GUIを持たないデーモン実行用バイナリです。Ctrl+C、SIGTERM、または`Shutdown`コマンドにより安全に終了処理を行います。
+- `eiviz-headless`: GUIを持たないデーモン実行用バイナリです。Ctrl+C、SIGTERM、または`Shutdown`コマンドにより安全に終了します。

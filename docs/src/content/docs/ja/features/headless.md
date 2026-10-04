@@ -3,9 +3,9 @@ title: headless
 description: GUIなしでMixerを動かし、eivizctlとRemoteから操作する
 ---
 
-`eiviz-headless`は、GUI画面を持たずにMixerをバックグラウンド実行するデーモンです。セッションファイル（`.eivz`または`.eivzx`）を読み込んで映像合成を行い、制御用のProtobuf WebSocketを開きます（既定: loopbackポート9400）。`run`実行時に`--session`を省略した場合は、OSの`eiviz/sessions`配下に日付付きの既定ファイルが自動作成されます。
+`eiviz-headless`は、GUIを持たずにMixerをバックグラウンドで実行するデーモンです。セッションファイル（`.eivz`または`.eivzx`）を読み込んで映像合成を行い、制御用のProtobuf WebSocketを開きます（既定: loopbackポート9400）。`run`実行時に`--session`を省略した場合は、OSの`eiviz/sessions`ディレクトリ配下に日付付きの既定ファイルが自動作成され、そのファイルが使用されます。
 
-Linuxではheadlessのみサポートされています。WindowsやmacOSの配布パッケージにも同じバイナリが同梱されています。操作はローカルの`eivizctl`や、別マシンの`Eiviz.Remote`から行います。通信プロトコルについては[eiviz API](/eiviz/ja/developers/api/)、Remoteの画面操作については[リモート接続](/eiviz/ja/features/remote/)を参照してください。
+Linuxではheadlessのみサポートされています。WindowsやmacOSの配布パッケージにも同じバイナリが同梱されています。操作はローカルの`eivizctl`や、別マシンの`Eiviz.Remote`（macOSは`eiviz-remote`）から行います。通信プロトコルについては[eiviz API](/eiviz/ja/developers/api/)、Remoteの画面操作については[リモート接続](/eiviz/ja/features/remote/)を参照してください。
 
 初めて利用する場合は、まず「起動」と「Remoteから接続する」の手順に沿って接続を確認してください。
 
@@ -37,8 +37,8 @@ eiviz-headless run --bind 127.0.0.1:9400 --renderer auto
 ```
 
 - `validate`と`canonicalize`: GPUを初期化せず、セッションの検証や正規化を行います。
-- `run`: セッションを読み込んでランタイムを初期化し、WebSocketの受付を開始します。準備が完了するとstderrに`ready ws=`が出力されます。Ctrl+CまたはAPIの`shutdown`コマンドで安全に終了します。
-- `--bind`: 指定がない場合は設定ファイル（prefs）の値、未設定時は`127.0.0.1:9400`を使用します。loopback以外へbindする場合はtokenの設定が必須です。暗号化（WSS/TLS）には対応していないため、信頼できるLANやVPN環境で運用してください。
+- `run`: セッションを読み込んでランタイムを初期化し、WebSocketの受付を開始します。準備が完了するとstderrに`ready ws=`が出力されます。Ctrl+C（UnixではSIGTERM）またはAPIの`shutdown`コマンドで安全に終了します。
+- `--bind`: 指定がない場合は設定ファイル（prefs）の値、設定ファイルにも指定がない場合は`127.0.0.1:9400`を使用します。loopback以外へbindする場合はtokenの設定が必須です。暗号化（WSS/TLS）には対応していないため、信頼できるLANやVPN環境で運用してください。
 
 ## 設定（prefs）
 
@@ -50,7 +50,7 @@ eiviz-headless run --bind 127.0.0.1:9400 --renderer auto
 | `token` | 接続認証用token（値の確認時は`(set)`と表示） |
 | `mediaDirectory` | Remoteからアップロードされたメディアの保存先 |
 | `maxRole` | 付与する最大権限（`read`/`operate`/`configure`/`admin`） |
-| `renderer` | GPUバックエンド（`auto`/`dx12`/`vulkan`/`metal`） |
+| `renderer` | GPUバックエンド（`auto`/`dx12`/`vulkan`/`metal`。OS非対応の値はエラー） |
 
 設定ファイルの保存先:
 - Windows: `%LOCALAPPDATA%\eiviz\headless-prefs.json`
@@ -60,10 +60,10 @@ eiviz-headless run --bind 127.0.0.1:9400 --renderer auto
 - bind: `--bind` → 設定ファイルの`bind` → `127.0.0.1:9400`
 - token: 設定ファイルの`token`のみ
 - renderer: `--renderer` → 設定ファイルの`renderer` → `auto`
-- メディア保存先: `--media-directory`または`EIVIZ_MEDIA_DIRECTORY` → 設定ファイル → 各OSの規定ディレクトリ
+- メディア保存先: `--media-directory`または`EIVIZ_MEDIA_DIRECTORY` → 設定ファイル → 各OSの既定ディレクトリ
 - 最大role: 設定ファイルの`maxRole` → `admin`
 
-規定のメディア保存先:
+既定のメディア保存先:
 - Windows: `%LOCALAPPDATA%\eiviz\media`
 - macOS: `~/Library/Application Support/eiviz/media`
 - Linux: `$XDG_DATA_HOME/eiviz/media`（未設定時は`~/.local/share/eiviz/media`）
@@ -111,10 +111,10 @@ eiviz> shutdown
 
 1. headless側の設定でtokenを指定し、外部から接続する場合は`bind`を`0.0.0.0:9400`等に変更します。
 2. `eiviz-headless run`を起動し、待機状態にします。
-3. クライアントPCで`Eiviz.Remote`を起動します。
-4. 画面左上のConnectから、headlessのIPアドレス、ポート（既定9400）、tokenを入力して接続します。
+3. クライアントPCで`Eiviz.Remote`（macOSは`eiviz-remote`）を起動します。
+4. 画面左上のConnectボタンをクリックし、headlessのIPアドレス、ポート番号（既定: 9400）、tokenを入力して接続します。
 
-接続は複数クライアントから同時に行うことが可能です。`eivizctl`とRemoteの併用にも対応しています。
+複数のクライアントから同時に接続できます。また、`eivizctl`とRemoteの併用にも対応しています。
 
 映像プレビューを確認する場合は、headless側でNDIまたはOMT出力を有効にし、Remote側のヘッダーメニューから該当出力を選択してください。詳細は[リモート接続](/eiviz/ja/features/remote/)を参照してください。
 

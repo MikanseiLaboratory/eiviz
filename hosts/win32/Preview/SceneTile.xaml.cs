@@ -233,6 +233,12 @@ public partial class SceneTile : UserControl
             PaintAnim();
             return;
         }
+        AnimButtons.Children.Add(new Border
+        {
+            Height = 1,
+            Background = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55)),
+            Margin = new Thickness(0, 4, 0, 2)
+        });
         AnimButtons.Children.Add(AnimHeading(Loc.T("anim.sequences")));
         foreach (var sequence in scene.Sequences)
         {

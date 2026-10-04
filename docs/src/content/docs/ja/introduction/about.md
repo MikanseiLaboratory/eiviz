@@ -1,6 +1,6 @@
 ---
 title: eivizについて
-description: 開発モチベーションと技術選定
+description: 開発動機と技術選定
 ---
 
 ## 開発の背景
@@ -32,14 +32,14 @@ eivizは有志コミュニティおよび個人開発者によって開発・保
 
 Windows向けUIホストはWPFで実装されています。GPUへの映像フレーム転送にはResizable BAR（ReBAR）を活用し、VRAM領域へ直接書き込むことで低遅延・高パフォーマンスを実現します。
 
-※ReBAR非対応環境ではパフォーマンスが大幅に低下する場合があります。また、Windows on ARMには未対応です（[#80](https://github.com/MikanseiLaboratory/eiviz/issues/80)）。Windows 11 24H2以前の一部環境ではGPU upload heapsに対応していないため、この最適化が利用できない場合があります。
+※ReBAR非対応環境ではパフォーマンスが大幅に低下する場合があります。また、Windows on ARMには未対応です（[#80](https://github.com/MikanseiLaboratory/eiviz/issues/80)）。Windows 11 24H2以前の一部環境ではGPU upload heapsに対応していないため、この最適化を利用できません。
 
 ### macOS: Swift 6 / SwiftUI / Metal
 
 macOS向けUIホストはSwiftUIで実装され、描画にはMetalを使用します。Apple SiliconのUnified Memoryアーキテクチャを活用し、メモリコピーのオーバーヘッドを削減しています。
 
 :::note
-現在実機検証はIntel世代のMacBookを中心に行っており、Apple Silicon環境での動作確認は進行中です。ディスクリートGPU搭載Macのサポートは予定していません。
+現在、実機検証はIntel世代のMacBookを中心に行っており、Apple Silicon環境での動作確認を進めています。ディスクリートGPU搭載Macのサポートは予定していません。
 :::
 
 ### Linux（実験的）: Rust/GTK 4/Vulkan

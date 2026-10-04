@@ -19,7 +19,7 @@ Mixerプロセス内でHTTPサーバーが動作します（既定: ポート`80
 | 状態取得 | クエリなし。vMix互換のXML（`application/xml`）を返却 |
 | Function実行 | `GET /api?Function=Fade&Duration=500` のようにクエリで指定し、実行後にXMLを返却 |
 
-XML出力ではSceneとInputがフラットな一覧として展開されます。対応しているFunctionは[Function Reference](/eiviz/ja/developers/function-reference/)を参照してください。未定義のFunctionには404、引数エラーには400を返します。
+XML出力では、Sceneに続いてInputがフラットな一覧として展開されます。対応しているFunctionの一覧は[Function Reference](/eiviz/ja/developers/function-reference/)を参照してください。未定義のFunctionには404、不正な引数には400を返します。なお、本家vMixとは異なり、既知のFunctionであっても処理に失敗した場合は成功として扱われません。
 
 アクセスログは`eiviz-mixer-http.log`に出力されます（定期ポーリングの`GET /api`は除外されます）。
 
@@ -33,12 +33,12 @@ XML出力ではSceneとInputがフラットな一覧として展開されます�
 | --- | --- |
 | `TALLY` | タリー状態の取得（各桁は入力順。0=オフ、1=Program、2=Preview） |
 | `FUNCTION` | HTTPと同様のショートカット実行（例: `FUNCTION Fade Duration=500`） |
-| `ACTS` | アクティベータ状態の取得（`Input`、`Preview`、`Overlay`等）。`Overlay1`から`Overlay8`はOn-Airの先頭8件です。9件目以降はこの面には出ません |
+| `ACTS` | アクティベータ状態の取得（`Input`、`Preview`、`Overlay`等）。`Overlay1`から`Overlay8`はOn-Airの先頭8件に対応し、9件目以降はこのインターフェースでは取得できません |
 | `XML` / `XMLTEXT` | 状態XMLの取得 |
 | `SUBSCRIBE` / `UNSUBSCRIBE` | タリーやアクティベータ状態の変更通知を購読 |
 | `VERSION` / `QUIT` | バージョン取得および接続切断 |
 
-対応Functionは[Function Reference](/eiviz/ja/developers/function-reference/)を参照してください。
+対応しているFunctionの一覧は[Function Reference](/eiviz/ja/developers/function-reference/)を参照してください。
 
 ## OBS WebSocket API
 

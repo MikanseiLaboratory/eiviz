@@ -11,8 +11,8 @@ eivizの動作環境とサポートハードウェアの一覧です。
 
 - OS: Windows 11（x64）※[Windows on ARMは未対応](https://github.com/MikanseiLaboratory/eiviz/issues/80)
 - GPU: **Resizable BARが有効なディスクリートGPU**（内蔵GPU環境は非推奨）
-  - AMD環境では「Smart Access Memory（SAM）」と表記される場合があります。
-  - Windows 11 24H2以前の一部環境では、GPU upload heapsに非対応のため最適化が機能しない場合があります。
+  - AMD環境では「Smart Access Memory（SAM）」と表記されることがあります。
+  - Windows 11 24H2以前の一部環境では、GPU upload heapsに対応していないため最適化が機能しない場合があります。
 
 | GPUベンダー | 推奨要件 |
 | --- | --- |
@@ -20,7 +20,7 @@ eivizの動作環境とサポートハードウェアの一覧です。
 | AMD | Radeon RX 6000シリーズ以降 |
 | Intel | Arc Aシリーズ（Alchemist）以降 |
 
-Direct3D 12対応GPUであれば基本動作は可能ですが、快適な運用のために上記推奨環境での使用をお勧めします。
+Direct3D 12対応GPUであれば基本動作は可能ですが、快適な運用のため上記推奨環境での使用をお勧めします。
 
 ## macOS
 
@@ -29,7 +29,7 @@ Direct3D 12対応GPUであれば基本動作は可能ですが、快適な運用
 - Intel Macおよび外付けGPU（eGPU）は非対応です。
 
 :::note
-開発チームの機材都合により、現在Intel Macでのビルド・動作確認を主として進めており、Apple Silicon実機での最適化は順次進めています。
+開発チームの機材環境の都合により、現在はIntel Macでのビルド・動作確認を中心に進めており、Apple Silicon実機での最適化は順次進めています。
 :::
 
 ## Linux（実験的）

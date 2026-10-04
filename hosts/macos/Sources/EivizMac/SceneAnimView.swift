@@ -40,6 +40,7 @@ struct SceneAnimView: View {
                 stateColumn
                     .frame(maxWidth: .infinity)
                     .layoutPriority(2)
+                Divider()
                 sequenceColumn
                     .frame(maxWidth: .infinity)
                     .layoutPriority(3)
