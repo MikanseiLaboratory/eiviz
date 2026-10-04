@@ -833,7 +833,7 @@ extension MixerController {
 
     func pushSceneAnim(_ scene: SceneEntry) {
         if isRemote { return }
-        var layerBufs: [[EivizOverlayDesc]] = scene.states.map { state in
+        let layerBufs: [[EivizOverlayDesc]] = scene.states.map { state in
             state.layers.compactMap { key in
                 guard let layer = scene.layers.first(where: { $0.layerId == key.layerId }) else { return nil }
                 var desc = MixerFFI.emptyOverlay()
@@ -848,7 +848,7 @@ extension MixerController {
                 return desc
             }
         }
-        var stepBufs: [[EivizSequenceStepDesc]] = scene.sequences.map { sequence in
+        let stepBufs: [[EivizSequenceStepDesc]] = scene.sequences.map { sequence in
             sequence.steps.map { step in
                 EivizSequenceStepDesc(
                     state_id: step.stateId,
@@ -858,12 +858,14 @@ extension MixerController {
                 )
             }
         }
-        withPinned(&layerBufs) { layerPtrs in
+        let layerCounts = layerBufs.map { UInt32($0.count) }
+        let stepCounts = stepBufs.map { UInt32($0.count) }
+        withPinned(layerBufs) { layerPtrs in
             let states: [EivizSceneStateDesc] = scene.states.enumerated().map { index, state in
                 EivizSceneStateDesc(
                     id: state.id,
                     layers: layerPtrs[index].map { UnsafePointer($0) },
-                    layer_count: UInt32(layerBufs[index].count),
+                    layer_count: layerCounts[index],
                     enter: sceneMotion(state.enter),
                     camera: EivizSceneCamera(
                         x: state.camera?.x ?? 0.5,
@@ -879,12 +881,12 @@ extension MixerController {
                     "Define scene states"
                 )
             }
-            withPinned(&stepBufs) { stepPtrs in
+            withPinned(stepBufs) { stepPtrs in
                 let sequences: [EivizSceneSequenceDesc] = scene.sequences.enumerated().map { index, sequence in
                     EivizSceneSequenceDesc(
                         id: sequence.id,
                         steps: stepPtrs[index].map { UnsafePointer($0) },
-                        step_count: UInt32(stepBufs[index].count)
+                        step_count: stepCounts[index]
                     )
                 }
                 sequences.withUnsafeBufferPointer { ptr in
@@ -992,15 +994,17 @@ extension MixerController {
         )
     }
 
-    private func withPinned<T, R>(_ buffers: inout [[T]], _ body: ([UnsafeMutablePointer<T>?]) -> R) -> R {
+    /// Pins each row for `body`. Each row is copied first so the pointer borrow does not overlap a read of `buffers`.
+    private func withPinned<T, R>(_ buffers: [[T]], _ body: ([UnsafeMutablePointer<T>?]) -> R) -> R {
         func walk(_ index: Int, _ acc: [UnsafeMutablePointer<T>?]) -> R {
             if index == buffers.count {
                 return body(acc)
             }
-            if buffers[index].isEmpty {
+            var row = buffers[index]
+            if row.isEmpty {
                 return walk(index + 1, acc + [nil])
             }
-            return buffers[index].withUnsafeMutableBufferPointer { ptr in
+            return row.withUnsafeMutableBufferPointer { ptr in
                 walk(index + 1, acc + [ptr.baseAddress])
             }
         }
