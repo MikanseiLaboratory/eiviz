@@ -978,9 +978,7 @@ unsafe fn sequences_from_ffi(
             }
             steps
         };
-        if steps.len() < 2 {
-            return Err("scene sequence needs at least two steps");
-        }
+        // One step is an unfinished edit. Playback refuses to start it.
         out.insert(desc.id, SequenceDef { steps });
     }
     Ok(out)

@@ -248,12 +248,6 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
             }
         }
         for seq in &scene.sequences {
-            if seq.steps.len() < 2 {
-                return Err(ValidationError::new(format!(
-                    "scene {} sequence {} needs at least two steps",
-                    scene.id, seq.id
-                )));
-            }
             for step in &seq.steps {
                 if !state_ids.contains(&step.state_id) {
                     return Err(ValidationError::new(format!(

@@ -1533,7 +1533,7 @@ pub unsafe extern "C" fn mixer_scene_show_pose(
             let mut shared = mixer.shared.lock_or_recover();
             {
                 let Some(spec) = shared.scenes.get_mut(&scene_id) else {
-                    return scene_anim_error("scene does not exist");
+                    return scene_anim_error(mixer, "scene does not exist");
                 };
                 spec.layers = Arc::clone(&copied);
                 if let Some(camera) = shown_camera {
@@ -1567,7 +1567,7 @@ pub unsafe extern "C" fn mixer_scene_camera_define(
             let mut shared = mixer.shared.lock_or_recover();
             let previous = {
                 let Some(spec) = shared.scenes.get_mut(&scene_id) else {
-                    return scene_anim_error("scene does not exist");
+                    return scene_anim_error(mixer, "scene does not exist");
                 };
                 let previous = spec.base_camera;
                 spec.base_camera = camera;
@@ -1610,8 +1610,11 @@ pub(crate) fn tick_scene_anims(shared: &mut Shared, frame: u64) {
     }
 }
 
-fn scene_anim_error(message: &str) -> i32 {
-    report_session_error(message);
+/// Records an animation error without locking the mixer again.
+/// Callers are already inside `with_mixer`. `report_session_error` takes that
+/// same lock, and `std::sync::Mutex` waits forever on the thread that holds it.
+fn scene_anim_error(mixer: &Mixer, message: &str) -> i32 {
+    set_error(&mixer.telemetry, message);
     ERR_INVALID_ARGUMENT
 }
 
@@ -1631,7 +1634,7 @@ pub unsafe extern "C" fn mixer_scene_states_define(
                 .define_states_raw(states, count)
             {
                 Ok(()) => OK,
-                Err(message) => scene_anim_error(message),
+                Err(message) => scene_anim_error(mixer, message),
             }
         })
         .unwrap_or_else(|code| code)
@@ -1654,7 +1657,7 @@ pub unsafe extern "C" fn mixer_scene_sequences_define(
                 .define_sequences_raw(sequences, count)
             {
                 Ok(()) => OK,
-                Err(message) => scene_anim_error(message),
+                Err(message) => scene_anim_error(mixer, message),
             }
         })
         .unwrap_or_else(|code| code)
@@ -1671,7 +1674,7 @@ pub unsafe extern "C" fn mixer_scene_go_to(scene_id: u64, state_id: u64) -> i32 
                 .get(&scene_id)
                 .map(|spec| (Arc::clone(&spec.base_layers), spec.base_camera))
             else {
-                return scene_anim_error("scene does not exist");
+                return scene_anim_error(mixer, "scene does not exist");
             };
             let frame = shared.composed_frame;
             match shared.scene_anims.entry(scene_id).or_default().go_to(
@@ -1681,7 +1684,7 @@ pub unsafe extern "C" fn mixer_scene_go_to(scene_id: u64, state_id: u64) -> i32 
                 frame,
             ) {
                 Ok(()) => OK,
-                Err(message) => scene_anim_error(message),
+                Err(message) => scene_anim_error(mixer, message),
             }
         })
         .unwrap_or_else(|code| code)
@@ -1698,7 +1701,7 @@ pub unsafe extern "C" fn mixer_scene_sequence(scene_id: u64, sequence_id: u64, o
                 .get(&scene_id)
                 .map(|spec| (Arc::clone(&spec.base_layers), spec.base_camera))
             else {
-                return scene_anim_error("scene does not exist");
+                return scene_anim_error(mixer, "scene does not exist");
             };
             let frame = shared.composed_frame;
             match shared.scene_anims.entry(scene_id).or_default().sequence(
@@ -1709,7 +1712,7 @@ pub unsafe extern "C" fn mixer_scene_sequence(scene_id: u64, sequence_id: u64, o
                 frame,
             ) {
                 Ok(()) => OK,
-                Err(message) => scene_anim_error(message),
+                Err(message) => scene_anim_error(mixer, message),
             }
         })
         .unwrap_or_else(|code| code)
