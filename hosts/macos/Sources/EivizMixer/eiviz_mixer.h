@@ -430,6 +430,8 @@ int32_t mixer_license_clear(void);
 int32_t mixer_machine_fingerprint(uint8_t *out, size_t cap);
 int32_t mixer_secret_set(const char *name, const char *value);
 int32_t mixer_decklink_connect(uint64_t id, const char *device, const char *mode, uint32_t frame_buffer_frames);
+int32_t mixer_decklink_enum_devices(uint8_t *out, size_t cap);
+int32_t mixer_decklink_enum_modes(const char *device, uint8_t *out, size_t cap);
 int32_t mixer_snapshot(uint64_t unit_id, uint32_t kind, const char *path);
 int32_t mixer_output_remove(uint64_t output_id);
 int32_t mixer_omt_discover(uint8_t *out, size_t cap);

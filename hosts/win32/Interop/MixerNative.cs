@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using Eiviz.Host.I18n;
 
 namespace Eiviz.Host.Interop;
@@ -408,6 +409,12 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_decklink_connect", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int ConnectDeckLink(ulong id, string device, string mode, uint frameBufferFrames);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_decklink_enum_devices")]
+    internal static unsafe partial int DeckLinkEnumDevices(byte* buffer, nuint capacity);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_decklink_enum_modes", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int DeckLinkEnumModes(string device, byte* buffer, nuint capacity);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_license_install", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int LicenseInstall(string ticket);
 
@@ -455,15 +462,72 @@ internal static partial class MixerNative
         return System.Text.Encoding.UTF8.GetString(buffer, 0, end < 0 ? buffer.Length : end);
     }
 
-    internal static MixerCapabilities QueryCapabilities()
+    internal static bool TryQueryCapabilities(out MixerCapabilities caps)
     {
-        MixerCapabilities caps = default;
+        MixerCapabilities value = default;
         unsafe
         {
-            if (Capabilities(&caps) != 0)
-                return default;
+            if (Capabilities(&value) != 0)
+            {
+                caps = default;
+                return false;
+            }
         }
-        return caps;
+        caps = value;
+        return true;
+    }
+
+    internal static MixerCapabilities QueryCapabilities() =>
+        TryQueryCapabilities(out var caps) ? caps : default;
+
+    internal static List<DeckLinkDeviceInfo> QueryDeckLinkDevices(out string error)
+    {
+        var buffer = new byte[1 << 16];
+        int n;
+        unsafe
+        {
+            fixed (byte* ptr = buffer)
+                n = DeckLinkEnumDevices(ptr, (nuint)buffer.Length);
+        }
+        return ReadDeckLinkJson<DeckLinkDeviceInfo>(buffer, n, out error);
+    }
+
+    internal static List<DeckLinkModeInfo> QueryDeckLinkModes(string device, out string error)
+    {
+        var buffer = new byte[1 << 16];
+        int n;
+        unsafe
+        {
+            fixed (byte* ptr = buffer)
+                n = DeckLinkEnumModes(device, ptr, (nuint)buffer.Length);
+        }
+        return ReadDeckLinkJson<DeckLinkModeInfo>(buffer, n, out error);
+    }
+
+    private static readonly JsonSerializerOptions DeckLinkJson = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    private static List<T> ReadDeckLinkJson<T>(byte[] buffer, int n, out string error)
+    {
+        error = "";
+        if (n >= 2 && n <= buffer.Length)
+        {
+            try
+            {
+                var value = JsonSerializer.Deserialize<List<T>>(buffer.AsSpan(0, n), DeckLinkJson);
+                if (value is not null)
+                    return value;
+            }
+            catch (JsonException)
+            {
+            }
+        }
+        error = LastErrorText();
+        if (string.IsNullOrWhiteSpace(error))
+            error = "DeckLink enumerate failed";
+        return [];
     }
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_snapshot", StringMarshalling = StringMarshalling.Utf8)]
@@ -1209,4 +1273,30 @@ internal unsafe struct MixerAudioDeviceInfo
     public fixed byte Name[256];
     public uint Direction;
     public uint Caps;
+}
+
+internal sealed class DeckLinkDeviceInfo
+{
+    public string Id { get; set; } = "";
+    public string Model { get; set; } = "";
+    public string Name { get; set; } = "";
+    public bool Capture { get; set; }
+    public bool Playback { get; set; }
+
+    public string Label =>
+        !string.IsNullOrWhiteSpace(Name) ? Name
+        : !string.IsNullOrWhiteSpace(Model) ? Model
+        : Id;
+}
+
+internal sealed class DeckLinkModeInfo
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public uint Width { get; set; }
+    public uint Height { get; set; }
+    public uint FpsNum { get; set; }
+    public uint FpsDen { get; set; }
+
+    public string Label => !string.IsNullOrWhiteSpace(Name) ? Name : $"{Width}x{Height}";
 }

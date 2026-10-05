@@ -243,6 +243,7 @@ internal static class MutationJson
         public int AudioMapRight { get; set; } = 1;
         public string AudioProcessExe { get; set; } = "";
         public string AudioProcessAumid { get; set; } = "";
+        public string DecklinkMode { get; set; } = "";
 
         public static InputWire From(InputEntry input) => new()
         {
@@ -283,7 +284,8 @@ internal static class MutationJson
             AudioMapLeft = input.AudioMapLeft,
             AudioMapRight = input.AudioMapRight,
             AudioProcessExe = input.AudioProcessExe,
-            AudioProcessAumid = input.AudioProcessAumid
+            AudioProcessAumid = input.AudioProcessAumid,
+            DecklinkMode = input.Kind == InputKind.DeckLink ? input.DecklinkMode : ""
         };
     }
 

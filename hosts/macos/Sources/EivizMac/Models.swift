@@ -50,7 +50,13 @@ enum InputKind: String, Codable, CaseIterable {
         try container.encode(rawValue)
     }
 
-    static let tabKinds: [InputKind] = [.color, .still, .video, .omt, .ndi, .uvc, .mix, .audio]
+    static let tabKinds: [InputKind] = [.color, .still, .video, .omt, .ndi, .uvc, .deckLink, .mix, .audio]
+
+    static func deckLinkInputAllowed() -> Bool {
+        var caps = EivizCapabilities()
+        guard mixer_capabilities(&caps) == 0 else { return false }
+        return caps.decklink_linked != 0 && caps.decklink_input_limit != 0
+    }
 
     var hasVideo: Bool { self != .audio }
 

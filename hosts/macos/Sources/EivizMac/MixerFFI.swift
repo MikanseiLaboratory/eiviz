@@ -204,4 +204,51 @@ enum MixerFFI {
         pointer.initializeMemory(as: UInt8.self, repeating: 0, count: MemoryLayout<T>.stride)
         return pointer.load(as: T.self)
     }
+
+    static func deckLinkDevices() -> (devices: [DeckLinkDeviceInfo], error: String) {
+        var buffer = [UInt8](repeating: 0, count: 1 << 16)
+        let n = buffer.withUnsafeMutableBufferPointer { ptr in
+            mixer_decklink_enum_devices(ptr.baseAddress, ptr.count)
+        }
+        return decodeDeckLink(buffer, n)
+    }
+
+    static func deckLinkModes(deviceId: String) -> (modes: [DeckLinkModeInfo], error: String) {
+        var buffer = [UInt8](repeating: 0, count: 1 << 16)
+        let n = withCString(deviceId) { device in
+            buffer.withUnsafeMutableBufferPointer { ptr in
+                mixer_decklink_enum_modes(device, ptr.baseAddress, ptr.count)
+            }
+        }
+        let decoded: (items: [DeckLinkModeInfo], error: String) = decodeDeckLink(buffer, n)
+        return (decoded.items, decoded.error)
+    }
+
+    private static func decodeDeckLink<T: Decodable>(_ buffer: [UInt8], _ n: Int32) -> (items: [T], error: String) {
+        if n >= 2, n <= buffer.count,
+           let items = try? JSONDecoder().decode([T].self, from: Data(buffer.prefix(Int(n)))) {
+            return (items, "")
+        }
+        let detail = lastErrorText()
+        return ([], detail.isEmpty ? "DeckLink enumerate failed" : detail)
+    }
+}
+
+struct DeckLinkDeviceInfo: Decodable, Identifiable, Hashable {
+    var id: String
+    var model: String = ""
+    var name: String = ""
+    var capture: Bool = false
+    var playback: Bool = false
+    var label: String { name.isEmpty ? (model.isEmpty ? id : model) : name }
+}
+
+struct DeckLinkModeInfo: Decodable, Identifiable, Hashable {
+    var id: String
+    var name: String = ""
+    var width: UInt32 = 0
+    var height: UInt32 = 0
+    var fpsNum: UInt32 = 0
+    var fpsDen: UInt32 = 1
+    var label: String { name.isEmpty ? "\(width)x\(height)" : name }
 }

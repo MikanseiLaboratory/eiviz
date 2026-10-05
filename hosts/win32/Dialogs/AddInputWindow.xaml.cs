@@ -15,23 +15,29 @@ public partial class AddInputWindow : Window
     private InputKind _kind = InputKind.Still;
     private bool _lockKind;
     private TagCheckPanel? _tags;
+    private bool _decklinkLoaded;
+    private bool _fillingDeckLink;
+    private string _pendingDeckLinkDevice = "";
+    private string _pendingDeckLinkMode = "";
 
     public AddInputWindow()
     {
         InitializeComponent();
-        foreach (var kind in new[] { InputKind.Color, InputKind.Still, InputKind.Video, InputKind.OMT, InputKind.NDI, InputKind.UVC, InputKind.Mix, InputKind.Audio })
+        var kinds = new List<InputKind>
         {
-            var button = new Button
-            {
-                Content = InputKindNames.Category(kind),
-                Height = 36,
-                Margin = new Thickness(8, 2, 8, 2),
-                Tag = kind,
-                HorizontalContentAlignment = HorizontalAlignment.Left
-            };
-            button.Click += Category_Click;
-            CategoryPanel.Children.Add(button);
-        }
+            InputKind.Color,
+            InputKind.Still,
+            InputKind.Video,
+            InputKind.OMT,
+            InputKind.NDI,
+            InputKind.UVC
+        };
+        if (InputKindNames.DeckLinkInputAllowed())
+            kinds.Add(InputKind.DeckLink);
+        kinds.Add(InputKind.Mix);
+        kinds.Add(InputKind.Audio);
+        foreach (var kind in kinds)
+            CategoryPanel.Children.Add(CategoryButton(kind));
         StillRecent.ItemsSource = StillHistory.ToArray();
         VideoRecent.ItemsSource = VideoHistory.ToArray();
         Highlight();
@@ -74,6 +80,7 @@ public partial class AddInputWindow : Window
     public int ResultAudioMapRight { get; private set; } = 1;
     public string? ResultAudioProcessExe { get; private set; }
     public string? ResultAudioProcessAumid { get; private set; }
+    public string ResultDecklinkMode { get; private set; } = "";
 
     public void BindTags(Session session, IEnumerable<string>? selected = null)
     {
@@ -162,6 +169,14 @@ public partial class AddInputWindow : Window
             RefreshAudioMaps(input.AudioMapLeft, input.AudioMapRight);
             _ = RefreshAudioProcesses(input.AudioProcessExe, input.AudioProcessAumid);
         }
+        if (input.Kind == InputKind.DeckLink)
+        {
+            EnsureDeckLinkCategory();
+            _pendingDeckLinkDevice = input.PathOrAddress ?? "";
+            _pendingDeckLinkMode = input.DecklinkMode;
+            SelectTag(DeckLinkBufferBox, Math.Clamp(input.FrameBufferFrames == 0 ? 1 : input.FrameBufferFrames, 1u, 8u).ToString());
+            RefreshDeckLink();
+        }
         if (input.Kind == InputKind.UVC && !string.IsNullOrWhiteSpace(input.PathOrAddress))
         {
             foreach (var item in UvcList.Items)
@@ -198,8 +213,11 @@ public partial class AddInputWindow : Window
         OmtPanel.Visibility = VisibleIf(InputKind.OMT);
         NdiPanel.Visibility = VisibleIf(InputKind.NDI);
         UvcPanel.Visibility = VisibleIf(InputKind.UVC);
+        DeckLinkPanel.Visibility = VisibleIf(InputKind.DeckLink);
         MixPanel.Visibility = VisibleIf(InputKind.Mix);
         AudioPanel.Visibility = VisibleIf(InputKind.Audio);
+        if (_kind == InputKind.DeckLink && !_decklinkLoaded)
+            RefreshDeckLink();
         UpdateAudioModePanels();
         MixBusBox.IsEnabled = MixTargetBox.SelectedItem is MixTargetItem { IsMultiview: false };
         foreach (Button button in CategoryPanel.Children)
@@ -209,6 +227,119 @@ public partial class AddInputWindow : Window
     }
 
     private Visibility VisibleIf(InputKind kind) => _kind == kind ? Visibility.Visible : Visibility.Collapsed;
+
+    private Button CategoryButton(InputKind kind)
+    {
+        var button = new Button
+        {
+            Content = InputKindNames.Category(kind),
+            Height = 36,
+            Margin = new Thickness(8, 2, 8, 2),
+            Tag = kind,
+            HorizontalContentAlignment = HorizontalAlignment.Left
+        };
+        button.Click += Category_Click;
+        return button;
+    }
+
+    private void EnsureDeckLinkCategory()
+    {
+        foreach (Button button in CategoryPanel.Children)
+        {
+            if (button.Tag is InputKind.DeckLink)
+                return;
+        }
+        var insert = CategoryPanel.Children.Count;
+        for (var i = 0; i < CategoryPanel.Children.Count; i++)
+        {
+            if (CategoryPanel.Children[i] is Button { Tag: InputKind.Mix })
+            {
+                insert = i;
+                break;
+            }
+        }
+        CategoryPanel.Children.Insert(insert, CategoryButton(InputKind.DeckLink));
+    }
+
+    private void RefreshDeckLink_Click(object sender, RoutedEventArgs e) => RefreshDeckLink();
+
+    private void DeckLinkDevice_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_fillingDeckLink)
+            return;
+        _pendingDeckLinkMode = "";
+        DeckLinkModeBox.Items.Clear();
+        RefreshDeckLinkModes();
+    }
+
+    private void RefreshDeckLink()
+    {
+        _decklinkLoaded = true;
+        _fillingDeckLink = true;
+        var selected = DeckLinkDeviceBox.SelectedItem is DeckLinkDeviceInfo current
+            ? current.Id
+            : _pendingDeckLinkDevice;
+        DeckLinkDeviceBox.Items.Clear();
+        var devices = MixerNative.QueryDeckLinkDevices(out var error)
+            .Where(item => item.Capture || item.Id == selected)
+            .ToList();
+        if (!string.IsNullOrWhiteSpace(selected) && devices.TrueForAll(item => item.Id != selected))
+        {
+            devices.Insert(0, new DeckLinkDeviceInfo
+            {
+                Id = selected,
+                Name = selected,
+                Capture = true
+            });
+        }
+        foreach (var device in devices)
+            DeckLinkDeviceBox.Items.Add(device);
+        DeckLinkStatus.Text = devices.Count == 0
+            ? (string.IsNullOrWhiteSpace(error) ? Loc.T("settings.decklinkNone") : error)
+            : error;
+        foreach (DeckLinkDeviceInfo item in DeckLinkDeviceBox.Items)
+        {
+            if (item.Id == selected)
+            {
+                DeckLinkDeviceBox.SelectedItem = item;
+                break;
+            }
+        }
+        _fillingDeckLink = false;
+        RefreshDeckLinkModes();
+    }
+
+    private void RefreshDeckLinkModes()
+    {
+        _fillingDeckLink = true;
+        var selected = DeckLinkModeBox.SelectedItem is DeckLinkModeInfo current && !string.IsNullOrEmpty(current.Id)
+            ? current.Id
+            : _pendingDeckLinkMode;
+        DeckLinkModeBox.Items.Clear();
+        string error = "";
+        var modes = new List<DeckLinkModeInfo>();
+        if (DeckLinkDeviceBox.SelectedItem is DeckLinkDeviceInfo device && !string.IsNullOrWhiteSpace(device.Id))
+            modes = MixerNative.QueryDeckLinkModes(device.Id, out error);
+        if (!string.IsNullOrWhiteSpace(selected) && modes.TrueForAll(item => item.Id != selected))
+            modes.Insert(0, new DeckLinkModeInfo { Id = selected, Name = selected });
+        foreach (var mode in modes)
+            DeckLinkModeBox.Items.Add(mode);
+        foreach (DeckLinkModeInfo item in DeckLinkModeBox.Items)
+        {
+            if (item.Id == selected)
+            {
+                DeckLinkModeBox.SelectedItem = item;
+                break;
+            }
+        }
+        if (DeckLinkModeBox.SelectedItem is null && DeckLinkModeBox.Items.Count > 0)
+            DeckLinkModeBox.SelectedIndex = 0;
+        if (!string.IsNullOrWhiteSpace(error))
+            DeckLinkStatus.Text = error;
+        _pendingDeckLinkDevice = "";
+        _pendingDeckLinkMode = "";
+        _fillingDeckLink = false;
+    }
 
     private static bool SameCategory(InputKind left, InputKind right) =>
         IsColour(left) && IsColour(right) || left == right;
@@ -487,6 +618,17 @@ public partial class AddInputWindow : Window
                         : "Default microphone";
                 }
                 ResultPath = ResultAudioDeviceId;
+                break;
+            case InputKind.DeckLink:
+                if (DeckLinkDeviceBox.SelectedItem is not DeckLinkDeviceInfo decklink
+                    || string.IsNullOrWhiteSpace(decklink.Id))
+                    return;
+                ResultPath = decklink.Id;
+                ResultName = decklink.Label;
+                ResultDecklinkMode = DeckLinkModeBox.SelectedItem is DeckLinkModeInfo decklinkMode
+                    ? decklinkMode.Id
+                    : "";
+                ResultFrameBufferFrames = ReadBuffer(DeckLinkBufferBox, 1);
                 break;
             case InputKind.UVC:
                 if (UvcList.SelectedItem is not CameraItem camera || string.IsNullOrEmpty(camera.Link))

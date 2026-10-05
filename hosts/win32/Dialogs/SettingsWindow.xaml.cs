@@ -103,6 +103,9 @@ public partial class SettingsWindow : Window
     }
     public ulong NextOutputId => _nextOutputId;
     private bool _suppressOutputs;
+    private List<DeckLinkDeviceInfo>? _decklinkDevices;
+    private string _decklinkDeviceError = "";
+    private readonly Dictionary<string, (List<DeckLinkModeInfo> Modes, string Error)> _decklinkModes = new(StringComparer.Ordinal);
     private bool _rebarAvailable;
     private List<(uint Kind, uint Channels, string Id, string Name)> _devices = [];
 
@@ -147,6 +150,9 @@ public partial class SettingsWindow : Window
 
     private void RefreshLicense()
     {
+        LicenseEditionText.Text = MainWindow.CurrentEdition() ?? "-";
+        if (Owner is MainWindow owner)
+            owner.ApplyEditionTitle();
         var status = MixerNative.QueryLicenseStatus(out var ticketId);
         if (status is null)
         {
@@ -659,24 +665,22 @@ public partial class SettingsWindow : Window
                     ApplyOutputFps(fps, output);
             };
 
-            TextBox? endpoint = null;
-            if (output.Transport is OutputTransport.DeckLink or OutputTransport.Rtmp)
+            FrameworkElement? endpoint = null;
+            if (output.Transport == OutputTransport.Rtmp)
             {
-                var isRtmp = output.Transport == OutputTransport.Rtmp;
-                endpoint = new TextBox
+                var url = new TextBox
                 {
-                    Text = isRtmp ? output.RtmpUrl : output.DecklinkDevice,
-                    ToolTip = Loc.T(isRtmp ? "settings.rtmpUrl" : "settings.decklinkDevice"),
+                    Text = output.RtmpUrl,
+                    ToolTip = Loc.T("settings.rtmpUrl"),
                     Margin = new Thickness(0, 0, 8, 6),
                     IsEnabled = !locked
                 };
-                endpoint.TextChanged += (_, _) =>
-                {
-                    if (isRtmp)
-                        output.RtmpUrl = endpoint.Text.Trim();
-                    else
-                        output.DecklinkDevice = endpoint.Text.Trim();
-                };
+                url.TextChanged += (_, _) => output.RtmpUrl = url.Text.Trim();
+                endpoint = url;
+            }
+            else if (output.Transport == OutputTransport.DeckLink)
+            {
+                endpoint = DeckLinkOutputFields(output, locked);
             }
 
             var remove = new Button { Content = "−", Width = 28, IsEnabled = !locked };
@@ -730,6 +734,142 @@ public partial class SettingsWindow : Window
             OutputRows.Children.Add(box);
         }
         _suppressOutputs = false;
+    }
+
+    private List<DeckLinkDeviceInfo> DeckLinkDevices()
+    {
+        if (_decklinkDevices is not null)
+            return _decklinkDevices;
+        _decklinkDevices = MixerNative.QueryDeckLinkDevices(out _decklinkDeviceError);
+        return _decklinkDevices;
+    }
+
+    private (List<DeckLinkModeInfo> Modes, string Error) DeckLinkModes(string deviceId)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId))
+            return ([], "");
+        if (_decklinkModes.TryGetValue(deviceId, out var cached))
+            return cached;
+        var modes = MixerNative.QueryDeckLinkModes(deviceId, out var error);
+        cached = (modes, error);
+        _decklinkModes[deviceId] = cached;
+        return cached;
+    }
+
+    private FrameworkElement DeckLinkOutputFields(OutputEntry output, bool locked)
+    {
+        var stack = new StackPanel { Margin = new Thickness(0, 0, 8, 6) };
+        stack.Children.Add(new TextBlock
+        {
+            Text = Loc.T("settings.decklinkDevice"),
+            Margin = new Thickness(0, 0, 0, 2)
+        });
+        var devices = DeckLinkDevices()
+            .Where(item => item.Playback || item.Id == output.DecklinkDevice)
+            .ToList();
+        if (!string.IsNullOrWhiteSpace(output.DecklinkDevice) && devices.TrueForAll(item => item.Id != output.DecklinkDevice))
+        {
+            devices.Insert(0, new DeckLinkDeviceInfo
+            {
+                Id = output.DecklinkDevice,
+                Name = output.DecklinkDevice,
+                Playback = true
+            });
+        }
+        var device = new ComboBox
+        {
+            IsEnabled = !locked,
+            DisplayMemberPath = "Label",
+            Margin = new Thickness(0, 0, 0, 6)
+        };
+        foreach (var item in devices)
+            device.Items.Add(item);
+        foreach (DeckLinkDeviceInfo item in device.Items)
+        {
+            if (item.Id == output.DecklinkDevice)
+            {
+                device.SelectedItem = item;
+                break;
+            }
+        }
+        device.SelectionChanged += (_, _) =>
+        {
+            if (_suppressOutputs || device.SelectedItem is not DeckLinkDeviceInfo info)
+                return;
+            if (info.Id == output.DecklinkDevice)
+                return;
+            output.DecklinkDevice = info.Id;
+            output.DecklinkMode = "";
+            RebuildOutputs();
+        };
+        stack.Children.Add(device);
+
+        stack.Children.Add(new TextBlock
+        {
+            Text = Loc.T("settings.decklinkMode"),
+            Margin = new Thickness(0, 0, 0, 2)
+        });
+        var listed = DeckLinkModes(output.DecklinkDevice);
+        var modes = listed.Modes.ToList();
+        if (!string.IsNullOrWhiteSpace(output.DecklinkMode) && modes.TrueForAll(item => item.Id != output.DecklinkMode))
+            modes.Insert(0, new DeckLinkModeInfo { Id = output.DecklinkMode, Name = output.DecklinkMode });
+        var mode = new ComboBox
+        {
+            IsEnabled = !locked,
+            DisplayMemberPath = "Label",
+            Margin = new Thickness(0, 0, 0, 6)
+        };
+        foreach (var item in modes)
+            mode.Items.Add(item);
+        foreach (DeckLinkModeInfo item in mode.Items)
+        {
+            if (item.Id == output.DecklinkMode)
+            {
+                mode.SelectedItem = item;
+                break;
+            }
+        }
+        if (mode.SelectedItem is null && mode.Items.Count > 0)
+        {
+            mode.SelectedIndex = 0;
+            if (mode.SelectedItem is DeckLinkModeInfo picked)
+                output.DecklinkMode = picked.Id;
+        }
+        mode.SelectionChanged += (_, _) =>
+        {
+            if (_suppressOutputs || mode.SelectedItem is not DeckLinkModeInfo info)
+                return;
+            output.DecklinkMode = info.Id;
+        };
+        stack.Children.Add(mode);
+
+        var key = new CheckBox
+        {
+            Content = Loc.T("settings.decklinkExternalKey"),
+            IsChecked = output.DecklinkExternalKey,
+            IsEnabled = !locked,
+            Foreground = System.Windows.Media.Brushes.White,
+            Margin = new Thickness(0, 0, 0, 6)
+        };
+        key.Checked += (_, _) => output.DecklinkExternalKey = true;
+        key.Unchecked += (_, _) => output.DecklinkExternalKey = false;
+        stack.Children.Add(key);
+
+        var notice = !string.IsNullOrWhiteSpace(_decklinkDeviceError)
+            ? _decklinkDeviceError
+            : listed.Error;
+        if (string.IsNullOrWhiteSpace(notice) && devices.Count == 0)
+            notice = Loc.T("settings.decklinkNone");
+        if (!string.IsNullOrWhiteSpace(notice))
+        {
+            stack.Children.Add(new TextBlock
+            {
+                Text = notice,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xCC, 0x88, 0x88))
+            });
+        }
+        return stack;
     }
 
     private void Ok_Click(object sender, RoutedEventArgs e)

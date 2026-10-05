@@ -8,6 +8,9 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var category = 0
     @State private var selectedMultiviewId: UInt64?
+    @State private var decklinkDevices: [DeckLinkDeviceInfo] = []
+    @State private var decklinkModes: [String: [DeckLinkModeInfo]] = [:]
+    @State private var decklinkError = ""
 
     var body: some View {
         HStack(spacing: 0) {
@@ -267,15 +270,82 @@ struct SettingsView: View {
                 outputRow($output)
             }
         }
+        .onAppear { refreshDeckLinkDevices() }
+    }
+
+    private func refreshDeckLinkDevices() {
+        let result = MixerFFI.deckLinkDevices()
+        decklinkDevices = result.devices
+        decklinkError = result.error
+    }
+
+    private func storeDeckLinkModes(_ deviceId: String) -> [DeckLinkModeInfo] {
+        if let cached = decklinkModes[deviceId] {
+            return cached
+        }
+        guard !deviceId.isEmpty else { return [] }
+        let result = MixerFFI.deckLinkModes(deviceId: deviceId)
+        decklinkModes[deviceId] = result.modes
+        if decklinkError.isEmpty {
+            decklinkError = result.error
+        }
+        return result.modes
+    }
+
+    @ViewBuilder
+    private func deckLinkOutputFields(_ output: Binding<OutputEntry>) -> some View {
+        let deviceId = output.wrappedValue.decklinkDevice
+        let modeId = output.wrappedValue.decklinkMode
+        let modes = decklinkModes[deviceId] ?? []
+        let playback = decklinkDevices.filter { $0.playback || $0.id == deviceId }
+        VStack(alignment: .leading, spacing: 4) {
+            Picker(L10n.t("settings.decklinkDevice"), selection: output.decklinkDevice) {
+                if deviceId.isEmpty || !playback.contains(where: { $0.id == deviceId }) {
+                    Text(deviceId).tag(deviceId)
+                }
+                ForEach(playback) { device in
+                    Text(device.label).tag(device.id)
+                }
+            }
+            Picker(L10n.t("settings.decklinkMode"), selection: output.decklinkMode) {
+                if modeId.isEmpty || !modes.contains(where: { $0.id == modeId }) {
+                    Text(modeId).tag(modeId)
+                }
+                ForEach(modes) { mode in
+                    Text(mode.label).tag(mode.id)
+                }
+            }
+            Toggle(L10n.t("settings.decklinkExternalKey"), isOn: output.decklinkExternalKey)
+            if playback.isEmpty {
+                Text(decklinkError.isEmpty ? L10n.t("settings.decklinkNone") : decklinkError)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onAppear {
+            let loaded = storeDeckLinkModes(deviceId)
+            if output.wrappedValue.decklinkMode.isEmpty {
+                output.wrappedValue.decklinkMode = loaded.first?.id ?? ""
+            }
+        }
+        .onChange(of: deviceId) { _, id in
+            let loaded = storeDeckLinkModes(id)
+            if !loaded.contains(where: { $0.id == output.wrappedValue.decklinkMode }) {
+                output.wrappedValue.decklinkMode = loaded.first?.id ?? ""
+            }
+        }
     }
 
     @State private var licenseTicket = ""
     @State private var licenseStatus = ""
+    @State private var licenseEdition = ""
     @State private var licenseFingerprint = ""
 
     private var license: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(L10n.t("settings.license")).fontWeight(.bold)
+            Text(L10n.t("settings.licenseEdition"))
+            Text(licenseEdition)
             Text(licenseStatus).foregroundStyle(EivizTheme.dim)
             Text(L10n.t("settings.licenseTicket"))
             TextEditor(text: $licenseTicket)
@@ -310,6 +380,8 @@ struct SettingsView: View {
     private func refreshLicense() {
         var status = EivizLicenseStatus()
         var ticketId = [UInt8](repeating: 0, count: 256)
+        licenseEdition = AppChrome.editionName() ?? "-"
+        AppChrome.applyTitle()
         let rc = mixer_license_status(&status, &ticketId, ticketId.count)
         if rc != 0 {
             licenseStatus = L10n.t("settings.licenseUnavailable")
@@ -370,13 +442,11 @@ struct SettingsView: View {
                         Text("RTMP").tag(OutputTransport.rtmp)
                     }
                 }
-                if output.wrappedValue.transport == .deckLink || output.wrappedValue.transport == .rtmp {
-                    mixerTextField(
-                        output.wrappedValue.transport == .rtmp ? output.rtmpUrl : output.decklinkDevice,
-                        placeholder: output.wrappedValue.transport == .rtmp
-                            ? L10n.t("settings.rtmpUrl")
-                            : L10n.t("settings.decklinkDevice")
-                    )
+                if output.wrappedValue.transport == .rtmp {
+                    mixerTextField(output.rtmpUrl, placeholder: L10n.t("settings.rtmpUrl"))
+                }
+                if output.wrappedValue.transport == .deckLink {
+                    deckLinkOutputFields(output)
                 }
                 if output.wrappedValue.transport == .omt {
                     Picker("", selection: Binding(
@@ -829,6 +899,7 @@ struct PreferencesView: View {
             if !reverting {
                 prefs.save()
                 prefs.localeRevision += 1
+                AppChrome.applyTitle()
             }
         }
         .onChange(of: prefs.theme) { _, _ in
@@ -874,10 +945,25 @@ struct AddInputView: View {
     @State private var mixPreview = false
     @State private var mixBuffer: UInt32 = 1
     @State private var selectedTags: [String] = []
+    @State private var decklinkDevices: [DeckLinkDeviceInfo] = []
+    @State private var decklinkModes: [DeckLinkModeInfo] = []
+    @State private var selectedDeckLink = ""
+    @State private var selectedDeckLinkMode = ""
+    @State private var decklinkError = ""
+    @State private var decklinkBuffer: UInt32 = 1
+
+    private var inputCategories: [String] {
+        var items = ["Colours", "Still", "Video", "OMT", "NDI®", "UVC"]
+        if InputKind.deckLinkInputAllowed() || editing?.kind == .deckLink {
+            items.append("DeckLink")
+        }
+        items.append("Mix")
+        return items
+    }
 
     var body: some View {
         HStack(spacing: 0) {
-            List(["Colours", "Still", "Video", "OMT", "NDI®", "UVC", "Mix"], id: \.self, selection: $category) { item in
+            List(inputCategories, id: \.self, selection: $category) { item in
                 Text(item).tag(item)
             }
             .frame(width: 200)
@@ -905,6 +991,11 @@ struct AddInputView: View {
         }
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
+        .onChange(of: category) { _, value in
+            if value == "DeckLink" {
+                refreshDeckLink()
+            }
+        }
         .onAppear {
             loadEditing()
             if mixTargetId == 0 {
@@ -1005,6 +1096,40 @@ struct AddInputView: View {
             Text("Frame buffer (1–8) holds decoded camera frames, same as NDI/OMT.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
+        case "DeckLink":
+            Button("Refresh devices") { refreshDeckLink() }
+            if !decklinkError.isEmpty {
+                Text(decklinkError)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if decklinkDevices.isEmpty {
+                Text(L10n.t("settings.decklinkNone"))
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Picker(L10n.t("settings.decklinkDevice"), selection: Binding(
+                get: { selectedDeckLink },
+                set: { value in
+                    selectedDeckLink = value
+                    selectedDeckLinkMode = ""
+                    refreshDeckLinkModes()
+                }
+            )) {
+                Text("").tag("")
+                ForEach(decklinkDevices) { device in
+                    Text(device.label).tag(device.id)
+                }
+            }
+            Picker(L10n.t("settings.decklinkMode"), selection: $selectedDeckLinkMode) {
+                Text("").tag("")
+                ForEach(decklinkModes) { mode in
+                    Text(mode.label).tag(mode.id)
+                }
+            }
+            frameBufferPicker($decklinkBuffer)
+            Text(L10n.t("settings.decklinkInputHelp"))
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
         default:
             Picker("Source", selection: $mixTargetId) {
                 ForEach(mixer.session.units) { unit in
@@ -1100,6 +1225,39 @@ struct AddInputView: View {
         refreshUvcModes()
     }
 
+    private func refreshDeckLink() {
+        let result = MixerFFI.deckLinkDevices()
+        decklinkError = result.error
+        var devices = result.devices.filter { $0.capture || $0.id == selectedDeckLink }
+        if !selectedDeckLink.isEmpty && !devices.contains(where: { $0.id == selectedDeckLink }) {
+            devices.insert(
+                DeckLinkDeviceInfo(id: selectedDeckLink, name: selectedDeckLink, capture: true),
+                at: 0
+            )
+        }
+        decklinkDevices = devices
+        refreshDeckLinkModes()
+    }
+
+    private func refreshDeckLinkModes() {
+        guard !selectedDeckLink.isEmpty else {
+            decklinkModes = []
+            return
+        }
+        let result = MixerFFI.deckLinkModes(deviceId: selectedDeckLink)
+        if decklinkError.isEmpty {
+            decklinkError = result.error
+        }
+        var modes = result.modes
+        if !selectedDeckLinkMode.isEmpty && !modes.contains(where: { $0.id == selectedDeckLinkMode }) {
+            modes.insert(DeckLinkModeInfo(id: selectedDeckLinkMode, name: selectedDeckLinkMode), at: 0)
+        }
+        decklinkModes = modes
+        if selectedDeckLinkMode.isEmpty {
+            selectedDeckLinkMode = modes.first?.id ?? ""
+        }
+    }
+
     private func refreshUvcModes() {
         guard !selectedUvc.isEmpty else {
             uvcModes = []
@@ -1130,6 +1288,12 @@ struct AddInputView: View {
         omtAddress = editing.kind == .omt ? (editing.pathOrAddress ?? "") : omtAddress
         ndiAddress = editing.kind == .ndi ? (editing.pathOrAddress ?? "") : ndiAddress
         selectedUvc = editing.kind == .uvc ? (editing.pathOrAddress ?? "") : selectedUvc
+        if editing.kind == .deckLink {
+            selectedDeckLink = editing.pathOrAddress ?? ""
+            selectedDeckLinkMode = editing.decklinkMode
+            decklinkBuffer = max(1, min(8, editing.frameBufferFrames == 0 ? 1 : editing.frameBufferFrames))
+            refreshDeckLink()
+        }
         if editing.kind == .uvc, editing.captureWidth > 0, editing.captureHeight > 0 {
             selectedMode = CaptureMode(
                 width: editing.captureWidth,
@@ -1176,6 +1340,8 @@ struct AddInputView: View {
             return omtAddress
         case "NDI®":
             return ndiAddress
+        case "DeckLink":
+            return decklinkDevices.first { $0.id == selectedDeckLink }?.label ?? "DeckLink"
         case "Mix":
             if mixIsMultiview {
                 return mixer.session.multiviews.first { $0.gpuId == mixTargetId }.map { "\($0.name) MV" } ?? "Mix"
@@ -1241,6 +1407,12 @@ struct AddInputView: View {
             input.ndiBandwidth = ndiLow ? .lowest : .highest
             input.frameBufferFrames = buffer
             input.useGpu = false
+        case "DeckLink":
+            guard !selectedDeckLink.isEmpty else { return false }
+            input.kind = .deckLink
+            input.pathOrAddress = selectedDeckLink
+            input.decklinkMode = selectedDeckLinkMode
+            input.frameBufferFrames = max(1, min(8, decklinkBuffer))
         case "Mix":
             if mixTargetId == 0 {
                 mixTargetId = mixer.session.units.first?.id

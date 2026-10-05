@@ -379,6 +379,7 @@ internal static class SessionStore
         public int AudioMapRight { get; set; } = 1;
         public string AudioProcessExe { get; set; } = "";
         public string AudioProcessAumid { get; set; } = "";
+        public string DecklinkMode { get; set; } = "";
 
         public static InputDto From(InputEntry input) => new()
         {
@@ -419,7 +420,8 @@ internal static class SessionStore
             AudioMapLeft = input.Kind == InputKind.Audio ? input.AudioMapLeft : 0,
             AudioMapRight = input.Kind == InputKind.Audio ? input.AudioMapRight : 1,
             AudioProcessExe = input.Kind == InputKind.Audio ? input.AudioProcessExe : "",
-            AudioProcessAumid = input.Kind == InputKind.Audio ? input.AudioProcessAumid : ""
+            AudioProcessAumid = input.Kind == InputKind.Audio ? input.AudioProcessAumid : "",
+            DecklinkMode = input.Kind == InputKind.DeckLink ? input.DecklinkMode : ""
         };
 
         public InputEntry ToEntry() => new()
@@ -461,7 +463,8 @@ internal static class SessionStore
             AudioMapLeft = Kind == InputKind.Audio ? AudioMapLeft : 0,
             AudioMapRight = Kind == InputKind.Audio ? AudioMapRight : 1,
             AudioProcessExe = Kind == InputKind.Audio ? AudioProcessExe : "",
-            AudioProcessAumid = Kind == InputKind.Audio ? AudioProcessAumid : ""
+            AudioProcessAumid = Kind == InputKind.Audio ? AudioProcessAumid : "",
+            DecklinkMode = Kind == InputKind.DeckLink ? DecklinkMode : ""
         };
     }
 

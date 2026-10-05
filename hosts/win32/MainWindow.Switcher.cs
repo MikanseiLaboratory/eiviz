@@ -65,6 +65,10 @@ public partial class MainWindow
         }
         foreach (var kind in InputKindNames.TabKinds)
         {
+            if (kind == InputKind.DeckLink
+                && !InputKindNames.DeckLinkInputAllowed()
+                && !_session.Inputs.Exists(item => item.Kind == InputKind.DeckLink))
+                continue;
             var filter = ListFilter.ForKind(kind);
             var on = _inputFilter.Mode == ListFilterMode.Kind
                 && _inputFilter.Kind is { } selected

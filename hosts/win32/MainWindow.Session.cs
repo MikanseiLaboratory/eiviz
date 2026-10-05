@@ -208,6 +208,10 @@ public partial class MainWindow
                 || (dialog.Kind == InputKind.Mix
                     && input.MixSource == dialog.ResultMixSource
                     && input.MixTargetId == dialog.ResultMixTargetId
+                    && input.FrameBufferFrames == dialog.ResultFrameBufferFrames)
+                || (dialog.Kind == InputKind.DeckLink
+                    && input.PathOrAddress == dialog.ResultPath
+                    && input.DecklinkMode == dialog.ResultDecklinkMode
                     && input.FrameBufferFrames == dialog.ResultFrameBufferFrames));
         if (!App.IsRemote && replacing && !keepLive && !input.IsBuiltin && (!wasGenerator || !nowGenerator))
         {
@@ -226,9 +230,10 @@ public partial class MainWindow
         input.ToneHz = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneHz : 0;
         input.ToneLevelDbfs = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneLevelDbfs : -20;
         input.UseGpu = dialog.Kind == InputKind.OMT && dialog.ResultUseGpu;
-        input.FrameBufferFrames = dialog.Kind is InputKind.OMT or InputKind.NDI or InputKind.Video or InputKind.UVC or InputKind.Mix
+        input.FrameBufferFrames = dialog.Kind is InputKind.OMT or InputKind.NDI or InputKind.Video or InputKind.UVC or InputKind.Mix or InputKind.DeckLink
             ? dialog.ResultFrameBufferFrames
             : 1;
+        input.DecklinkMode = dialog.Kind == InputKind.DeckLink ? dialog.ResultDecklinkMode : "";
         input.MixSource = dialog.Kind == InputKind.Mix ? dialog.ResultMixSource : MixSource.MuProgram;
         input.MixTargetId = dialog.Kind == InputKind.Mix ? dialog.ResultMixTargetId : 0;
         if (dialog.Kind == InputKind.Mix)
@@ -318,6 +323,17 @@ public partial class MainWindow
                     dialog.ResultPath!,
                     dialog.ResultFrameBufferFrames,
                     input.NdiBandwidth);
+                break;
+            case InputKind.DeckLink:
+                if (string.IsNullOrWhiteSpace(dialog.ResultPath))
+                    throw new InvalidOperationException(Loc.T("settings.decklinkNone"));
+                MixerNative.ThrowIfFailed(
+                    MixerNative.ConnectDeckLink(
+                        input.Id,
+                        dialog.ResultPath,
+                        input.DecklinkMode,
+                        input.FrameBufferFrames),
+                    "DeckLink connect");
                 break;
             case InputKind.UVC:
                 input.CaptureWidth = dialog.ResultCaptureWidth;

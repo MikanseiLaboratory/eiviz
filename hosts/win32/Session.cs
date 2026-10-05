@@ -396,6 +396,7 @@ internal static class InputKindNames
         InputKind.OMT,
         InputKind.NDI,
         InputKind.UVC,
+        InputKind.DeckLink,
         InputKind.Mix,
         InputKind.Audio
     ];
@@ -443,6 +444,12 @@ internal static class InputKindNames
     private static bool SceneUses(Session session, ulong sceneGpuId, ulong sourceId) =>
         session.Scenes.Any(scene =>
             scene.GpuId == sceneGpuId && scene.Layers.Any(layer => layer.InputId == sourceId));
+
+    public static bool DeckLinkInputAllowed()
+    {
+        var caps = MixerNative.QueryCapabilities();
+        return caps.DecklinkLinked != 0 && caps.DecklinkInputLimit != 0;
+    }
 
     public static bool SameCategory(InputKind left, InputKind right) =>
         left == right || (IsColour(left) && IsColour(right));
