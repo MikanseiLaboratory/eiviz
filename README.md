@@ -36,6 +36,39 @@ Same steps, with the `macos-x64` pkg.
 
 Linux currently ships as CLI (headless) only. Build from source and run `eiviz-headless`. See [Headless](https://mikanseilaboratory.github.io/eiviz/en/features/headless/). A Release build is strongly recommended for performance.
 
+## Develop
+
+An executable with no `eiviz-pro.required` beside it is the OSS build. It does not search for a Pro module and uses the Free limits.
+
+Rust 1.97. The Windows host also needs .NET 10 and the NDI SDK 6 runtime DLL.
+
+```bat
+cargo test --workspace --locked
+dotnet build hosts\win32\Eiviz.Host.csproj
+```
+
+`dotnet build` always builds the release `eiviz_mixer.dll` and copies it next to the host, including a Debug configuration.
+
+```bat
+hosts\win32\bin\Debug\net10.0-windows\Eiviz.Host.exe
+```
+
+The Release configuration writes `hosts\win32\bin\Release\net10.0-windows\Eiviz.Host.exe`.
+
+Headless initializes the GPU and serves the control API:
+
+```bat
+cargo run -p eiviz-headless --features runtime --release --locked -- run
+```
+
+On macOS, from `hosts/macos`:
+
+```bash
+swift build -c release
+```
+
+Run the `eiviz-mac` product. `swift build --show-bin-path` prints its directory.
+
 ## What it is
 
 A next-generation production graphics tool, built by video operators for video operations.

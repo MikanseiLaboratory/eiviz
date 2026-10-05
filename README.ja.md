@@ -47,6 +47,33 @@ eivizは特定の企業ではなく、メインメンテナとコミュニティ
 現在CLI(headless)モードのみ対応しています。ソースコードをビルドし、`eiviz-headless`を実行してください。手順は[headless](https://mikanseilaboratory.github.io/eiviz/ja/features/headless/)です。
 パフォーマンスの観点から、Releaseビルドで実行することを強く推奨します。
 
+## 開発
+
+実行ファイルの隣に`eiviz-pro.required`が無いビルドがOSS版です。Proモジュールは探さず、Freeの上限だけで起動します。
+
+Rust 1.97が必要です。Windowsホストには.NET 10と、NDI SDK 6のランタイムDLLも必要です。
+
+```bat
+cargo test --workspace --locked
+dotnet build hosts\win32\Eiviz.Host.csproj
+```
+
+`dotnet build`は構成に関わらずリリースの`eiviz_mixer.dll`を作り、ホストの出力ディレクトリへコピーします。
+
+```bat
+hosts\win32\bin\Debug\net10.0-windows\Eiviz.Host.exe
+```
+
+Release構成の出力は`hosts\win32\bin\Release\net10.0-windows\Eiviz.Host.exe`です。
+
+ヘッドレスはGPUを初期化し、制御APIを待ち受けます。
+
+```bat
+cargo run -p eiviz-headless --features runtime --release --locked -- run
+```
+
+macOSは`hosts/macos`で`swift build -c release`し、成果物の`eiviz-mac`を起動します。配置先は`swift build --show-bin-path`が表示します。
+
 ## 開発のAI利用について
 
 本ツールは開発にAI/LLMを使用しています。
