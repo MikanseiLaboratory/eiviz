@@ -396,6 +396,15 @@ public partial class App : Application
                         input.KeepFullOnMultiview,
                         input.OmtQuality);
                     break;
+                case InputKind.DeckLink when network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
+                    MixerNative.ThrowIfFailed(
+                        MixerNative.ConnectDeckLink(
+                            input.Id,
+                            input.PathOrAddress,
+                            input.DecklinkMode,
+                            input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u)),
+                        "DeckLink connect");
+                    break;
                 case InputKind.NDI when network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
                     MixerApply.ConnectNdi(
                         input.Id,

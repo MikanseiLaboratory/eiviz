@@ -87,12 +87,14 @@ internal static partial class MixerNative
 
     internal static string TransitionLabel(uint kind) => TransitionCatalog.Label(kind);
     internal const int ErrBufferTooSmall = 6;
+    internal const int ErrNotSupportedPlan = 7;
     internal const uint FormatUyvy = 0;
     internal const uint FormatBgra = 1;
     internal const uint FormatRgba = 3;
     internal const uint OutOmt = 0;
     internal const uint OutNdi = 1;
     internal const uint OutDeckLink = 2;
+    internal const uint OutRtmp = 3;
     internal const uint SrcKindScene = 0;
     internal const uint SrcKindMuPreview = 1;
     internal const uint SrcKindMuProgram = 2;
@@ -371,6 +373,76 @@ internal static partial class MixerNative
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_output_add", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int OutputAdd(ulong outputId, uint transport, string name, uint sourceKind, ulong sourceId, ulong unitId, uint useGpu, ulong audioBusId, uint skipIdleEncode, uint width, uint height, uint fpsNum, uint fpsDen);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_output_add_ex", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int OutputAddEx(ulong outputId, uint transport, string name, uint sourceKind, ulong sourceId, ulong unitId, uint useGpu, ulong audioBusId, uint skipIdleEncode, uint width, uint height, uint fpsNum, uint fpsDen, string configJson);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_capabilities")]
+    internal static unsafe partial int Capabilities(MixerCapabilities* caps);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_secret_set", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int SecretSet(string name, string value);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_decklink_connect", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int ConnectDeckLink(ulong id, string device, string mode, uint frameBufferFrames);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_license_install", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int LicenseInstall(string ticket);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_license_clear")]
+    internal static partial int LicenseClear();
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_license_status")]
+    internal static unsafe partial int LicenseStatus(MixerLicenseStatus* status, byte* ticketId, nuint cap);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_machine_fingerprint")]
+    internal static unsafe partial int MachineFingerprint(byte* buffer, nuint cap);
+
+    internal static MixerLicenseStatus? QueryLicenseStatus(out string ticketId)
+    {
+        MixerLicenseStatus status = default;
+        var buffer = new byte[256];
+        unsafe
+        {
+            fixed (byte* ptr = buffer)
+            {
+                if (LicenseStatus(&status, ptr, (nuint)buffer.Length) != 0)
+                {
+                    ticketId = "";
+                    return null;
+                }
+            }
+        }
+        var end = Array.IndexOf(buffer, (byte)0);
+        ticketId = System.Text.Encoding.UTF8.GetString(buffer, 0, end < 0 ? buffer.Length : end);
+        return status;
+    }
+
+    internal static string QueryFingerprint()
+    {
+        var buffer = new byte[4096];
+        unsafe
+        {
+            fixed (byte* ptr = buffer)
+            {
+                if (MachineFingerprint(ptr, (nuint)buffer.Length) != 0)
+                    return "";
+            }
+        }
+        var end = Array.IndexOf(buffer, (byte)0);
+        return System.Text.Encoding.UTF8.GetString(buffer, 0, end < 0 ? buffer.Length : end);
+    }
+
+    internal static MixerCapabilities QueryCapabilities()
+    {
+        MixerCapabilities caps = default;
+        unsafe
+        {
+            if (Capabilities(&caps) != 0)
+                return default;
+        }
+        return caps;
+    }
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_snapshot", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int Snapshot(ulong unitId, uint kind, string path);
@@ -931,6 +1003,32 @@ internal struct EivizActiveSequence
     [FieldOffset(8)] public uint StepIndex;
     [FieldOffset(12)] public uint Reverse;
     [FieldOffset(16)] public uint Holding;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixerCapabilities
+{
+    public uint Plan;
+    public uint MixingUnitLimit;
+    public uint DecklinkInputLimit;
+    public uint DecklinkOutputLimit;
+    public uint RtmpMaxWidth;
+    public uint RtmpMaxHeight;
+    public uint RtmpMaxFpsNum;
+    public uint RtmpMaxFpsDen;
+    public uint Recording;
+    public uint Srt;
+    public uint HardwareEncode;
+    public uint DecklinkLinked;
+    public uint RtmpLinked;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixerLicenseStatus
+{
+    public uint State;
+    public uint Plan;
+    public long ExpiresAt;
 }
 
 [StructLayout(LayoutKind.Sequential)]

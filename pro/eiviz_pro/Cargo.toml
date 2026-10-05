@@ -1,0 +1,16 @@
+[package]
+name = "eiviz_pro"
+version = "0.3.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Free-plan stand-in. Official builds replace this directory with the private Pro module"
+
+[features]
+default = []
+# Present so `--features eiviz_pro/pro-dev` matches the private crate. The stand-in ignores it.
+pro-dev = []
+
+[dependencies]
+eiviz-pro-api.workspace = true

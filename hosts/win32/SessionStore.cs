@@ -652,6 +652,7 @@ internal sealed class InputKindJsonConverter : JsonConverter<InputKind>
             "Video" or "video" => InputKind.Video,
             "Mix" or "mix" => InputKind.Mix,
             "Audio" or "audio" => InputKind.Audio,
+            "DeckLink" or "deckLink" or "decklink" => InputKind.DeckLink,
             _ => throw new JsonException($"Unknown InputKind '{text}'.")
         };
     }

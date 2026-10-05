@@ -136,3 +136,11 @@ sequenceDiagram
 ## 音声パイプライン
 
 内部では48 kHzステレオのオーディオグラフを処理します。各Mixing Unitが専用のMU Busを1本持ちます。ヘッドホンは、メーターのヘッドホンアイコンで選択したMixing UnitまたはInputの音声を出力します。Inputは送り先のMixing Unitとゲインの設定を持ち、FollowではPreview/Programの切り替えに連動します。Overlayの音声も連動可能です。詳細は[MU Bus](/eiviz/ja/concepts/audio-auxs/)を参照してください。
+
+## Proモジュール
+
+DeckLink、RTMP、有料プランの上限はProモジュールが担当します。公開リポジトリの`pro/eiviz_pro`はFree固定のスタブです。公式ビルドはそのディレクトリを非公開のeiviz-proで置き換えます。`mixer/Cargo.toml`は常にこのパスを参照するため、マニフェストは書き換えません。
+
+プランが許可しない呼び出しは`ERR_NOT_SUPPORTED_PLAN`です。実装がリンクされていない場合は`ERR_IO`です。先にプランを見ます。ホストは`mixer_capabilities`の結果だけでDeckLinkとRTMPを表示し、コンパイル時のProフラグは持ちません。
+
+有料プランは署名付きチケットです。ProモジュールがEd25519の公開鍵を埋め込み、OS時刻と保存した最終確認時刻の大きい方で期限を見ます。ソルト付き指紋の過半数が一致すれば同じマシンです。ホストはチケットの読み込みと状態表示だけを行い、プランの判定はしません。

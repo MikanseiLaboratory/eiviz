@@ -17,6 +17,8 @@ control-api = []
 [dependencies]
 eiviz-control.workspace = true
 eiviz-api.workspace = true
+eiviz-pro-api.workspace = true
+eiviz_pro.workspace = true
 tokio.workspace = true
 bytemuck = { version = "1.25", features = ["derive"] }
 fontdue = "0.9"

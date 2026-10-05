@@ -108,7 +108,7 @@ public partial class SettingsWindow : Window
 
     private void CategoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (DisplayPanel is null || PerformancePanel is null || MultiviewPanel is null || AudioBusPanel is null || AdvancedPanel is null || WebApiPanel is null)
+        if (DisplayPanel is null || PerformancePanel is null || MultiviewPanel is null || AudioBusPanel is null || AdvancedPanel is null || WebApiPanel is null || LicensePanel is null)
             return;
         var index = CategoryList.SelectedIndex;
         DisplayPanel.Visibility = index == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -118,6 +118,55 @@ public partial class SettingsWindow : Window
         AudioBusPanel.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
         WebApiPanel.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
         AdvancedPanel.Visibility = index == 6 ? Visibility.Visible : Visibility.Collapsed;
+        LicensePanel.Visibility = index == 7 ? Visibility.Visible : Visibility.Collapsed;
+        if (index == 7)
+            RefreshLicense();
+    }
+
+    private void LicenseInstall_Click(object sender, RoutedEventArgs e)
+    {
+        var code = MixerNative.LicenseInstall(LicenseTicketBox.Text.Trim());
+        RefreshLicense();
+        if (code == 0)
+            RebuildOutputs();
+    }
+
+    private void LicenseClear_Click(object sender, RoutedEventArgs e)
+    {
+        MixerNative.LicenseClear();
+        LicenseTicketBox.Text = "";
+        RefreshLicense();
+        RebuildOutputs();
+    }
+
+    private void LicenseCopy_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(LicenseFingerprintBox.Text))
+            Clipboard.SetText(LicenseFingerprintBox.Text);
+    }
+
+    private void RefreshLicense()
+    {
+        var status = MixerNative.QueryLicenseStatus(out var ticketId);
+        if (status is null)
+        {
+            LicenseStatusText.Text = Loc.T("settings.licenseUnavailable");
+            LicenseFingerprintBox.Text = "";
+            return;
+        }
+        var state = status.Value.State switch
+        {
+            1 => Loc.T("settings.licenseValid"),
+            2 => Loc.T("settings.licenseExpired"),
+            3 => Loc.T("settings.licenseFingerprintMismatch"),
+            4 => Loc.T("settings.licenseBadSignature"),
+            _ => Loc.T("settings.licenseUnregistered"),
+        };
+        var expiry = status.Value.ExpiresAt > 0
+            ? DateTimeOffset.FromUnixTimeSeconds(status.Value.ExpiresAt).ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+            : "-";
+        LicenseStatusText.Text = $"{state}  {Loc.T("settings.licenseExpiry")}: {expiry}  {ticketId}";
+        LicenseFingerprintBox.Text = MixerNative.QueryFingerprint();
     }
 
     private void Default_Click(object sender, RoutedEventArgs e)
@@ -510,14 +559,25 @@ public partial class SettingsWindow : Window
             grid.RowDefinitions.Add(new RowDefinition());
             grid.RowDefinitions.Add(new RowDefinition());
             grid.RowDefinitions.Add(new RowDefinition());
+            grid.RowDefinitions.Add(new RowDefinition());
 
             var name = new TextBox { Text = output.Name, Margin = new Thickness(0, 0, 8, 6) };
             name.TextChanged += (_, _) => output.Name = name.Text.Trim();
+            var caps = MixerNative.QueryCapabilities();
+            var deckLinkAllowed = caps.DecklinkLinked != 0 && caps.DecklinkOutputLimit != 0;
+            var rtmpAllowed = caps.RtmpLinked != 0 && caps.RtmpMaxWidth != 0;
             var transport = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !OnAirLock.Active };
             transport.Items.Add(new ComboBoxItem { Content = "OMT", Tag = OutputTransport.Omt });
             transport.Items.Add(new ComboBoxItem { Content = "NDI", Tag = OutputTransport.Ndi });
-            transport.Items.Add(new ComboBoxItem { Content = "DeckLink", Tag = OutputTransport.DeckLink });
-            transport.SelectedIndex = (int)output.Transport;
+            if (deckLinkAllowed || output.Transport == OutputTransport.DeckLink)
+                transport.Items.Add(new ComboBoxItem { Content = "DeckLink", Tag = OutputTransport.DeckLink });
+            if (rtmpAllowed || output.Transport == OutputTransport.Rtmp)
+                transport.Items.Add(new ComboBoxItem { Content = "RTMP", Tag = OutputTransport.Rtmp });
+            foreach (ComboBoxItem item in transport.Items)
+            {
+                if (item.Tag is OutputTransport tagged && tagged == output.Transport)
+                    transport.SelectedItem = item;
+            }
             transport.SelectionChanged += (_, _) =>
             {
                 if (transport.SelectedItem is ComboBoxItem item && item.Tag is OutputTransport value)
@@ -599,6 +659,26 @@ public partial class SettingsWindow : Window
                     ApplyOutputFps(fps, output);
             };
 
+            TextBox? endpoint = null;
+            if (output.Transport is OutputTransport.DeckLink or OutputTransport.Rtmp)
+            {
+                var isRtmp = output.Transport == OutputTransport.Rtmp;
+                endpoint = new TextBox
+                {
+                    Text = isRtmp ? output.RtmpUrl : output.DecklinkDevice,
+                    ToolTip = Loc.T(isRtmp ? "settings.rtmpUrl" : "settings.decklinkDevice"),
+                    Margin = new Thickness(0, 0, 8, 6),
+                    IsEnabled = !locked
+                };
+                endpoint.TextChanged += (_, _) =>
+                {
+                    if (isRtmp)
+                        output.RtmpUrl = endpoint.Text.Trim();
+                    else
+                        output.DecklinkDevice = endpoint.Text.Trim();
+                };
+            }
+
             var remove = new Button { Content = "−", Width = 28, IsEnabled = !locked };
             remove.Click += (_, _) =>
             {
@@ -628,6 +708,11 @@ public partial class SettingsWindow : Window
             Grid.SetColumn(fps, 1);
             Grid.SetRow(skipIdle, 6);
             Grid.SetColumnSpan(skipIdle, 4);
+            if (endpoint is not null)
+            {
+                Grid.SetRow(endpoint, 7);
+                Grid.SetColumnSpan(endpoint, 3);
+            }
             grid.Children.Add(name);
             grid.Children.Add(remove);
             grid.Children.Add(transport);
@@ -639,6 +724,8 @@ public partial class SettingsWindow : Window
             grid.Children.Add(size);
             grid.Children.Add(fps);
             grid.Children.Add(skipIdle);
+            if (endpoint is not null)
+                grid.Children.Add(endpoint);
             box.Child = grid;
             OutputRows.Children.Add(box);
         }

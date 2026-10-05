@@ -167,8 +167,9 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
             }
             _ => {}
         }
-        if output.transport == OutputTransport::DeckLink {
-            // DeckLink stays host-owned; headless ignores it.
+        if output.transport == OutputTransport::DeckLink || output.transport == OutputTransport::Rtmp
+        {
+            // The mixer accepts or rejects the resource. A plan error does not abort the session.
         }
         if output.audio_unit_id != 0 && !unit_ids.contains(&output.audio_unit_id) {
             return Err(ValidationError::new(format!(

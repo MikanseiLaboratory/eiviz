@@ -124,6 +124,7 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
                 audio_map_right: 1,
                 audio_process_exe: String::new(),
                 audio_process_aumid: String::new(),
+                decklink_mode: String::new(),
             });
             document.next_input_id = id.saturating_add(1);
             Ok(())
@@ -440,6 +441,15 @@ mod tests {
             height: 0,
             fps_num: 0,
             fps_den: 0,
+            decklink_device: String::new(),
+            decklink_mode: String::new(),
+            decklink_external_key: false,
+            rtmp_url: String::new(),
+            rtmp_secret_ref: String::new(),
+            rtmp_video_bitrate: 0,
+            rtmp_audio_bitrate: 0,
+            rtmp_keyint: 0,
+            rtmp_video_only: false,
         });
         doc.outputs.push(crate::session::OutputDto {
             id: 101,
@@ -456,6 +466,15 @@ mod tests {
             height: 0,
             fps_num: 0,
             fps_den: 0,
+            decklink_device: String::new(),
+            decklink_mode: String::new(),
+            decklink_external_key: false,
+            rtmp_url: String::new(),
+            rtmp_secret_ref: String::new(),
+            rtmp_video_bitrate: 0,
+            rtmp_audio_bitrate: 0,
+            rtmp_keyint: 0,
+            rtmp_video_only: false,
         });
         let published = doc.published_video_outputs();
         assert_eq!(published.len(), 1);
@@ -490,6 +509,15 @@ mod tests {
                     height: 0,
                     fps_num: 0,
                     fps_den: 0,
+                    decklink_device: String::new(),
+                    decklink_mode: String::new(),
+                    decklink_external_key: false,
+                    rtmp_url: String::new(),
+                    rtmp_secret_ref: String::new(),
+                    rtmp_video_bitrate: 0,
+                    rtmp_audio_bitrate: 0,
+                    rtmp_keyint: 0,
+                    rtmp_video_only: false,
                 }],
                 headphone: None,
                 headphone_copy_monitor: Some(true),

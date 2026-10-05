@@ -225,7 +225,7 @@ Detail is in [MU Bus](/eiviz/en/concepts/audio-auxs/).
 | --- | --- | --- |
 | OMT | Stay on the GPU, or read back as UYVY and convert to VMX on a dedicated send thread | Shipped |
 | NDI | CPU path | Shipped |
-| DeckLink | — | In progress |
+| DeckLink | Pro module, UYVY or Fill/Key RGBA | Pro |
 
 One thread is assigned per output.
 
@@ -243,3 +243,11 @@ On a remote connection those live surfaces sample NDI/OMT receivers. Operator st
 Windows cannot keep many DXGI flip swapchains at once. [Settings](/eiviz/en/introduction/settings/) → Advanced, Video output destination window limit, caps how many may be open. They are used for real-time Preview, Program, and Multiview. A Switcher UI shows Preview and Program, so it uses 2 slots. You can raise the limit, but it may become unstable. Closing a window detaches its swapchain and frees a slot. Closing the main window closes the extra windows and exits the process.
 
 Reloading a session rebuilds the main window so preview surfaces attach on first layout. HWNDs are not reused across mixer lifetimes.
+
+## Pro module
+
+DeckLink, RTMP, and paid-plan limits live in the Pro module. The public repository ships a Free stand-in at `pro/eiviz_pro`. Official builds replace that directory with the private eiviz-pro checkout. `mixer/Cargo.toml` always path-depends on it, so the manifest is not rewritten.
+
+A call the plan does not allow returns `ERR_NOT_SUPPORTED_PLAN`. A missing backend returns `ERR_IO`. The plan check comes first. Hosts show DeckLink and RTMP only from `mixer_capabilities`. They do not use a compile-time Pro flag.
+
+A paid plan is a signed ticket. The Pro module embeds the Ed25519 public key, checks expiry against the later of the OS clock and a stored timestamp, and accepts the machine when a majority of salted fingerprints match. The host installs the ticket and displays the status. It does not decide the plan.

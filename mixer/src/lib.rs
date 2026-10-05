@@ -36,6 +36,7 @@ mod ndi;
 mod omt;
 mod pool;
 mod present;
+mod pro;
 mod readback;
 mod rebar;
 mod runtime;
@@ -61,15 +62,15 @@ pub use abi::{
     AudioPeak, BACKEND_AUTO, BACKEND_DX12, BACKEND_METAL, BACKEND_VULKAN, DURATION_FRAMES,
     DURATION_MS, EASING_BEZIER, EASING_HOLD, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT,
     EASING_SMOOTHSTEP, ERR_ALREADY_CREATED, ERR_BUFFER_TOO_SMALL, ERR_DEVICE, ERR_INVALID_ARGUMENT,
-    ERR_IO, ERR_NOT_CREATED, EivizCurve, EivizSceneCamera, GEN_BARS, GEN_SOLID, INCOMING_PREVIEW,
-    INCOMING_PROGRAM,
-    InputRuntimeStats, MULTIVIEW_BASE, MixerRebarInfo, MixerRuntimeStats, MixerSourceStatus,
+    ERR_IO, ERR_NOT_CREATED, ERR_NOT_SUPPORTED_PLAN, EivizCurve, EivizSceneCamera, GEN_BARS,
+    GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, InputRuntimeStats, MULTIVIEW_BASE,
+    MixerCapabilities, MixerLicenseStatus, MixerRebarInfo, MixerRuntimeStats, MixerSourceStatus,
     MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI,
-    OUT_OMT, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE, OutputRuntimeStats, OverlayDesc, Rect,
-    SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS, SRC_BLACK, SRC_BLUE,
-    SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
-    SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
-    TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
+    OUT_OMT, OUT_RTMP, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE, OutputRuntimeStats,
+    OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS,
+    SRC_BLACK, SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
+    SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR,
+    TRANSITION_BLINDS, TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
     TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DATAMOSH,
     TRANSITION_DIAMOND, TRANSITION_DIP, TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT,
     TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP, TRANSITION_DISPLACE, TRANSITION_FADE,
@@ -230,6 +231,7 @@ pub(crate) struct LiveOutput {
     video_sub: Arc<AtomicBool>,
     use_gpu: bool,
     skip_idle_encode: bool,
+    bytes_per_pixel: u32,
     tx: crate::frame_hub::OutputTx,
     pace: Arc<crate::frame_hub::OutputPace>,
     audio_send: Option<Arc<dyn Fn(AudioPacket) + Send + Sync>>,
@@ -249,6 +251,7 @@ pub(crate) struct OutputSnap {
     video_sub: Arc<AtomicBool>,
     use_gpu: bool,
     skip_idle_encode: bool,
+    bytes_per_pixel: u32,
     tx: crate::frame_hub::OutputTx,
     pace: Arc<crate::frame_hub::OutputPace>,
     audio_send: Option<Arc<dyn Fn(AudioPacket) + Send + Sync>>,
@@ -394,6 +397,7 @@ pub(crate) enum LiveReceiver {
     /// Held so `Drop` joins the ingest thread. Bandwidth save needs Advanced SDK.
     #[cfg(any(windows, target_os = "macos"))]
     Ndi(#[allow(dead_code)] NdiReceiver),
+    DeckLink(Box<dyn eiviz_pro_api::CaptureHandle>),
 }
 
 impl LiveReceiver {
@@ -403,6 +407,7 @@ impl LiveReceiver {
             // NDI bandwidth save needs Advanced SDK; see NdiReceiver.
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => {}
+            Self::DeckLink(_) => {}
         }
     }
 
@@ -415,6 +420,10 @@ impl LiveReceiver {
             ),
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => (true, false, String::new()),
+            Self::DeckLink(capture) => {
+                let stats = capture.stats();
+                (!stats.no_signal, stats.frames > 0, stats.last_error)
+            }
         }
     }
 }
@@ -423,6 +432,7 @@ pub(crate) enum OutputHandle {
     Omt(ProgramSender),
     #[cfg(any(windows, target_os = "macos"))]
     Ndi(NdiSender),
+    Pro(Box<dyn eiviz_pro_api::MediaOutput>),
 }
 
 impl OutputHandle {
@@ -434,6 +444,7 @@ impl OutputHandle {
             }
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(sender) => sender.pump(),
+            Self::Pro(output) => Ok(output.stats().connected),
         }
     }
 
@@ -442,6 +453,7 @@ impl OutputHandle {
             Self::Omt(sender) => sender.pump_accept(),
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => Ok(()),
+            Self::Pro(_) => Ok(()),
         }
     }
 
@@ -450,6 +462,7 @@ impl OutputHandle {
             Self::Omt(sender) => Some(sender.video_subscriber_count() as u32),
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => None,
+            Self::Pro(_) => None,
         }
     }
 
@@ -471,6 +484,11 @@ impl OutputHandle {
             Self::Ndi(sender) => {
                 sender.send_video_uyvy(width, height, stride, pts, data, fps_n, fps_d)
             }
+            Self::Pro(output) => output
+                .submit_video(crate::pro::video_frame(
+                    width, height, stride, pts, data, fps_n, fps_d,
+                ))
+                .map_err(|error| error.message),
         }
     }
 
@@ -479,6 +497,7 @@ impl OutputHandle {
         match self {
             Self::Omt(_) => None,
             Self::Ndi(sender) => Some(sender.last_send_ms()),
+            Self::Pro(_) => None,
         }
     }
 
@@ -502,6 +521,10 @@ impl OutputHandle {
                 busy.store(false, Ordering::Release);
                 Ok(())
             }
+            Self::Pro(_) => {
+                busy.store(false, Ordering::Release);
+                Ok(())
+            }
         }
     }
 
@@ -510,6 +533,7 @@ impl OutputHandle {
             Self::Omt(sender) => sender.flush_gpu_encode(omt_gpu),
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => Ok(()),
+            Self::Pro(_) => Ok(()),
         }
     }
 
@@ -518,6 +542,9 @@ impl OutputHandle {
             Self::Omt(sender) => sender.send_audio(packet),
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(sender) => sender.send_audio(packet),
+            Self::Pro(output) => output
+                .submit_audio(crate::pro::audio_frame(packet))
+                .map_err(|error| error.message),
         }
     }
 
@@ -526,6 +553,7 @@ impl OutputHandle {
             Self::Omt(_) => false,
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => true,
+            Self::Pro(_) => false,
         }
     }
 }
@@ -1344,6 +1372,15 @@ fn mixer_create_unit_ffi(unit_id: u64, width: u32, height: u32) -> i32 {
     }
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock_or_recover();
+        let replacing = shared.units.contains_key(&unit_id);
+        let limit = crate::pro::entitlements().mixing_units;
+        if !eiviz_pro_api::Entitlements::admits_count(limit, shared.units.len(), replacing) {
+            set_error(
+                &mixer.telemetry,
+                "mixing unit limit for this plan has been reached",
+            );
+            return ERR_NOT_SUPPORTED_PLAN;
+        }
         let fps_num = shared.master_fps_num;
         let fps_den = shared.master_fps_den;
         shared.units.insert(
@@ -1540,11 +1577,11 @@ pub unsafe extern "C" fn mixer_scene_show_pose(
                     spec.camera = camera;
                 }
             }
-            shared
-                .scene_anims
-                .entry(scene_id)
-                .or_default()
-                .hold_pose(copied.as_ref(), shown_camera, state_id);
+            shared.scene_anims.entry(scene_id).or_default().hold_pose(
+                copied.as_ref(),
+                shown_camera,
+                state_id,
+            );
             shared.compose_dirty = true;
             OK
         })
@@ -3734,6 +3771,189 @@ unsafe fn mixer_omt_start_send_ffi(unit_id: u64, name: *const c_char) -> i32 {
     }
 }
 
+fn gate_pro_output(
+    output_id: u64,
+    transport: u32,
+    unit_id: u64,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+    extras: &crate::pro::OutputExtras,
+) -> Option<i32> {
+    if transport != OUT_DECKLINK && transport != OUT_RTMP {
+        return None;
+    }
+    let _ = extras;
+    let code = with_mixer(|mixer| {
+        let ent = crate::pro::entitlements();
+        let shared = mixer.shared.lock_or_recover();
+        if transport == OUT_DECKLINK {
+            let existing = shared
+                .outputs
+                .iter()
+                .filter(|(id, output)| **id != output_id && output.transport == OUT_DECKLINK)
+                .count();
+            if !eiviz_pro_api::Entitlements::admits_count(ent.decklink_outputs, existing, false) {
+                set_error(
+                    &mixer.telemetry,
+                    "DeckLink output is not included in this plan",
+                );
+                return ERR_NOT_SUPPORTED_PLAN;
+            }
+            if crate::pro::module().decklink().is_none() {
+                set_error(&mixer.telemetry, "DeckLink is not linked in this build");
+                return ERR_IO;
+            }
+            return OK;
+        }
+        let unit = shared.units.get(&unit_id);
+        let (width, height) = if width > 0 && height > 0 {
+            (width, height)
+        } else if let Some(unit) = unit {
+            (unit.width, unit.height)
+        } else {
+            (0, 0)
+        };
+        let (fps_num, fps_den) = if fps_num > 0 && fps_den > 0 {
+            (fps_num, fps_den)
+        } else if let Some(unit) = unit {
+            (unit.fps_num, unit.fps_den)
+        } else {
+            (shared.master_fps_num, shared.master_fps_den)
+        };
+        if width == 0 || height == 0 || fps_num == 0 || fps_den == 0 {
+            set_error(
+                &mixer.telemetry,
+                "RTMP output needs a picture size and frame rate",
+            );
+            return ERR_INVALID_ARGUMENT;
+        }
+        if !ent.rtmp.allows_video(width, height, fps_num, fps_den) {
+            set_error(
+                &mixer.telemetry,
+                format!("RTMP {width}x{height} at {fps_num}/{fps_den} exceeds this plan"),
+            );
+            return ERR_NOT_SUPPORTED_PLAN;
+        }
+        if crate::pro::module().streaming().is_none() {
+            set_error(&mixer.telemetry, "RTMP is not linked in this build");
+            return ERR_IO;
+        }
+        OK
+    })
+    .unwrap_or_else(|code| code);
+    (code != OK).then_some(code)
+}
+
+fn picture_of(
+    unit_id: u64,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+) -> (u32, u32, u32, u32) {
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock_or_recover();
+        let unit = shared.units.get(&unit_id);
+        let (width, height) = if width > 0 && height > 0 {
+            (width, height)
+        } else if let Some(unit) = unit {
+            (unit.width, unit.height)
+        } else {
+            (0, 0)
+        };
+        let (fps_num, fps_den) = if fps_num > 0 && fps_den > 0 {
+            (fps_num, fps_den)
+        } else if let Some(unit) = unit {
+            (unit.fps_num, unit.fps_den)
+        } else {
+            (shared.master_fps_num, shared.master_fps_den)
+        };
+        (width, height, fps_num, fps_den)
+    })
+    .unwrap_or((width, height, fps_num, fps_den))
+}
+
+fn start_pro_output(
+    transport: u32,
+    name: &str,
+    extras: &crate::pro::OutputExtras,
+    unit_id: u64,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+) -> Result<Box<dyn eiviz_pro_api::MediaOutput>, i32> {
+    let fail = |error: eiviz_pro_api::ProError| -> i32 {
+        let code = crate::pro::pro_code(error.clone());
+        let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error.message));
+        code
+    };
+    if transport == OUT_DECKLINK {
+        let Some(backend) = crate::pro::module().decklink() else {
+            let _ = with_mixer(|mixer| {
+                set_error(&mixer.telemetry, "DeckLink is not linked in this build")
+            });
+            return Err(ERR_IO);
+        };
+        let device = if extras.device.is_empty() {
+            name.to_string()
+        } else {
+            extras.device.clone()
+        };
+        return backend
+            .start_playout(&eiviz_pro_api::DeckLinkPlayoutConfig {
+                device_id: device,
+                mode_id: extras.mode.clone(),
+                external_key: extras.external_key,
+                fps_num,
+                fps_den,
+            })
+            .map_err(fail);
+    }
+    let url = match crate::pro::rtmp_url(extras) {
+        Ok(url) => url,
+        Err(error) => {
+            let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
+            return Err(ERR_INVALID_ARGUMENT);
+        }
+    };
+    let Some(backend) = crate::pro::module().streaming() else {
+        let _ = with_mixer(|mixer| set_error(&mixer.telemetry, "RTMP is not linked in this build"));
+        return Err(ERR_IO);
+    };
+    let (width, height, fps_num, fps_den) = picture_of(unit_id, width, height, fps_num, fps_den);
+    backend
+        .start_rtmp(&eiviz_pro_api::RtmpConfig {
+            url,
+            video_bitrate: if extras.video_bitrate == 0 {
+                4_500_000
+            } else {
+                extras.video_bitrate
+            },
+            keyint: if extras.keyint == 0 {
+                60
+            } else {
+                extras.keyint
+            },
+            width,
+            height,
+            fps_num,
+            fps_den,
+            encoder: eiviz_pro_api::VideoEncoderKind::OpenH264,
+            audio: eiviz_pro_api::AudioEncodeConfig {
+                bitrate: if extras.audio_bitrate == 0 {
+                    128_000
+                } else {
+                    extras.audio_bitrate
+                },
+                video_only: extras.video_only,
+            },
+        })
+        .map_err(fail)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_output_add(
     output_id: u64,
@@ -3751,7 +3971,7 @@ pub unsafe extern "C" fn mixer_output_add(
     fps_den: u32,
 ) -> i32 {
     ffi_guard("mixer_output_add", ERR_DEVICE, || unsafe {
-        mixer_output_add_ffi(
+        mixer_output_add_ex_ffi(
             output_id,
             transport,
             name,
@@ -3765,11 +3985,13 @@ pub unsafe extern "C" fn mixer_output_add(
             height,
             fps_num,
             fps_den,
+            std::ptr::null(),
         )
     })
 }
 
-unsafe fn mixer_output_add_ffi(
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_output_add_ex(
     output_id: u64,
     transport: u32,
     name: *const c_char,
@@ -3783,6 +4005,43 @@ unsafe fn mixer_output_add_ffi(
     height: u32,
     fps_num: u32,
     fps_den: u32,
+    config_json: *const c_char,
+) -> i32 {
+    ffi_guard("mixer_output_add_ex", ERR_DEVICE, || unsafe {
+        mixer_output_add_ex_ffi(
+            output_id,
+            transport,
+            name,
+            source_kind,
+            source_id,
+            unit_id,
+            use_gpu,
+            audio_unit_id,
+            skip_idle_encode,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            config_json,
+        )
+    })
+}
+
+unsafe fn mixer_output_add_ex_ffi(
+    output_id: u64,
+    transport: u32,
+    name: *const c_char,
+    source_kind: u32,
+    source_id: u64,
+    unit_id: u64,
+    use_gpu: u32,
+    audio_unit_id: u64,
+    skip_idle_encode: u32,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+    config_json: *const c_char,
 ) -> i32 {
     if name.is_null() {
         return ERR_INVALID_ARGUMENT;
@@ -3803,14 +4062,17 @@ unsafe fn mixer_output_add_ffi(
         .unwrap_or_default()
         .to_string();
     crate::diag::info(&format!("output_add id={output_id} transport={transport}"));
-    if transport == OUT_DECKLINK {
-        let _ = with_mixer(|mixer| {
-            set_error(
-                &mixer.telemetry,
-                "DeckLink output is not linked in this build",
-            );
-        });
-        return ERR_IO;
+    let extras = match crate::pro::parse_extras(crate::pro::cstr(config_json)) {
+        Ok(extras) => extras,
+        Err(error) => {
+            let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
+            return ERR_INVALID_ARGUMENT;
+        }
+    };
+    if let Some(code) = gate_pro_output(
+        output_id, transport, unit_id, width, height, fps_num, fps_den, &extras,
+    ) {
+        return code;
     }
     let use_gpu = transport == OUT_OMT && use_gpu != 0;
     let skip_idle_encode = transport == OUT_OMT && skip_idle_encode != 0;
@@ -3886,6 +4148,12 @@ unsafe fn mixer_output_add_ffi(
                 }
             }
         }
+        OUT_DECKLINK | OUT_RTMP => match start_pro_output(
+            transport, &name, &extras, unit_id, width, height, fps_num, fps_den,
+        ) {
+            Ok(output) => OutputHandle::Pro(output),
+            Err(code) => return code,
+        },
         _ => return ERR_INVALID_ARGUMENT,
     };
     with_mixer(|mixer| {
@@ -3893,6 +4161,7 @@ unsafe fn mixer_output_add_ffi(
             OutputHandle::Omt(sender) => Some(omt::omt_audio_send(sender.audio_ingress())),
             #[cfg(any(windows, target_os = "macos"))]
             OutputHandle::Ndi(_) => None,
+            OutputHandle::Pro(_) => None,
         };
         let video_sub = Arc::new(AtomicBool::new(false));
         let connections = match &handle {
@@ -3951,6 +4220,11 @@ unsafe fn mixer_output_add_ffi(
                 video_sub,
                 use_gpu,
                 skip_idle_encode,
+                bytes_per_pixel: if transport == OUT_DECKLINK && extras.external_key {
+                    4
+                } else {
+                    2
+                },
                 tx: worker.tx.clone(),
                 pace: Arc::clone(&worker.tx.pace),
                 audio_send,
@@ -3982,6 +4256,350 @@ fn mixer_output_remove_ffi(output_id: u64) -> i32 {
         shutdown_output_worker(worker);
     }
     OK
+}
+
+fn write_bytes(out: *mut u8, cap: usize, bytes: &[u8]) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    if bytes.len() > cap {
+        return ERR_BUFFER_TOO_SMALL;
+    }
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
+    bytes.len() as i32
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_capabilities(out: *mut MixerCapabilities) -> i32 {
+    ffi_guard("mixer_capabilities", ERR_DEVICE, || unsafe {
+        mixer_capabilities_ffi(out)
+    })
+}
+
+unsafe fn mixer_capabilities_ffi(out: *mut MixerCapabilities) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let mut caps = MixerCapabilities {
+        plan: 0,
+        mixing_unit_limit: 0,
+        decklink_input_limit: 0,
+        decklink_output_limit: 0,
+        rtmp_max_width: 0,
+        rtmp_max_height: 0,
+        rtmp_max_fps_num: 0,
+        rtmp_max_fps_den: 0,
+        recording: 0,
+        srt: 0,
+        hardware_encode: 0,
+        decklink_linked: 0,
+        rtmp_linked: 0,
+    };
+    crate::pro::fill_capabilities(&mut caps);
+    unsafe { *out = caps };
+    OK
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_license_install(ticket: *const c_char) -> i32 {
+    ffi_guard("mixer_license_install", ERR_IO, || unsafe {
+        mixer_license_install_ffi(ticket)
+    })
+}
+
+unsafe fn mixer_license_install_ffi(ticket: *const c_char) -> i32 {
+    let Some(ticket) = crate::pro::cstr(ticket) else {
+        return ERR_INVALID_ARGUMENT;
+    };
+    match crate::pro::license_install(ticket) {
+        Ok(status) if status.condition == eiviz_pro_api::LicenseCondition::Valid => OK,
+        Ok(_) => ERR_INVALID_ARGUMENT,
+        Err(code) => code,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_license_status(
+    out: *mut MixerLicenseStatus,
+    ticket_id: *mut u8,
+    cap: usize,
+) -> i32 {
+    ffi_guard("mixer_license_status", ERR_IO, || unsafe {
+        mixer_license_status_ffi(out, ticket_id, cap)
+    })
+}
+
+unsafe fn mixer_license_status_ffi(
+    out: *mut MixerLicenseStatus,
+    ticket_id: *mut u8,
+    cap: usize,
+) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let status = match crate::pro::license_status() {
+        Ok(status) => status,
+        Err(code) => return code,
+    };
+    unsafe {
+        *out = MixerLicenseStatus {
+            state: status.condition.abi(),
+            plan: status.plan.abi(),
+            expires_at: status.expires_at,
+        };
+    }
+    if ticket_id.is_null() {
+        return OK;
+    }
+    let bytes = status.ticket_id.as_bytes();
+    if cap < bytes.len() + 1 {
+        return ERR_BUFFER_TOO_SMALL;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ticket_id, bytes.len());
+        *ticket_id.add(bytes.len()) = 0;
+    }
+    OK
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_license_clear() -> i32 {
+    ffi_guard(
+        "mixer_license_clear",
+        ERR_IO,
+        || match crate::pro::license_clear() {
+            Ok(()) => OK,
+            Err(code) => code,
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_machine_fingerprint(out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_machine_fingerprint", ERR_IO, || unsafe {
+        mixer_machine_fingerprint_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_machine_fingerprint_ffi(out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let text = match crate::pro::machine_fingerprint() {
+        Ok(text) => text,
+        Err(code) => return code,
+    };
+    let bytes = text.as_bytes();
+    if cap < bytes.len() + 1 {
+        return ERR_BUFFER_TOO_SMALL;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len());
+        *out.add(bytes.len()) = 0;
+    }
+    OK
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_secret_set(name: *const c_char, value: *const c_char) -> i32 {
+    ffi_guard("mixer_secret_set", ERR_DEVICE, || unsafe {
+        mixer_secret_set_ffi(name, value)
+    })
+}
+
+unsafe fn mixer_secret_set_ffi(name: *const c_char, value: *const c_char) -> i32 {
+    let (Some(name), Some(value)) = (crate::pro::cstr(name), crate::pro::cstr(value)) else {
+        return ERR_INVALID_ARGUMENT;
+    };
+    crate::pro::secret_set(name, value);
+    OK
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_secret_clear(name: *const c_char) -> i32 {
+    ffi_guard("mixer_secret_clear", ERR_DEVICE, || unsafe {
+        mixer_secret_clear_ffi(name)
+    })
+}
+
+unsafe fn mixer_secret_clear_ffi(name: *const c_char) -> i32 {
+    let Some(name) = crate::pro::cstr(name) else {
+        return ERR_INVALID_ARGUMENT;
+    };
+    crate::pro::secret_clear(name);
+    OK
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_decklink_enum_devices(out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_decklink_enum_devices", ERR_DEVICE, || unsafe {
+        mixer_decklink_enum_devices_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_decklink_enum_devices_ffi(out: *mut u8, cap: usize) -> i32 {
+    let Some(backend) = crate::pro::module().decklink() else {
+        let _ =
+            with_mixer(|mixer| set_error(&mixer.telemetry, "DeckLink is not linked in this build"));
+        return ERR_IO;
+    };
+    match backend.enumerate() {
+        Ok(devices) => {
+            let json = serde_json::to_vec(&devices).unwrap_or_else(|_| b"[]".to_vec());
+            write_bytes(out, cap, &json)
+        }
+        Err(error) => {
+            let code = crate::pro::pro_code(error.clone());
+            let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error.message));
+            code
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_decklink_enum_modes(
+    device: *const c_char,
+    out: *mut u8,
+    cap: usize,
+) -> i32 {
+    ffi_guard("mixer_decklink_enum_modes", ERR_DEVICE, || unsafe {
+        mixer_decklink_enum_modes_ffi(device, out, cap)
+    })
+}
+
+unsafe fn mixer_decklink_enum_modes_ffi(device: *const c_char, out: *mut u8, cap: usize) -> i32 {
+    let Some(device) = crate::pro::cstr(device) else {
+        return ERR_INVALID_ARGUMENT;
+    };
+    let Some(backend) = crate::pro::module().decklink() else {
+        let _ =
+            with_mixer(|mixer| set_error(&mixer.telemetry, "DeckLink is not linked in this build"));
+        return ERR_IO;
+    };
+    match backend.modes(device) {
+        Ok(modes) => {
+            let json = serde_json::to_vec(&modes).unwrap_or_else(|_| b"[]".to_vec());
+            write_bytes(out, cap, &json)
+        }
+        Err(error) => {
+            let code = crate::pro::pro_code(error.clone());
+            let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error.message));
+            code
+        }
+    }
+}
+
+struct DeckLinkIngest {
+    id: u64,
+    uploads: std::sync::Arc<Mutex<crate::upload::UploadStore>>,
+    depth: u32,
+}
+
+impl eiviz_pro_api::CaptureSink for DeckLinkIngest {
+    fn video(&mut self, frame: eiviz_pro_api::VideoFrame) {
+        if frame.layout != eiviz_pro_api::PixelLayout::Uyvy {
+            return;
+        }
+        let mut store = self.uploads.lock_or_recover();
+        store.ensure_playout(
+            self.id,
+            frame.width,
+            frame.height,
+            crate::upload::CpuFormat::Uyvy,
+            self.depth,
+        );
+        let _ =
+            store.push_playout_cpu(self.id, &frame.data, frame.stride as usize, frame.pts_100ns);
+    }
+
+    fn audio(&mut self, frame: eiviz_pro_api::AudioFrame) {
+        crate::upload::ingest_audio_live(
+            &self.uploads,
+            self.id,
+            AudioPacket {
+                timestamp: frame.pts_100ns,
+                sample_rate: frame.sample_rate as i32,
+                channels: frame.channels as i32,
+                samples_per_channel: frame.frames as i32,
+                pcm_planar_f32: frame.planar_f32.to_vec(),
+            },
+        );
+    }
+
+    fn signal(&mut self, _status: eiviz_pro_api::SignalStatus) {}
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_decklink_connect(
+    id: u64,
+    device: *const c_char,
+    mode: *const c_char,
+    frame_buffer_frames: u32,
+) -> i32 {
+    ffi_guard("mixer_decklink_connect", ERR_DEVICE, || unsafe {
+        mixer_decklink_connect_ffi(id, device, mode, frame_buffer_frames)
+    })
+}
+
+unsafe fn mixer_decklink_connect_ffi(
+    id: u64,
+    device: *const c_char,
+    mode: *const c_char,
+    frame_buffer_frames: u32,
+) -> i32 {
+    let Some(device) = crate::pro::cstr(device) else {
+        return ERR_INVALID_ARGUMENT;
+    };
+    let mode = crate::pro::cstr(mode).unwrap_or("").to_string();
+    let device = device.to_string();
+    let depth = frame_buffer_frames.clamp(1, 8);
+    let uploads = match with_mixer(|mixer| {
+        let shared = mixer.shared.lock_or_recover();
+        let existing = shared
+            .receivers
+            .iter()
+            .filter(|(rid, receiver)| **rid != id && matches!(receiver, LiveReceiver::DeckLink(_)))
+            .count();
+        if !eiviz_pro_api::Entitlements::admits_count(
+            crate::pro::entitlements().decklink_inputs,
+            existing,
+            false,
+        ) {
+            set_error(
+                &mixer.telemetry,
+                "DeckLink input is not included in this plan",
+            );
+            return Err(ERR_NOT_SUPPORTED_PLAN);
+        }
+        if crate::pro::module().decklink().is_none() {
+            set_error(&mixer.telemetry, "DeckLink is not linked in this build");
+            return Err(ERR_IO);
+        }
+        Ok(shared.uploads.clone())
+    }) {
+        Ok(Ok(uploads)) => uploads,
+        Ok(Err(code)) => return code,
+        Err(code) => return code,
+    };
+    let Some(backend) = crate::pro::module().decklink() else {
+        let _ =
+            with_mixer(|mixer| set_error(&mixer.telemetry, "DeckLink is not linked in this build"));
+        return ERR_IO;
+    };
+    match backend.start_capture(
+        &eiviz_pro_api::DeckLinkCaptureConfig {
+            device_id: device,
+            mode_id: mode,
+        },
+        Box::new(DeckLinkIngest { id, uploads, depth }),
+    ) {
+        Ok(handle) => insert_receiver(id, LiveReceiver::DeckLink(handle)),
+        Err(error) => {
+            let code = crate::pro::pro_code(error.clone());
+            let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error.message));
+            code
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -6067,6 +6685,7 @@ mod tests {
             video_sub: Arc::new(AtomicBool::new(false)),
             use_gpu: false,
             skip_idle_encode: true,
+            bytes_per_pixel: 2,
             tx: crate::frame_hub::OutputTx::stub(),
             pace: Arc::new(crate::frame_hub::OutputPace::new(60, 1)),
             audio_send: None,
@@ -6160,6 +6779,7 @@ mod tests {
             video_sub: Arc::new(AtomicBool::new(true)),
             use_gpu: false,
             skip_idle_encode: true,
+            bytes_per_pixel: 2,
             tx: crate::frame_hub::OutputTx::stub(),
             pace: Arc::new(crate::frame_hub::OutputPace::new(60, 1)),
             audio_send: None,

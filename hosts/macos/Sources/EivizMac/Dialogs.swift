@@ -19,6 +19,7 @@ struct SettingsView: View {
                 Text("Headphone").tag(4)
                 Text(L10n.t("settings.webApi")).tag(5)
                 Text(L10n.t("settings.advanced")).tag(6)
+                Text(L10n.t("settings.license")).tag(7)
             }
             .frame(width: 200)
             .listStyle(.sidebar)
@@ -30,7 +31,8 @@ struct SettingsView: View {
                     else if category == 3 { multiview }
                     else if category == 4 { audio }
                     else if category == 5 { webApi }
-                    else { advanced }
+                    else if category == 6 { advanced }
+                    else { license }
                 }
                 Spacer()
                 HStack {
@@ -267,6 +269,84 @@ struct SettingsView: View {
         }
     }
 
+    @State private var licenseTicket = ""
+    @State private var licenseStatus = ""
+    @State private var licenseFingerprint = ""
+
+    private var license: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(L10n.t("settings.license")).fontWeight(.bold)
+            Text(licenseStatus).foregroundStyle(EivizTheme.dim)
+            Text(L10n.t("settings.licenseTicket"))
+            TextEditor(text: $licenseTicket)
+                .font(.system(.body, design: .monospaced))
+                .frame(height: 72)
+            HStack {
+                Button(L10n.t("settings.licenseInstall")) {
+                    let ticket = licenseTicket.trimmingCharacters(in: .whitespacesAndNewlines)
+                    ticket.withCString { ptr in
+                        _ = mixer_license_install(ptr)
+                    }
+                    refreshLicense()
+                }
+                Button(L10n.t("settings.licenseClear")) {
+                    _ = mixer_license_clear()
+                    licenseTicket = ""
+                    refreshLicense()
+                }
+            }
+            Text(L10n.t("settings.licenseFingerprint"))
+            Text(licenseFingerprint)
+                .font(.system(.body, design: .monospaced))
+                .textSelection(.enabled)
+            Button(L10n.t("settings.licenseCopy")) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(licenseFingerprint, forType: .string)
+            }
+        }
+        .onAppear { refreshLicense() }
+    }
+
+    private func refreshLicense() {
+        var status = EivizLicenseStatus()
+        var ticketId = [UInt8](repeating: 0, count: 256)
+        let rc = mixer_license_status(&status, &ticketId, ticketId.count)
+        if rc != 0 {
+            licenseStatus = L10n.t("settings.licenseUnavailable")
+            licenseFingerprint = ""
+            return
+        }
+        let state: String
+        switch status.state {
+        case 1: state = L10n.t("settings.licenseValid")
+        case 2: state = L10n.t("settings.licenseExpired")
+        case 3: state = L10n.t("settings.licenseFingerprintMismatch")
+        case 4: state = L10n.t("settings.licenseBadSignature")
+        default: state = L10n.t("settings.licenseUnregistered")
+        }
+        let id = String(decoding: ticketId.prefix { $0 != 0 }, as: UTF8.self)
+        let expiry = status.expires_at > 0 ? String(status.expires_at) : "-"
+        licenseStatus = "\(state)  \(L10n.t("settings.licenseExpiry")): \(expiry)  \(id)"
+        var fingerprint = [UInt8](repeating: 0, count: 4096)
+        if mixer_machine_fingerprint(&fingerprint, fingerprint.count) == 0 {
+            licenseFingerprint = String(decoding: fingerprint.prefix { $0 != 0 }, as: UTF8.self)
+        } else {
+            licenseFingerprint = ""
+        }
+    }
+
+    private static func deckLinkOutputAllowed() -> Bool {
+        var caps = EivizCapabilities()
+        guard mixer_capabilities(&caps) == 0 else { return false }
+        return caps.decklink_linked != 0 && caps.decklink_output_limit != 0
+    }
+
+    private static func rtmpAllowed() -> Bool {
+        var caps = EivizCapabilities()
+        guard mixer_capabilities(&caps) == 0 else { return false }
+        return caps.rtmp_linked != 0 && caps.rtmp_max_width != 0
+    }
+
     private func outputRow(_ output: Binding<OutputEntry>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -283,6 +363,20 @@ struct SettingsView: View {
                 )) {
                     Text("OMT").tag(OutputTransport.omt)
                     Text("NDI®").tag(OutputTransport.ndi)
+                    if output.wrappedValue.transport == .deckLink || Self.deckLinkOutputAllowed() {
+                        Text("DeckLink").tag(OutputTransport.deckLink)
+                    }
+                    if output.wrappedValue.transport == .rtmp || Self.rtmpAllowed() {
+                        Text("RTMP").tag(OutputTransport.rtmp)
+                    }
+                }
+                if output.wrappedValue.transport == .deckLink || output.wrappedValue.transport == .rtmp {
+                    mixerTextField(
+                        output.wrappedValue.transport == .rtmp ? output.rtmpUrl : output.decklinkDevice,
+                        placeholder: output.wrappedValue.transport == .rtmp
+                            ? L10n.t("settings.rtmpUrl")
+                            : L10n.t("settings.decklinkDevice")
+                    )
                 }
                 if output.wrappedValue.transport == .omt {
                     Picker("", selection: Binding(

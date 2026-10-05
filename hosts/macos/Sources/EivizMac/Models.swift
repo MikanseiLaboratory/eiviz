@@ -12,6 +12,7 @@ enum InputKind: String, Codable, CaseIterable {
     case uvc = "UVC"
     case mix = "Mix"
     case audio = "Audio"
+    case deckLink = "DeckLink"
 
     var category: String {
         switch self {
@@ -23,6 +24,7 @@ enum InputKind: String, Codable, CaseIterable {
         case .uvc: return "UVC"
         case .mix: return "Mix"
         case .audio: return "Audio"
+        case .deckLink: return "DeckLink"
         }
     }
 
@@ -32,6 +34,7 @@ enum InputKind: String, Codable, CaseIterable {
         case "OMT", "Omt": self = .omt
         case "NDI", "Ndi": self = .ndi
         case "UVC", "Uvc": self = .uvc
+        case "DeckLink", "deckLink", "decklink": self = .deckLink
         default:
             guard let value = InputKind(rawValue: raw) else {
                 throw DecodingError.dataCorrupted(
@@ -119,11 +122,13 @@ enum OutputTransport: String, Codable, Hashable {
     case omt = "Omt"
     case ndi = "Ndi"
     case deckLink = "DeckLink"
+    case rtmp = "Rtmp"
     var rawValueU32: UInt32 {
         switch self {
         case .omt: return 0
         case .ndi: return 1
         case .deckLink: return 2
+        case .rtmp: return 3
         }
     }
 }
@@ -280,6 +285,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var audioMapRight: Int32 = 1
     var audioProcessExe: String = ""
     var audioProcessAumid: String = ""
+    var decklinkMode: String = ""
     var isBuiltin: Bool { id <= EIVIZ_SRC_BLUE }
     var videoStartsPlaying: Bool { videoPlayWhen == .never || videoPlayWhen == .always }
 
@@ -305,7 +311,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         case guid, captureWidth, captureHeight, captureFpsNum, captureFpsDen, tags
         case mixSource, mixTargetId
         case audioCaptureMode, audioDeviceKind, audioDeviceId, audioMapLeft, audioMapRight
-        case audioProcessExe, audioProcessAumid
+        case audioProcessExe, audioProcessAumid, decklinkMode
     }
 
     init(
@@ -398,6 +404,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         audioMapRight = try container.decodeIfPresent(Int32.self, forKey: .audioMapRight) ?? 1
         audioProcessExe = try container.decodeIfPresent(String.self, forKey: .audioProcessExe) ?? ""
         audioProcessAumid = try container.decodeIfPresent(String.self, forKey: .audioProcessAumid) ?? ""
+        decklinkMode = try container.decodeIfPresent(String.self, forKey: .decklinkMode) ?? ""
         if kind != .mix {
             mixSource = .muProgram
             mixTargetId = 0
@@ -1100,10 +1107,21 @@ struct OutputEntry: Identifiable, Codable {
     var height: UInt32 = 0
     var fpsNum: UInt32 = 0
     var fpsDen: UInt32 = 0
+    var decklinkDevice: String = ""
+    var decklinkMode: String = ""
+    var decklinkExternalKey: Bool = false
+    var rtmpUrl: String = ""
+    var rtmpSecretRef: String = ""
+    var rtmpVideoBitrate: UInt32 = 0
+    var rtmpAudioBitrate: UInt32 = 0
+    var rtmpKeyint: UInt32 = 0
+    var rtmpVideoOnly: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case id, name, transport, sourceKind, sourceId, unitId, useGpu, enabled, audioUnitId
         case skipEncodeWhenNoReceivers, width, height, fpsNum, fpsDen
+        case decklinkDevice, decklinkMode, decklinkExternalKey
+        case rtmpUrl, rtmpSecretRef, rtmpVideoBitrate, rtmpAudioBitrate, rtmpKeyint, rtmpVideoOnly
     }
 
     init(
@@ -1120,7 +1138,16 @@ struct OutputEntry: Identifiable, Codable {
         width: UInt32 = 0,
         height: UInt32 = 0,
         fpsNum: UInt32 = 0,
-        fpsDen: UInt32 = 0
+        fpsDen: UInt32 = 0,
+        decklinkDevice: String = "",
+        decklinkMode: String = "",
+        decklinkExternalKey: Bool = false,
+        rtmpUrl: String = "",
+        rtmpSecretRef: String = "",
+        rtmpVideoBitrate: UInt32 = 0,
+        rtmpAudioBitrate: UInt32 = 0,
+        rtmpKeyint: UInt32 = 0,
+        rtmpVideoOnly: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -1136,6 +1163,15 @@ struct OutputEntry: Identifiable, Codable {
         self.height = height
         self.fpsNum = fpsNum
         self.fpsDen = fpsDen
+        self.decklinkDevice = decklinkDevice
+        self.decklinkMode = decklinkMode
+        self.decklinkExternalKey = decklinkExternalKey
+        self.rtmpUrl = rtmpUrl
+        self.rtmpSecretRef = rtmpSecretRef
+        self.rtmpVideoBitrate = rtmpVideoBitrate
+        self.rtmpAudioBitrate = rtmpAudioBitrate
+        self.rtmpKeyint = rtmpKeyint
+        self.rtmpVideoOnly = rtmpVideoOnly
     }
 
     init(from decoder: Decoder) throws {
@@ -1154,6 +1190,15 @@ struct OutputEntry: Identifiable, Codable {
         height = try container.decodeIfPresent(UInt32.self, forKey: .height) ?? 0
         fpsNum = try container.decodeIfPresent(UInt32.self, forKey: .fpsNum) ?? 0
         fpsDen = try container.decodeIfPresent(UInt32.self, forKey: .fpsDen) ?? 0
+        decklinkDevice = try container.decodeIfPresent(String.self, forKey: .decklinkDevice) ?? ""
+        decklinkMode = try container.decodeIfPresent(String.self, forKey: .decklinkMode) ?? ""
+        decklinkExternalKey = try container.decodeIfPresent(Bool.self, forKey: .decklinkExternalKey) ?? false
+        rtmpUrl = try container.decodeIfPresent(String.self, forKey: .rtmpUrl) ?? ""
+        rtmpSecretRef = try container.decodeIfPresent(String.self, forKey: .rtmpSecretRef) ?? ""
+        rtmpVideoBitrate = try container.decodeIfPresent(UInt32.self, forKey: .rtmpVideoBitrate) ?? 0
+        rtmpAudioBitrate = try container.decodeIfPresent(UInt32.self, forKey: .rtmpAudioBitrate) ?? 0
+        rtmpKeyint = try container.decodeIfPresent(UInt32.self, forKey: .rtmpKeyint) ?? 0
+        rtmpVideoOnly = try container.decodeIfPresent(Bool.self, forKey: .rtmpVideoOnly) ?? false
     }
 }
 

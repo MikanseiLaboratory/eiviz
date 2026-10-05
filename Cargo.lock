@@ -663,6 +663,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "eiviz-pro-api"
+version = "0.3.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "eiviz_mixer"
 version = "0.3.0"
 dependencies = [
@@ -675,6 +682,8 @@ dependencies = [
  "dispatch2",
  "eiviz-api",
  "eiviz-control",
+ "eiviz-pro-api",
+ "eiviz_pro",
  "fontdue",
  "gpu-video",
  "grafton-ndi",
@@ -698,6 +707,13 @@ dependencies = [
  "wgpu",
  "windows",
  "windows-core",
+]
+
+[[package]]
+name = "eiviz_pro"
+version = "0.3.0"
+dependencies = [
+ "eiviz-pro-api",
 ]
 
 [[package]]

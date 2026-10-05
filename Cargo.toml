@@ -1,5 +1,13 @@
 [workspace]
-members = ["mixer", "crates/eiviz-control", "crates/eiviz-api", "crates/eiviz-remote", "headless"]
+members = [
+    "mixer",
+    "crates/eiviz-control",
+    "crates/eiviz-api",
+    "crates/eiviz-remote",
+    "crates/eiviz-pro-api",
+    "pro/eiviz_pro",
+    "headless",
+]
 resolver = "2"
 
 [workspace.package]
@@ -13,6 +21,8 @@ eiviz-control = { path = "crates/eiviz-control" }
 eiviz-api = { path = "crates/eiviz-api" }
 eiviz_remote = { path = "crates/eiviz-remote" }
 eiviz_mixer = { path = "mixer" }
+eiviz-pro-api = { path = "crates/eiviz-pro-api" }
+eiviz_pro = { path = "pro/eiviz_pro" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

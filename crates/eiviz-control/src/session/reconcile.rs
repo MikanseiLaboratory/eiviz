@@ -35,6 +35,7 @@ pub enum ReconcileOp {
     StartVideo(VideoStartApply),
     ConnectOmt(LiveConnectApply),
     ConnectNdi(LiveConnectApply),
+    ConnectDeckLink(LiveConnectApply),
     StartAudioCapture(AudioCaptureApply),
     DestroySource {
         id: u64,
@@ -278,7 +279,7 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
 
     let prev_outputs = previous.map(|doc| doc.outputs.as_slice()).unwrap_or(&[]);
     for output in &next.outputs {
-        if !output.enabled || matches!(output.transport, OutputTransport::DeckLink) {
+        if !output.enabled {
             if prev_outputs.iter().any(|item| item.id == output.id) {
                 ops.push(ReconcileOp::RemoveOutput { id: output.id });
             }
@@ -463,6 +464,7 @@ pub fn apply_one<P: crate::port::MixerPort + ?Sized>(
         | ReconcileOp::StartVideo(_)
         | ReconcileOp::ConnectOmt(_)
         | ReconcileOp::ConnectNdi(_)
+        | ReconcileOp::ConnectDeckLink(_)
         | ReconcileOp::StartAudioCapture(_)
         | ReconcileOp::DestroySource { .. }
         | ReconcileOp::FailInput { .. } => apply_inputs(port, op, statuses),
@@ -536,6 +538,12 @@ fn apply_inputs<P: crate::port::MixerPort + ?Sized>(
         ),
         ReconcileOp::ConnectNdi(spec) => accept_io(
             port.ndi_connect(spec.clone()),
+            statuses,
+            crate::ids::ResourceKind::Input,
+            spec.id,
+        ),
+        ReconcileOp::ConnectDeckLink(spec) => accept_io(
+            port.decklink_connect(spec.clone()),
             statuses,
             crate::ids::ResourceKind::Input,
             spec.id,
@@ -686,6 +694,10 @@ fn accept_io(
             statuses.push(retrying(kind, id, error.message()));
             Ok(())
         }
+        Err(error) if matches!(error, crate::error::ControlError::NotSupportedPlan { .. }) => {
+            statuses.push(failed(kind, id, error.message()));
+            Ok(())
+        }
         Err(error) => Err(error),
     }
 }
@@ -781,6 +793,7 @@ fn input_ops(input: &InputDto) -> Vec<ReconcileOp> {
         })],
         InputKind::OMT => vec![ReconcileOp::ConnectOmt(live_connect(input))],
         InputKind::NDI => vec![ReconcileOp::ConnectNdi(live_connect(input))],
+        InputKind::DeckLink => vec![ReconcileOp::ConnectDeckLink(live_connect(input))],
         InputKind::Mix => {
             let mut target_id = input.mix_target_id;
             let source_kind = match input.mix_source {
@@ -859,6 +872,7 @@ fn live_connect(input: &InputDto) -> LiveConnectApply {
             BandwidthSave::AlwaysFull => 3,
         },
         keep_full_on_multiview: input.keep_full_on_multiview,
+        mode: input.decklink_mode.clone(),
     }
 }
 
@@ -1105,6 +1119,7 @@ fn output_apply(output: &OutputDto) -> OutputApply {
             OutputTransport::Omt => 0,
             OutputTransport::Ndi => 1,
             OutputTransport::DeckLink => 2,
+            OutputTransport::Rtmp => 3,
         },
         name: output.name.clone(),
         source_kind,
@@ -1121,7 +1136,23 @@ fn output_apply(output: &OutputDto) -> OutputApply {
         height: output.height,
         fps_num: output.fps_num,
         fps_den: output.fps_den,
+        config: output_config_json(output),
     }
+}
+
+fn output_config_json(output: &OutputDto) -> String {
+    serde_json::json!({
+        "device": output.decklink_device,
+        "mode": output.decklink_mode,
+        "externalKey": output.decklink_external_key,
+        "url": output.rtmp_url,
+        "secretRef": output.rtmp_secret_ref,
+        "videoBitrate": output.rtmp_video_bitrate,
+        "audioBitrate": output.rtmp_audio_bitrate,
+        "keyint": output.rtmp_keyint,
+        "videoOnly": output.rtmp_video_only,
+    })
+    .to_string()
 }
 
 fn input_desired_equal(a: &InputDto, b: &InputDto) -> bool {
@@ -1139,6 +1170,7 @@ fn input_desired_equal(a: &InputDto, b: &InputDto) -> bool {
         && a.capture_height == b.capture_height
         && a.capture_fps_num == b.capture_fps_num
         && a.capture_fps_den == b.capture_fps_den
+        && a.decklink_mode == b.decklink_mode
 }
 
 fn output_equal(a: &OutputDto, b: &OutputDto) -> bool {
@@ -1155,6 +1187,15 @@ fn output_equal(a: &OutputDto, b: &OutputDto) -> bool {
         && a.height == b.height
         && a.fps_num == b.fps_num
         && a.fps_den == b.fps_den
+        && a.decklink_device == b.decklink_device
+        && a.decklink_mode == b.decklink_mode
+        && a.decklink_external_key == b.decklink_external_key
+        && a.rtmp_url == b.rtmp_url
+        && a.rtmp_secret_ref == b.rtmp_secret_ref
+        && a.rtmp_video_bitrate == b.rtmp_video_bitrate
+        && a.rtmp_audio_bitrate == b.rtmp_audio_bitrate
+        && a.rtmp_keyint == b.rtmp_keyint
+        && a.rtmp_video_only == b.rtmp_video_only
 }
 
 #[cfg(test)]

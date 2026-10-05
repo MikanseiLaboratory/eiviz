@@ -17,6 +17,20 @@ pub struct Capabilities {
     pub presentation_abi: bool,
     pub native_api: bool,
     pub vmix_http: bool,
+    /// `0` Free, `1` Professional, `2` Enterprise.
+    pub plan: u32,
+    pub mixing_unit_limit: u32,
+    pub decklink_input_limit: u32,
+    pub decklink_output_limit: u32,
+    pub rtmp_max_width: u32,
+    pub rtmp_max_height: u32,
+    pub rtmp_max_fps_num: u32,
+    pub rtmp_max_fps_den: u32,
+    pub recording: bool,
+    pub srt: bool,
+    pub hardware_encode: bool,
+    pub decklink_linked: bool,
+    pub rtmp_linked: bool,
 }
 
 impl Default for Capabilities {
@@ -41,6 +55,19 @@ impl Default for Capabilities {
             presentation_abi: true,
             native_api: true,
             vmix_http: true,
+            plan: 0,
+            mixing_unit_limit: 4,
+            decklink_input_limit: 0,
+            decklink_output_limit: 0,
+            rtmp_max_width: 1280,
+            rtmp_max_height: 720,
+            rtmp_max_fps_num: 30,
+            rtmp_max_fps_den: 1,
+            recording: false,
+            srt: false,
+            hardware_encode: false,
+            decklink_linked: false,
+            rtmp_linked: false,
         }
     }
 }

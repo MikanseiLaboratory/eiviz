@@ -83,6 +83,11 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      - name: Checkout private Pro module
+        uses: ./.github/actions/pro-checkout
+        with:
+          token: ${{ secrets.EIVIZ_PRO_TOKEN }}
+
       - name: Setup NDI SDK and LLVM
         uses: ./.github/actions/setup-ndi-windows
 
@@ -103,10 +108,10 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Test mixer
-        run: cargo test -p eiviz_mixer --locked --release -- --test-threads=1
+        run: cargo test -p eiviz_mixer --release -- --test-threads=1
 
       - name: Build headless
-        run: cargo build -p eiviz-headless --locked --release --bins
+        run: cargo build -p eiviz-headless --release --bins
 
       - name: Publish host (win-x64)
         run: |
@@ -197,6 +202,11 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      - name: Checkout private Pro module
+        uses: ./.github/actions/pro-checkout
+        with:
+          token: ${{ secrets.EIVIZ_PRO_TOKEN }}
+
       - name: Setup NDI SDK
         uses: ./.github/actions/setup-ndi-macos
 
@@ -212,10 +222,10 @@ jobs:
           workspaces: .
 
       - name: Test mixer
-        run: cargo test -p eiviz_mixer --locked --release -- --test-threads=1
+        run: cargo test -p eiviz_mixer --release -- --test-threads=1
 
       - name: Build headless
-        run: cargo build -p eiviz-headless --locked --release --bins
+        run: cargo build -p eiviz-headless --release --bins
 
       - name: Build Mac host
         run: |
@@ -283,6 +293,11 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      - name: Checkout private Pro module
+        uses: ./.github/actions/pro-checkout
+        with:
+          token: ${{ secrets.EIVIZ_PRO_TOKEN }}
+
       - name: Setup NDI SDK
         uses: ./.github/actions/setup-ndi-macos
 
@@ -299,7 +314,7 @@ jobs:
           key: macos-x64
 
       - name: Build headless (x86_64)
-        run: cargo build -p eiviz-headless --locked --release --bins --target x86_64-apple-darwin
+        run: cargo build -p eiviz-headless --release --bins --target x86_64-apple-darwin
 
       - name: Build Mac host (x86_64)
         env:

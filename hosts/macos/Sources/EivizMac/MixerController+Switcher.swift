@@ -569,6 +569,17 @@ extension MixerController {
         }
         _ = mixer_output_remove(entry.id)
         guard entry.enabled else { return }
+        if entry.transport == .rtmp, !entry.rtmpSecretRef.isEmpty {
+            let key = KeychainStore.load(account: "rtmp/" + entry.rtmpSecretRef)
+            if !key.isEmpty {
+            MixerFFI.withCString(entry.rtmpSecretRef) { name in
+                MixerFFI.withCString(key) { value in
+                    _ = mixer_secret_set(name, value)
+                }
+            }
+            }
+        }
+        let config = outputConfigJSON(entry)
         let id = entry.id
         let transport = entry.transport.rawValueU32
         let name = entry.name
@@ -584,7 +595,8 @@ extension MixerController {
         let fpsDen = entry.fpsDen
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             MixerFFI.withCString(name) { cName in
-                let code = mixer_output_add(
+                MixerFFI.withCString(config) { cConfig in
+                let code = mixer_output_add_ex(
                     id,
                     transport,
                     cName,
@@ -597,15 +609,28 @@ extension MixerController {
                     width,
                     height,
                     fpsNum,
-                    fpsDen
+                    fpsDen,
+                    cConfig
                 )
                 if code != 0 {
                     DispatchQueue.main.async {
                         _ = self?.fail(code, "Add output")
                     }
                 }
+                }
             }
         }
+    }
+
+    private func outputConfigJSON(_ entry: OutputEntry) -> String {
+        func esc(_ value: String) -> String {
+            value
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+        }
+        return """
+        {"device":"\(esc(entry.decklinkDevice))","mode":"\(esc(entry.decklinkMode))","externalKey":\(entry.decklinkExternalKey),"url":"\(esc(entry.rtmpUrl))","secretRef":"\(esc(entry.rtmpSecretRef))","videoBitrate":\(entry.rtmpVideoBitrate),"audioBitrate":\(entry.rtmpAudioBitrate),"keyint":\(entry.rtmpKeyint),"videoOnly":\(entry.rtmpVideoOnly)}
+        """
     }
 
 }

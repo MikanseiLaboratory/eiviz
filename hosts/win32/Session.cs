@@ -16,7 +16,8 @@ public enum InputKind
     NDI,
     UVC,
     Mix,
-    Audio
+    Audio,
+    DeckLink
 }
 
 public enum AudioCaptureMode
@@ -59,7 +60,8 @@ public enum OutputTransport
 {
     Omt = 0,
     Ndi = 1,
-    DeckLink = 2
+    DeckLink = 2,
+    Rtmp = 3
 }
 
 public enum OutputSourceKind
@@ -352,6 +354,7 @@ public sealed class InputEntry
     public int AudioMapRight { get; set; } = 1;
     public string AudioProcessExe { get; set; } = "";
     public string AudioProcessAumid { get; set; } = "";
+    public string DecklinkMode { get; set; } = "";
     public bool VideoStartsPlaying =>
         VideoPlayWhen is VideoPlayWhen.Never or VideoPlayWhen.Always;
 
@@ -407,6 +410,7 @@ internal static class InputKindNames
         InputKind.UVC => "UVC",
         InputKind.Mix => "Mix",
         InputKind.Audio => "Audio",
+        InputKind.DeckLink => "DeckLink",
         _ => kind.ToString()
     };
 
@@ -1010,6 +1014,15 @@ public sealed class OutputEntry
     public uint Height { get; set; }
     public uint FpsNum { get; set; }
     public uint FpsDen { get; set; }
+    public string DecklinkDevice { get; set; } = "";
+    public string DecklinkMode { get; set; } = "";
+    public bool DecklinkExternalKey { get; set; }
+    public string RtmpUrl { get; set; } = "";
+    public string RtmpSecretRef { get; set; } = "";
+    public uint RtmpVideoBitrate { get; set; }
+    public uint RtmpAudioBitrate { get; set; }
+    public uint RtmpKeyint { get; set; }
+    public bool RtmpVideoOnly { get; set; }
 }
 
 public enum MvLabelUnit

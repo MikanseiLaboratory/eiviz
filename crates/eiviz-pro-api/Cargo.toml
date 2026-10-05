@@ -1,0 +1,11 @@
+[package]
+name = "eiviz-pro-api"
+version = "0.3.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Plan entitlements and the Rust boundary between eiviz_mixer and the eiviz Pro module"
+
+[dependencies]
+serde.workspace = true
