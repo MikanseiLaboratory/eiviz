@@ -49,30 +49,30 @@ eivizは特定の企業ではなく、メインメンテナとコミュニティ
 
 ## 開発
 
-実行ファイルの隣に`eiviz-pro.required`が無いビルドがOSS版です。Proモジュールは探さず、Freeの上限だけで起動します。
+実行ファイルと同じディレクトリに`eiviz-pro.required`が存在しない場合はOSS版として動作します。Proモジュールは探索せず、Freeプランの上限のみで起動します。
 
-Rust 1.97が必要です。Windowsホストには.NET 10と、NDI SDK 6のランタイムDLLも必要です。
+Rust 1.97が必要です。Windowsホストのビルドには.NET 10とNDI SDK 6ランタイムDLLが必要です。
 
 ```bat
 cargo test --workspace --locked
 dotnet build hosts\win32\Eiviz.Host.csproj
 ```
 
-`dotnet build`は構成に関わらずリリースの`eiviz_mixer.dll`を作り、ホストの出力ディレクトリへコピーします。
+`dotnet build`を実行すると、構成に関係なくRelease版の`eiviz_mixer.dll`が生成され、ホストの出力先へコピーされます。
 
 ```bat
 hosts\win32\bin\Debug\net10.0-windows\Eiviz.Host.exe
 ```
 
-Release構成の出力は`hosts\win32\bin\Release\net10.0-windows\Eiviz.Host.exe`です。
+Release構成の出力先は`hosts\win32\bin\Release\net10.0-windows\Eiviz.Host.exe`です。
 
-ヘッドレスはGPUを初期化し、制御APIを待ち受けます。
+ヘッドレス（CLI）はGPUを初期化し、制御APIの接続を待機します。
 
 ```bat
 cargo run -p eiviz-headless --features runtime --release --locked -- run
 ```
 
-macOSは`hosts/macos`で`swift build -c release`し、成果物の`eiviz-mac`を起動します。配置先は`swift build --show-bin-path`が表示します。
+macOSホストは`hosts/macos`で`swift build -c release`を実行し、生成された`eiviz-mac`を起動します。成果物の配置先は`swift build --show-bin-path`で確認できます。
 
 ## 開発のAI利用について
 
