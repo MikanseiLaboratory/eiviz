@@ -139,7 +139,7 @@ sequenceDiagram
 
 ## Proモジュール
 
-DeckLink、RTMP、有料プランの上限はProモジュールが担当します。公開リポジトリの`pro/eiviz_pro`はFree固定のスタブです。公式ビルドはそのディレクトリを非公開のeiviz-proで置き換えます。`mixer/Cargo.toml`は常にこのパスを参照するため、マニフェストは書き換えません。
+DeckLink、RTMP、有料プランの上限は署名済みのProモジュールが担当します。Mixerは起動時にそのモジュールをC ABIで一度だけ読み込み、プロセス終了までアンロードしません。モジュールが無い公開ビルドはFreeの上限だけを使います。`eiviz-pro.required`があるパッケージは、モジュールの欠落・署名不正・ABI不一致で起動に失敗し、Freeへは戻りません。
 
 プランが許可しない呼び出しは`ERR_NOT_SUPPORTED_PLAN`です。実装がリンクされていない場合は`ERR_IO`です。先にプランを見ます。ホストは`mixer_capabilities`の結果だけでDeckLinkとRTMPを表示し、コンパイル時のProフラグは持ちません。
 

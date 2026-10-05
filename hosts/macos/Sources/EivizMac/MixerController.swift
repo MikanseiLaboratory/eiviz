@@ -126,6 +126,7 @@ final class MixerController: ObservableObject {
             presentError(L10n.t("error.abiMismatch"), title: L10n.t("action.Metal mixer initialization"))
             return
         }
+        guard prepareProModule() else { return }
         if isRemote {
             bootRemote()
             return
@@ -147,6 +148,35 @@ final class MixerController: ObservableObject {
         publishSession()
         updateStatus()
         openPendingSession()
+    }
+
+    private func prepareProModule() -> Bool {
+        let code: Int32
+        if let path = CommandLine.arguments.firstIndex(of: "--pro-module").flatMap({ index in
+            CommandLine.arguments.indices.contains(index + 1) ? CommandLine.arguments[index + 1] : nil
+        }) {
+            code = path.withCString { mixer_pro_prepare($0) }
+        } else {
+            code = mixer_pro_prepare(nil)
+        }
+        guard code == 0 else {
+            presentError(proModuleError(), title: L10n.t("action.Metal mixer initialization"))
+            return false
+        }
+        return true
+    }
+
+    private func proModuleError() -> String {
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        let code = buffer.withUnsafeMutableBytes { raw -> Int32 in
+            guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return -1 }
+            return mixer_pro_copy_error(base, raw.count)
+        }
+        let text = String(decoding: buffer.prefix { $0 != 0 }, as: UTF8.self)
+        if code != 0 || text.isEmpty {
+            return "Pro module failed to load."
+        }
+        return text
     }
 
     private func startTimers() {

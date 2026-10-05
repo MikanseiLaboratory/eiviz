@@ -1,11 +1,12 @@
-//! Plan gate. `eiviz_pro` is the module at `pro/eiviz_pro`.
-//! Official builds replace that directory; the public tree ships a Free stand-in.
+//! Plan gate. A signed Pro module, when loaded, replaces the Free entitlements
+//! compiled into the mixer. Nothing here searches for a module on its own.
 
 use std::ffi::{CStr, c_char};
 use std::sync::{Mutex, OnceLock};
 
 use eiviz_pro_api::{
-    Entitlements, LicenseStatus, PixelLayout, Plan, ProError, ProErrorKind, Quota, VideoFrame,
+    DeckLinkBackend, Entitlements, LicenseStatus, PixelLayout, Plan, ProError, ProErrorKind,
+    ProModule, Quota, StreamBackend, VideoFrame,
 };
 
 use crate::abi::{
@@ -13,8 +14,32 @@ use crate::abi::{
 };
 use crate::upload::AudioPacket;
 
-pub fn module() -> &'static dyn eiviz_pro_api::ProModule {
-    eiviz_pro::module()
+struct FreeModule;
+
+impl ProModule for FreeModule {
+    fn module_name(&self) -> &'static str {
+        "free"
+    }
+
+    fn entitlements(&self) -> Entitlements {
+        Entitlements::free()
+    }
+
+    fn decklink(&self) -> Option<&dyn DeckLinkBackend> {
+        None
+    }
+
+    fn streaming(&self) -> Option<&dyn StreamBackend> {
+        None
+    }
+}
+
+pub fn module() -> &'static dyn ProModule {
+    if let Some(loaded) = crate::pro_load::loaded() {
+        return loaded;
+    }
+    static FREE: FreeModule = FreeModule;
+    &FREE
 }
 
 pub fn entitlements() -> Entitlements {
@@ -229,12 +254,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn license_backend_follows_the_linked_module() {
-        if module().module_name() == "stub" {
-            assert!(module().license().is_none());
-            assert_eq!(license_install("ticket").unwrap_err(), ERR_IO);
-        } else {
-            assert!(module().license().is_some());
-        }
+    fn free_module_has_no_pro_backends() {
+        assert_eq!(module().module_name(), "free");
+        assert!(module().license().is_none());
+        assert!(module().decklink().is_none());
+        assert!(module().streaming().is_none());
+        assert_eq!(license_install("ticket").unwrap_err(), ERR_IO);
+        assert_eq!(entitlements().plan, Plan::Free);
     }
 }

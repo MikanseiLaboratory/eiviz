@@ -18,7 +18,9 @@ control-api = []
 eiviz-control.workspace = true
 eiviz-api.workspace = true
 eiviz-pro-api.workspace = true
-eiviz_pro.workspace = true
+ed25519-dalek = "2.2.0"
+libloading = "0.8"
+sha2 = "0.10"
 tokio.workspace = true
 bytemuck = { version = "1.25", features = ["derive"] }
 fontdue = "0.9"
@@ -65,6 +67,13 @@ wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl"
 cc = "1"
 
 [dev-dependencies]
+eiviz-pro-api.workspace = true
+eiviz_pro_test_plugin = { path = "../crates/eiviz-pro-test-plugin" }
+eiviz_pro_empty_plugin = { path = "../crates/eiviz-pro-empty-plugin" }
+base64 = "0.22"
+ed25519-dalek = "2.2.0"
+libloading = "0.8"
+sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png"] }
 pollster = "0.4"
 serial_test = "3"

@@ -25,6 +25,16 @@ impl LicenseCondition {
             Self::BadSignature => 4,
         }
     }
+
+    pub fn from_abi(value: u32) -> Self {
+        match value {
+            1 => Self::Valid,
+            2 => Self::Expired,
+            3 => Self::FingerprintMismatch,
+            4 => Self::BadSignature,
+            _ => Self::Unregistered,
+        }
+    }
 }
 
 /// Result of reading the stored ticket.

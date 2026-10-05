@@ -122,6 +122,28 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_ping")]
     internal static partial uint Ping();
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_pro_prepare", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int ProPrepare(string? path);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_pro_copy_error")]
+    internal static unsafe partial int ProCopyError(byte* buffer, nuint cap);
+
+    internal static string QueryProError()
+    {
+        var buffer = new byte[1024];
+        unsafe
+        {
+            fixed (byte* ptr = buffer)
+            {
+                if (ProCopyError(ptr, (nuint)buffer.Length) != 0)
+                    return "Pro module failed to load.";
+            }
+        }
+        var end = Array.IndexOf(buffer, (byte)0);
+        var text = System.Text.Encoding.UTF8.GetString(buffer, 0, end < 0 ? buffer.Length : end);
+        return string.IsNullOrWhiteSpace(text) ? "Pro module failed to load." : text;
+    }
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_create")]
     internal static partial int Create(ulong adapterLuid, uint fpsNumerator, uint fpsDenominator);
 

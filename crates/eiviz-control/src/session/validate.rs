@@ -167,7 +167,8 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
             }
             _ => {}
         }
-        if output.transport == OutputTransport::DeckLink || output.transport == OutputTransport::Rtmp
+        if output.transport == OutputTransport::DeckLink
+            || output.transport == OutputTransport::Rtmp
         {
             // The mixer accepts or rejects the resource. A plan error does not abort the session.
         }

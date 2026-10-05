@@ -52,9 +52,9 @@ pub(crate) fn spawn_output_worker(
     Ok(OutputWorker { tx, join })
 }
 
-pub(crate) fn shutdown_output_worker(worker: OutputWorker) {
+pub(crate) fn shutdown_output_worker(worker: OutputWorker) -> bool {
     let _ = worker.tx.send(SendCmd::Shutdown);
-    crate::diag::join_timeout(worker.join, Duration::from_secs(2), "send");
+    crate::diag::join_timeout(worker.join, Duration::from_secs(2), "send")
 }
 
 fn send_worker(

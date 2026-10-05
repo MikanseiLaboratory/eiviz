@@ -156,6 +156,10 @@ enum Cmd {
         /// Install a signed license ticket, then print the plan from capabilities.
         #[arg(long)]
         license: Option<PathBuf>,
+        /// Absolute or relative path of a signed Pro module. Without this flag,
+        /// `eiviz-pro.required` next to the executable selects the module.
+        #[arg(long)]
+        pro_module: Option<PathBuf>,
     },
 }
 
@@ -191,7 +195,15 @@ fn main() -> ExitCode {
             renderer,
             media_directory,
             license,
-        } => match run_daemon(session, bind, renderer, media_directory, license) {
+            pro_module,
+        } => match run_daemon(
+            session,
+            bind,
+            renderer,
+            media_directory,
+            license,
+            pro_module,
+        ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(code) => ExitCode::from(code),
         },
@@ -289,16 +301,31 @@ fn run_daemon(
     renderer: Option<String>,
     media_directory: Option<PathBuf>,
     license: Option<PathBuf>,
+    pro_module: Option<PathBuf>,
 ) -> Result<(), u8> {
     #[cfg(not(feature = "runtime"))]
     {
-        let _ = (session, bind, renderer, media_directory, license);
+        let _ = (
+            session,
+            bind,
+            renderer,
+            media_directory,
+            license,
+            pro_module,
+        );
         eprintln!("eiviz-headless error=runtime binary built without mixer runtime");
         Err(EXIT_OTHER)
     }
     #[cfg(feature = "runtime")]
     {
-        run_daemon_runtime(session, bind, renderer, media_directory, license)
+        run_daemon_runtime(
+            session,
+            bind,
+            renderer,
+            media_directory,
+            license,
+            pro_module,
+        )
     }
 }
 
@@ -309,6 +336,7 @@ fn run_daemon_runtime(
     renderer: Option<String>,
     media_directory: Option<PathBuf>,
     license: Option<PathBuf>,
+    pro_module: Option<PathBuf>,
 ) -> Result<(), u8> {
     let prefs = eiviz_headless::HeadlessPrefs::load().map_err(|error| {
         eprintln!("eiviz-headless error=prefs {error}");
@@ -346,6 +374,10 @@ fn run_daemon_runtime(
         eprintln!("eiviz-headless error=runtime {error}");
         EXIT_OTHER
     })?;
+    if let Err(error) = eiviz_mixer::prepare_pro_module(pro_module.as_deref()) {
+        eprintln!("eiviz-headless error=pro {error}");
+        return Err(EXIT_ARGS);
+    }
     rt.block_on(async move {
         if let Some(path) = license.as_ref() {
             install_license(path)?;

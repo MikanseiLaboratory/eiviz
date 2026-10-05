@@ -9,3 +9,4 @@ description = "Plan entitlements and the Rust boundary between eiviz_mixer and t
 
 [dependencies]
 serde.workspace = true
+serde_json.workspace = true

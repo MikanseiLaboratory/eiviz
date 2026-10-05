@@ -37,6 +37,12 @@ mod omt;
 mod pool;
 mod present;
 mod pro;
+mod pro_load;
+#[cfg(debug_assertions)]
+pub use pro_load::{
+    ProTestCapture, pro_test_frames, pro_test_open_capture, pro_test_open_output, pro_test_shutdown,
+};
+pub use pro_load::{load_pro_module, prepare_pro_module};
 mod readback;
 mod rebar;
 mod runtime;
@@ -1338,11 +1344,17 @@ pub(crate) fn mixer_destroy_inner() {
             crate::diag::warn("render still running after join timeout");
         }
     }
+    let mut outputs_stopped = true;
     for worker in std::mem::take(&mut mixer.send_workers).into_values() {
-        shutdown_output_worker(worker);
+        outputs_stopped &= shutdown_output_worker(worker);
     }
     crate::diag::info("mixer_destroy drop");
     drop(mixer);
+    if outputs_stopped {
+        crate::pro_load::shutdown_if_idle();
+    } else {
+        crate::diag::warn("output worker timed out; Pro module stays loaded");
+    }
     *mixer_slot().lock_or_recover() = MixerSlot::Empty;
     crate::diag::reset_generation();
     reset_frame_caches();

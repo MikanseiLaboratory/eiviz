@@ -246,7 +246,7 @@ Reloading a session rebuilds the main window so preview surfaces attach on first
 
 ## Pro module
 
-DeckLink, RTMP, and paid-plan limits live in the Pro module. The public repository ships a Free stand-in at `pro/eiviz_pro`. Official builds replace that directory with the private eiviz-pro checkout. `mixer/Cargo.toml` always path-depends on it, so the manifest is not rewritten.
+DeckLink, RTMP, and paid-plan limits live in a signed Pro module. The mixer loads that module once at startup through a versioned C ABI and keeps it mapped until the process exits. A public build with no module uses the Free limits. A package that contains `eiviz-pro.required` fails startup when the module is missing, badly signed, or built for a different ABI. It does not fall back to Free.
 
 A call the plan does not allow returns `ERR_NOT_SUPPORTED_PLAN`. A missing backend returns `ERR_IO`. The plan check comes first. Hosts show DeckLink and RTMP only from `mixer_capabilities`. They do not use a compile-time Pro flag.
 

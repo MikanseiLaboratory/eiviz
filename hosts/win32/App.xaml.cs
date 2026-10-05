@@ -31,6 +31,7 @@ public partial class App : Application
         {
             if (MixerNative.Ping() != 0x4549_5649)
                 throw new InvalidOperationException("The Rust mixer ABI does not match this host.");
+            LoadRequiredProModule(e.Args);
             Session = Session.Default();
             if (HostRole.IsRemote)
                 BootRemoteMixer();
@@ -138,6 +139,18 @@ public partial class App : Application
         MainWindow = next;
         next.Show();
         previous?.Close();
+    }
+
+    private static void LoadRequiredProModule(string[] args)
+    {
+        string? path = null;
+        for (var i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] == "--pro-module")
+                path = args[i + 1];
+        }
+        if (MixerNative.ProPrepare(path) != 0)
+            throw new InvalidOperationException(MixerNative.QueryProError());
     }
 
     private void BootMixer()
