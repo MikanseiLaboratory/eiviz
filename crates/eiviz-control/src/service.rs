@@ -10,7 +10,7 @@ use crate::ids::Resolver;
 use crate::lifecycle::Lifecycle;
 use crate::live::ResourceStatus;
 use crate::port::{AutoApply, MixerPort, OverlayAutoApply};
-use crate::query::{Capabilities, Query, Snapshot};
+use crate::query::{Query, Snapshot};
 use crate::session::Document;
 use crate::session::mutate;
 use crate::session::reconcile::{plan, repair_live};
@@ -170,7 +170,7 @@ impl ControlService {
             document,
             live,
             resources: self.resources.clone(),
-            capabilities: Capabilities::default(),
+            capabilities: self.port.capabilities(),
             lifecycle: self.lifecycle,
             epoch: self.epoch.clone(),
         })

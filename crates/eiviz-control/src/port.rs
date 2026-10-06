@@ -144,6 +144,15 @@ pub trait MixerPort: Send {
     fn discover_audio(&self) -> ControlResult<String> {
         Ok("[]".into())
     }
+    fn capabilities(&self) -> crate::query::Capabilities {
+        crate::query::Capabilities::default()
+    }
+    fn decklink_connect(&mut self, spec: LiveConnectApply) -> ControlResult<()> {
+        let _ = spec;
+        Err(crate::error::ControlError::io(
+            "DeckLink is not linked in this build",
+        ))
+    }
 
     /// Concrete impls forward to `reconcile::apply_one` so the large match is
     /// monomorphized per port type instead of taking `&mut dyn MixerPort`.
@@ -291,6 +300,8 @@ pub struct LiveConnectApply {
     pub quality_or_bandwidth: u32,
     pub save_mode: u32,
     pub keep_full_on_multiview: bool,
+    /// DeckLink display mode. Empty for OMT and NDI.
+    pub mode: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -308,6 +319,8 @@ pub struct OutputApply {
     pub height: u32,
     pub fps_num: u32,
     pub fps_den: u32,
+    /// JSON extras for DeckLink and RTMP. Empty for OMT and NDI.
+    pub config: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

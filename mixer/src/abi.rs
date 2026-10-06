@@ -5,6 +5,8 @@ pub const ERR_INVALID_ARGUMENT: i32 = 3;
 pub const ERR_DEVICE: i32 = 4;
 pub const ERR_IO: i32 = 5;
 pub const ERR_BUFFER_TOO_SMALL: i32 = 6;
+/// The linked plan does not include this feature or quota.
+pub const ERR_NOT_SUPPORTED_PLAN: i32 = 7;
 
 pub const BACKEND_AUTO: u32 = 0;
 pub const BACKEND_DX12: u32 = 1;
@@ -133,6 +135,38 @@ pub const MU_SOURCE_FLAG: u64 = 0x8000_0000_0000_0000;
 pub const OUT_OMT: u32 = 0;
 pub const OUT_NDI: u32 = 1;
 pub const OUT_DECKLINK: u32 = 2;
+pub const OUT_RTMP: u32 = 3;
+
+/// `0` is denied and [`u32::MAX`] is unlimited. See `eiviz_pro_api::Quota`.
+#[allow(dead_code)]
+pub const QUOTA_UNLIMITED: u32 = u32::MAX;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct MixerCapabilities {
+    pub plan: u32,
+    pub mixing_unit_limit: u32,
+    pub decklink_input_limit: u32,
+    pub decklink_output_limit: u32,
+    pub rtmp_max_width: u32,
+    pub rtmp_max_height: u32,
+    pub rtmp_max_fps_num: u32,
+    pub rtmp_max_fps_den: u32,
+    pub recording: u32,
+    pub srt: u32,
+    pub hardware_encode: u32,
+    pub decklink_linked: u32,
+    pub rtmp_linked: u32,
+}
+
+/// `state` matches [`eiviz_pro_api::LicenseCondition::abi`].
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct MixerLicenseStatus {
+    pub state: u32,
+    pub plan: u32,
+    pub expires_at: i64,
+}
 
 pub const SRC_KIND_SCENE: u32 = 0;
 pub const SRC_KIND_MU_PREVIEW: u32 = 1;
@@ -364,8 +398,8 @@ pub fn validate_camera(camera: EivizSceneCamera) -> Result<(), &'static str> {
         return Err("scene camera zoom is out of range");
     }
     let margin = 0.5 / camera.zoom;
-    let inside = (margin..=1.0 - margin).contains(&camera.x)
-        && (margin..=1.0 - margin).contains(&camera.y);
+    let inside =
+        (margin..=1.0 - margin).contains(&camera.x) && (margin..=1.0 - margin).contains(&camera.y);
     if !inside {
         return Err("scene camera center is out of range");
     }

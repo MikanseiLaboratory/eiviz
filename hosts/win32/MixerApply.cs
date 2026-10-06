@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -212,7 +213,25 @@ internal static class MixerApply
     {
         NormalizeOutputSource(output);
         var audioUnitId = output.SourceKind == OutputSourceKind.Multiview ? 0uL : output.AudioUnitId;
-        var code = MixerNative.OutputAdd(
+        if (output.Transport == OutputTransport.Rtmp && !string.IsNullOrEmpty(output.RtmpSecretRef))
+        {
+            var key = CredentialStore.Load("rtmp/" + output.RtmpSecretRef);
+            if (!string.IsNullOrEmpty(key))
+                MixerNative.ThrowIfFailed(MixerNative.SecretSet(output.RtmpSecretRef, key), "RTMP secret");
+        }
+        var config = JsonSerializer.Serialize(new
+        {
+            device = output.DecklinkDevice,
+            mode = output.DecklinkMode,
+            externalKey = output.DecklinkExternalKey,
+            url = output.RtmpUrl,
+            secretRef = output.RtmpSecretRef,
+            videoBitrate = output.RtmpVideoBitrate,
+            audioBitrate = output.RtmpAudioBitrate,
+            keyint = output.RtmpKeyint,
+            videoOnly = output.RtmpVideoOnly
+        });
+        var code = MixerNative.OutputAddEx(
             output.Id,
             (uint)output.Transport,
             output.Name,
@@ -225,7 +244,8 @@ internal static class MixerApply
             output.Width,
             output.Height,
             output.FpsNum,
-            output.FpsDen);
+            output.FpsDen,
+            config);
         if (code != 0)
             MixerNative.ThrowIfFailed(code, "Add output");
     }

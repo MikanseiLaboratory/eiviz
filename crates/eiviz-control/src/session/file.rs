@@ -565,6 +565,7 @@ fn input_to_pb(input: &InputDto) -> pb::Input {
         audio_map_right: input.audio_map_right,
         audio_process_exe: input.audio_process_exe.clone(),
         audio_process_aumid: input.audio_process_aumid.clone(),
+        decklink_mode: input.decklink_mode.clone(),
     }
 }
 
@@ -612,6 +613,7 @@ fn input_from_pb(input: pb::Input) -> Result<InputDto, String> {
         audio_map_right: input.audio_map_right,
         audio_process_exe: input.audio_process_exe,
         audio_process_aumid: input.audio_process_aumid,
+        decklink_mode: input.decklink_mode,
     })
 }
 
@@ -1030,6 +1032,15 @@ fn output_to_pb(output: &OutputDto) -> pb::Output {
         height: output.height,
         fps_num: output.fps_num,
         fps_den: output.fps_den,
+        decklink_device: output.decklink_device.clone(),
+        decklink_mode: output.decklink_mode.clone(),
+        decklink_external_key: output.decklink_external_key,
+        rtmp_url: output.rtmp_url.clone(),
+        rtmp_secret_ref: output.rtmp_secret_ref.clone(),
+        rtmp_video_bitrate: output.rtmp_video_bitrate,
+        rtmp_audio_bitrate: output.rtmp_audio_bitrate,
+        rtmp_keyint: output.rtmp_keyint,
+        rtmp_video_only: output.rtmp_video_only,
     }
 }
 
@@ -1049,6 +1060,15 @@ fn output_from_pb(output: pb::Output) -> Result<OutputDto, String> {
         height: output.height,
         fps_num: output.fps_num,
         fps_den: output.fps_den,
+        decklink_device: output.decklink_device,
+        decklink_mode: output.decklink_mode,
+        decklink_external_key: output.decklink_external_key,
+        rtmp_url: output.rtmp_url,
+        rtmp_secret_ref: output.rtmp_secret_ref,
+        rtmp_video_bitrate: output.rtmp_video_bitrate,
+        rtmp_audio_bitrate: output.rtmp_audio_bitrate,
+        rtmp_keyint: output.rtmp_keyint,
+        rtmp_video_only: output.rtmp_video_only,
     })
 }
 
@@ -1268,7 +1288,7 @@ proto_enum!(
     OutputTransport,
     pb::OutputTransport,
     "output transport",
-    { Omt => Omt, Ndi => Ndi, DeckLink => DeckLink }
+    { Omt => Omt, Ndi => Ndi, DeckLink => DeckLink, Rtmp => Rtmp }
 );
 proto_enum!(
     source_kind_to_pb,
@@ -1362,6 +1382,7 @@ fn input_kind_to_pb(kind: InputKind) -> pb::InputKind {
         InputKind::UVC => pb::InputKind::Uvc,
         InputKind::Mix => pb::InputKind::Mix,
         InputKind::Audio => pb::InputKind::Audio,
+        InputKind::DeckLink => pb::InputKind::DeckLink,
     }
 }
 
@@ -1378,6 +1399,7 @@ fn input_kind_from_pb(value: i32) -> Result<InputKind, String> {
         Ok(pb::InputKind::Uvc) => Ok(InputKind::UVC),
         Ok(pb::InputKind::Mix) => Ok(InputKind::Mix),
         Ok(pb::InputKind::Audio) => Ok(InputKind::Audio),
+        Ok(pb::InputKind::DeckLink) => Ok(InputKind::DeckLink),
         Err(_) => Err(unknown("input kind", value)),
     }
 }

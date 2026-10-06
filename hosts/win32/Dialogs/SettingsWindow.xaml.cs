@@ -103,12 +103,15 @@ public partial class SettingsWindow : Window
     }
     public ulong NextOutputId => _nextOutputId;
     private bool _suppressOutputs;
+    private List<DeckLinkDeviceInfo>? _decklinkDevices;
+    private string _decklinkDeviceError = "";
+    private readonly Dictionary<string, (List<DeckLinkModeInfo> Modes, string Error)> _decklinkModes = new(StringComparer.Ordinal);
     private bool _rebarAvailable;
     private List<(uint Kind, uint Channels, string Id, string Name)> _devices = [];
 
     private void CategoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (DisplayPanel is null || PerformancePanel is null || MultiviewPanel is null || AudioBusPanel is null || AdvancedPanel is null || WebApiPanel is null)
+        if (DisplayPanel is null || PerformancePanel is null || MultiviewPanel is null || AudioBusPanel is null || AdvancedPanel is null || WebApiPanel is null || LicensePanel is null)
             return;
         var index = CategoryList.SelectedIndex;
         DisplayPanel.Visibility = index == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -118,6 +121,58 @@ public partial class SettingsWindow : Window
         AudioBusPanel.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
         WebApiPanel.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
         AdvancedPanel.Visibility = index == 6 ? Visibility.Visible : Visibility.Collapsed;
+        LicensePanel.Visibility = index == 7 ? Visibility.Visible : Visibility.Collapsed;
+        if (index == 7)
+            RefreshLicense();
+    }
+
+    private void LicenseInstall_Click(object sender, RoutedEventArgs e)
+    {
+        var code = MixerNative.LicenseInstall(LicenseTicketBox.Text.Trim());
+        RefreshLicense();
+        if (code == 0)
+            RebuildOutputs();
+    }
+
+    private void LicenseClear_Click(object sender, RoutedEventArgs e)
+    {
+        MixerNative.LicenseClear();
+        LicenseTicketBox.Text = "";
+        RefreshLicense();
+        RebuildOutputs();
+    }
+
+    private void LicenseCopy_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(LicenseFingerprintBox.Text))
+            Clipboard.SetText(LicenseFingerprintBox.Text);
+    }
+
+    private void RefreshLicense()
+    {
+        LicenseEditionText.Text = MainWindow.CurrentEdition() ?? "-";
+        if (Owner is MainWindow owner)
+            owner.ApplyEditionTitle();
+        var status = MixerNative.QueryLicenseStatus(out var ticketId);
+        if (status is null)
+        {
+            LicenseStatusText.Text = Loc.T("settings.licenseUnavailable");
+            LicenseFingerprintBox.Text = "";
+            return;
+        }
+        var state = status.Value.State switch
+        {
+            1 => Loc.T("settings.licenseValid"),
+            2 => Loc.T("settings.licenseExpired"),
+            3 => Loc.T("settings.licenseFingerprintMismatch"),
+            4 => Loc.T("settings.licenseBadSignature"),
+            _ => Loc.T("settings.licenseUnregistered"),
+        };
+        var expiry = status.Value.ExpiresAt > 0
+            ? DateTimeOffset.FromUnixTimeSeconds(status.Value.ExpiresAt).ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+            : "-";
+        LicenseStatusText.Text = $"{state}  {Loc.T("settings.licenseExpiry")}: {expiry}  {ticketId}";
+        LicenseFingerprintBox.Text = MixerNative.QueryFingerprint();
     }
 
     private void Default_Click(object sender, RoutedEventArgs e)
@@ -510,14 +565,25 @@ public partial class SettingsWindow : Window
             grid.RowDefinitions.Add(new RowDefinition());
             grid.RowDefinitions.Add(new RowDefinition());
             grid.RowDefinitions.Add(new RowDefinition());
+            grid.RowDefinitions.Add(new RowDefinition());
 
             var name = new TextBox { Text = output.Name, Margin = new Thickness(0, 0, 8, 6) };
             name.TextChanged += (_, _) => output.Name = name.Text.Trim();
+            var caps = MixerNative.QueryCapabilities();
+            var deckLinkAllowed = caps.DecklinkLinked != 0 && caps.DecklinkOutputLimit != 0;
+            var rtmpAllowed = caps.RtmpLinked != 0 && caps.RtmpMaxWidth != 0;
             var transport = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !OnAirLock.Active };
             transport.Items.Add(new ComboBoxItem { Content = "OMT", Tag = OutputTransport.Omt });
             transport.Items.Add(new ComboBoxItem { Content = "NDI", Tag = OutputTransport.Ndi });
-            transport.Items.Add(new ComboBoxItem { Content = "DeckLink", Tag = OutputTransport.DeckLink });
-            transport.SelectedIndex = (int)output.Transport;
+            if (deckLinkAllowed || output.Transport == OutputTransport.DeckLink)
+                transport.Items.Add(new ComboBoxItem { Content = "DeckLink", Tag = OutputTransport.DeckLink });
+            if (rtmpAllowed || output.Transport == OutputTransport.Rtmp)
+                transport.Items.Add(new ComboBoxItem { Content = "RTMP", Tag = OutputTransport.Rtmp });
+            foreach (ComboBoxItem item in transport.Items)
+            {
+                if (item.Tag is OutputTransport tagged && tagged == output.Transport)
+                    transport.SelectedItem = item;
+            }
             transport.SelectionChanged += (_, _) =>
             {
                 if (transport.SelectedItem is ComboBoxItem item && item.Tag is OutputTransport value)
@@ -599,6 +665,24 @@ public partial class SettingsWindow : Window
                     ApplyOutputFps(fps, output);
             };
 
+            FrameworkElement? endpoint = null;
+            if (output.Transport == OutputTransport.Rtmp)
+            {
+                var url = new TextBox
+                {
+                    Text = output.RtmpUrl,
+                    ToolTip = Loc.T("settings.rtmpUrl"),
+                    Margin = new Thickness(0, 0, 8, 6),
+                    IsEnabled = !locked
+                };
+                url.TextChanged += (_, _) => output.RtmpUrl = url.Text.Trim();
+                endpoint = url;
+            }
+            else if (output.Transport == OutputTransport.DeckLink)
+            {
+                endpoint = DeckLinkOutputFields(output, locked);
+            }
+
             var remove = new Button { Content = "−", Width = 28, IsEnabled = !locked };
             remove.Click += (_, _) =>
             {
@@ -628,6 +712,11 @@ public partial class SettingsWindow : Window
             Grid.SetColumn(fps, 1);
             Grid.SetRow(skipIdle, 6);
             Grid.SetColumnSpan(skipIdle, 4);
+            if (endpoint is not null)
+            {
+                Grid.SetRow(endpoint, 7);
+                Grid.SetColumnSpan(endpoint, 3);
+            }
             grid.Children.Add(name);
             grid.Children.Add(remove);
             grid.Children.Add(transport);
@@ -639,10 +728,148 @@ public partial class SettingsWindow : Window
             grid.Children.Add(size);
             grid.Children.Add(fps);
             grid.Children.Add(skipIdle);
+            if (endpoint is not null)
+                grid.Children.Add(endpoint);
             box.Child = grid;
             OutputRows.Children.Add(box);
         }
         _suppressOutputs = false;
+    }
+
+    private List<DeckLinkDeviceInfo> DeckLinkDevices()
+    {
+        if (_decklinkDevices is not null)
+            return _decklinkDevices;
+        _decklinkDevices = MixerNative.QueryDeckLinkDevices(out _decklinkDeviceError);
+        return _decklinkDevices;
+    }
+
+    private (List<DeckLinkModeInfo> Modes, string Error) DeckLinkModes(string deviceId)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId))
+            return ([], "");
+        if (_decklinkModes.TryGetValue(deviceId, out var cached))
+            return cached;
+        var modes = MixerNative.QueryDeckLinkModes(deviceId, out var error);
+        cached = (modes, error);
+        _decklinkModes[deviceId] = cached;
+        return cached;
+    }
+
+    private FrameworkElement DeckLinkOutputFields(OutputEntry output, bool locked)
+    {
+        var stack = new StackPanel { Margin = new Thickness(0, 0, 8, 6) };
+        stack.Children.Add(new TextBlock
+        {
+            Text = Loc.T("settings.decklinkDevice"),
+            Margin = new Thickness(0, 0, 0, 2)
+        });
+        var devices = DeckLinkDevices()
+            .Where(item => item.Playback || item.Id == output.DecklinkDevice)
+            .ToList();
+        if (!string.IsNullOrWhiteSpace(output.DecklinkDevice) && devices.TrueForAll(item => item.Id != output.DecklinkDevice))
+        {
+            devices.Insert(0, new DeckLinkDeviceInfo
+            {
+                Id = output.DecklinkDevice,
+                Name = output.DecklinkDevice,
+                Playback = true
+            });
+        }
+        var device = new ComboBox
+        {
+            IsEnabled = !locked,
+            DisplayMemberPath = "Label",
+            Margin = new Thickness(0, 0, 0, 6)
+        };
+        foreach (var item in devices)
+            device.Items.Add(item);
+        foreach (DeckLinkDeviceInfo item in device.Items)
+        {
+            if (item.Id == output.DecklinkDevice)
+            {
+                device.SelectedItem = item;
+                break;
+            }
+        }
+        device.SelectionChanged += (_, _) =>
+        {
+            if (_suppressOutputs || device.SelectedItem is not DeckLinkDeviceInfo info)
+                return;
+            if (info.Id == output.DecklinkDevice)
+                return;
+            output.DecklinkDevice = info.Id;
+            output.DecklinkMode = "";
+            RebuildOutputs();
+        };
+        stack.Children.Add(device);
+
+        stack.Children.Add(new TextBlock
+        {
+            Text = Loc.T("settings.decklinkMode"),
+            Margin = new Thickness(0, 0, 0, 2)
+        });
+        var listed = DeckLinkModes(output.DecklinkDevice);
+        var modes = listed.Modes.ToList();
+        if (!string.IsNullOrWhiteSpace(output.DecklinkMode) && modes.TrueForAll(item => item.Id != output.DecklinkMode))
+            modes.Insert(0, new DeckLinkModeInfo { Id = output.DecklinkMode, Name = output.DecklinkMode });
+        var mode = new ComboBox
+        {
+            IsEnabled = !locked,
+            DisplayMemberPath = "Label",
+            Margin = new Thickness(0, 0, 0, 6)
+        };
+        foreach (var item in modes)
+            mode.Items.Add(item);
+        foreach (DeckLinkModeInfo item in mode.Items)
+        {
+            if (item.Id == output.DecklinkMode)
+            {
+                mode.SelectedItem = item;
+                break;
+            }
+        }
+        if (mode.SelectedItem is null && mode.Items.Count > 0)
+        {
+            mode.SelectedIndex = 0;
+            if (mode.SelectedItem is DeckLinkModeInfo picked)
+                output.DecklinkMode = picked.Id;
+        }
+        mode.SelectionChanged += (_, _) =>
+        {
+            if (_suppressOutputs || mode.SelectedItem is not DeckLinkModeInfo info)
+                return;
+            output.DecklinkMode = info.Id;
+        };
+        stack.Children.Add(mode);
+
+        var key = new CheckBox
+        {
+            Content = Loc.T("settings.decklinkExternalKey"),
+            IsChecked = output.DecklinkExternalKey,
+            IsEnabled = !locked,
+            Foreground = System.Windows.Media.Brushes.White,
+            Margin = new Thickness(0, 0, 0, 6)
+        };
+        key.Checked += (_, _) => output.DecklinkExternalKey = true;
+        key.Unchecked += (_, _) => output.DecklinkExternalKey = false;
+        stack.Children.Add(key);
+
+        var notice = !string.IsNullOrWhiteSpace(_decklinkDeviceError)
+            ? _decklinkDeviceError
+            : listed.Error;
+        if (string.IsNullOrWhiteSpace(notice) && devices.Count == 0)
+            notice = Loc.T("settings.decklinkNone");
+        if (!string.IsNullOrWhiteSpace(notice))
+        {
+            stack.Children.Add(new TextBlock
+            {
+                Text = notice,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xCC, 0x88, 0x88))
+            });
+        }
+        return stack;
     }
 
     private void Ok_Click(object sender, RoutedEventArgs e)

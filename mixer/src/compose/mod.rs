@@ -2692,9 +2692,39 @@ impl Composer {
         height: u32,
         packed_src: bool,
     ) -> Option<&wgpu::Texture> {
+        self.scale_rgba_ex(
+            device, encoder, output_id, src, width, height, packed_src, false,
+        )
+    }
+
+    /// RGBA texture with `COPY_SRC`, including when the picture size already matches.
+    /// Fill/Key readback cannot use the packed UYVY bus.
+    pub fn rgba_readback(
+        &mut self,
+        device: &GpuDevice,
+        encoder: &mut wgpu::CommandEncoder,
+        output_id: u64,
+        src: &wgpu::Texture,
+        width: u32,
+        height: u32,
+    ) -> Option<&wgpu::Texture> {
+        self.scale_rgba_ex(device, encoder, output_id, src, width, height, false, true)
+    }
+
+    fn scale_rgba_ex(
+        &mut self,
+        device: &GpuDevice,
+        encoder: &mut wgpu::CommandEncoder,
+        output_id: u64,
+        src: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        packed_src: bool,
+        copy_same: bool,
+    ) -> Option<&wgpu::Texture> {
         let width = width.max(2);
         let height = height.max(1);
-        if !packed_src && src.size().width == width && src.size().height == height {
+        if !copy_same && !packed_src && src.size().width == width && src.size().height == height {
             return None;
         }
         let key = 0x5100_0000_0000_0000 | output_id;
@@ -2943,7 +2973,10 @@ mod tests {
     #[test]
     fn camera_rect_is_identity_until_the_camera_moves() {
         let full = [0.0, 0.0, 1.0, 1.0];
-        assert_eq!(camera_rect(full, crate::abi::EivizSceneCamera::IDENTITY), full);
+        assert_eq!(
+            camera_rect(full, crate::abi::EivizSceneCamera::IDENTITY),
+            full
+        );
         let zoomed = camera_rect(
             [0.25, 0.25, 0.5, 0.5],
             crate::abi::EivizSceneCamera {

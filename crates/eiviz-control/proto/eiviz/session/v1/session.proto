@@ -129,6 +129,7 @@ message Input {
   string audio_process_exe = 38;
   string audio_process_aumid = 39;
   repeated uint64 audio_units = 40;
+  string decklink_mode = 41;
 }
 
 message SceneLayer {
@@ -307,6 +308,15 @@ message Output {
   uint32 fps_num = 13;
   uint32 fps_den = 14;
   uint64 audio_unit_id = 15;
+  string decklink_device = 16;
+  string decklink_mode = 17;
+  bool decklink_external_key = 18;
+  string rtmp_url = 19;
+  string rtmp_secret_ref = 20;
+  uint32 rtmp_video_bitrate = 21;
+  uint32 rtmp_audio_bitrate = 22;
+  uint32 rtmp_keyint = 23;
+  bool rtmp_video_only = 24;
 }
 
 message MvSlot {
@@ -380,6 +390,7 @@ enum InputKind {
   INPUT_KIND_UVC = 8;
   INPUT_KIND_MIX = 9;
   INPUT_KIND_AUDIO = 10;
+  INPUT_KIND_DECK_LINK = 11;
 }
 
 enum MixSource {
@@ -432,6 +443,7 @@ enum OutputTransport {
   OUTPUT_TRANSPORT_OMT = 1;
   OUTPUT_TRANSPORT_NDI = 2;
   OUTPUT_TRANSPORT_DECK_LINK = 3;
+  OUTPUT_TRANSPORT_RTMP = 4;
 }
 
 enum OutputSourceKind {

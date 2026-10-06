@@ -233,6 +233,7 @@ mod tests {
             audio_map_right: 1,
             audio_process_exe: String::new(),
             audio_process_aumid: String::new(),
+            decklink_mode: String::new(),
         }
     }
 

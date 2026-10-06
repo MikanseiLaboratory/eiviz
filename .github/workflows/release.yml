@@ -103,10 +103,10 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Test mixer
-        run: cargo test -p eiviz_mixer --locked --release -- --test-threads=1
+        run: cargo test -p eiviz_mixer --release --locked -- --test-threads=1
 
       - name: Build headless
-        run: cargo build -p eiviz-headless --locked --release --bins
+        run: cargo build -p eiviz-headless --release --locked --bins
 
       - name: Publish host (win-x64)
         run: |
@@ -212,10 +212,10 @@ jobs:
           workspaces: .
 
       - name: Test mixer
-        run: cargo test -p eiviz_mixer --locked --release -- --test-threads=1
+        run: cargo test -p eiviz_mixer --release --locked -- --test-threads=1
 
       - name: Build headless
-        run: cargo build -p eiviz-headless --locked --release --bins
+        run: cargo build -p eiviz-headless --release --locked --bins
 
       - name: Build Mac host
         run: |
@@ -299,7 +299,7 @@ jobs:
           key: macos-x64
 
       - name: Build headless (x86_64)
-        run: cargo build -p eiviz-headless --locked --release --bins --target x86_64-apple-darwin
+        run: cargo build -p eiviz-headless --release --locked --bins --target x86_64-apple-darwin
 
       - name: Build Mac host (x86_64)
         env:

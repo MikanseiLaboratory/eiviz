@@ -14,13 +14,14 @@ use crate::{
     mixer_api_configure, mixer_audio_capture_start, mixer_audio_headphone_set,
     mixer_audio_set_bus_gain, mixer_audio_set_headphone_copy_monitor,
     mixer_audio_set_headphone_listen, mixer_audio_set_input, mixer_audio_set_unit_link,
-    mixer_audio_unit_bus_set, mixer_bind_multiview, mixer_create_unit, mixer_define_generator,
-    mixer_define_mix_input, mixer_define_scene, mixer_destroy_scene, mixer_destroy_source,
-    mixer_destroy_unit, mixer_load_still, mixer_ndi_connect, mixer_omt_connect, mixer_omt_discover,
-    mixer_omt_set_quality, mixer_output_add, mixer_output_remove, mixer_set_bus_colors,
-    mixer_set_frame_buffer, mixer_set_live_save, mixer_set_master_fps, mixer_set_mv_label,
-    mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_configure,
-    mixer_video_seek, mixer_video_set_loop, mixer_video_set_playing, mixer_video_start,
+    mixer_audio_unit_bus_set, mixer_bind_multiview, mixer_capabilities, mixer_create_unit,
+    mixer_decklink_connect, mixer_define_generator, mixer_define_mix_input, mixer_define_scene,
+    mixer_destroy_scene, mixer_destroy_source, mixer_destroy_unit, mixer_load_still,
+    mixer_ndi_connect, mixer_omt_connect, mixer_omt_discover, mixer_omt_set_quality,
+    mixer_output_add_ex, mixer_output_remove, mixer_set_bus_colors, mixer_set_frame_buffer,
+    mixer_set_live_save, mixer_set_master_fps, mixer_set_mv_label, mixer_set_ndi_gpu_upload,
+    mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_configure, mixer_video_seek,
+    mixer_video_set_loop, mixer_video_set_playing, mixer_video_start,
 };
 
 pub(crate) fn control() -> &'static Mutex<ControlService> {
@@ -415,8 +416,9 @@ impl MixerPort for ProcessMixer {
 
     fn output_add(&mut self, spec: OutputApply) -> ControlResult<()> {
         let name = CString::new(spec.name).unwrap_or_else(|_| CString::new("").unwrap());
+        let config = CString::new(spec.config).unwrap_or_else(|_| CString::new("{}").unwrap());
         map_abi(unsafe {
-            mixer_output_add(
+            mixer_output_add_ex(
                 spec.id,
                 spec.transport,
                 name.as_ptr(),
@@ -430,8 +432,59 @@ impl MixerPort for ProcessMixer {
                 spec.height,
                 spec.fps_num,
                 spec.fps_den,
+                config.as_ptr(),
             )
         })
+    }
+
+    fn decklink_connect(&mut self, spec: LiveConnectApply) -> ControlResult<()> {
+        let device = CString::new(spec.address).unwrap_or_else(|_| CString::new("").unwrap());
+        let mode = CString::new(spec.mode).unwrap_or_else(|_| CString::new("").unwrap());
+        map_abi(unsafe {
+            mixer_decklink_connect(
+                spec.id,
+                device.as_ptr(),
+                mode.as_ptr(),
+                spec.frame_buffer_frames,
+            )
+        })
+    }
+
+    fn capabilities(&self) -> eiviz_control::query::Capabilities {
+        let mut raw = crate::abi::MixerCapabilities {
+            plan: 0,
+            mixing_unit_limit: 0,
+            decklink_input_limit: 0,
+            decklink_output_limit: 0,
+            rtmp_max_width: 0,
+            rtmp_max_height: 0,
+            rtmp_max_fps_num: 0,
+            rtmp_max_fps_den: 0,
+            recording: 0,
+            srt: 0,
+            hardware_encode: 0,
+            decklink_linked: 0,
+            rtmp_linked: 0,
+        };
+        if unsafe { mixer_capabilities(&mut raw) } != crate::abi::OK {
+            return eiviz_control::query::Capabilities::default();
+        }
+        eiviz_control::query::Capabilities {
+            plan: raw.plan,
+            mixing_unit_limit: raw.mixing_unit_limit,
+            decklink_input_limit: raw.decklink_input_limit,
+            decklink_output_limit: raw.decklink_output_limit,
+            rtmp_max_width: raw.rtmp_max_width,
+            rtmp_max_height: raw.rtmp_max_height,
+            rtmp_max_fps_num: raw.rtmp_max_fps_num,
+            rtmp_max_fps_den: raw.rtmp_max_fps_den,
+            recording: raw.recording != 0,
+            srt: raw.srt != 0,
+            hardware_encode: raw.hardware_encode != 0,
+            decklink_linked: raw.decklink_linked != 0,
+            rtmp_linked: raw.rtmp_linked != 0,
+            ..eiviz_control::query::Capabilities::default()
+        }
     }
 
     fn output_remove(&mut self, id: u64) -> ControlResult<()> {

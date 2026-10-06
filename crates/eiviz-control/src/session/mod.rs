@@ -417,6 +417,7 @@ session_string_enum! {
         UVC,
         Mix,
         Audio,
+        DeckLink,
     }
 }
 
@@ -474,6 +475,7 @@ session_string_enum! {
         Omt,
         Ndi,
         DeckLink,
+        Rtmp,
     }
 }
 
@@ -649,6 +651,9 @@ pub struct InputDto {
     pub audio_process_exe: String,
     #[serde(default)]
     pub audio_process_aumid: String,
+    /// DeckLink display mode id. The device id is `path_or_address`.
+    #[serde(default)]
+    pub decklink_mode: String,
 }
 
 session_string_enum! {
@@ -1221,6 +1226,25 @@ pub struct OutputDto {
     pub fps_num: u32,
     #[serde(default)]
     pub fps_den: u32,
+    #[serde(default)]
+    pub decklink_device: String,
+    #[serde(default)]
+    pub decklink_mode: String,
+    #[serde(default)]
+    pub decklink_external_key: bool,
+    #[serde(default)]
+    pub rtmp_url: String,
+    /// Name in the process secret table. The stream key itself is not stored.
+    #[serde(default)]
+    pub rtmp_secret_ref: String,
+    #[serde(default)]
+    pub rtmp_video_bitrate: u32,
+    #[serde(default)]
+    pub rtmp_audio_bitrate: u32,
+    #[serde(default)]
+    pub rtmp_keyint: u32,
+    #[serde(default)]
+    pub rtmp_video_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -226,7 +226,11 @@ struct CatalogTabBar: View {
                     tab(name, .tag(name))
                 }
                 if input {
-                    ForEach(InputKind.tabKinds, id: \.self) { kind in
+                    ForEach(InputKind.tabKinds.filter { kind in
+                        kind != .deckLink
+                            || InputKind.deckLinkInputAllowed()
+                            || mixer.session.inputs.contains { $0.kind == .deckLink }
+                    }, id: \.self) { kind in
                         tab(kind.category, .kind(kind))
                     }
                 }
