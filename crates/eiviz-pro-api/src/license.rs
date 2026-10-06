@@ -1,5 +1,5 @@
 //! Ticket verification surface. The private Pro crate implements this.
-//! The Free stand-in returns `None` from [`crate::ProModule::license`].
+//! The Community stand-in returns `None` from [`crate::ProModule::license`].
 
 use crate::error::ProResult;
 use crate::plan::Plan;
@@ -38,7 +38,7 @@ impl LicenseCondition {
 }
 
 /// Result of reading the stored ticket.
-/// `plan` is the plan named by a parsed ticket, or [`Plan::Free`] when nothing is stored.
+/// `plan` is the plan named by a parsed ticket, or [`Plan::Community`] when nothing is stored.
 /// Only [`LicenseCondition::Valid`] changes what the mixer is allowed to do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LicenseStatus {
@@ -52,7 +52,7 @@ impl LicenseStatus {
     pub fn unregistered() -> Self {
         Self {
             condition: LicenseCondition::Unregistered,
-            plan: Plan::Free,
+            plan: Plan::Community,
             expires_at: 0,
             ticket_id: String::new(),
         }

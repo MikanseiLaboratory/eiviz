@@ -1,8 +1,8 @@
-/// Commercial plan. OSS builds and the official free download both use [`Plan::Free`].
+/// Commercial plan. OSS builds and the official download both use [`Plan::Community`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Plan {
-    Free,
+    Community,
     Professional,
     Enterprise,
 }
@@ -10,7 +10,7 @@ pub enum Plan {
 impl Plan {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Free => "free",
+            Self::Community => "community",
             Self::Professional => "professional",
             Self::Enterprise => "enterprise",
         }
@@ -18,17 +18,17 @@ impl Plan {
 
     pub fn from_name(name: &str) -> Option<Self> {
         match name.trim().to_ascii_lowercase().as_str() {
-            "free" => Some(Self::Free),
+            "community" => Some(Self::Community),
             "professional" | "pro" => Some(Self::Professional),
             "enterprise" => Some(Self::Enterprise),
             _ => None,
         }
     }
 
-    /// C ABI / protobuf sentinel. `0` Free, `1` Professional, `2` Enterprise.
+    /// C ABI / protobuf sentinel. `0` Community, `1` Professional, `2` Enterprise.
     pub fn abi(self) -> u32 {
         match self {
-            Self::Free => 0,
+            Self::Community => 0,
             Self::Professional => 1,
             Self::Enterprise => 2,
         }
@@ -109,9 +109,9 @@ pub struct Entitlements {
 }
 
 impl Entitlements {
-    pub fn free() -> Self {
+    pub fn community() -> Self {
         Self {
-            plan: Plan::Free,
+            plan: Plan::Community,
             mixing_units: Quota::Limited(4),
             decklink_inputs: Quota::Denied,
             decklink_outputs: Quota::Denied,
@@ -150,7 +150,7 @@ impl Entitlements {
 
     pub fn for_plan(plan: Plan) -> Self {
         match plan {
-            Plan::Free => Self::free(),
+            Plan::Community => Self::community(),
             Plan::Professional => Self::professional(),
             Plan::Enterprise => Self::enterprise(),
         }
@@ -174,8 +174,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn free_rtmp_is_720p30_inclusive() {
-        let rtmp = Entitlements::free().rtmp;
+    fn community_rtmp_is_720p30_inclusive() {
+        let rtmp = Entitlements::community().rtmp;
         assert!(rtmp.allows_video(1280, 720, 30, 1));
         assert!(rtmp.allows_video(1280, 720, 30_000, 1_001));
         assert!(!rtmp.allows_video(1920, 1080, 30, 1));

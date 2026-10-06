@@ -61,7 +61,7 @@ public partial class MainWindow : Window
             return null;
         return caps.Plan switch
         {
-            0 => "Free",
+            0 => "Community",
             1 => "Professional",
             2 => "Enterprise",
             _ => null,

@@ -343,7 +343,7 @@ impl Entitlements {
         let plan = match raw.plan {
             1 => Plan::Professional,
             2 => Plan::Enterprise,
-            _ => Plan::Free,
+            _ => Plan::Community,
         };
         Self {
             plan,
@@ -400,9 +400,9 @@ mod tests {
 
     #[test]
     fn entitlements_round_trip_keeps_sentinels() {
-        let free = Entitlements::free().to_abi(0);
-        let back = Entitlements::from_abi(free);
-        assert_eq!(back, Entitlements::free());
+        let community = Entitlements::community().to_abi(0);
+        let back = Entitlements::from_abi(community);
+        assert_eq!(back, Entitlements::community());
         let enterprise = Entitlements::enterprise().to_abi(FEATURE_DECKLINK | FEATURE_RTMP);
         let back = Entitlements::from_abi(enterprise);
         assert_eq!(back.plan, Plan::Enterprise);

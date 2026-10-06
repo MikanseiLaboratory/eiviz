@@ -611,7 +611,7 @@ impl LicenseBackend for LoadedPro {
             plan: match raw.plan {
                 1 => Plan::Professional,
                 2 => Plan::Enterprise,
-                _ => Plan::Free,
+                _ => Plan::Community,
             },
             expires_at: raw.expires_at,
             ticket_id: String::from_utf8_lossy(&ticket_id[..written]).into_owned(),

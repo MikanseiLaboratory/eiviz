@@ -1,4 +1,4 @@
-//! Plan gate. A signed Pro module, when loaded, replaces the Free entitlements
+//! Plan gate. A signed Pro module, when loaded, replaces the Community entitlements
 //! compiled into the mixer. Nothing here searches for a module on its own.
 
 use std::ffi::{CStr, c_char};
@@ -14,15 +14,15 @@ use crate::abi::{
 };
 use crate::upload::AudioPacket;
 
-struct FreeModule;
+struct CommunityModule;
 
-impl ProModule for FreeModule {
+impl ProModule for CommunityModule {
     fn module_name(&self) -> &'static str {
-        "free"
+        "community"
     }
 
     fn entitlements(&self) -> Entitlements {
-        Entitlements::free()
+        Entitlements::community()
     }
 
     fn decklink(&self) -> Option<&dyn DeckLinkBackend> {
@@ -38,8 +38,8 @@ pub fn module() -> &'static dyn ProModule {
     if let Some(loaded) = crate::pro_load::loaded() {
         return loaded;
     }
-    static FREE: FreeModule = FreeModule;
-    &FREE
+    static COMMUNITY: CommunityModule = CommunityModule;
+    &COMMUNITY
 }
 
 pub fn entitlements() -> Entitlements {
@@ -152,7 +152,7 @@ pub fn fill_capabilities(out: &mut MixerCapabilities) {
         decklink_linked: u32::from(decklink),
         rtmp_linked: u32::from(rtmp),
     };
-    let _ = Plan::Free;
+    let _ = Plan::Community;
 }
 
 fn video_width(quota: Quota<eiviz_pro_api::VideoLimit>) -> u32 {
@@ -254,12 +254,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn free_module_has_no_pro_backends() {
-        assert_eq!(module().module_name(), "free");
+    fn community_module_has_no_pro_backends() {
+        assert_eq!(module().module_name(), "community");
         assert!(module().license().is_none());
         assert!(module().decklink().is_none());
         assert!(module().streaming().is_none());
         assert_eq!(license_install("ticket").unwrap_err(), ERR_IO);
-        assert_eq!(entitlements().plan, Plan::Free);
+        assert_eq!(entitlements().plan, Plan::Community);
     }
 }

@@ -17,7 +17,7 @@ pub struct Capabilities {
     pub presentation_abi: bool,
     pub native_api: bool,
     pub vmix_http: bool,
-    /// `0` Free, `1` Professional, `2` Enterprise.
+    /// `0` Community, `1` Professional, `2` Enterprise.
     pub plan: u32,
     pub mixing_unit_limit: u32,
     pub decklink_input_limit: u32,

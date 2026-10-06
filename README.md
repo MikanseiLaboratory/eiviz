@@ -38,7 +38,7 @@ Linux currently ships as CLI (headless) only. Build from source and run `eiviz-h
 
 ## Develop
 
-An executable with no `eiviz-pro.required` beside it is the OSS build. It does not search for a Pro module and uses the Free limits.
+An executable with no `eiviz-pro.required` beside it is the OSS build. It does not search for a Pro module and uses the Community limits.
 
 Rust 1.97. The Windows host also needs .NET 10 and the NDI SDK 6 runtime DLL.
 

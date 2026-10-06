@@ -5,7 +5,7 @@ enum AppChrome {
         var caps = EivizCapabilities()
         guard mixer_capabilities(&caps) == 0 else { return nil }
         switch caps.plan {
-        case 0: return "Free"
+        case 0: return "Community"
         case 1: return "Professional"
         case 2: return "Enterprise"
         default: return nil

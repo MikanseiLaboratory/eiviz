@@ -2,10 +2,10 @@
 //!
 //! The mixer does not link the Pro crate. A signed module is loaded at
 //! startup through [`ffi::ProApi`]. Without that module the mixer uses
-//! [`Entitlements::free`] and reports DeckLink, RTMP, and licensing as
+//! [`Entitlements::community`] and reports DeckLink, RTMP, and licensing as
 //! unlinked. A required Pro package must fail startup when the module is
 //! missing, unsigned, or built for a different ABI. It must not fall back
-//! to the Free plan.
+//! to the Community plan.
 //!
 //! The traits in this crate stay on one side of the DLL. The private module
 //! implements them and exports [`ffi::GET_API_SYMBOL`]. The mixer adapts the
@@ -38,7 +38,7 @@ pub use media::{AudioFrame, MediaOutput, OutputStats, PixelLayout, VideoFrame};
 pub use plan::{Entitlements, Plan, Quota, VideoLimit};
 pub use stream::{AudioEncodeConfig, RtmpConfig, StreamBackend, VideoEncoderKind};
 
-/// Entry point implemented by the Free stand-in and by the private Pro crate.
+/// Entry point implemented by the Community stand-in and by the private Pro crate.
 pub trait ProModule: Send + Sync {
     /// Short identifier shown in About / diagnostics (`"stub"`, `"eiviz-pro"`).
     fn module_name(&self) -> &'static str;
@@ -52,7 +52,7 @@ pub trait ProModule: Send + Sync {
     /// `None` when this build links no RTMP implementation.
     fn streaming(&self) -> Option<&dyn StreamBackend>;
 
-    /// `None` on the Free stand-in. Official builds verify a signed ticket here.
+    /// `None` on the Community stand-in. Official builds verify a signed ticket here.
     fn license(&self) -> Option<&dyn LicenseBackend> {
         None
     }
