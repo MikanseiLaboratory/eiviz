@@ -364,8 +364,6 @@ public partial class MainWindow : Window
 
     private void Disconnect_Click(object sender, RoutedEventArgs e)
     {
-        if (RejectIfOnAirLock())
-            return;
         var app = (App)Application.Current;
         _overlay?.Close();
         CloseAllSwitchers();

@@ -179,8 +179,7 @@ public partial class MainWindow
         if (!_inputPreviews.TryGetValue(inputId, out var window))
             return;
         _inputPreviews.Remove(inputId);
-        using (OnAirLock.AllowClose())
-            window.Close();
+        window.Close();
     }
 
     private void ApplyInputSource(InputEntry input, AddInputWindow dialog, bool replacing)
@@ -584,13 +583,11 @@ public partial class MainWindow
         if (!_switchers.TryGetValue(unitId, out var window))
             return;
         _switchers.Remove(unitId);
-        using (OnAirLock.AllowClose())
-            window.Close();
+        window.Close();
     }
 
     private void CloseAllSwitchers()
     {
-        using var _ = OnAirLock.AllowClose();
         foreach (var window in _switchers.Values.ToArray())
             window.Close();
         _switchers.Clear();
@@ -1001,7 +998,6 @@ public partial class MainWindow
 
     internal void CloseOwnedSurfaces()
     {
-        using var _ = OnAirLock.AllowClose();
         _overlay?.Close();
         _resourcesWindow?.Close();
         _logWindow?.Close();

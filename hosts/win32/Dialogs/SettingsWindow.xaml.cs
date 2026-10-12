@@ -530,11 +530,6 @@ public partial class SettingsWindow : Window
 
     private void DeleteMv_Click(object sender, RoutedEventArgs e)
     {
-        if (OnAirLock.Active)
-        {
-            MessageBox.Show(this, Loc.T("msg.onAirLock"), Loc.T("chrome.onAirLock"));
-            return;
-        }
         if (MvList.SelectedItem is not MultiviewLayout layout)
             return;
         if (Owner is MainWindow main)

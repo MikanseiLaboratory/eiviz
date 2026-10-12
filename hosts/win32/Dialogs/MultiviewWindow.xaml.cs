@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using System.Windows;
-using Eiviz.Host;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -46,13 +45,6 @@ public partial class MultiviewWindow : Window
     }
 
     public ulong LayoutId => _layout.Id;
-
-    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
-    {
-        if (OnAirLock.BlockClosing(this, e))
-            return;
-        base.OnClosing(e);
-    }
 
     internal void SyncPresentInterval()
     {

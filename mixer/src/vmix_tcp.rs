@@ -395,13 +395,13 @@ fn function_reply(rest: &str) -> String {
         Some((name, query)) => (name, query.trim()),
         None => (rest, ""),
     };
+    if name.eq_ignore_ascii_case("ActivatorRefresh") {
+        return "FUNCTION OK Completed\r\n".into();
+    }
     let params = crate::vmix_api::parse_query(query);
-    let quiet = name.eq_ignore_ascii_case("ActivatorRefresh");
     match crate::vmix_api::dispatch_function(name, &params) {
         Ok(()) => {
-            if !quiet {
-                crate::diag::http_info(&format!("tcp FUNCTION {name} OK"));
-            }
+            crate::diag::http_info(&format!("tcp FUNCTION {name} OK"));
             "FUNCTION OK Completed\r\n".into()
         }
         Err(crate::vmix_api::DispatchError::Unknown(message))

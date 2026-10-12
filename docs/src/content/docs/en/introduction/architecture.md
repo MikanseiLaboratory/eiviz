@@ -240,7 +240,7 @@ Per-OS hosts live in `hosts/win32`, `hosts/macos`, and `hosts/linux`. Live Previ
 
 On a remote connection those live surfaces sample NDI/OMT receivers. Operator steps are in [Remote connection](/eiviz/en/features/remote/). A Mix Input is a delayed alias of a Mixing Unit bus or a session Multiview; it reads the FrameDelay ring and uses the same thumbnail path.
 
-Windows DirectX 12 cannot keep many DXGI flip swapchains at once. [Settings](/eiviz/en/introduction/settings/) → Advanced, Video output destination window limit, caps how many may be open and shows how many slots are in use. Vulkan does not apply this cap. The slots are used for real-time Preview, Program, and Multiview. A Switcher UI shows Preview and Program, so it uses 2 slots. You can raise the limit, but it may become unstable. Closing a window detaches its swapchain and frees a slot. Closing the main window closes the extra windows and exits the process. On Air Lock blocks that close until the lock is turned off.
+Windows (DirectX 12) cannot keep many DXGI flip swapchains at once. [Settings](/eiviz/en/introduction/settings/) → Advanced, Video output destination window limit, caps how many may be open. They are used for real-time Preview, Program, and Multiview. A Switcher UI shows Preview and Program, so it uses 2 slots. You can raise the limit, but it may become unstable. Closing a window detaches its swapchain and frees a slot. Closing the main window closes the extra windows and exits the process (blocked when On Air Lock is on).
 
 Reloading a session rebuilds the main window so preview surfaces attach on first layout. HWNDs are not reused across mixer lifetimes.
 
