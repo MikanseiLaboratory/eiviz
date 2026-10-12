@@ -3,6 +3,6 @@ title: Decklink
 description: Decklinkへの出力
 ---
 
-DeckLinkの入出力はProモジュール限定の機能です。Community版では`ERR_NOT_SUPPORTED_PLAN`を返します。ホストUIは`mixer_capabilities`でモジュールがリンクされており、現在のプランで許可されている場合のみDeckLink出力を選択肢に表示します。
+DeckLink入出力はProモジュール専用の機能です。Communityプランでは`ERR_NOT_SUPPORTED_PLAN`が返されます。ホストUIは`mixer_capabilities`でモジュールが読み込まれており、かつ有効なプランで許可されている場合のみDeckLink出力を選択肢に表示します。
 
-公式のPro版パッケージには署名済みProモジュールと`eiviz-pro.required`が同梱されています。OSS（公開）ビルドには同モジュールは含まれません。本数の上限は[プラン](/eiviz/ja/introduction/plans/)を参照してください。
+公式のProパッケージには署名済みProモジュールと`eiviz-pro.required`が同梱されています。OSS公開ビルドには同モジュールは含まれません。利用可能な入出力数は[プラン](/eiviz/ja/introduction/plans/)を参照してください。

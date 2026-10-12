@@ -82,7 +82,7 @@ final class LicenseReturnServer {
             }
             let message = code == 0
                 ? "eivizにライセンスを登録しました。このタブを閉じてください。"
-                : "eivizへの登録に失敗しました。このタブを閉じて、表示されたチケットをライセンス欄へ貼ってください。"
+                : "eivizへの登録に失敗しました。このタブを閉じて、表示されたチケットをライセンス入力欄へ貼り付けてください。"
             let page = "<!DOCTYPE html><html lang=\"ja\"><meta charset=\"utf-8\"><title>eiviz</title><p>\(message)</p></html>"
             let body = Data(page.utf8)
             let header = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"

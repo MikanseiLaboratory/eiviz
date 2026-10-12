@@ -271,7 +271,7 @@ public partial class SettingsWindow : Window
                 }
                 var message = code == 0
                     ? "eivizにライセンスを登録しました。このタブを閉じてください。"
-                    : "eivizへの登録に失敗しました。このタブを閉じて、表示されたチケットをライセンス欄へ貼ってください。";
+                    : "eivizへの登録に失敗しました。このタブを閉じて、表示されたチケットをライセンス入力欄へ貼り付けてください。";
                 var body = Encoding.UTF8.GetBytes(
                     $"<!DOCTYPE html><html lang=\"ja\"><meta charset=\"utf-8\"><title>eiviz</title><p>{message}</p></html>");
                 context.Response.ContentType = "text/html; charset=utf-8";

@@ -71,8 +71,10 @@ Audio is one Mixing Unit's MU Bus, or None (no audio).
 When Multiview is selected as the video source, audio cannot be sent.  
 Resolution and frame rate are per output. Follow session settings uses the Mixing Unit (or the session master frame rate and default size). Video is sent at that rate, not as soon as compose finishes.
 
-OMT can choose an encode path. The default is CPU (Recommended). CPU (Recommended) is the default OMT encoder. Use it for Mixing Unit Program and other mission-critical program video. If CPU encode is selected, the frame is read back as UYVY, then converted to the VMX codec and sent on a dedicated CPU send thread. GPU is an auxiliary OMT encoder. It can offload work from the CPU, but it loses more than CPU, so use it for Multiview and other auxiliary video.  
-NDI is always CPU encode.
+OMT supports two encoding paths:
+- **CPU (Recommended)**: The default high-quality encoder. Recommended for Mixing Unit Program and other broadcast feeds. Frames are read back as UYVY, converted to the VMX codec, and sent on a dedicated CPU thread.
+- **GPU**: An auxiliary encoder that offloads work from the CPU. Useful for Multiview and secondary monitoring outputs where lower compression efficiency is acceptable.  
+NDI is always CPU encoded.
 
 One thread is assigned per output. Detail is in [NDI / OMT](/eiviz/en/features/outputs/ndi-omt/).
 
@@ -120,11 +122,11 @@ Endpoints and Functions are in [Compatibility APIs](/eiviz/en/developers/compati
 
 ### Video output destination window limit
 
-Used for real-time Preview, Program, and Multiview. The setting shows how many are in use. The cap is enforced on DirectX 12.  
-A Switcher UI shows Preview and Program, so it uses 2 slots. The main Preview/Program, each open Multiview, Scene Editor, and the Overlay window count the same way. Scene tiles and input-preview thumbs do not count.
+Sets the maximum number of simultaneous real-time preview windows (Preview, Program, Multiview). The current usage count is shown beneath the setting. This limit is enforced exclusively under DirectX 12.  
+A Switcher UI shows both Preview and Program, consuming 2 slots. Main Preview/Program, each open Multiview, the Scene Editor, and the Overlay window count toward this limit (scene thumbnails and input previews do not).
 
-Auto starts at 6. You can raise it in Settings, but it may become unstable.  
-At the limit, a new window will not open. Close one to free a slot. The host path is in [System architecture](/eiviz/en/introduction/architecture/).
+Auto defaults to 6. You can raise it in Settings, but doing so may reduce system stability.  
+When the limit is reached, new windows will not open until an existing window is closed to free a slot. The host implementation is detailed in [System architecture](/eiviz/en/introduction/architecture/).
 
 ## Preferences
 
