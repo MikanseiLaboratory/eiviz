@@ -157,7 +157,6 @@ public partial class MainWindow : Window
         OpenRecentButton.IsEnabled = !locked;
         DeleteUnitButton.IsEnabled = !locked;
         DeleteInputButton.IsEnabled = !locked;
-        RemoveSceneButton.IsEnabled = !locked;
         foreach (var tile in ScenePanel.Children.OfType<SceneTile>())
             tile.SetCloseEnabled(!locked);
         RebuildStreamToggles();
@@ -169,6 +168,13 @@ public partial class MainWindow : Window
             return false;
         MessageBox.Show(this, Loc.T("msg.onAirLock"), Loc.T("chrome.onAirLock"));
         return true;
+    }
+
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        if (OnAirLock.BlockClosing(e))
+            return;
+        base.OnClosing(e);
     }
 
     internal void ReloadFromSession()

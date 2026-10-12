@@ -141,14 +141,14 @@ internal sealed class MeterStrip : StackPanel
             Width = 26,
             Height = 22,
             Margin = new Thickness(0, 0, 2, 0),
-            IsChecked = mute,
+            IsChecked = !mute,
             ToolTip = "Mute"
         };
         _mute.Click += (_, _) =>
         {
             if (_syncing)
                 return;
-            Mute = _mute.IsChecked == true;
+            Mute = _mute.IsChecked != true;
             _mute.Content = MuteGlyph(Mute);
             FaderChanged?.Invoke(TargetId, Gain, Mute);
         };
@@ -197,7 +197,7 @@ internal sealed class MeterStrip : StackPanel
         Gain = gain < 0 ? 1 : gain;
         Mute = mute;
         _fader.Value = GainToSlider(Gain);
-        _mute.IsChecked = mute;
+        _mute.IsChecked = !mute;
         _mute.Content = MuteGlyph(mute);
         _syncing = false;
     }

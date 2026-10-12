@@ -50,6 +50,10 @@ enum FlipBudget {
     nonisolated(unsafe) private static var seenLost: UInt64 = 0
     nonisolated(unsafe) private static var refuseQueued = false
 
+    static var used: Int { attached }
+
+    static var limit: Int { effectiveMax() }
+
     static func configure(_ limit: UInt32) {
         limitSetting = isAllowed(limit) ? limit : 0
         ceiling = limitSetting == 0

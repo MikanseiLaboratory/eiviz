@@ -112,7 +112,7 @@ vMix-compatible HTTP, vMix-compatible TCP, and Protobuf WebSocket listen setting
 - Username / password: BasicAuth on HTTP if either is set. Both empty means no HTTP auth. TCP has no auth. WebSocket tokens are the listen token in Preferences, or `EIVIZ_API_TOKEN` for headless
 - Browser `Origin`: `EIVIZ_API_ALLOWED_ORIGINS` (comma-separated; `*` allows any). When unset, connections that send `Origin` are refused. See [eiviz API](/eiviz/en/developers/api/)
 
-If the HTTP port is already in use, eiviz starts with HTTP off and shows a warning. If only 8099 is busy, HTTP still runs and TCP warns on its own. A WebSocket bind failure is the same: that surface turns off and warns. Listen start/stop and Functions are written to the mixer log (Help → Logs).
+If the HTTP port is already in use, eiviz shows a warning and attempts to bind the next port (e.g. 8089). If only port 8099 is busy, HTTP still runs and TCP warns on its own. A WebSocket bind failure is handled similarly. Listen start/stop and Functions are written to the mixer log (Help → Logs).
 
 Endpoints and Functions are in [Compatibility APIs](/eiviz/en/developers/compatibility/) and the [Function Reference](/eiviz/en/developers/function-reference/).
 
@@ -120,7 +120,7 @@ Endpoints and Functions are in [Compatibility APIs](/eiviz/en/developers/compati
 
 ### Video output destination window limit
 
-Used for real-time Preview, Program, and Multiview.  
+Used for real-time Preview, Program, and Multiview. The setting shows how many are in use. The cap is enforced on DirectX 12.  
 A Switcher UI shows Preview and Program, so it uses 2 slots. The main Preview/Program, each open Multiview, Scene Editor, and the Overlay window count the same way. Scene tiles and input-preview thumbs do not count.
 
 Auto starts at 6. You can raise it in Settings, but it may become unstable.  

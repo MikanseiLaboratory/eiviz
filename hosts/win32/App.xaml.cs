@@ -112,6 +112,7 @@ public partial class App : Application
     /// layout, the same as a cold start. Do not reuse HWNDs across mixer lifetimes.
     internal void ReloadSession(Session session)
     {
+        using var allowClose = OnAirLock.AllowClose();
         var previous = MainWindow as MainWindow;
         previous?.CloseOwnedSurfaces();
         FlipBudget.Reset();
@@ -226,7 +227,7 @@ public partial class App : Application
         var user = settings.VmixApiUser ?? "";
         var password = settings.VmixApiPassword ?? "";
         ApplyHttpApi(app, settings, port, user, password);
-        ApplyTcpApi(app, settings);
+        ApplyTcpApi(settings);
         ApplyNativeApi(app, settings);
     }
 
@@ -239,24 +240,61 @@ public partial class App : Application
         if (!enabled || code != 5)
             MixerNative.ThrowIfFailed(code, "Configure vMix HTTP API");
 
+        var owner = ListenOwner(MixerNative.ApiListenOwnerText());
+        if (port < 65535)
+        {
+            var next = port + 1;
+            var retry = MixerNative.ApiConfigure(1, next, user, password);
+            if (retry == 0)
+            {
+                settings.VmixApiPort = next;
+                PersistHttpPort(app);
+                HostLog.Write(
+                    "WARN",
+                    owner is null
+                        ? $"vMix HTTP API listen failed on port {port}; listening on {next}"
+                        : $"vMix HTTP API listen failed on port {port}; in use by {owner}; listening on {next}");
+                QueueApiWarning(() => ShowHttpListenMoved(port, next, owner));
+                return;
+            }
+            if (retry != 5)
+                MixerNative.ThrowIfFailed(retry, "Configure vMix HTTP API");
+            owner = ListenOwner(MixerNative.ApiListenOwnerText());
+            port = next;
+        }
+
         settings.VmixApiEnabled = false;
         var disable = MixerNative.ApiConfigure(0, port, user, password);
         if (disable != 0)
             HostLog.Write("WARN", $"disable vMix HTTP API after listen failure: {disable}");
 
-        var ownerName = MixerNative.ApiListenOwnerText();
-        var owner = string.IsNullOrEmpty(ownerName) ? null : ownerName;
         HostLog.Write(
             "WARN",
             owner is null
                 ? $"vMix HTTP API listen failed on port {port}; disabled"
                 : $"vMix HTTP API listen failed on port {port}; in use by {owner}; disabled");
-        app.Dispatcher.BeginInvoke(
-            () => ShowHttpListenFailed(port, owner),
-            DispatcherPriority.ApplicationIdle);
+        QueueApiWarning(() => ShowHttpListenFailed(port, owner));
     }
 
-    private static void ApplyTcpApi(App app, SessionSettings settings)
+    private static string? ListenOwner(string ownerName) =>
+        string.IsNullOrEmpty(ownerName) ? null : ownerName;
+
+    private static void PersistHttpPort(App app)
+    {
+        var path = SessionStore.CurrentPath();
+        if (!SessionStore.CanOverwrite(path))
+            return;
+        try
+        {
+            SessionStore.Save(app.Session, path!);
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("WARN", $"save HTTP port: {ex.Message}");
+        }
+    }
+
+    private static void ApplyTcpApi(SessionSettings settings)
     {
         var enabled = settings.VmixTcpEnabledValue;
         var code = MixerNative.TcpConfigure(enabled ? 1u : 0u);
@@ -265,21 +303,17 @@ public partial class App : Application
         if (!enabled || code != 5)
             MixerNative.ThrowIfFailed(code, "Configure vMix TCP API");
 
+        var owner = ListenOwner(MixerNative.TcpListenOwnerText());
         settings.VmixTcpEnabled = false;
         var disable = MixerNative.TcpConfigure(0);
         if (disable != 0)
             HostLog.Write("WARN", $"disable vMix TCP API after listen failure: {disable}");
-
-        var ownerName = MixerNative.TcpListenOwnerText();
-        var owner = string.IsNullOrEmpty(ownerName) ? null : ownerName;
         HostLog.Write(
             "WARN",
             owner is null
                 ? "vMix TCP API listen failed on port 8099; disabled"
                 : $"vMix TCP API listen failed on port 8099; in use by {owner}; disabled");
-        app.Dispatcher.BeginInvoke(
-            () => ShowTcpListenFailed(owner),
-            DispatcherPriority.ApplicationIdle);
+        QueueApiWarning(() => ShowTcpListenFailed(owner));
     }
 
     private static void ApplyNativeApi(App app, SessionSettings settings)
@@ -303,22 +337,26 @@ public partial class App : Application
         if (!enabled || code != 5)
             MixerNative.ThrowIfFailed(code, "Configure Protobuf WebSocket API");
 
+        var owner = ListenOwner(MixerNative.WsListenOwnerText());
         prefs.NativeApiEnabled = false;
         prefs.Save();
         var disable = MixerNative.WsConfigureOwned(0, bind, port, "", "", "");
         if (disable != 0)
             HostLog.Write("WARN", $"disable Protobuf WebSocket API after listen failure: {disable}");
-
-        var ownerName = MixerNative.WsListenOwnerText();
-        var owner = string.IsNullOrEmpty(ownerName) ? null : ownerName;
         HostLog.Write(
             "WARN",
             owner is null
                 ? $"Protobuf WebSocket API listen failed on port {port}; disabled"
                 : $"Protobuf WebSocket API listen failed on port {port}; in use by {owner}; disabled");
-        app.Dispatcher.BeginInvoke(
-            () => ShowWsListenFailed(port, owner),
-            DispatcherPriority.ApplicationIdle);
+        QueueApiWarning(() => ShowWsListenFailed(port, owner));
+    }
+
+    private static void ShowHttpListenMoved(uint port, uint next, string? owner)
+    {
+        var text = string.IsNullOrEmpty(owner)
+            ? Loc.Format("msg.httpListenMoved", port, next)
+            : Loc.Format("msg.httpListenMovedOwner", port, owner, next);
+        ShowApiWarning(text);
     }
 
     private static void ShowHttpListenFailed(uint port, string? owner)
@@ -345,14 +383,41 @@ public partial class App : Application
         ShowApiWarning(text);
     }
 
+    private static void QueueApiWarning(Action show)
+    {
+        // ApplicationIdle never runs while the 16ms UI timer is queued, so the
+        // warning dialog was logged and then never shown.
+        var app = (App)Current;
+        app.Dispatcher.BeginInvoke(show, DispatcherPriority.Normal);
+    }
+
     private static void ShowApiWarning(string text)
     {
         var title = Loc.T("settings.webApi");
-        var window = Current.MainWindow;
-        if (window is null)
+        var window = Current?.MainWindow;
+        if (window is not { IsVisible: true })
+        {
+            if (window is not null)
+            {
+                void OnShown(object? sender, EventArgs e)
+                {
+                    window.ContentRendered -= OnShown;
+                    ShowApiWarning(text);
+                }
+                window.ContentRendered += OnShown;
+                return;
+            }
             MessageBox.Show(text, title, MessageBoxButton.OK, MessageBoxImage.Warning);
-        else
+            return;
+        }
+        try
+        {
             MessageBox.Show(window, text, title, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (InvalidOperationException)
+        {
+            MessageBox.Show(text, title, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void AttachInputs()

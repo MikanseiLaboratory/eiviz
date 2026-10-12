@@ -160,6 +160,7 @@ struct SettingsView: View {
     private var advanced: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(L10n.t("settings.flipBudget"))
+            Text(L10n.format("settings.flipBudgetUsage", "\(FlipBudget.used)", "\(FlipBudget.limit)"))
             Picker("", selection: $mixer.session.settings.flipSwapchainLimit) {
                 Text(L10n.t("settings.flipBudgetAuto")).tag(UInt32(0))
                 ForEach([UInt32(4), 6, 8, 10, 12, 16], id: \.self) { value in

@@ -1,5 +1,6 @@
 using System.Windows;
 using Eiviz.Host.I18n;
+using Eiviz.Host.Interop;
 
 namespace Eiviz.Host.Preview;
 
@@ -31,9 +32,16 @@ internal static class FlipBudget
         _seenLost = 0;
     }
 
+    public static int Used => OperatingSystem.IsWindows() ? Live.Count : 0;
+
+    public static int Limit => EffectiveMax();
+
+    public static bool EnforcesLimit =>
+        OperatingSystem.IsWindows() && MixerNative.Backend() == 1;
+
     public static bool TryOpen(int surfaces, Window? owner = null)
     {
-        if (!OperatingSystem.IsWindows() || surfaces <= 0)
+        if (!EnforcesLimit || surfaces <= 0)
             return true;
         if (Live.Count + surfaces <= EffectiveMax())
             return true;
@@ -47,7 +55,7 @@ internal static class FlipBudget
             return true;
         if (Live.Contains(host))
             return true;
-        if (Live.Count >= EffectiveMax())
+        if (EnforcesLimit && Live.Count >= EffectiveMax())
             return false;
         Live.Add(host);
         _lastAttach = host;
@@ -71,7 +79,7 @@ internal static class FlipBudget
 
     public static void ObserveLost(ulong total)
     {
-        if (!OperatingSystem.IsWindows() || total <= _seenLost)
+        if (!EnforcesLimit || total <= _seenLost)
             return;
         _seenLost = total;
         if (_lastAttach is null)

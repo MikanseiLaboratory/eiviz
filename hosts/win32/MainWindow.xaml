@@ -199,6 +199,16 @@
                         <ListBox x:Name="InputList" Background="{DynamicResource ListBackground}" Foreground="{DynamicResource TextForeground}" BorderBrush="{DynamicResource ButtonBorder}"
                                  SelectionChanged="InputList_SelectionChanged"
                                  MouseDoubleClick="InputList_DoubleClick">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Unavailable}" Value="True">
+                                            <Setter Property="Opacity" Value="0.45"/>
+                                            <Setter Property="ToolTip" Value="{Binding UnavailableTip}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
                             <ListBox.ContextMenu>
                                 <ContextMenu>
                                     <MenuItem Header="{Binding [input.relinkFolder], Source={x:Static i18n:Loc.Source}}" Click="RelinkMedia_Click"/>
@@ -215,7 +225,6 @@
                         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                                 <Button Content="+" Width="28" Click="AddScene_Click"/>
-                                <Button x:Name="RemoveSceneButton" Content="-" Width="28" Margin="4,0,0,0" Click="RemoveScene_Click"/>
                                 <Button Content="Edit" Width="48" Margin="4,0,0,0" Click="EditScene_Click"/>
                             </StackPanel>
                             <TextBlock Text="{Binding [chrome.scenes], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>

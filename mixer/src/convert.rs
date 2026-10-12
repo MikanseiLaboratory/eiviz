@@ -365,18 +365,24 @@ impl Nv12Converter {
         })
     }
 
-    /// Submits the NV12 to RGBA pass and returns its submission index.
-    /// Does not wait. `nv12` must stay alive until that submission completes.
+    /// Submits the NV12 to RGBA pass.
+    ///
+    /// `on_gpu_done` runs after this submission finishes, on whichever thread next
+    /// polls the device. It is also run if this function returns an error, so the
+    /// caller can release a slot either way. `nv12` is an external Vulkan image;
+    /// it stays alive until that callback, because dropping it frees the image.
     pub fn convert_nv12_texture(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         ring: &mut VideoGpuRing,
-        nv12: &wgpu::Texture,
+        nv12: wgpu::Texture,
         width: u32,
         height: u32,
         pts: i64,
-    ) -> Result<(GpuVideoFrame, wgpu::SubmissionIndex), String> {
+        on_gpu_done: impl FnOnce() + Send + 'static,
+    ) -> Result<GpuVideoFrame, String> {
+        let mut on_gpu_done = OnGpuDone::new(on_gpu_done);
         let y_view = nv12.create_view(&wgpu::TextureViewDescriptor {
             label: Some("eiviz nv12 y"),
             format: Some(wgpu::TextureFormat::R8Unorm),
@@ -442,25 +448,33 @@ impl Nv12Converter {
             pass.set_bind_group(0, &bind, &[]);
             pass.draw(0..6, 0..1);
         }
-        let index = {
+        // Keep the external NV12 image until this submission is retired. Waiting on the
+        // returned submission index from the decode thread races the render thread's
+        // queue maintenance: wgpu 30 then panics with
+        // "current submission index should be at least the wait submission index"
+        // and the file thread dies, so seek and transport controls stop working.
+        {
             let _guard = crate::device::lock_gpu_queue();
-            queue.submit(Some(encoder.finish()))
-        };
-        // The caller keeps `nv12` alive until this submission finishes. Waiting here would
-        // drain every earlier mixer submission on the shared queue, once per frame.
-        Ok((
-            GpuVideoFrame {
-                pts,
-                width,
-                height,
-                packed: false,
-                bgra: false,
-                texture: dest,
-                view: dest_view,
-                lease: Some(lease),
-            },
-            index,
-        ))
+            let _submission = queue.submit(Some(encoder.finish()));
+            let notify = on_gpu_done.take();
+            queue.on_submitted_work_done(move || {
+                drop(bind);
+                drop(y_view);
+                drop(uv_view);
+                drop(nv12);
+                notify();
+            });
+        }
+        Ok(GpuVideoFrame {
+            pts,
+            width,
+            height,
+            packed: false,
+            bgra: false,
+            texture: dest,
+            view: dest_view,
+            lease: Some(lease),
+        })
     }
 
     pub fn copy_bgra(
@@ -520,6 +534,27 @@ impl Nv12Converter {
             view: dest_view,
             lease: Some(lease),
         })
+    }
+}
+
+/// Calls `F` on drop unless [`OnGpuDone::take`] removed it.
+struct OnGpuDone<F: FnOnce()>(Option<F>);
+
+impl<F: FnOnce()> OnGpuDone<F> {
+    fn new(notify: F) -> Self {
+        Self(Some(notify))
+    }
+
+    fn take(&mut self) -> F {
+        self.0.take().expect("gpu done callback")
+    }
+}
+
+impl<F: FnOnce()> Drop for OnGpuDone<F> {
+    fn drop(&mut self) {
+        if let Some(notify) = self.0.take() {
+            notify();
+        }
     }
 }
 

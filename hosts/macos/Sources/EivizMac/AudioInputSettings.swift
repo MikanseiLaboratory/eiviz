@@ -60,10 +60,10 @@ struct AudioInputSettingsView: View {
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                         Toggle(isOn: Binding(
-                            get: { input.mute },
-                            set: { mixer.applyInputAudio(id: input.id, units: input.audioUnits, gain: input.gain, mute: $0) }
+                            get: { !input.mute },
+                            set: { mixer.applyInputAudio(id: input.id, units: input.audioUnits, gain: input.gain, mute: !$0) }
                         )) {
-                            Text("Mute")
+                            Text("Audio")
                         }
                         .toggleStyle(OnOffToggleStyle())
                     }

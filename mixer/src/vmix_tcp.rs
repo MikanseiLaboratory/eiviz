@@ -97,7 +97,6 @@ pub unsafe fn listen_owner_c(out: *mut u8, cap: usize) -> i32 {
 fn stop_worker() {
     let (stop, join) = {
         let mut slot = tcp_slot().lock_or_recover();
-        slot.listen_owner = None;
         (slot.stop.take(), slot.join.take())
     };
     if let Some(stop) = stop {

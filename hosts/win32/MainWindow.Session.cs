@@ -444,16 +444,6 @@ public partial class MainWindow
         SessionStore.Publish(_session);
     }
 
-    private void RemoveScene_Click(object sender, RoutedEventArgs e)
-    {
-        if (_selectedScene is null)
-        {
-            MessageBox.Show(this, Loc.T("msg.selectSceneDelete"));
-            return;
-        }
-        DeleteScene(_selectedScene);
-    }
-
     private void DeleteScene(SceneEntry removed)
     {
         if (RejectIfOnAirLock())
@@ -461,6 +451,11 @@ public partial class MainWindow
         if (_session.Scenes.Count <= 1)
         {
             MessageBox.Show(this, Loc.T("msg.oneScene"));
+            return;
+        }
+        if (SceneInUse(removed, out var usedBy))
+        {
+            MessageBox.Show(this, usedBy, Loc.T("chrome.scenes"), MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         if (TryRemoteMutate(MutationJson.DeleteScene(removed.Id), Loc.T("msg.selectSceneDelete")))
@@ -505,6 +500,31 @@ public partial class MainWindow
         RebuildOverlayToggles();
         RebuildStreamToggles();
         SessionStore.Publish(_session);
+    }
+
+    private bool SceneInUse(SceneEntry scene, out string message)
+    {
+        var names = new List<string>();
+        foreach (var unit in _session.Units)
+        {
+            if (!UnitShowsScene(unit, scene))
+                continue;
+            names.Add(string.IsNullOrWhiteSpace(unit.Name) ? $"Mixing Unit {unit.Id}" : unit.Name);
+        }
+        message = names.Count == 0
+            ? ""
+            : Loc.Format("msg.sceneInUse", string.Join(Environment.NewLine, names));
+        return names.Count > 0;
+    }
+
+    private bool UnitShowsScene(MixingUnitEntry unit, SceneEntry scene)
+    {
+        if (unit.PreviewSceneId == scene.Id || unit.ProgramSceneId == scene.Id)
+            return true;
+        if (Application.Current is not App app)
+            return false;
+        app.Backend.BusSources(unit.Id, out var preview, out var program);
+        return preview == scene.GpuId || program == scene.GpuId;
     }
 
     private void EditScene_Click(object sender, RoutedEventArgs e)
@@ -595,6 +615,11 @@ public partial class MainWindow
 
     private void AddUnit_Click(object sender, RoutedEventArgs e)
     {
+        if (!PlanGate.CanAddMixingUnit(_session.Units.Count))
+        {
+            PlanGate.Tip(this, "msg.planMixingUnit");
+            return;
+        }
         var draft = new MixingUnitEntry
         {
             Id = _session.NextUnitId,
@@ -1198,6 +1223,11 @@ public partial class MainWindow
         {
             if (output.Transport == OutputTransport.Rtmp)
                 continue;
+            if (output.Transport == OutputTransport.DeckLink && !PlanGate.DeckLinkOutput)
+            {
+                MixerApply.RemoveOutput(output.Id);
+                continue;
+            }
             var prior = previous.FirstOrDefault(item => item.Id == output.Id);
             if (prior is not null && SameOutput(prior, output))
                 continue;

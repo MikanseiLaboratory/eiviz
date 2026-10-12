@@ -64,14 +64,14 @@ description: セッションに保存される設定ウィンドウの項目
 
 外部制御用のAPIサーバーを設定します。設定の詳細は[eiviz API](/eiviz/ja/developers/api/)および[互換API](/eiviz/ja/developers/compatibility/)を参照してください。
 
-- **HTTP**: vMix互換HTTPサーバー（既定ポート: 8088）。Basic認証のユーザー名・パスワードを設定可能です。
+- **HTTP**: vMix互換HTTPサーバー（既定ポート: 8088）。Basic認証に対応。ポート競合時は警告を表示し、次のポート（+1）での起動を試行します。
 - **TCP**: vMix互換TCPサーバー（既定ポート: 8099）。認証には対応していません。
 - **WebSocket**: eivizネイティブのProtobuf制御API（既定ポート: 9400）。loopback以外へのbindには認証tokenが必須です。
 - **ブラウザのOrigin制限**: WebブラウザからWebSocketに接続する場合は、環境変数`EIVIZ_API_ALLOWED_ORIGINS`に対象のOriginまたは`*`を指定する必要があります。
 
 ## 詳細設定
 
-- **映像出力先ウィンドウの上限**: PreviewやProgram、Multiviewをリアルタイム表示するための描画スロット数の上限です（既定: 6）。上限に達すると新規のプレビューウィンドウを開けなくなります。不要なウィンドウを閉じるとスロットが解放されます。
+- **映像出力先ウィンドウの上限**: PreviewやProgram、Multiviewをリアルタイム表示するウィンドウ数の上限です（既定: 6）。設定の下に使用中の数を出します。上限を超えて開けなくなるのはDirectX 12のときだけです。不要なウィンドウを閉じると枠が空きます。
 
 ## 環境設定（Preferences）
 
