@@ -7,9 +7,9 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::abi::{
-    validate_camera, EivizActiveMove, EivizActiveSequence, EivizMotion, EivizReachedLayer,
-    EivizSceneCamera, EivizSceneSequenceDesc, EivizSceneStateDesc, EivizSequenceStepDesc,
-    OverlayDesc, Rect, SCENE_SEQ_PLAY, SCENE_SEQ_REVERSE, SCENE_SEQ_STOP,
+    EivizActiveMove, EivizActiveSequence, EivizMotion, EivizReachedLayer, EivizSceneCamera,
+    EivizSceneSequenceDesc, EivizSceneStateDesc, EivizSequenceStepDesc, OverlayDesc, Rect,
+    SCENE_SEQ_PLAY, SCENE_SEQ_REVERSE, SCENE_SEQ_STOP, validate_camera,
 };
 
 pub(crate) type SceneCamera = EivizSceneCamera;
@@ -182,7 +182,16 @@ impl SceneRuntime {
             }
             (targets, camera, motion.unwrap_or(state.enter))
         };
-        self.start_move(state_id, 0, targets, camera, motion, base, base_camera, frame);
+        self.start_move(
+            state_id,
+            0,
+            targets,
+            camera,
+            motion,
+            base,
+            base_camera,
+            frame,
+        );
         Ok(())
     }
 
@@ -1294,7 +1303,11 @@ mod tests {
         let base = vec![layer(1, 0.0)];
         rt.go_to(1, &base, CAM, 0).unwrap();
         let mid = rt.tick(&base, CAM, 15).unwrap();
-        assert!((mid.camera.zoom - 2.0).abs() < 1.0e-3, "zoom {}", mid.camera.zoom);
+        assert!(
+            (mid.camera.zoom - 2.0).abs() < 1.0e-3,
+            "zoom {}",
+            mid.camera.zoom
+        );
         assert!((mid.camera.x - 0.625).abs() < 1.0e-3);
         assert!((x_of(&mid.layers, 1) - 0.0).abs() < 1.0e-4);
     }
@@ -1400,7 +1413,11 @@ mod tests {
         let _ = rt.tick(&base, CAM, 10);
         rt.go_to(2, &base, CAM, 10).unwrap();
         let next = rt.tick(&base, CAM, 15).unwrap();
-        assert!((next.camera.zoom - 2.0).abs() < 1.0e-3, "zoom {}", next.camera.zoom);
+        assert!(
+            (next.camera.zoom - 2.0).abs() < 1.0e-3,
+            "zoom {}",
+            next.camera.zoom
+        );
         assert!(x_of(&next.layers, 1) < 0.5);
     }
 }

@@ -214,6 +214,8 @@ enum MixerRemote {
               let settingsObj = try? JSONSerialization.jsonObject(with: settings),
               let outputs = try? encoder.encode(session.outputs),
               let outputsObj = try? JSONSerialization.jsonObject(with: outputs),
+              let encoders = try? encoder.encode(session.streamEncoders),
+              let encodersObj = try? JSONSerialization.jsonObject(with: encoders),
               let headphone = try? encoder.encode(session.headphone),
               let headphoneObj = try? JSONSerialization.jsonObject(with: headphone)
         else { return "{}" }
@@ -221,9 +223,11 @@ enum MixerRemote {
             "kind": "setSettings",
             "settings": settingsObj,
             "outputs": outputsObj,
+            "streamEncoders": encodersObj,
             "headphone": headphoneObj,
             "headphoneCopyMonitor": session.headphoneCopyMonitor,
-            "nextOutputId": NSNumber(value: session.nextOutputId)
+            "nextOutputId": NSNumber(value: session.nextOutputId),
+            "nextStreamEncoderId": NSNumber(value: session.nextStreamEncoderId)
         ])
     }
 

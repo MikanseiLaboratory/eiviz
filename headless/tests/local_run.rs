@@ -82,8 +82,8 @@ fn incomplete_pro_outputs_do_not_abort_headless() {
           "outputs": [
             { "id": 100, "name": "pgm", "transport": "Omt", "sourceKind": "MuProgram" },
             { "id": 101, "name": "deck", "transport": "DeckLink", "sourceKind": "MuProgram" },
-            { "id": 102, "name": "yt", "transport": "Rtmp", "sourceKind": "MuProgram" },
-            { "id": 103, "name": "dead", "transport": "Rtmp", "sourceKind": "MuProgram", "rtmpUrl": "rtmp://127.0.0.1:1/live/x" }
+            { "id": 102, "name": "yt", "transport": "Rtmp", "streamEncoderId": 1 },
+            { "id": 103, "name": "dead", "transport": "Rtmp", "streamEncoderId": 1, "rtmpUrl": "rtmp://127.0.0.1:1/live/x" }
           ]
         }"#,
     )

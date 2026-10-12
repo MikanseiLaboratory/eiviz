@@ -51,6 +51,8 @@ message Document {
   Headphone headphone = 23;
   uint32 headphone_listen_kind = 24;
   uint64 headphone_listen_id = 25;
+  repeated StreamEncoder stream_encoders = 26;
+  uint64 next_stream_encoder_id = 27;
 }
 
 message SessionSettings {
@@ -290,6 +292,25 @@ message MixingUnit {
   MuBus audio = 17;
 }
 
+message StreamEncoder {
+  uint64 id = 1;
+  string name = 2;
+  OutputSourceKind source_kind = 3;
+  uint64 source_id = 4;
+  uint64 unit_id = 5;
+  uint64 audio_unit_id = 6;
+  uint32 width = 7;
+  uint32 height = 8;
+  uint32 fps_num = 9;
+  uint32 fps_den = 10;
+  uint32 video_bitrate = 11;
+  uint32 audio_bitrate = 12;
+  uint32 keyint = 13;
+  bool video_only = 14;
+  // 0 means automatic.
+  uint32 encoder_threads = 15;
+}
+
 message Output {
   uint64 id = 1;
   string name = 2;
@@ -313,10 +334,9 @@ message Output {
   bool decklink_external_key = 18;
   string rtmp_url = 19;
   string rtmp_secret_ref = 20;
-  uint32 rtmp_video_bitrate = 21;
-  uint32 rtmp_audio_bitrate = 22;
-  uint32 rtmp_keyint = 23;
-  bool rtmp_video_only = 24;
+  reserved 21, 22, 23, 24;
+  reserved "rtmp_video_bitrate", "rtmp_audio_bitrate", "rtmp_keyint", "rtmp_video_only";
+  uint64 stream_encoder_id = 25;
 }
 
 message MvSlot {

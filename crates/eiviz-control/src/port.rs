@@ -47,6 +47,10 @@ pub trait MixerPort: Send {
 
     fn output_add(&mut self, spec: OutputApply) -> ControlResult<()>;
     fn output_remove(&mut self, id: u64) -> ControlResult<()>;
+    fn stream_encoder_add(&mut self, spec: StreamEncoderApply) -> ControlResult<()>;
+    fn stream_encoder_remove(&mut self, id: u64) -> ControlResult<()>;
+    fn stream_destination_add(&mut self, spec: StreamDestinationApply) -> ControlResult<()>;
+    fn stream_destination_remove(&mut self, encoder_id: u64, id: u64) -> ControlResult<()>;
 
     fn audio_set_unit_device(&mut self, spec: UnitAudioApply) -> ControlResult<()>;
     fn audio_set_headphone_device(&mut self, spec: HeadphoneApply) -> ControlResult<()>;
@@ -319,8 +323,35 @@ pub struct OutputApply {
     pub height: u32,
     pub fps_num: u32,
     pub fps_den: u32,
-    /// JSON extras for DeckLink and RTMP. Empty for OMT and NDI.
+    /// JSON extras for DeckLink. Empty for OMT and NDI.
     pub config: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StreamEncoderApply {
+    pub id: u64,
+    pub source_kind: u32,
+    pub source_id: u64,
+    pub unit_id: u64,
+    pub audio_unit_id: u64,
+    pub width: u32,
+    pub height: u32,
+    pub fps_num: u32,
+    pub fps_den: u32,
+    pub video_bitrate: u32,
+    pub audio_bitrate: u32,
+    pub keyint: u32,
+    pub video_only: bool,
+    /// `0` means automatic.
+    pub encoder_threads: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StreamDestinationApply {
+    pub encoder_id: u64,
+    pub id: u64,
+    pub url: String,
+    pub secret_ref: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -486,6 +517,18 @@ impl MixerPort for NullMixer {
         Ok(())
     }
     fn output_remove(&mut self, _id: u64) -> ControlResult<()> {
+        Ok(())
+    }
+    fn stream_encoder_add(&mut self, _spec: StreamEncoderApply) -> ControlResult<()> {
+        Ok(())
+    }
+    fn stream_encoder_remove(&mut self, _id: u64) -> ControlResult<()> {
+        Ok(())
+    }
+    fn stream_destination_add(&mut self, _spec: StreamDestinationApply) -> ControlResult<()> {
+        Ok(())
+    }
+    fn stream_destination_remove(&mut self, _encoder_id: u64, _id: u64) -> ControlResult<()> {
         Ok(())
     }
     fn audio_set_unit_device(&mut self, _spec: UnitAudioApply) -> ControlResult<()> {

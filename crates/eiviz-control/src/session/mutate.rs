@@ -143,6 +143,8 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             headphone,
             headphone_copy_monitor,
             next_output_id,
+            stream_encoders,
+            next_stream_encoder_id,
         } => {
             let renderer = document.settings.renderer;
             let last_session_path = document.settings.last_session_path.clone();
@@ -158,6 +160,12 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             }
             if next_output_id != 0 {
                 document.next_output_id = next_output_id;
+            }
+            if let Some(encoders) = stream_encoders {
+                document.stream_encoders = encoders;
+            }
+            if next_stream_encoder_id != 0 {
+                document.next_stream_encoder_id = next_stream_encoder_id;
             }
             Ok(())
         }
@@ -446,10 +454,7 @@ mod tests {
             decklink_external_key: false,
             rtmp_url: String::new(),
             rtmp_secret_ref: String::new(),
-            rtmp_video_bitrate: 0,
-            rtmp_audio_bitrate: 0,
-            rtmp_keyint: 0,
-            rtmp_video_only: false,
+            stream_encoder_id: 0,
         });
         doc.outputs.push(crate::session::OutputDto {
             id: 101,
@@ -471,10 +476,7 @@ mod tests {
             decklink_external_key: false,
             rtmp_url: String::new(),
             rtmp_secret_ref: String::new(),
-            rtmp_video_bitrate: 0,
-            rtmp_audio_bitrate: 0,
-            rtmp_keyint: 0,
-            rtmp_video_only: false,
+            stream_encoder_id: 0,
         });
         let published = doc.published_video_outputs();
         assert_eq!(published.len(), 1);
@@ -514,13 +516,12 @@ mod tests {
                     decklink_external_key: false,
                     rtmp_url: String::new(),
                     rtmp_secret_ref: String::new(),
-                    rtmp_video_bitrate: 0,
-                    rtmp_audio_bitrate: 0,
-                    rtmp_keyint: 0,
-                    rtmp_video_only: false,
+                    stream_encoder_id: 0,
                 }],
                 headphone: None,
                 headphone_copy_monitor: Some(true),
+                stream_encoders: None,
+                next_stream_encoder_id: 0,
                 next_output_id: 101,
             },
         )
@@ -546,6 +547,8 @@ mod tests {
                 headphone: None,
                 headphone_copy_monitor: None,
                 next_output_id: 0,
+                stream_encoders: None,
+                next_stream_encoder_id: 0,
             },
         )
         .unwrap();

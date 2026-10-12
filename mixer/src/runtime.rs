@@ -20,8 +20,10 @@ use crate::{
     mixer_ndi_connect, mixer_omt_connect, mixer_omt_discover, mixer_omt_set_quality,
     mixer_output_add_ex, mixer_output_remove, mixer_set_bus_colors, mixer_set_frame_buffer,
     mixer_set_live_save, mixer_set_master_fps, mixer_set_mv_label, mixer_set_ndi_gpu_upload,
-    mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_configure, mixer_video_seek,
-    mixer_video_set_loop, mixer_video_set_playing, mixer_video_start,
+    mixer_set_rebar_optimization, mixer_snapshot, mixer_stream_destination_add,
+    mixer_stream_destination_remove, mixer_stream_encoder_add, mixer_stream_encoder_remove,
+    mixer_unit_configure, mixer_video_seek, mixer_video_set_loop, mixer_video_set_playing,
+    mixer_video_start,
 };
 
 pub(crate) fn control() -> &'static Mutex<ControlService> {
@@ -489,6 +491,50 @@ impl MixerPort for ProcessMixer {
 
     fn output_remove(&mut self, id: u64) -> ControlResult<()> {
         map_abi(mixer_output_remove(id))
+    }
+
+    fn stream_encoder_add(&mut self, spec: StreamEncoderApply) -> ControlResult<()> {
+        let id = eiviz_control::ids::stream_encoder_gpu_id(spec.id);
+        map_abi(unsafe {
+            mixer_stream_encoder_add(
+                id,
+                spec.source_kind,
+                spec.source_id,
+                spec.unit_id,
+                spec.audio_unit_id,
+                spec.width,
+                spec.height,
+                spec.fps_num,
+                spec.fps_den,
+                spec.video_bitrate,
+                spec.audio_bitrate,
+                spec.keyint,
+                u32::from(spec.video_only),
+                spec.encoder_threads,
+            )
+        })
+    }
+
+    fn stream_encoder_remove(&mut self, id: u64) -> ControlResult<()> {
+        map_abi(mixer_stream_encoder_remove(
+            eiviz_control::ids::stream_encoder_gpu_id(id),
+        ))
+    }
+
+    fn stream_destination_add(&mut self, spec: StreamDestinationApply) -> ControlResult<()> {
+        let encoder_id = eiviz_control::ids::stream_encoder_gpu_id(spec.encoder_id);
+        let url = CString::new(spec.url).unwrap_or_else(|_| CString::new("").unwrap());
+        let secret = CString::new(spec.secret_ref).unwrap_or_else(|_| CString::new("").unwrap());
+        map_abi(unsafe {
+            mixer_stream_destination_add(encoder_id, spec.id, url.as_ptr(), secret.as_ptr())
+        })
+    }
+
+    fn stream_destination_remove(&mut self, encoder_id: u64, id: u64) -> ControlResult<()> {
+        map_abi(mixer_stream_destination_remove(
+            eiviz_control::ids::stream_encoder_gpu_id(encoder_id),
+            id,
+        ))
     }
 
     fn audio_set_unit_device(&mut self, spec: UnitAudioApply) -> ControlResult<()> {

@@ -222,44 +222,6 @@ pub(crate) struct LiveUnit {
     custom_wgsl: Option<String>,
 }
 
-/// Connection settings. Routing fields can change without opening a new socket.
-#[derive(Clone, PartialEq, Eq)]
-struct RtmpLink {
-    url: String,
-    secret_ref: String,
-    video_bitrate: u32,
-    audio_bitrate: u32,
-    keyint: u32,
-    video_only: bool,
-    width: u32,
-    height: u32,
-    fps_num: u32,
-    fps_den: u32,
-}
-
-impl RtmpLink {
-    fn from_request(
-        extras: &crate::pro::OutputExtras,
-        width: u32,
-        height: u32,
-        fps_num: u32,
-        fps_den: u32,
-    ) -> Self {
-        Self {
-            url: extras.url.clone(),
-            secret_ref: extras.secret_ref.clone(),
-            video_bitrate: extras.video_bitrate,
-            audio_bitrate: extras.audio_bitrate,
-            keyint: extras.keyint,
-            video_only: extras.video_only,
-            width,
-            height,
-            fps_num,
-            fps_den,
-        }
-    }
-}
-
 pub(crate) struct LiveOutput {
     source_kind: u32,
     source_id: u64,
@@ -270,7 +232,7 @@ pub(crate) struct LiveOutput {
     fps_num: u32,
     fps_den: u32,
     transport: u32,
-    rtmp_link: Option<RtmpLink>,
+    stream: Option<SharedStream>,
     started_at: Instant,
     connections: Arc<AtomicU32>,
     video_sub: Arc<AtomicBool>,
@@ -473,11 +435,14 @@ impl LiveReceiver {
     }
 }
 
+type SharedStream = Arc<Mutex<Box<dyn eiviz_pro_api::StreamOutput>>>;
+
 pub(crate) enum OutputHandle {
     Omt(ProgramSender),
     #[cfg(any(windows, target_os = "macos"))]
     Ndi(NdiSender),
     Pro(Box<dyn eiviz_pro_api::MediaOutput>),
+    Stream(SharedStream),
 }
 
 impl OutputHandle {
@@ -490,6 +455,18 @@ impl OutputHandle {
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(sender) => sender.pump(),
             Self::Pro(output) => Ok(output.stats().connected),
+            Self::Stream(output) => {
+                let stats = lock_stream(output).stats();
+                if !stats.connected {
+                    let message = if stats.message.is_empty() {
+                        "stream encoder is not publishing".to_string()
+                    } else {
+                        stats.message
+                    };
+                    crate::diag::error_throttled(&format!("stream: {message}"));
+                }
+                Ok(stats.connected)
+            }
         }
     }
 
@@ -499,6 +476,7 @@ impl OutputHandle {
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => Ok(()),
             Self::Pro(_) => Ok(()),
+            Self::Stream(_) => Ok(()),
         }
     }
 
@@ -508,6 +486,7 @@ impl OutputHandle {
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => None,
             Self::Pro(_) => None,
+            Self::Stream(_) => None,
         }
     }
 
@@ -534,6 +513,11 @@ impl OutputHandle {
                     width, height, stride, pts, data, fps_n, fps_d,
                 ))
                 .map_err(|error| error.message),
+            Self::Stream(output) => lock_stream(output)
+                .submit_video(crate::pro::video_frame(
+                    width, height, stride, pts, data, fps_n, fps_d,
+                ))
+                .map_err(|error| error.message),
         }
     }
 
@@ -543,6 +527,7 @@ impl OutputHandle {
             Self::Omt(_) => None,
             Self::Ndi(sender) => Some(sender.last_send_ms()),
             Self::Pro(_) => None,
+            Self::Stream(_) => None,
         }
     }
 
@@ -570,6 +555,10 @@ impl OutputHandle {
                 busy.store(false, Ordering::Release);
                 Ok(())
             }
+            Self::Stream(_) => {
+                busy.store(false, Ordering::Release);
+                Ok(())
+            }
         }
     }
 
@@ -579,6 +568,7 @@ impl OutputHandle {
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => Ok(()),
             Self::Pro(_) => Ok(()),
+            Self::Stream(_) => Ok(()),
         }
     }
 
@@ -590,6 +580,9 @@ impl OutputHandle {
             Self::Pro(output) => output
                 .submit_audio(crate::pro::audio_frame(packet))
                 .map_err(|error| error.message),
+            Self::Stream(output) => lock_stream(output)
+                .submit_audio(crate::pro::audio_frame(packet))
+                .map_err(|error| error.message),
         }
     }
 
@@ -599,8 +592,15 @@ impl OutputHandle {
             #[cfg(any(windows, target_os = "macos"))]
             Self::Ndi(_) => true,
             Self::Pro(_) => false,
+            Self::Stream(_) => false,
         }
     }
+}
+
+fn lock_stream(
+    output: &SharedStream,
+) -> std::sync::MutexGuard<'_, Box<dyn eiviz_pro_api::StreamOutput>> {
+    output.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
 pub(crate) enum SendCmd {
@@ -3874,21 +3874,21 @@ fn gate_pro_output(
             (shared.master_fps_num, shared.master_fps_den)
         };
         if width == 0 || height == 0 || fps_num == 0 || fps_den == 0 {
-            set_error(
-                &mixer.telemetry,
-                "RTMP output needs a picture size and frame rate",
-            );
+            let message = "RTMP output needs a picture size and frame rate";
+            crate::diag::error(&format!("stream encoder id={output_id}: {message}"));
+            set_error(&mixer.telemetry, message);
             return ERR_INVALID_ARGUMENT;
         }
         if !ent.rtmp.allows_video(width, height, fps_num, fps_den) {
-            set_error(
-                &mixer.telemetry,
-                format!("RTMP {width}x{height} at {fps_num}/{fps_den} exceeds this plan"),
-            );
+            let message = format!("RTMP {width}x{height} at {fps_num}/{fps_den} exceeds this plan");
+            crate::diag::error(&format!("stream encoder id={output_id}: {message}"));
+            set_error(&mixer.telemetry, message);
             return ERR_NOT_SUPPORTED_PLAN;
         }
         if crate::pro::module().streaming().is_none() {
-            set_error(&mixer.telemetry, "RTMP is not linked in this build");
+            let message = "RTMP is not linked in this build";
+            crate::diag::error(&format!("stream encoder id={output_id}: {message}"));
+            set_error(&mixer.telemetry, message);
             return ERR_IO;
         }
         OK
@@ -3950,9 +3950,8 @@ fn start_pro_output(
         };
         let device = extras.device.clone();
         if device.is_empty() {
-            let _ = with_mixer(|mixer| {
-                set_error(&mixer.telemetry, "DeckLink output needs a device")
-            });
+            let _ =
+                with_mixer(|mixer| set_error(&mixer.telemetry, "DeckLink output needs a device"));
             return Err(ERR_IO);
         }
         return backend
@@ -3965,46 +3964,8 @@ fn start_pro_output(
             })
             .map_err(fail);
     }
-    let url = match crate::pro::rtmp_url(extras) {
-        Ok(url) => url,
-        Err(error) => {
-            let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
-            return Err(ERR_IO);
-        }
-    };
-    let Some(backend) = crate::pro::module().streaming() else {
-        let _ = with_mixer(|mixer| set_error(&mixer.telemetry, "RTMP is not linked in this build"));
-        return Err(ERR_IO);
-    };
-    let (width, height, fps_num, fps_den) = picture_of(unit_id, width, height, fps_num, fps_den);
-    backend
-        .start_rtmp(&eiviz_pro_api::RtmpConfig {
-            url,
-            video_bitrate: if extras.video_bitrate == 0 {
-                4_500_000
-            } else {
-                extras.video_bitrate
-            },
-            keyint: if extras.keyint == 0 {
-                60
-            } else {
-                extras.keyint
-            },
-            width,
-            height,
-            fps_num,
-            fps_den,
-            encoder: eiviz_pro_api::VideoEncoderKind::OpenH264,
-            audio: eiviz_pro_api::AudioEncodeConfig {
-                bitrate: if extras.audio_bitrate == 0 {
-                    128_000
-                } else {
-                    extras.audio_bitrate
-                },
-                video_only: extras.video_only,
-            },
-        })
-        .map_err(fail)
+    let _ = (unit_id, width, height);
+    Err(ERR_INVALID_ARGUMENT)
 }
 
 #[unsafe(no_mangle)]
@@ -4115,6 +4076,15 @@ unsafe fn mixer_output_add_ex_ffi(
         .unwrap_or_default()
         .to_string();
     crate::diag::info(&format!("output_add id={output_id} transport={transport}"));
+    if transport == OUT_RTMP {
+        let _ = with_mixer(|mixer| {
+            set_error(
+                &mixer.telemetry,
+                "RTMP is started as a stream encoder, not an output",
+            )
+        });
+        return ERR_INVALID_ARGUMENT;
+    }
     let extras = match crate::pro::parse_extras(crate::pro::cstr(config_json)) {
         Ok(extras) => extras,
         Err(error) => {
@@ -4135,34 +4105,6 @@ unsafe fn mixer_output_add_ex_ffi(
     } else {
         audio_unit_id
     };
-    // A scene cut republishes the session. The RTMP URL and encoder settings
-    // are unchanged, so the publisher must stay on the same socket. YouTube
-    // drops the ingest when the TCP connection is replaced.
-    if transport == OUT_RTMP {
-        let link = RtmpLink::from_request(&extras, width, height, fps_num, fps_den);
-        let kept = match with_mixer(|mixer| {
-            let mut shared = mixer.shared.lock_or_recover();
-            let Some(existing) = shared.outputs.get_mut(&output_id) else {
-                return false;
-            };
-            if existing.transport != OUT_RTMP || existing.rtmp_link.as_ref() != Some(&link) {
-                return false;
-            }
-            existing.source_kind = source_kind;
-            existing.source_id = source_id;
-            existing.unit_id = unit_id;
-            existing.audio_unit_id = audio_unit_id;
-            existing.skip_idle_encode = skip_idle_encode;
-            true
-        }) {
-            Ok(kept) => kept,
-            Err(code) => return code,
-        };
-        if kept {
-            crate::diag::info(&format!("output_keep id={output_id} transport={transport}"));
-            return OK;
-        }
-    }
     // Replace must not withdraw `_omt._tcp` for this instance name.
     // openmediatransport-rs keys DNS-SD by name; Drop of the old sender
     // would unregister the live row, and a second register of the same
@@ -4229,7 +4171,7 @@ unsafe fn mixer_output_add_ex_ffi(
                 }
             }
         }
-        OUT_DECKLINK | OUT_RTMP => match start_pro_output(
+        OUT_DECKLINK => match start_pro_output(
             transport, &name, &extras, unit_id, width, height, fps_num, fps_den,
         ) {
             Ok(output) => OutputHandle::Pro(output),
@@ -4242,7 +4184,7 @@ unsafe fn mixer_output_add_ex_ffi(
             OutputHandle::Omt(sender) => Some(omt::omt_audio_send(sender.audio_ingress())),
             #[cfg(any(windows, target_os = "macos"))]
             OutputHandle::Ndi(_) => None,
-            OutputHandle::Pro(_) => None,
+            OutputHandle::Pro(_) | OutputHandle::Stream(_) => None,
         };
         let video_sub = Arc::new(AtomicBool::new(false));
         let connections = match &handle {
@@ -4296,9 +4238,7 @@ unsafe fn mixer_output_add_ex_ffi(
                 fps_num: inherited.0,
                 fps_den: inherited.1,
                 transport,
-                rtmp_link: (transport == OUT_RTMP).then(|| {
-                    RtmpLink::from_request(&extras, width, height, fps_num, fps_den)
-                }),
+                stream: None,
                 started_at: Instant::now(),
                 connections,
                 video_sub,
@@ -4318,6 +4258,350 @@ unsafe fn mixer_output_add_ex_ffi(
         OK
     })
     .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_stream_encoder_add(
+    encoder_id: u64,
+    source_kind: u32,
+    source_id: u64,
+    unit_id: u64,
+    audio_unit_id: u64,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+    video_bitrate: u32,
+    audio_bitrate: u32,
+    keyint: u32,
+    video_only: u32,
+    encoder_threads: u32,
+) -> i32 {
+    ffi_guard("mixer_stream_encoder_add", ERR_DEVICE, || {
+        stream_encoder_add_ffi(
+            encoder_id,
+            source_kind,
+            source_id,
+            unit_id,
+            audio_unit_id,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            video_bitrate,
+            audio_bitrate,
+            keyint,
+            video_only,
+            encoder_threads,
+        )
+    })
+}
+
+fn stream_encoder_add_ffi(
+    encoder_id: u64,
+    source_kind: u32,
+    source_id: u64,
+    unit_id: u64,
+    audio_unit_id: u64,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+    video_bitrate: u32,
+    audio_bitrate: u32,
+    keyint: u32,
+    video_only: u32,
+    encoder_threads: u32,
+) -> i32 {
+    if (width == 0) != (height == 0) || (fps_num == 0) != (fps_den == 0) {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let extras = crate::pro::OutputExtras::default();
+    if let Some(code) = gate_pro_output(
+        encoder_id, OUT_RTMP, unit_id, width, height, fps_num, fps_den, &extras,
+    ) {
+        return code;
+    }
+    let (width, height, fps_num, fps_den) = picture_of(unit_id, width, height, fps_num, fps_den);
+    let Some(backend) = crate::pro::module().streaming() else {
+        let message = "RTMP is not linked in this build";
+        crate::diag::error(&format!("stream encoder id={encoder_id}: {message}"));
+        let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
+        return ERR_IO;
+    };
+    let started = backend.start_stream(&eiviz_pro_api::StreamEncodeConfig {
+        video_bitrate: if video_bitrate == 0 {
+            4_500_000
+        } else {
+            video_bitrate
+        },
+        keyint: if keyint == 0 { 60 } else { keyint },
+        width,
+        height,
+        fps_num,
+        fps_den,
+        encoder: eiviz_pro_api::VideoEncoderKind::OpenH264,
+        encoder_threads,
+        audio: eiviz_pro_api::AudioEncodeConfig {
+            bitrate: if audio_bitrate == 0 {
+                128_000
+            } else {
+                audio_bitrate
+            },
+            video_only: video_only != 0,
+        },
+    });
+    let output = match started {
+        Ok(output) => output,
+        Err(error) => {
+            let code = crate::pro::pro_code(error.clone());
+            crate::diag::error(&format!(
+                "stream encoder id={encoder_id}: {}",
+                error.message
+            ));
+            let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error.message));
+            return code;
+        }
+    };
+    let shared = Arc::new(Mutex::new(output));
+    // The audio scheduler must not wait on OpenH264. A blocked 10 ms tick
+    // skips samples, which is a click even on a generated 1 kHz tone.
+    let (audio_tx, audio_rx) = std::sync::mpsc::sync_channel(64);
+    let audio_output = Arc::clone(&shared);
+    let audio_thread = thread::Builder::new()
+        .name(format!("eiviz-rtmp-aac-{encoder_id}"))
+        .spawn(move || {
+            while let Ok(packet) = audio_rx.recv() {
+                if let Err(error) =
+                    lock_stream(&audio_output).submit_audio(crate::pro::audio_frame(&packet))
+                {
+                    crate::diag::error_throttled(&format!(
+                        "stream send audio: {}",
+                        error.message
+                    ));
+                }
+            }
+        });
+    if let Err(error) = audio_thread {
+        crate::diag::error(&format!("stream audio thread: {error}"));
+        return ERR_DEVICE;
+    }
+    let audio_send: Arc<dyn Fn(AudioPacket) + Send + Sync> = Arc::new(move |packet| {
+        if audio_tx.try_send(packet).is_err() {
+            crate::diag::error_throttled("stream audio queue is full");
+        }
+    });
+    let source_id = crate::abi::resolve_output_source_id(source_kind, source_id);
+    let audio_unit_id = if source_kind == SRC_KIND_MU_MULTIVIEW {
+        0
+    } else {
+        audio_unit_id
+    };
+    let old = match with_mixer(|mixer| {
+        mixer.shared.lock_or_recover().outputs.remove(&encoder_id);
+        mixer.send_workers.remove(&encoder_id)
+    }) {
+        Ok(old) => old,
+        Err(code) => return code,
+    };
+    if let Some(old) = old {
+        shutdown_output_worker(old);
+    }
+    with_mixer(|mixer| {
+        let video_sub = Arc::new(AtomicBool::new(false));
+        let connections = Arc::new(AtomicU32::new(0));
+        let clock = mixer.shared.lock_or_recover().clock;
+        let worker = match spawn_output_worker(
+            encoder_id,
+            OutputHandle::Stream(Arc::clone(&shared)),
+            Arc::clone(&video_sub),
+            Arc::clone(&connections),
+            mixer.omt_gpu.clone(),
+            Arc::clone(&mixer.stop),
+            clock,
+            fps_num,
+            fps_den,
+        ) {
+            Ok(worker) => worker,
+            Err(error) => {
+                crate::diag::error(&error);
+                set_error(&mixer.telemetry, error);
+                return ERR_DEVICE;
+            }
+        };
+        mixer.shared.lock_or_recover().outputs.insert(
+            encoder_id,
+            LiveOutput {
+                source_kind,
+                source_id,
+                unit_id,
+                audio_unit_id,
+                width,
+                height,
+                fps_num,
+                fps_den,
+                transport: OUT_RTMP,
+                stream: Some(Arc::clone(&shared)),
+                started_at: Instant::now(),
+                connections,
+                video_sub,
+                use_gpu: false,
+                skip_idle_encode: false,
+                bytes_per_pixel: 2,
+                tx: worker.tx.clone(),
+                pace: Arc::clone(&worker.tx.pace),
+                audio_send: Some(audio_send),
+            },
+        );
+        mixer.send_workers.insert(encoder_id, worker);
+        crate::diag::info(&format!(
+            "stream encoder id={encoder_id} {width}x{height} {fps_num}/{fps_den}"
+        ));
+        OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_stream_encoder_remove(encoder_id: u64) -> i32 {
+    ffi_guard("mixer_stream_encoder_remove", ERR_DEVICE, || {
+        mixer_output_remove_ffi(encoder_id)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_stream_destination_add(
+    encoder_id: u64,
+    destination_id: u64,
+    url: *const c_char,
+    secret_ref: *const c_char,
+) -> i32 {
+    ffi_guard("mixer_stream_destination_add", ERR_DEVICE, || {
+        let url = match crate::pro::cstr(url) {
+            Some(url) => url.to_string(),
+            None => return ERR_INVALID_ARGUMENT,
+        };
+        let secret_ref = crate::pro::cstr(secret_ref).unwrap_or("").to_string();
+        let resolved = match crate::pro::rtmp_url(&crate::pro::OutputExtras {
+            url,
+            secret_ref,
+            ..crate::pro::OutputExtras::default()
+        }) {
+            Ok(url) => url,
+            Err(error) => {
+                crate::diag::error(&format!(
+                    "stream destination id={destination_id} encoder={encoder_id}: {error}"
+                ));
+                let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
+                return ERR_IO;
+            }
+        };
+        let stream = match with_mixer(|mixer| {
+            mixer
+                .shared
+                .lock_or_recover()
+                .outputs
+                .get(&encoder_id)
+                .and_then(|output| output.stream.clone())
+        }) {
+            Ok(Some(stream)) => stream,
+            Ok(None) => {
+                let message = "stream encoder is not running";
+                crate::diag::error(&format!(
+                    "stream destination id={destination_id} encoder={encoder_id}: {message}"
+                ));
+                let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
+                return ERR_IO;
+            }
+            Err(code) => return code,
+        };
+        match lock_stream(&stream).add_destination(destination_id, &resolved) {
+            Ok(()) => OK,
+            Err(error) => {
+                let code = crate::pro::pro_code(error.clone());
+                crate::diag::error(&format!(
+                    "stream destination id={destination_id} encoder={encoder_id}: {}",
+                    error.message
+                ));
+                let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error.message));
+                code
+            }
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_stream_destination_remove(encoder_id: u64, destination_id: u64) -> i32 {
+    ffi_guard("mixer_stream_destination_remove", ERR_DEVICE, || {
+        let stream = match with_mixer(|mixer| {
+            mixer
+                .shared
+                .lock_or_recover()
+                .outputs
+                .get(&encoder_id)
+                .and_then(|output| output.stream.clone())
+        }) {
+            Ok(Some(stream)) => stream,
+            Ok(None) => return OK,
+            Err(code) => return code,
+        };
+        match lock_stream(&stream).remove_destination(destination_id) {
+            Ok(()) => OK,
+            Err(error) => {
+                let code = crate::pro::pro_code(error.clone());
+                let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error.message));
+                code
+            }
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_stream_destination_stats(
+    encoder_id: u64,
+    destination_id: u64,
+    connected: *mut u32,
+    video_frames: *mut u64,
+    dropped: *mut u64,
+    bitrate: *mut u32,
+    encoder_threads: *mut u32,
+) -> i32 {
+    ffi_guard("mixer_stream_destination_stats", ERR_DEVICE, || {
+        if connected.is_null() || video_frames.is_null() || dropped.is_null() || bitrate.is_null() {
+            return ERR_INVALID_ARGUMENT;
+        }
+        let stream = match with_mixer(|mixer| {
+            mixer
+                .shared
+                .lock_or_recover()
+                .outputs
+                .get(&encoder_id)
+                .and_then(|output| output.stream.clone())
+        }) {
+            Ok(Some(stream)) => stream,
+            Ok(None) => return ERR_IO,
+            Err(code) => return code,
+        };
+        match lock_stream(&stream).destination_stats(destination_id) {
+            Ok(stats) => {
+                unsafe {
+                    *connected = u32::from(stats.connected);
+                    *video_frames = stats.video_frames;
+                    *dropped = stats.dropped;
+                    *bitrate = stats.bitrate;
+                    if !encoder_threads.is_null() {
+                        *encoder_threads = stats.encoder_threads;
+                    }
+                }
+                OK
+            }
+            Err(error) => {
+                let code = crate::pro::pro_code(error.clone());
+                let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error.message));
+                code
+            }
+        }
+    })
 }
 
 #[unsafe(no_mangle)]

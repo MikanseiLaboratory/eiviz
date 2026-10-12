@@ -68,19 +68,61 @@ internal static class SessionStore
     {
         if (Application.Current is App { Backend.IsRemote: true })
             return;
+        EnsureStreamEncoder(session);
         foreach (var output in session.Outputs)
         {
             if (output.Transport != OutputTransport.Rtmp || string.IsNullOrEmpty(output.RtmpSecretRef))
                 continue;
             var key = CredentialStore.Load("rtmp/" + output.RtmpSecretRef);
             if (string.IsNullOrEmpty(key))
+            {
+                HostLog.Write("WARN", "RTMP secret " + output.RtmpSecretRef + " is not stored");
                 continue;
+            }
             MixerNative.ThrowIfFailed(MixerNative.SecretSet(output.RtmpSecretRef, key), "RTMP secret");
         }
         MixerNative.SessionReplaceText(ToJson(session));
     }
 
     public static void ReplaceRuntime(Session session) => Publish(session);
+
+    /// An enabled RTMP row with no encode profile never opens a socket. Create
+    /// the same default profile the settings page uses and point those rows at it.
+    private static void EnsureStreamEncoder(Session session)
+    {
+        var missing = session.Outputs.Where(output =>
+            output.Transport == OutputTransport.Rtmp
+            && output.Enabled
+            && session.StreamEncoders.All(encoder => encoder.Id != output.StreamEncoderId)).ToList();
+        if (missing.Count == 0)
+            return;
+        if (session.StreamEncoders.Count == 0)
+        {
+            if (session.NextStreamEncoderId == 0)
+                session.NextStreamEncoderId = 1;
+            var unit = session.Units.Count > 0 ? session.Units[0].Id : 1UL;
+            var gap = Loc.Language == AppLanguage.Ja ? "" : " ";
+            session.StreamEncoders.Add(new StreamEncoderEntry
+            {
+                Id = session.NextStreamEncoderId++,
+                Name = Loc.T("settings.encodeName") + gap + "1",
+                SourceKind = OutputSourceKind.MuProgram,
+                UnitId = unit,
+                AudioUnitId = unit,
+                Width = 1920,
+                Height = 1080,
+                FpsNum = 60_000,
+                FpsDen = 1_001,
+                VideoBitrate = 6_000_000,
+                AudioBitrate = 128_000,
+                Keyint = 120,
+                EncoderThreads = 0
+            });
+        }
+        var id = session.StreamEncoders[0].Id;
+        foreach (var output in missing)
+            output.StreamEncoderId = id;
+    }
 
     public static bool RelinkInput(InputEntry input, string path)
     {
@@ -207,6 +249,7 @@ internal static class SessionStore
         public List<OverlaySlot> Overlays { get; set; } = [];
         public ulong NextOverlayId { get; set; } = 1;
         public List<OutputEntry> Outputs { get; set; } = [];
+        public List<StreamEncoderEntry> StreamEncoders { get; set; } = [];
         public List<MultiviewDto> Multiviews { get; set; } = [];
         public List<SceneLayoutPreset> ScenePresets { get; set; } = [];
         public List<string> InputTags { get; set; } = [];
@@ -215,6 +258,7 @@ internal static class SessionStore
         public ulong NextSceneId { get; set; }
         public ulong NextUnitId { get; set; }
         public ulong NextOutputId { get; set; }
+        public ulong NextStreamEncoderId { get; set; } = 1;
         public ulong NextMultiviewId { get; set; }
         public ulong SelectedUnitId { get; set; }
         public HeadphoneEntry Headphone { get; set; } = new();
@@ -233,6 +277,7 @@ internal static class SessionStore
             Overlays = [.. session.Overlays],
             NextOverlayId = session.NextOverlayId,
             Outputs = session.Outputs.Select(output => output.Clone()).ToList(),
+            StreamEncoders = session.StreamEncoders.Select(encoder => encoder.Clone()).ToList(),
             Multiviews = session.Multiviews.Select(MultiviewDto.From).ToList(),
             ScenePresets = session.ScenePresets.Select(preset => new SceneLayoutPreset
             {
@@ -245,6 +290,7 @@ internal static class SessionStore
             NextSceneId = session.NextSceneId,
             NextUnitId = session.NextUnitId,
             NextOutputId = session.NextOutputId,
+            NextStreamEncoderId = session.NextStreamEncoderId,
             NextMultiviewId = session.NextMultiviewId,
             SelectedUnitId = session.SelectedUnitId,
             Headphone = session.Headphone.Clone(),
@@ -303,6 +349,8 @@ internal static class SessionStore
                 session.Units.Add(unit.ToEntry());
             foreach (var output in Outputs)
                 session.Outputs.Add(output);
+            foreach (var encoder in StreamEncoders)
+                session.StreamEncoders.Add(encoder.Clone());
             foreach (var layout in Multiviews)
                 session.Multiviews.Add(layout.ToEntry(session));
             foreach (var preset in ScenePresets)
@@ -319,6 +367,9 @@ internal static class SessionStore
             session.NextSceneId = Math.Max(NextSceneId, session.Scenes.Count == 0 ? 1 : session.Scenes.Max(item => item.Id) + 1);
             session.NextUnitId = Math.Max(NextUnitId, session.Units.Count == 0 ? 1 : session.Units.Max(item => item.Id) + 1);
             session.NextOutputId = Math.Max(NextOutputId, session.Outputs.Count == 0 ? 100 : session.Outputs.Max(item => item.Id) + 1);
+            session.NextStreamEncoderId = Math.Max(
+                NextStreamEncoderId == 0 ? 1 : NextStreamEncoderId,
+                session.StreamEncoders.Count == 0 ? 1 : session.StreamEncoders.Max(item => item.Id) + 1);
             session.NextMultiviewId = Math.Max(NextMultiviewId, session.Multiviews.Count == 0 ? 1 : session.Multiviews.Max(item => item.Id) + 1);
             session.EnsureDefaultTransitions();
             if (session.Units.Count == 0)

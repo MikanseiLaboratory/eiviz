@@ -1026,10 +1026,7 @@ public sealed class OutputEntry
     public bool DecklinkExternalKey { get; set; }
     public string RtmpUrl { get; set; } = "";
     public string RtmpSecretRef { get; set; } = "";
-    public uint RtmpVideoBitrate { get; set; }
-    public uint RtmpAudioBitrate { get; set; }
-    public uint RtmpKeyint { get; set; }
-    public bool RtmpVideoOnly { get; set; }
+    public ulong StreamEncoderId { get; set; }
 
     public OutputEntry Clone() => new()
     {
@@ -1052,10 +1049,45 @@ public sealed class OutputEntry
         DecklinkExternalKey = DecklinkExternalKey,
         RtmpUrl = RtmpUrl,
         RtmpSecretRef = RtmpSecretRef,
-        RtmpVideoBitrate = RtmpVideoBitrate,
-        RtmpAudioBitrate = RtmpAudioBitrate,
-        RtmpKeyint = RtmpKeyint,
-        RtmpVideoOnly = RtmpVideoOnly
+        StreamEncoderId = StreamEncoderId
+    };
+}
+
+public sealed class StreamEncoderEntry
+{
+    public ulong Id { get; set; }
+    public string Name { get; set; } = "";
+    public OutputSourceKind SourceKind { get; set; } = OutputSourceKind.MuProgram;
+    public ulong SourceId { get; set; }
+    public ulong UnitId { get; set; } = 1;
+    public ulong AudioUnitId { get; set; } = 1;
+    public uint Width { get; set; } = 1920;
+    public uint Height { get; set; } = 1080;
+    public uint FpsNum { get; set; } = 60_000;
+    public uint FpsDen { get; set; } = 1_001;
+    public uint VideoBitrate { get; set; } = 6_000_000;
+    public uint AudioBitrate { get; set; } = 128_000;
+    public uint Keyint { get; set; } = 120;
+    public bool VideoOnly { get; set; }
+    public uint EncoderThreads { get; set; }
+
+    public StreamEncoderEntry Clone() => new()
+    {
+        Id = Id,
+        Name = Name,
+        SourceKind = SourceKind,
+        SourceId = SourceId,
+        UnitId = UnitId,
+        AudioUnitId = AudioUnitId,
+        Width = Width,
+        Height = Height,
+        FpsNum = FpsNum,
+        FpsDen = FpsDen,
+        VideoBitrate = VideoBitrate,
+        AudioBitrate = AudioBitrate,
+        Keyint = Keyint,
+        VideoOnly = VideoOnly,
+        EncoderThreads = EncoderThreads
     };
 }
 
@@ -1230,6 +1262,7 @@ public sealed class Session
     public List<TransitionPreset> Transitions { get; } = [];
     public List<OverlaySlot> Overlays { get; } = [];
     public List<OutputEntry> Outputs { get; } = [];
+    public List<StreamEncoderEntry> StreamEncoders { get; } = [];
     public List<MultiviewLayout> Multiviews { get; } = [];
     public List<SceneLayoutPreset> ScenePresets { get; } = [];
     public List<string> InputTags { get; } = [];
@@ -1239,6 +1272,7 @@ public sealed class Session
     public ulong NextUnitId { get; set; } = 1;
     public ulong NextMonitorId { get; set; } = 1000;
     public ulong NextOutputId { get; set; } = 100;
+    public ulong NextStreamEncoderId { get; set; } = 1;
     public ulong NextMultiviewId { get; set; } = 1;
     public ulong NextOverlayId { get; set; } = 1;
     public ulong SelectedUnitId { get; set; } = 1;

@@ -1054,7 +1054,9 @@ impl VmxEncoder {
             width,
             height,
             profile: vmx::Profile::Default,
-            color_space: vmx::ColorSpace::Undefined,
+            // UYVY leaving the mixer is limited-range BT.709. Do not leave
+            // this to the receiver's HD/SD heuristic.
+            color_space: vmx::ColorSpace::Bt709,
         })
         .map_err(|e| e.to_string())?;
         self.codec = Some(codec);

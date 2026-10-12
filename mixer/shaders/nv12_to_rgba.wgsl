@@ -26,12 +26,13 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VsOut {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    // Limited-range BT.709. Chroma is scaled from the 224 code-value swing.
     let y = (textureSample(y_tex, samp, in.uv).r - 16.0 / 255.0) * (255.0 / 219.0);
-    let chroma = textureSample(uv_tex, samp, in.uv).rg - vec2<f32>(128.0 / 255.0);
+    let chroma = (textureSample(uv_tex, samp, in.uv).rg - vec2<f32>(128.0 / 255.0)) * (255.0 / 224.0);
     let u = chroma.x;
     let v = chroma.y;
     let r = clamp(y + 1.5748 * v, 0.0, 1.0);
-    let g = clamp(y - 0.1873 * u - 0.4681 * v, 0.0, 1.0);
+    let g = clamp(y - 0.187324 * u - 0.468124 * v, 0.0, 1.0);
     let b = clamp(y + 1.8556 * u, 0.0, 1.0);
     return vec4<f32>(r, g, b, 1.0);
 }

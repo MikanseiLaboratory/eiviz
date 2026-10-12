@@ -18,10 +18,10 @@ use eiviz_mixer::{
     mixer_define_mix_input, mixer_define_scene, mixer_destroy, mixer_generator_set_tone,
     mixer_omt_connect, mixer_omt_discover, mixer_omt_start_send, mixer_output_add, mixer_ping,
     mixer_session_replace, mixer_set_live_save, mixer_set_ndi_gpu_upload,
-    mixer_set_rebar_optimization, mixer_snapshot,
-    mixer_unit_acquire_frame, mixer_unit_cut, mixer_unit_detach_native, mixer_unit_get_state,
-    mixer_unit_release_frame, mixer_unit_set_overlays, mixer_unit_set_state,
-    mixer_validate_custom_wgsl, mixer_video_enum_captures, mixer_video_start,
+    mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_acquire_frame, mixer_unit_cut,
+    mixer_unit_detach_native, mixer_unit_get_state, mixer_unit_release_frame,
+    mixer_unit_set_overlays, mixer_unit_set_state, mixer_validate_custom_wgsl,
+    mixer_video_enum_captures, mixer_video_start,
 };
 #[cfg(target_os = "linux")]
 use eiviz_mixer::{BACKEND_VULKAN, mixer_backend};
@@ -2306,7 +2306,7 @@ fn session_replace_survives_incomplete_pro_outputs() {
       "outputs": [
         { "id": 100, "name": "eiviz-pgm", "transport": "Omt", "sourceKind": "MuProgram", "useGpu": true, "audioUnitId": 1 },
         { "id": 101, "name": "deck", "transport": "DeckLink", "sourceKind": "MuProgram", "unitId": 1 },
-        { "id": 102, "name": "yt", "transport": "Rtmp", "sourceKind": "MuProgram", "unitId": 1 }
+        { "id": 102, "name": "yt", "transport": "Rtmp", "streamEncoderId": 1 }
       ]
     }"#;
     let code = unsafe { mixer_session_replace(json.as_ptr(), json.len(), 0) };

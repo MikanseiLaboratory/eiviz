@@ -11,6 +11,7 @@ use super::{
     HeadphoneDto, InputDto, InputKind, InternalColorFormat, MixSource, MuBusDto, MultiviewDto,
     MultiviewTemplate, MvLabelAnchor, MvLabelUnit, MvSlot, MvSlotKind, NdiBandwidth, OmtQuality,
     OutputDto, OutputSourceKind, OutputTransport, OverlaySlot, RgbColor, SceneDto, SceneLayer,
+    StreamEncoderDto,
     SceneLayerGeom, SceneLayoutPreset, SessionSettings, SwitcherSceneFilter, TransitionPreset,
     UnitDto, VideoPlayWhen, VideoTriggerWhen,
 };
@@ -347,6 +348,8 @@ fn document_to_pb(doc: &Document) -> pb::Document {
         transitions: doc.transitions.iter().map(transition_to_pb).collect(),
         overlays: doc.overlays.iter().map(overlay_to_pb).collect(),
         next_overlay_id: doc.next_overlay_id,
+        stream_encoders: doc.stream_encoders.iter().map(stream_encoder_to_pb).collect(),
+        next_stream_encoder_id: doc.next_stream_encoder_id,
         outputs: doc.outputs.iter().map(output_to_pb).collect(),
         multiviews: doc.multiviews.iter().map(multiview_to_pb).collect(),
         next_input_id: doc.next_input_id,
@@ -387,6 +390,12 @@ fn document_from_pb(doc: pb::Document) -> Result<Document, String> {
             .collect(),
         overlays: doc.overlays.into_iter().map(overlay_from_pb).collect(),
         next_overlay_id: doc.next_overlay_id,
+        stream_encoders: doc
+            .stream_encoders
+            .into_iter()
+            .map(stream_encoder_from_pb)
+            .collect::<Result<_, _>>()?,
+        next_stream_encoder_id: doc.next_stream_encoder_id,
         outputs: doc
             .outputs
             .into_iter()
@@ -1037,11 +1046,48 @@ fn output_to_pb(output: &OutputDto) -> pb::Output {
         decklink_external_key: output.decklink_external_key,
         rtmp_url: output.rtmp_url.clone(),
         rtmp_secret_ref: output.rtmp_secret_ref.clone(),
-        rtmp_video_bitrate: output.rtmp_video_bitrate,
-        rtmp_audio_bitrate: output.rtmp_audio_bitrate,
-        rtmp_keyint: output.rtmp_keyint,
-        rtmp_video_only: output.rtmp_video_only,
+        stream_encoder_id: output.stream_encoder_id,
     }
+}
+
+fn stream_encoder_to_pb(encoder: &StreamEncoderDto) -> pb::StreamEncoder {
+    pb::StreamEncoder {
+        id: encoder.id,
+        name: encoder.name.clone(),
+        source_kind: source_kind_to_pb(encoder.source_kind).into(),
+        source_id: encoder.source_id,
+        unit_id: encoder.unit_id,
+        audio_unit_id: encoder.audio_unit_id,
+        width: encoder.width,
+        height: encoder.height,
+        fps_num: encoder.fps_num,
+        fps_den: encoder.fps_den,
+        video_bitrate: encoder.video_bitrate,
+        audio_bitrate: encoder.audio_bitrate,
+        keyint: encoder.keyint,
+        video_only: encoder.video_only,
+        encoder_threads: encoder.encoder_threads,
+    }
+}
+
+fn stream_encoder_from_pb(encoder: pb::StreamEncoder) -> Result<StreamEncoderDto, String> {
+    Ok(StreamEncoderDto {
+        id: encoder.id,
+        name: encoder.name,
+        source_kind: source_kind_from_pb(encoder.source_kind)?,
+        source_id: encoder.source_id,
+        unit_id: encoder.unit_id,
+        audio_unit_id: encoder.audio_unit_id,
+        width: encoder.width,
+        height: encoder.height,
+        fps_num: encoder.fps_num,
+        fps_den: encoder.fps_den,
+        video_bitrate: encoder.video_bitrate,
+        audio_bitrate: encoder.audio_bitrate,
+        keyint: encoder.keyint,
+        video_only: encoder.video_only,
+        encoder_threads: encoder.encoder_threads,
+    })
 }
 
 fn output_from_pb(output: pb::Output) -> Result<OutputDto, String> {
@@ -1065,10 +1111,7 @@ fn output_from_pb(output: pb::Output) -> Result<OutputDto, String> {
         decklink_external_key: output.decklink_external_key,
         rtmp_url: output.rtmp_url,
         rtmp_secret_ref: output.rtmp_secret_ref,
-        rtmp_video_bitrate: output.rtmp_video_bitrate,
-        rtmp_audio_bitrate: output.rtmp_audio_bitrate,
-        rtmp_keyint: output.rtmp_keyint,
-        rtmp_video_only: output.rtmp_video_only,
+        stream_encoder_id: output.stream_encoder_id,
     })
 }
 

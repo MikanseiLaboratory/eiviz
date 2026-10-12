@@ -29,14 +29,17 @@ pub use ffi::{
     ABI_MAJOR, FEATURE_DECKLINK, FEATURE_LICENSE, FEATURE_RTMP, GET_API_SYMBOL, GetApiFn,
     LAYOUT_BGRA, LAYOUT_UYVY, PRO_BUSY, PRO_DEVICE, PRO_INVALID, PRO_IO, PRO_NOT_SUPPORTED, PRO_OK,
     PRO_UNAVAILABLE, ProApi, ProAudioView, ProBytes, ProCaptureCallbacks, ProCaptureStatsAbi,
-    ProEntitlementsAbi, ProLicenseStatusAbi, ProOutputStatsAbi, ProPlayoutConfig, ProRtmpConfig,
-    ProStatus, ProVideoView, SIGNAL_NONE, SIGNAL_PRESENT, abi_hash, copy_to_buffer, module_target,
+    ProEntitlementsAbi, ProLicenseStatusAbi, ProOutputStatsAbi, ProPlayoutConfig, ProStatus,
+    ProStreamConfig, ProVideoView, SIGNAL_NONE, SIGNAL_PRESENT, abi_hash, copy_to_buffer,
+    module_target,
 };
 pub use license::{LicenseBackend, LicenseCondition, LicenseStatus};
 pub use manifest::ModuleManifest;
 pub use media::{AudioFrame, MediaOutput, OutputStats, PixelLayout, VideoFrame};
 pub use plan::{Entitlements, Plan, Quota, VideoLimit};
-pub use stream::{AudioEncodeConfig, RtmpConfig, StreamBackend, VideoEncoderKind};
+pub use stream::{
+    AudioEncodeConfig, StreamBackend, StreamEncodeConfig, StreamOutput, VideoEncoderKind,
+};
 
 /// Entry point implemented by the Community stand-in and by the private Pro crate.
 pub trait ProModule: Send + Sync {

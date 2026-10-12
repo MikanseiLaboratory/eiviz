@@ -17,8 +17,8 @@ use eiviz_pro_api::{
     OutputStats, PRO_BUSY, PRO_DEVICE, PRO_INVALID, PRO_NOT_SUPPORTED, PRO_UNAVAILABLE,
     PixelLayout, Plan, ProApi, ProAudioView, ProCaptureCallbacks, ProCaptureStatsAbi,
     ProEntitlementsAbi, ProError, ProErrorKind, ProLicenseStatusAbi, ProOutputStatsAbi,
-    ProPlayoutConfig, ProRtmpConfig, ProStatus, ProVideoView, RtmpConfig, SIGNAL_NONE,
-    SignalStatus, StreamBackend, VideoFrame, abi_hash, module_target,
+    ProPlayoutConfig, ProStatus, ProStreamConfig, ProVideoView, SIGNAL_NONE, SignalStatus,
+    StreamBackend, StreamEncodeConfig, StreamOutput, VideoFrame, abi_hash, module_target,
 };
 use sha2::{Digest, Sha256};
 
@@ -198,7 +198,10 @@ fn api_complete(api: &ProApi) -> bool {
         && api.capture_stats.is_some()
         && api.capture_destroy.is_some()
         && api.playout_start.is_some()
-        && api.rtmp_start.is_some()
+        && api.stream_start.is_some()
+        && api.stream_add_destination.is_some()
+        && api.stream_remove_destination.is_some()
+        && api.stream_destination_stats.is_some()
         && api.output_submit_video.is_some()
         && api.output_submit_audio.is_some()
         && api.output_stats.is_some()
@@ -543,11 +546,9 @@ impl DeckLinkBackend for LoadedPro {
 }
 
 impl StreamBackend for LoadedPro {
-    fn start_rtmp(&self, config: &RtmpConfig) -> Result<Box<dyn MediaOutput>, ProError> {
-        let raw = ProRtmpConfig {
-            struct_size: std::mem::size_of::<ProRtmpConfig>() as u32,
-            url: config.url.as_ptr(),
-            url_len: config.url.len(),
+    fn start_stream(&self, config: &StreamEncodeConfig) -> Result<Box<dyn StreamOutput>, ProError> {
+        let raw = ProStreamConfig {
+            struct_size: std::mem::size_of::<ProStreamConfig>() as u32,
             video_bitrate: config.video_bitrate,
             audio_bitrate: config.audio.bitrate,
             keyint: config.keyint,
@@ -556,14 +557,33 @@ impl StreamBackend for LoadedPro {
             height: config.height,
             fps_num: config.fps_num,
             fps_den: config.fps_den,
+            encoder_threads: config.encoder_threads,
         };
-        self.open_output(|handle| unsafe {
-            if let Some(start) = self.api.rtmp_start {
-                start(self.module, &raw, handle)
+        let mut handle = std::ptr::null_mut();
+        let status = unsafe {
+            if let Some(start) = self.api.stream_start {
+                start(self.module, &raw, &mut handle)
             } else {
                 ProStatus::new(PRO_UNAVAILABLE)
             }
-        })
+        };
+        if !status.is_ok() || handle.is_null() {
+            return Err(self.error(status));
+        }
+        Ok(Box::new(PluginStream {
+            output: PluginOutput {
+                submit_video: self.api.output_submit_video,
+                submit_audio: self.api.output_submit_audio,
+                stats_fn: self.api.output_stats,
+                destroy_fn: self.api.output_destroy,
+                copy_last_error: self.api.copy_last_error,
+                module: self.module,
+                handle,
+            },
+            add_destination: self.api.stream_add_destination,
+            remove_destination: self.api.stream_remove_destination,
+            destination_stats: self.api.stream_destination_stats,
+        }))
     }
 }
 
@@ -815,14 +835,7 @@ impl PluginOutput {
         let mut buffer = [0u8; 512];
         let mut written = 0usize;
         if let Some(copy) = self.copy_last_error {
-            let _ = unsafe {
-                copy(
-                    self.module,
-                    buffer.as_mut_ptr(),
-                    buffer.len(),
-                    &mut written,
-                )
-            };
+            let _ = unsafe { copy(self.module, buffer.as_mut_ptr(), buffer.len(), &mut written) };
         }
         let message = String::from_utf8_lossy(&buffer[..written.min(buffer.len())]).into_owned();
         ProError::device(if message.is_empty() {
@@ -901,6 +914,7 @@ impl MediaOutput for PluginOutput {
             repeated: 0,
             dropped: 0,
             bitrate: 0,
+            encoder_threads: 0,
         };
         let mut message = [0u8; 256];
         let Some(stats) = self.stats_fn else {
@@ -921,7 +935,100 @@ impl MediaOutput for PluginOutput {
             dropped: raw.dropped,
             bitrate: raw.bitrate,
             message: String::from_utf8_lossy(&message[..message_len]).into_owned(),
+            encoder_threads: raw.encoder_threads,
         }
+    }
+}
+
+struct PluginStream {
+    output: PluginOutput,
+    add_destination: Option<unsafe extern "C" fn(*mut c_void, u64, *const u8, usize) -> ProStatus>,
+    remove_destination: Option<unsafe extern "C" fn(*mut c_void, u64) -> ProStatus>,
+    destination_stats: Option<
+        unsafe extern "C" fn(*mut c_void, u64, *mut ProOutputStatsAbi, *mut u8, usize) -> ProStatus,
+    >,
+}
+
+unsafe impl Send for PluginStream {}
+
+impl MediaOutput for PluginStream {
+    fn submit_video(&mut self, frame: VideoFrame) -> Result<(), ProError> {
+        self.output.submit_video(frame)
+    }
+
+    fn submit_audio(&mut self, frame: AudioFrame) -> Result<(), ProError> {
+        self.output.submit_audio(frame)
+    }
+
+    fn stats(&self) -> OutputStats {
+        self.output.stats()
+    }
+}
+
+impl StreamOutput for PluginStream {
+    fn add_destination(&mut self, id: u64, url: &str) -> Result<(), ProError> {
+        let Some(add) = self.add_destination else {
+            return Err(ProError::unavailable("pro function is missing"));
+        };
+        let status = unsafe { add(self.output.handle, id, url.as_ptr(), url.len()) };
+        if status.is_ok() {
+            Ok(())
+        } else {
+            Err(self.output.submit_error(status, "pro destination status"))
+        }
+    }
+
+    fn remove_destination(&mut self, id: u64) -> Result<(), ProError> {
+        let Some(remove) = self.remove_destination else {
+            return Err(ProError::unavailable("pro function is missing"));
+        };
+        let status = unsafe { remove(self.output.handle, id) };
+        if status.is_ok() {
+            Ok(())
+        } else {
+            Err(self.output.submit_error(status, "pro destination status"))
+        }
+    }
+
+    fn destination_stats(&self, id: u64) -> Result<OutputStats, ProError> {
+        let Some(stats_fn) = self.destination_stats else {
+            return Err(ProError::unavailable("pro function is missing"));
+        };
+        let mut raw = ProOutputStatsAbi {
+            struct_size: std::mem::size_of::<ProOutputStatsAbi>() as u32,
+            connected: 0,
+            video_frames: 0,
+            repeated: 0,
+            dropped: 0,
+            bitrate: 0,
+            encoder_threads: 0,
+        };
+        let mut message = [0u8; 256];
+        let status = unsafe {
+            stats_fn(
+                self.output.handle,
+                id,
+                &mut raw,
+                message.as_mut_ptr(),
+                message.len(),
+            )
+        };
+        if !status.is_ok() {
+            return Err(self.output.submit_error(status, "pro destination status"));
+        }
+        let message_len = message
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(message.len());
+        Ok(OutputStats {
+            connected: raw.connected != 0,
+            video_frames: raw.video_frames,
+            repeated: raw.repeated,
+            dropped: raw.dropped,
+            bitrate: raw.bitrate,
+            message: String::from_utf8_lossy(&message[..message_len]).into_owned(),
+            encoder_threads: raw.encoder_threads,
+        })
     }
 }
 

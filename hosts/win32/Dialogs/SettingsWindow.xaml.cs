@@ -54,6 +54,12 @@ public partial class SettingsWindow : Window
             Outputs.Add(Clone(output));
             _nextOutputId = Math.Max(_nextOutputId, output.Id + 1);
         }
+        _nextStreamEncoderId = session.NextStreamEncoderId == 0 ? 1 : session.NextStreamEncoderId;
+        foreach (var encoder in session.StreamEncoders)
+        {
+            StreamEncoders.Add(encoder.Clone());
+            _nextStreamEncoderId = Math.Max(_nextStreamEncoderId, encoder.Id + 1);
+        }
         SelectTag(FpsBox, $"{Settings.MasterFpsNum}/{Settings.MasterFpsDen}");
         SelectTag(SizeBox, $"{Settings.DefaultWidth}x{Settings.DefaultHeight}");
         SelectTag(BufferBox, Settings.FrameBufferFrames.ToString());
@@ -70,6 +76,7 @@ public partial class SettingsWindow : Window
             .Select(device => (device.Kind, device.Channels, device.Id, device.Name))
             .ToList();
         RebuildOutputs();
+        RebuildEncodes();
         RebuildStreams();
         RebuildLayouts();
         RebuildBuses();
@@ -87,6 +94,7 @@ public partial class SettingsWindow : Window
 
     public SessionSettings Settings { get; }
     public List<OutputEntry> Outputs { get; } = [];
+    public List<StreamEncoderEntry> StreamEncoders { get; } = [];
     public HeadphoneEntry Headphone { get; private set; } = new();
     public bool HeadphoneCopyMonitor { get; private set; }
 
@@ -95,6 +103,8 @@ public partial class SettingsWindow : Window
         var locked = OnAirLock.Active;
         if (AddOutputButton is not null)
             AddOutputButton.IsEnabled = !locked;
+        if (AddEncodeButton is not null)
+            AddEncodeButton.IsEnabled = !locked;
         if (AddStreamButton is not null)
             AddStreamButton.IsEnabled = !locked;
         if (FpsBox is not null)
@@ -103,10 +113,14 @@ public partial class SettingsWindow : Window
             SizeBox.IsEnabled = !locked;
         if (OutputRows is not null)
             RebuildOutputs();
+        if (EncodeRows is not null)
+            RebuildEncodes();
         if (StreamRows is not null)
             RebuildStreams();
     }
     public ulong NextOutputId => _nextOutputId;
+    public ulong NextStreamEncoderId => _nextStreamEncoderId;
+    private ulong _nextStreamEncoderId = 1;
     private bool _suppressOutputs;
     private List<DeckLinkDeviceInfo>? _decklinkDevices;
     private string _decklinkDeviceError = "";
@@ -544,33 +558,76 @@ public partial class SettingsWindow : Window
         RebuildOutputs();
     }
 
+    private void AddEncode_Click(object sender, RoutedEventArgs e)
+    {
+        if (OnAirLock.Active)
+            return;
+        StreamEncoders.Add(NewEncoder());
+        RebuildEncodes();
+        RebuildStreams();
+    }
+
     private void AddStream_Click(object sender, RoutedEventArgs e)
     {
         if (OnAirLock.Active)
             return;
         if (_nextOutputId < 100)
             _nextOutputId = 100;
-        var fpsNum = Settings.MasterFpsNum == 0 ? 60_000u : Settings.MasterFpsNum;
-        var fpsDen = Settings.MasterFpsDen == 0 ? 1_001u : Settings.MasterFpsDen;
+        if (StreamEncoders.Count == 0)
+        {
+            StreamEncoders.Add(NewEncoder());
+            RebuildEncodes();
+        }
+        var unit = _session.Units.Count > 0 ? _session.Units[0].Id : 1;
         Outputs.Add(new OutputEntry
         {
             Id = _nextOutputId++,
             Name = NextStreamName(),
             Transport = OutputTransport.Rtmp,
             SourceKind = OutputSourceKind.MuProgram,
-            UnitId = _session.Units.Count > 0 ? _session.Units[0].Id : 1,
-            AudioUnitId = _session.Units.Count > 0 ? _session.Units[0].Id : 1,
+            UnitId = unit,
+            AudioUnitId = unit,
             SkipEncodeWhenNoReceivers = false,
             Enabled = false,
-            Width = Settings.DefaultWidth == 0 ? 1920 : Settings.DefaultWidth,
-            Height = Settings.DefaultHeight == 0 ? 1080 : Settings.DefaultHeight,
-            FpsNum = fpsNum,
-            FpsDen = fpsDen,
-            RtmpVideoBitrate = 6_000_000,
-            RtmpAudioBitrate = 128_000,
-            RtmpKeyint = 120
+            StreamEncoderId = StreamEncoders[0].Id
         });
         RebuildStreams();
+    }
+
+    private StreamEncoderEntry NewEncoder()
+    {
+        if (_nextStreamEncoderId == 0)
+            _nextStreamEncoderId = 1;
+        var unit = _session.Units.Count > 0 ? _session.Units[0].Id : 1UL;
+        return new StreamEncoderEntry
+        {
+            Id = _nextStreamEncoderId++,
+            Name = NextEncodeName(),
+            SourceKind = OutputSourceKind.MuProgram,
+            UnitId = unit,
+            AudioUnitId = unit,
+            Width = 1920,
+            Height = 1080,
+            FpsNum = 60_000,
+            FpsDen = 1_001,
+            VideoBitrate = 6_000_000,
+            AudioBitrate = 128_000,
+            Keyint = 120,
+            EncoderThreads = 0
+        };
+    }
+
+    private string NextEncodeName()
+    {
+        var prefix = Loc.T("settings.encodeName");
+        var gap = Loc.Language == AppLanguage.Ja ? "" : " ";
+        for (var n = 1; n < 100; n++)
+        {
+            var name = prefix + gap + n;
+            if (StreamEncoders.TrueForAll(item => item.Name != name))
+                return name;
+        }
+        return prefix;
     }
 
     private string NextStreamName()
@@ -587,10 +644,108 @@ public partial class SettingsWindow : Window
         return prefix;
     }
 
+    private void RebuildEncodes()
+    {
+        EncodeRows.Children.Clear();
+        for (var i = 0; i < StreamEncoders.Count; i++)
+            EncodeRows.Children.Add(BuildEncodeRow(StreamEncoders[i], i));
+    }
+
+    private Border BuildEncodeRow(StreamEncoderEntry encoder, int index)
+    {
+        var locked = OnAirLock.Active;
+        var box = StreamCard();
+        var grid = new Grid();
+        for (var col = 0; col < 3; col++)
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+        for (var row = 0; row < 4; row++)
+            grid.RowDefinitions.Add(new RowDefinition());
+
+        var name = new TextBox { Text = encoder.Name, Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
+        name.TextChanged += (_, _) => encoder.Name = name.Text.Trim();
+        var remove = new Button { Content = "−", Width = 28, IsEnabled = !locked };
+        remove.Click += (_, _) =>
+        {
+            if (OnAirLock.Active)
+                return;
+            StreamEncoders.RemoveAt(index);
+            RebuildEncodes();
+            RebuildStreams();
+        };
+
+        var videoKbps = encoder.VideoBitrate == 0 ? 6000u : encoder.VideoBitrate / 1000;
+        var audioKbps = encoder.AudioBitrate == 0 ? 128u : encoder.AudioBitrate / 1000;
+        var video = Labeled(Loc.T("settings.videoBitrate"), videoKbps.ToString(), !locked, value =>
+        {
+            if (uint.TryParse(value, out var kbps) && kbps > 0)
+                encoder.VideoBitrate = kbps * 1000;
+        });
+        var audio = Labeled(Loc.T("settings.audioBitrate"), audioKbps.ToString(), !locked, value =>
+        {
+            if (uint.TryParse(value, out var kbps) && kbps > 0)
+                encoder.AudioBitrate = kbps * 1000;
+        });
+        var keyint = Labeled(Loc.T("settings.keyframeInterval"), (encoder.Keyint == 0 ? 120 : encoder.Keyint).ToString(), !locked, value =>
+        {
+            if (uint.TryParse(value, out var frames) && frames > 0)
+                encoder.Keyint = frames;
+        });
+
+        var size = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
+        FillEncodeSize(size, encoder);
+        size.SelectionChanged += (_, _) =>
+        {
+            if (!OnAirLock.Active)
+                ApplyEncodeSize(size, encoder);
+        };
+        var fps = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
+        FillEncodeFps(fps, encoder);
+        fps.SelectionChanged += (_, _) =>
+        {
+            if (!OnAirLock.Active)
+                ApplyEncodeFps(fps, encoder);
+        };
+        var threads = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
+        FillThreads(threads, encoder);
+        threads.SelectionChanged += (_, _) =>
+        {
+            if (OnAirLock.Active || threads.SelectedItem is not ComboBoxItem item || item.Tag is not string tag)
+                return;
+            if (uint.TryParse(tag, out var count))
+                encoder.EncoderThreads = count;
+        };
+        var threadLabel = new TextBlock { Text = Loc.T("settings.threads"), Margin = new Thickness(0, 0, 8, 2) };
+
+        Grid.SetColumnSpan(name, 3);
+        Grid.SetColumn(remove, 3);
+        Grid.SetRow(video, 1);
+        Grid.SetRow(audio, 1);
+        Grid.SetColumn(audio, 1);
+        Grid.SetRow(keyint, 1);
+        Grid.SetColumn(keyint, 2);
+        Grid.SetRow(size, 2);
+        Grid.SetRow(fps, 2);
+        Grid.SetColumn(fps, 1);
+        Grid.SetRow(threadLabel, 3);
+        Grid.SetRow(threads, 3);
+        Grid.SetColumn(threads, 1);
+        grid.Children.Add(name);
+        grid.Children.Add(remove);
+        grid.Children.Add(video);
+        grid.Children.Add(audio);
+        grid.Children.Add(keyint);
+        grid.Children.Add(size);
+        grid.Children.Add(fps);
+        grid.Children.Add(threadLabel);
+        grid.Children.Add(threads);
+        box.Child = grid;
+        return box;
+    }
+
     private void RebuildStreams()
     {
         StreamRows.Children.Clear();
-        _suppressOutputs = true;
         for (var i = 0; i < Outputs.Count; i++)
         {
             var index = i;
@@ -599,19 +754,12 @@ public partial class SettingsWindow : Window
                 continue;
             StreamRows.Children.Add(BuildStreamRow(output, index));
         }
-        _suppressOutputs = false;
     }
 
     private Border BuildStreamRow(OutputEntry output, int index)
     {
         var locked = OnAirLock.Active;
-        var box = new Border
-        {
-            BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44)),
-            BorderThickness = new Thickness(1),
-            Padding = new Thickness(8),
-            Margin = new Thickness(0, 0, 0, 8)
-        };
+        var box = StreamCard();
         var grid = new Grid();
         for (var col = 0; col < 3; col++)
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -630,6 +778,17 @@ public partial class SettingsWindow : Window
             RebuildStreams();
         };
 
+        var encode = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
+        foreach (var encoder in StreamEncoders)
+            encode.Items.Add(new ComboBoxItem { Content = encoder.Name, Tag = encoder.Id });
+        SelectUlongTag(encode, output.StreamEncoderId);
+        encode.SelectionChanged += (_, _) =>
+        {
+            if (encode.SelectedItem is ComboBoxItem item && item.Tag is ulong id)
+                output.StreamEncoderId = id;
+        };
+        var encodeLabel = new TextBlock { Text = Loc.T("settings.useEncode"), Margin = new Thickness(0, 0, 8, 2) };
+
         var server = Labeled(Loc.T("settings.streamServer"), output.RtmpUrl, !locked, value => output.RtmpUrl = value.Trim());
         var key = new PasswordBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
         if (!string.IsNullOrEmpty(output.RtmpSecretRef))
@@ -644,68 +803,36 @@ public partial class SettingsWindow : Window
         };
         var keyLabel = new TextBlock { Text = Loc.T("settings.streamKey"), Margin = new Thickness(0, 0, 8, 2) };
 
-        var videoKbps = output.RtmpVideoBitrate == 0 ? 6000u : output.RtmpVideoBitrate / 1000;
-        var audioKbps = output.RtmpAudioBitrate == 0 ? 128u : output.RtmpAudioBitrate / 1000;
-        var video = Labeled(Loc.T("settings.videoBitrate"), videoKbps.ToString(), !locked, value =>
-        {
-            if (uint.TryParse(value, out var kbps) && kbps > 0)
-                output.RtmpVideoBitrate = kbps * 1000;
-        });
-        var audio = Labeled(Loc.T("settings.audioBitrate"), audioKbps.ToString(), !locked, value =>
-        {
-            if (uint.TryParse(value, out var kbps) && kbps > 0)
-                output.RtmpAudioBitrate = kbps * 1000;
-        });
-        var keyint = Labeled(Loc.T("settings.keyframeInterval"), (output.RtmpKeyint == 0 ? 120 : output.RtmpKeyint).ToString(), !locked, value =>
-        {
-            if (uint.TryParse(value, out var frames) && frames > 0)
-                output.RtmpKeyint = frames;
-        });
-
-        var size = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
-        FillOutputSize(size, output);
-        size.SelectionChanged += (_, _) =>
-        {
-            if (!OnAirLock.Active)
-                ApplyOutputSize(size, output);
-        };
-        var fps = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
-        FillOutputFps(fps, output);
-        fps.SelectionChanged += (_, _) =>
-        {
-            if (!OnAirLock.Active)
-                ApplyOutputFps(fps, output);
-        };
-
         Grid.SetColumnSpan(name, 3);
         Grid.SetColumn(remove, 3);
-        Grid.SetRow(server, 1);
+        Grid.SetRow(encodeLabel, 1);
+        Grid.SetColumnSpan(encodeLabel, 4);
+        Grid.SetRow(encode, 2);
+        Grid.SetColumnSpan(encode, 3);
+        Grid.SetRow(server, 3);
         Grid.SetColumnSpan(server, 4);
-        Grid.SetRow(keyLabel, 2);
+        Grid.SetRow(keyLabel, 4);
         Grid.SetColumnSpan(keyLabel, 4);
-        Grid.SetRow(key, 3);
+        Grid.SetRow(key, 5);
         Grid.SetColumnSpan(key, 4);
-        Grid.SetRow(video, 4);
-        Grid.SetRow(audio, 4);
-        Grid.SetColumn(audio, 1);
-        Grid.SetRow(keyint, 4);
-        Grid.SetColumn(keyint, 2);
-        Grid.SetRow(size, 5);
-        Grid.SetRow(fps, 5);
-        Grid.SetColumn(fps, 1);
         grid.Children.Add(name);
         grid.Children.Add(remove);
+        grid.Children.Add(encodeLabel);
+        grid.Children.Add(encode);
         grid.Children.Add(server);
         grid.Children.Add(keyLabel);
         grid.Children.Add(key);
-        grid.Children.Add(video);
-        grid.Children.Add(audio);
-        grid.Children.Add(keyint);
-        grid.Children.Add(size);
-        grid.Children.Add(fps);
         box.Child = grid;
         return box;
     }
+
+    private static Border StreamCard() => new()
+    {
+        BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44)),
+        BorderThickness = new Thickness(1),
+        Padding = new Thickness(8),
+        Margin = new Thickness(0, 0, 0, 8)
+    };
 
     private static StackPanel Labeled(string label, string value, bool enabled, Action<string> changed)
     {
@@ -1067,6 +1194,7 @@ public partial class SettingsWindow : Window
             Settings.DefaultHeight = uint.Parse(parts[1]);
         }
         _session.NextOutputId = _nextOutputId;
+        _session.NextStreamEncoderId = _nextStreamEncoderId;
         if (MvUnitBox.SelectedItem is MixingUnitEntry unit)
             Settings.DefaultMultiviewUnitId = unit.Id;
         if (BufferBox.SelectedItem is ComboBoxItem buffer && buffer.Tag is string bufferTag
@@ -1222,6 +1350,90 @@ public partial class SettingsWindow : Window
                 if (box.SelectedItem is MixingUnitEntry unit)
                     output.UnitId = unit.Id;
                 break;
+        }
+    }
+
+    private static void FillEncodeSize(ComboBox box, StreamEncoderEntry encoder)
+    {
+        box.Items.Add(new ComboBoxItem { Content = Loc.T("settings.followSessionSettings"), Tag = "0x0" });
+        box.Items.Add(new ComboBoxItem { Content = "1920x1080", Tag = "1920x1080" });
+        box.Items.Add(new ComboBoxItem { Content = "1280x720", Tag = "1280x720" });
+        box.Items.Add(new ComboBoxItem { Content = "3840x2160", Tag = "3840x2160" });
+        var tag = encoder.Width == 0 || encoder.Height == 0 ? "0x0" : $"{encoder.Width}x{encoder.Height}";
+        if (box.Items.Cast<ComboBoxItem>().All(item => !Equals(item.Tag, tag)))
+            box.Items.Add(new ComboBoxItem { Content = tag, Tag = tag });
+        SelectTag(box, tag);
+    }
+
+    private static void ApplyEncodeSize(ComboBox box, StreamEncoderEntry encoder)
+    {
+        if (box.SelectedItem is not ComboBoxItem item || item.Tag is not string tag)
+            return;
+        if (tag == "0x0")
+        {
+            encoder.Width = 0;
+            encoder.Height = 0;
+            return;
+        }
+        var parts = tag.Split('x');
+        if (parts.Length == 2
+            && uint.TryParse(parts[0], out var width)
+            && uint.TryParse(parts[1], out var height))
+        {
+            encoder.Width = width;
+            encoder.Height = height;
+        }
+    }
+
+    private static void FillEncodeFps(ComboBox box, StreamEncoderEntry encoder)
+    {
+        box.Items.Add(new ComboBoxItem { Content = Loc.T("settings.followSessionSettings"), Tag = "0/0" });
+        box.Items.Add(new ComboBoxItem { Content = "23.976p", Tag = "24000/1001" });
+        box.Items.Add(new ComboBoxItem { Content = "24p", Tag = "24/1" });
+        box.Items.Add(new ComboBoxItem { Content = "25p", Tag = "25/1" });
+        box.Items.Add(new ComboBoxItem { Content = "29.97p", Tag = "30000/1001" });
+        box.Items.Add(new ComboBoxItem { Content = "30p", Tag = "30/1" });
+        box.Items.Add(new ComboBoxItem { Content = "50p", Tag = "50/1" });
+        box.Items.Add(new ComboBoxItem { Content = "NTSC 59.94p", Tag = "60000/1001" });
+        box.Items.Add(new ComboBoxItem { Content = "60p", Tag = "60/1" });
+        var tag = encoder.FpsNum == 0 || encoder.FpsDen == 0 ? "0/0" : $"{encoder.FpsNum}/{encoder.FpsDen}";
+        if (box.Items.Cast<ComboBoxItem>().All(item => !Equals(item.Tag, tag)))
+            box.Items.Add(new ComboBoxItem { Content = tag, Tag = tag });
+        SelectTag(box, tag);
+    }
+
+    private static void ApplyEncodeFps(ComboBox box, StreamEncoderEntry encoder)
+    {
+        if (box.SelectedItem is not ComboBoxItem item || item.Tag is not string tag)
+            return;
+        var parts = tag.Split('/');
+        if (parts.Length == 2
+            && uint.TryParse(parts[0], out var num)
+            && uint.TryParse(parts[1], out var den))
+        {
+            encoder.FpsNum = num;
+            encoder.FpsDen = den;
+        }
+    }
+
+    private static void FillThreads(ComboBox box, StreamEncoderEntry encoder)
+    {
+        box.Items.Add(new ComboBoxItem { Content = Loc.T("settings.threadsAuto"), Tag = "0" });
+        for (var n = 1; n <= 4; n++)
+            box.Items.Add(new ComboBoxItem { Content = n.ToString(), Tag = n.ToString() });
+        var tag = encoder.EncoderThreads is >= 1 and <= 4 ? encoder.EncoderThreads.ToString() : "0";
+        SelectTag(box, tag);
+    }
+
+    private static void SelectUlongTag(ComboBox box, ulong tag)
+    {
+        foreach (ComboBoxItem item in box.Items)
+        {
+            if (item.Tag is ulong value && value == tag)
+            {
+                box.SelectedItem = item;
+                return;
+            }
         }
     }
 

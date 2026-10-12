@@ -42,6 +42,8 @@ pub struct OutputStats {
     pub dropped: u64,
     pub bitrate: u32,
     pub message: String,
+    /// Threads the encoder is actually using. `0` when this stat is not an encoder.
+    pub encoder_threads: u32,
 }
 
 /// Something that accepts paced frames from the mixer send thread.

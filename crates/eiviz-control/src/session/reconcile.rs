@@ -2,7 +2,7 @@ use crate::live::LiveState;
 use crate::session::{
     AudioCaptureMode, AudioDeviceKind, AudioLinkMode, BandwidthSave, Document, InputDto, InputKind,
     MixSource, MultiviewDto, MvSlotKind, NdiBandwidth, OmtQuality, OutputDto, OutputSourceKind,
-    OutputTransport, SceneDto, VideoPlayWhen,
+    OutputTransport, SceneDto, StreamEncoderDto, VideoPlayWhen,
 };
 use crate::{geometry::MultiviewPane, ids, port::*};
 
@@ -65,6 +65,15 @@ pub enum ReconcileOp {
     },
     AddOutput(OutputApply),
     RemoveOutput {
+        id: u64,
+    },
+    AddStreamEncoder(StreamEncoderApply),
+    RemoveStreamEncoder {
+        id: u64,
+    },
+    AddStreamDestination(StreamDestinationApply),
+    RemoveStreamDestination {
+        encoder_id: u64,
         id: u64,
     },
     AudioInput {
@@ -279,6 +288,9 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
 
     let prev_outputs = previous.map(|doc| doc.outputs.as_slice()).unwrap_or(&[]);
     for output in &next.outputs {
+        if output.transport == OutputTransport::Rtmp {
+            continue;
+        }
         if !output.enabled {
             if prev_outputs.iter().any(|item| item.id == output.id) {
                 ops.push(ReconcileOp::RemoveOutput { id: output.id });
@@ -289,15 +301,15 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
         if prev.is_some_and(|item| output_equal(item, output)) {
             continue;
         }
-        // Same RTMP ingest stays connected across a cut. Add retargets the
-        // bus; Remove would close the socket before that retarget runs.
-        let keep_rtmp = prev.is_some_and(|item| rtmp_link_equal(item, output));
-        if prev.is_some() && !keep_rtmp {
+        if prev.is_some() {
             ops.push(ReconcileOp::RemoveOutput { id: output.id });
         }
         ops.push(ReconcileOp::AddOutput(output_apply(output)));
     }
     for prev in prev_outputs {
+        if prev.transport == OutputTransport::Rtmp {
+            continue;
+        }
         if !next
             .outputs
             .iter()
@@ -306,6 +318,7 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
             ops.push(ReconcileOp::RemoveOutput { id: prev.id });
         }
     }
+    diff_streams(previous, next, &mut ops);
 
     if previous.is_none_or(|prev| {
         prev.settings.vmix_api_enabled != next.settings.vmix_api_enabled
@@ -607,6 +620,22 @@ fn apply_live<P: crate::port::MixerPort + ?Sized>(
             spec.id,
         ),
         ReconcileOp::RemoveOutput { id } => port.output_remove(*id),
+        ReconcileOp::AddStreamEncoder(spec) => accept_io(
+            port.stream_encoder_add(spec.clone()),
+            statuses,
+            crate::ids::ResourceKind::Output,
+            spec.id,
+        ),
+        ReconcileOp::RemoveStreamEncoder { id } => port.stream_encoder_remove(*id),
+        ReconcileOp::AddStreamDestination(spec) => accept_io(
+            port.stream_destination_add(spec.clone()),
+            statuses,
+            crate::ids::ResourceKind::Output,
+            spec.id,
+        ),
+        ReconcileOp::RemoveStreamDestination { encoder_id, id } => {
+            port.stream_destination_remove(*encoder_id, *id)
+        }
         ReconcileOp::AudioInput {
             id,
             units,
@@ -1158,10 +1187,6 @@ fn output_config_json(output: &OutputDto) -> String {
         "externalKey": output.decklink_external_key,
         "url": output.rtmp_url,
         "secretRef": output.rtmp_secret_ref,
-        "videoBitrate": output.rtmp_video_bitrate,
-        "audioBitrate": output.rtmp_audio_bitrate,
-        "keyint": output.rtmp_keyint,
-        "videoOnly": output.rtmp_video_only,
     })
     .to_string()
 }
@@ -1184,21 +1209,6 @@ fn input_desired_equal(a: &InputDto, b: &InputDto) -> bool {
         && a.decklink_mode == b.decklink_mode
 }
 
-fn rtmp_link_equal(a: &OutputDto, b: &OutputDto) -> bool {
-    a.transport == OutputTransport::Rtmp
-        && b.transport == OutputTransport::Rtmp
-        && a.rtmp_url == b.rtmp_url
-        && a.rtmp_secret_ref == b.rtmp_secret_ref
-        && a.rtmp_video_bitrate == b.rtmp_video_bitrate
-        && a.rtmp_audio_bitrate == b.rtmp_audio_bitrate
-        && a.rtmp_keyint == b.rtmp_keyint
-        && a.rtmp_video_only == b.rtmp_video_only
-        && a.width == b.width
-        && a.height == b.height
-        && a.fps_num == b.fps_num
-        && a.fps_den == b.fps_den
-}
-
 fn output_equal(a: &OutputDto, b: &OutputDto) -> bool {
     a.transport == b.transport
         && a.name == b.name
@@ -1218,10 +1228,223 @@ fn output_equal(a: &OutputDto, b: &OutputDto) -> bool {
         && a.decklink_external_key == b.decklink_external_key
         && a.rtmp_url == b.rtmp_url
         && a.rtmp_secret_ref == b.rtmp_secret_ref
-        && a.rtmp_video_bitrate == b.rtmp_video_bitrate
-        && a.rtmp_audio_bitrate == b.rtmp_audio_bitrate
-        && a.rtmp_keyint == b.rtmp_keyint
-        && a.rtmp_video_only == b.rtmp_video_only
+        && a.stream_encoder_id == b.stream_encoder_id
+}
+
+fn encoder_equal(a: &StreamEncoderDto, b: &StreamEncoderDto) -> bool {
+    a.source_kind == b.source_kind
+        && a.source_id == b.source_id
+        && a.unit_id == b.unit_id
+        && a.audio_unit_id == b.audio_unit_id
+        && a.width == b.width
+        && a.height == b.height
+        && a.fps_num == b.fps_num
+        && a.fps_den == b.fps_den
+        && a.video_bitrate == b.video_bitrate
+        && a.audio_bitrate == b.audio_bitrate
+        && a.keyint == b.keyint
+        && a.video_only == b.video_only
+        && a.encoder_threads == b.encoder_threads
+}
+
+fn destination_equal(a: &OutputDto, b: &OutputDto) -> bool {
+    a.rtmp_url == b.rtmp_url
+        && a.rtmp_secret_ref == b.rtmp_secret_ref
+        && a.stream_encoder_id == b.stream_encoder_id
+}
+
+fn rtmp_destination(output: &OutputDto) -> bool {
+    output.transport == OutputTransport::Rtmp && output.enabled
+}
+
+fn diff_streams(previous: Option<&Document>, next: &Document, ops: &mut Vec<ReconcileOp>) {
+    let prev_encoders = previous
+        .map(|doc| doc.stream_encoders.as_slice())
+        .unwrap_or(&[]);
+    let prev_outputs = previous.map(|doc| doc.outputs.as_slice()).unwrap_or(&[]);
+    let mut seen = Vec::new();
+    for encoder in &next.stream_encoders {
+        seen.push(encoder.id);
+        let dests: Vec<&OutputDto> = next
+            .outputs
+            .iter()
+            .filter(|output| rtmp_destination(output) && output.stream_encoder_id == encoder.id)
+            .collect();
+        let prev = prev_encoders.iter().find(|item| item.id == encoder.id);
+        if dests.is_empty() {
+            if prev.is_some() {
+                remove_stream(prev_outputs, encoder.id, ops);
+            }
+            continue;
+        }
+        if prev.is_none_or(|item| !encoder_equal(item, encoder)) {
+            if prev.is_some() {
+                ops.push(ReconcileOp::RemoveStreamEncoder { id: encoder.id });
+            }
+            ops.push(ReconcileOp::AddStreamEncoder(stream_encoder_apply(encoder)));
+            for dest in dests {
+                ops.push(ReconcileOp::AddStreamDestination(destination_apply(dest)));
+            }
+            continue;
+        }
+        for dest in &dests {
+            let prev_dest = prev_outputs.iter().find(|item| item.id == dest.id);
+            if prev_dest.is_some_and(|item| rtmp_destination(item) && destination_equal(item, dest))
+            {
+                continue;
+            }
+            if prev_dest.is_some_and(rtmp_destination) {
+                ops.push(ReconcileOp::RemoveStreamDestination {
+                    encoder_id: encoder.id,
+                    id: dest.id,
+                });
+            }
+            ops.push(ReconcileOp::AddStreamDestination(destination_apply(dest)));
+        }
+        for prev_dest in prev_outputs {
+            if rtmp_destination(prev_dest)
+                && prev_dest.stream_encoder_id == encoder.id
+                && !dests.iter().any(|item| item.id == prev_dest.id)
+            {
+                ops.push(ReconcileOp::RemoveStreamDestination {
+                    encoder_id: encoder.id,
+                    id: prev_dest.id,
+                });
+            }
+        }
+    }
+    for prev in prev_encoders {
+        if !seen.contains(&prev.id) {
+            remove_stream(prev_outputs, prev.id, ops);
+        }
+    }
+    for output in &next.outputs {
+        if rtmp_destination(output)
+            && !next
+                .stream_encoders
+                .iter()
+                .any(|encoder| encoder.id == output.stream_encoder_id)
+        {
+            ops.push(ReconcileOp::AddStreamDestination(destination_apply(
+                output,
+            )));
+        }
+    }
+}
+
+fn remove_stream(prev_outputs: &[OutputDto], encoder_id: u64, ops: &mut Vec<ReconcileOp>) {
+    for output in prev_outputs {
+        if rtmp_destination(output) && output.stream_encoder_id == encoder_id {
+            ops.push(ReconcileOp::RemoveStreamDestination {
+                encoder_id,
+                id: output.id,
+            });
+        }
+    }
+    ops.push(ReconcileOp::RemoveStreamEncoder { id: encoder_id });
+}
+
+fn stream_encoder_apply(encoder: &StreamEncoderDto) -> StreamEncoderApply {
+    let mut source_id = encoder.source_id;
+    if encoder.source_kind == OutputSourceKind::Multiview
+        && source_id != 0
+        && source_id < ids::MULTIVIEW_BASE
+    {
+        source_id = ids::multiview_gpu_id(source_id);
+    } else if encoder.source_kind == OutputSourceKind::Scene
+        && source_id != 0
+        && source_id < ids::SCENE_BASE
+    {
+        source_id = ids::scene_gpu_id(source_id);
+    }
+    StreamEncoderApply {
+        id: encoder.id,
+        source_kind: match encoder.source_kind {
+            OutputSourceKind::Scene => 0,
+            OutputSourceKind::MuPreview => 1,
+            OutputSourceKind::MuProgram => 2,
+            OutputSourceKind::Multiview => 3,
+            OutputSourceKind::Input => 4,
+        },
+        source_id,
+        unit_id: encoder.unit_id,
+        audio_unit_id: if encoder.source_kind == OutputSourceKind::Multiview {
+            0
+        } else {
+            encoder.audio_unit_id
+        },
+        width: encoder.width,
+        height: encoder.height,
+        fps_num: encoder.fps_num,
+        fps_den: encoder.fps_den,
+        video_bitrate: encoder.video_bitrate,
+        audio_bitrate: encoder.audio_bitrate,
+        keyint: encoder.keyint,
+        video_only: encoder.video_only,
+        encoder_threads: encoder.encoder_threads,
+    }
+}
+
+/// A failed attach is otherwise skipped forever: the next document compares equal
+/// and `plan` emits nothing. Re-issue destination adds, and rebuild an encoder
+/// whose last attempt never started.
+pub fn reinforce_streams(
+    previous: &[crate::live::ResourceStatus],
+    next: &Document,
+    ops: &mut Vec<ReconcileOp>,
+) {
+    let trouble = |id: u64| {
+        previous.iter().find(|status| {
+            status.kind == crate::ids::ResourceKind::Output
+                && status.id == id
+                && status.phase != crate::live::ResourcePhase::Ready
+        })
+    };
+    let needs_encoder = |status: &crate::live::ResourceStatus| {
+        status.message.contains("not running") || status.message.contains("not linked")
+    };
+    for encoder in &next.stream_encoders {
+        let dests: Vec<&OutputDto> = next
+            .outputs
+            .iter()
+            .filter(|output| rtmp_destination(output) && output.stream_encoder_id == encoder.id)
+            .collect();
+        if dests.is_empty() {
+            continue;
+        }
+        let encoder_down = trouble(encoder.id).is_some_and(needs_encoder)
+            || dests.iter().any(|dest| trouble(dest.id).is_some_and(needs_encoder));
+        let adding_encoder = ops.iter().any(|op| {
+            matches!(op, ReconcileOp::AddStreamEncoder(spec) if spec.id == encoder.id)
+        });
+        if encoder_down && !adding_encoder {
+            ops.push(ReconcileOp::RemoveStreamEncoder { id: encoder.id });
+            ops.push(ReconcileOp::AddStreamEncoder(stream_encoder_apply(encoder)));
+            for dest in &dests {
+                ops.push(ReconcileOp::AddStreamDestination(destination_apply(dest)));
+            }
+            continue;
+        }
+        for dest in &dests {
+            let adding = ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == dest.id)
+            });
+            if !adding {
+                ops.push(ReconcileOp::AddStreamDestination(destination_apply(
+                    dest,
+                )));
+            }
+        }
+    }
+}
+
+fn destination_apply(output: &OutputDto) -> StreamDestinationApply {
+    StreamDestinationApply {
+        encoder_id: output.stream_encoder_id,
+        id: output.id,
+        url: output.rtmp_url.clone(),
+        secret_ref: output.rtmp_secret_ref.clone(),
+    }
 }
 
 #[cfg(test)]
@@ -1485,10 +1708,17 @@ mod tests {
               "inputs": [{{ "id": 2, "name": "Bars", "kind": "Bars" }}],
               "scenes": [{{ "id": 1, "name": "Scene 1", "layers": [{{ "inputId": 2, "width": 1, "height": 1 }}] }}],
               "units": [{{ "id": 1, "name": "MU 1" }}],
+              "streamEncoders": [{{
+                "id": 1, "name": "Encode 1", "sourceKind": "MuProgram", "unitId": 1,
+                "videoBitrate": 6000000, "audioBitrate": 128000, "keyint": 120,
+                "width": 1920, "height": 1080, "fpsNum": 60000, "fpsDen": 1001
+              }}],
               "outputs": [{{
-                "id": 102, "name": "{name}", "transport": "Rtmp", "sourceKind": "MuProgram",
-                "rtmpUrl": "{url}", "rtmpVideoBitrate": 6000000, "width": 1920, "height": 1080,
-                "fpsNum": 60000, "fpsDen": 1001
+                "id": 102, "name": "{name}", "transport": "Rtmp", "enabled": true,
+                "streamEncoderId": 1, "rtmpUrl": "{url}"
+              }}, {{
+                "id": 103, "name": "local", "transport": "Rtmp", "enabled": true,
+                "streamEncoderId": 1, "rtmpUrl": "rtmp://127.0.0.1/live"
               }}]
             }}"#
         );
@@ -1496,30 +1726,118 @@ mod tests {
     }
 
     #[test]
-    fn republish_keeps_rtmp_socket_when_the_ingest_is_unchanged() {
+    fn disabling_one_destination_keeps_the_encoder_and_the_other() {
         let prev = rtmp_doc("youtube", "rtmp://example/live");
-        let mut next = rtmp_doc("renamed", "rtmp://example/live");
-        next.outputs[0].source_id = 1;
+        let mut next = rtmp_doc("youtube", "rtmp://example/live");
+        next.outputs[0].enabled = false;
         let ops = plan(Some(&prev), &next);
         assert!(
-            !ops.iter()
-                .any(|op| matches!(op, ReconcileOp::RemoveOutput { id: 102 })),
-            "an unchanged ingest must not close the RTMP socket"
+            ops.iter().any(|op| matches!(
+                op,
+                ReconcileOp::RemoveStreamDestination { id: 102, .. }
+            ))
         );
         assert!(
-            ops.iter()
-                .any(|op| matches!(op, ReconcileOp::AddOutput(spec) if spec.id == 102))
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::RemoveStreamEncoder { .. }))
+        );
+        assert!(
+            !ops.iter().any(|op| matches!(
+                op,
+                ReconcileOp::RemoveStreamDestination { id: 103, .. }
+            ))
         );
     }
 
     #[test]
-    fn republish_replaces_rtmp_when_the_url_changes() {
+    fn changing_the_encode_profile_rebuilds_the_encoder() {
         let prev = rtmp_doc("youtube", "rtmp://example/live");
-        let next = rtmp_doc("youtube", "rtmp://example/other");
+        let mut next = rtmp_doc("youtube", "rtmp://example/live");
+        next.stream_encoders[0].video_bitrate = 4_000_000;
         let ops = plan(Some(&prev), &next);
         assert!(
             ops.iter()
-                .any(|op| matches!(op, ReconcileOp::RemoveOutput { id: 102 }))
+                .any(|op| matches!(op, ReconcileOp::RemoveStreamEncoder { id: 1 }))
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::AddStreamEncoder(spec) if spec.id == 1 && spec.video_bitrate == 4_000_000))
+        );
+        assert!(
+            ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102)
+            })
+        );
+        assert!(
+            ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 103)
+            })
+        );
+    }
+
+    #[test]
+    fn republish_reattaches_a_destination_that_failed_to_start() {
+        let doc = rtmp_doc("youtube", "rtmp://example/live");
+        let mut ops = plan(Some(&doc), &doc);
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::AddStreamDestination(_)))
+        );
+        let failed = vec![crate::live::ResourceStatus {
+            kind: crate::ids::ResourceKind::Output,
+            id: 102,
+            phase: crate::live::ResourcePhase::Retrying,
+            message: "RTMP secret 'stream-102' is not set".into(),
+        }];
+        reinforce_streams(&failed, &doc, &mut ops);
+        assert!(
+            ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102)
+            })
+        );
+        assert!(
+            ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 103)
+            })
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::RemoveStreamEncoder { .. }))
+        );
+    }
+
+    #[test]
+    fn missing_encoder_is_rebuilt_on_the_next_publish() {
+        let doc = rtmp_doc("youtube", "rtmp://example/live");
+        let mut ops = plan(Some(&doc), &doc);
+        let failed = vec![crate::live::ResourceStatus {
+            kind: crate::ids::ResourceKind::Output,
+            id: 102,
+            phase: crate::live::ResourcePhase::Retrying,
+            message: "stream encoder is not running".into(),
+        }];
+        reinforce_streams(&failed, &doc, &mut ops);
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::AddStreamEncoder(spec) if spec.id == 1))
+        );
+        assert!(
+            ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102)
+            })
+        );
+    }
+
+    #[test]
+    fn no_enabled_destination_stops_the_encoder() {
+        let prev = rtmp_doc("youtube", "rtmp://example/live");
+        let mut next = rtmp_doc("youtube", "rtmp://example/live");
+        next.outputs[0].enabled = false;
+        next.outputs[1].enabled = false;
+        let ops = plan(Some(&prev), &next);
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::RemoveStreamEncoder { id: 1 }))
         );
     }
 }

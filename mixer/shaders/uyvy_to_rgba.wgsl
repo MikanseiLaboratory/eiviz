@@ -40,13 +40,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let x = in.uv.x * dims.x * 2.0;
     let packed_u = (floor(x * 0.5) + 0.5) / dims.x;
     let sample = textureSample(packed_tex, packed_samp, vec2<f32>(packed_u, in.uv.y));
-    let u = sample.r * 255.0 - 128.0;
+    // Limited-range BT.709, the inverse of rgba_to_uyvy.wgsl.
+    let u = (sample.r * 255.0 - 128.0) * (255.0 / 224.0);
+    let v = (sample.b * 255.0 - 128.0) * (255.0 / 224.0);
     let y0 = sample.g * 255.0;
-    let v = sample.b * 255.0 - 128.0;
     let y1 = sample.a * 255.0;
-    let y = select(y1, y0, (u32(floor(x)) & 1u) == 0u);
-    let r = clamp(y + 1.402 * v, 0.0, 255.0) / 255.0;
-    let g = clamp(y - 0.344136 * u - 0.714136 * v, 0.0, 255.0) / 255.0;
-    let b = clamp(y + 1.772 * u, 0.0, 255.0) / 255.0;
+    let y8 = select(y1, y0, (u32(floor(x)) & 1u) == 0u);
+    let y = (y8 - 16.0) * (255.0 / 219.0);
+    let r = clamp(y + 1.5748 * v, 0.0, 255.0) / 255.0;
+    let g = clamp(y - 0.187324 * u - 0.468124 * v, 0.0, 255.0) / 255.0;
+    let b = clamp(y + 1.8556 * u, 0.0, 255.0) / 255.0;
     return vec4<f32>(r * params.opacity, g * params.opacity, b * params.opacity, params.opacity);
 }

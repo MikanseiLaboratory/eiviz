@@ -225,11 +225,7 @@ internal static class MixerApply
             mode = output.DecklinkMode,
             externalKey = output.DecklinkExternalKey,
             url = output.RtmpUrl,
-            secretRef = output.RtmpSecretRef,
-            videoBitrate = output.RtmpVideoBitrate,
-            audioBitrate = output.RtmpAudioBitrate,
-            keyint = output.RtmpKeyint,
-            videoOnly = output.RtmpVideoOnly
+            secretRef = output.RtmpSecretRef
         });
         var code = MixerNative.OutputAddEx(
             output.Id,

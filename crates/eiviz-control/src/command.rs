@@ -273,6 +273,10 @@ pub enum SessionMutation {
         headphone_copy_monitor: Option<bool>,
         #[serde(default, alias = "next_output_id")]
         next_output_id: u64,
+        #[serde(default)]
+        stream_encoders: Option<Vec<crate::session::StreamEncoderDto>>,
+        #[serde(default, alias = "next_stream_encoder_id")]
+        next_stream_encoder_id: u64,
     },
     RelinkMedia {
         directories: Vec<String>,

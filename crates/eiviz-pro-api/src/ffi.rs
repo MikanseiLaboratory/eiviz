@@ -145,10 +145,8 @@ pub struct ProPlayoutConfig {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct ProRtmpConfig {
+pub struct ProStreamConfig {
     pub struct_size: u32,
-    pub url: *const u8,
-    pub url_len: usize,
     pub video_bitrate: u32,
     pub audio_bitrate: u32,
     pub keyint: u32,
@@ -157,6 +155,8 @@ pub struct ProRtmpConfig {
     pub height: u32,
     pub fps_num: u32,
     pub fps_den: u32,
+    /// `0` means automatic.
+    pub encoder_threads: u32,
 }
 
 #[repr(C)]
@@ -186,6 +186,7 @@ pub struct ProOutputStatsAbi {
     pub repeated: u64,
     pub dropped: u64,
     pub bitrate: u32,
+    pub encoder_threads: u32,
 }
 
 /// Function table. `struct_size` is the plugin's view of this struct.
@@ -237,8 +238,14 @@ pub struct ProApi {
     pub playout_start: Option<
         unsafe extern "C" fn(*mut c_void, *const ProPlayoutConfig, *mut *mut c_void) -> ProStatus,
     >,
-    pub rtmp_start: Option<
-        unsafe extern "C" fn(*mut c_void, *const ProRtmpConfig, *mut *mut c_void) -> ProStatus,
+    pub stream_start: Option<
+        unsafe extern "C" fn(*mut c_void, *const ProStreamConfig, *mut *mut c_void) -> ProStatus,
+    >,
+    pub stream_add_destination:
+        Option<unsafe extern "C" fn(*mut c_void, u64, *const u8, usize) -> ProStatus>,
+    pub stream_remove_destination: Option<unsafe extern "C" fn(*mut c_void, u64) -> ProStatus>,
+    pub stream_destination_stats: Option<
+        unsafe extern "C" fn(*mut c_void, u64, *mut ProOutputStatsAbi, *mut u8, usize) -> ProStatus,
     >,
     pub output_submit_video:
         Option<unsafe extern "C" fn(*mut c_void, *const ProVideoView) -> ProStatus>,
@@ -275,7 +282,7 @@ pub fn abi_hash() -> u64 {
         std::mem::size_of::<ProAudioView>(),
         std::mem::size_of::<ProCaptureCallbacks>(),
         std::mem::size_of::<ProPlayoutConfig>(),
-        std::mem::size_of::<ProRtmpConfig>(),
+        std::mem::size_of::<ProStreamConfig>(),
         std::mem::size_of::<ProLicenseStatusAbi>(),
         std::mem::size_of::<ProCaptureStatsAbi>(),
         std::mem::size_of::<ProOutputStatsAbi>(),

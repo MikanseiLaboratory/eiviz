@@ -1419,6 +1419,8 @@ async fn settings_cmd(session: &ControlSession, cmd: SettingsCmd) -> Result<CmdR
                     headphone: Some(doc.headphone),
                     headphone_copy_monitor: Some(doc.headphone_copy_monitor),
                     next_output_id: doc.next_output_id,
+                    stream_encoders: None,
+                    next_stream_encoder_id: 0,
                 },
                 expected,
             )
@@ -1440,6 +1442,8 @@ async fn settings_cmd(session: &ControlSession, cmd: SettingsCmd) -> Result<CmdR
                     headphone: Some(headphone),
                     headphone_copy_monitor: Some(doc.headphone_copy_monitor),
                     next_output_id: doc.next_output_id,
+                    stream_encoders: None,
+                    next_stream_encoder_id: 0,
                 },
                 expected,
             )
@@ -1460,6 +1464,8 @@ async fn settings_cmd(session: &ControlSession, cmd: SettingsCmd) -> Result<CmdR
                     headphone: Some(doc.headphone),
                     headphone_copy_monitor: Some(on),
                     next_output_id: doc.next_output_id,
+                    stream_encoders: None,
+                    next_stream_encoder_id: 0,
                 },
                 expected,
             )
@@ -1683,6 +1689,8 @@ async fn patch_outputs(
             headphone: Some(doc.headphone),
             headphone_copy_monitor: Some(doc.headphone_copy_monitor),
             next_output_id: doc.next_output_id,
+            stream_encoders: Some(doc.stream_encoders),
+            next_stream_encoder_id: doc.next_stream_encoder_id,
         },
         expected,
     )

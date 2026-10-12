@@ -1,5 +1,5 @@
 use crate::error::ProResult;
-use crate::media::MediaOutput;
+use crate::media::{MediaOutput, OutputStats};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VideoEncoderKind {
@@ -13,11 +13,9 @@ pub struct AudioEncodeConfig {
     pub video_only: bool,
 }
 
+/// One encode. Destinations are attached afterwards and share the packets.
 #[derive(Clone, Debug)]
-pub struct RtmpConfig {
-    /// `rtmp://` or `rtmps://` URL including the application and stream name.
-    /// The stream name may be a secret reference resolved by the mixer.
-    pub url: String,
+pub struct StreamEncodeConfig {
     pub video_bitrate: u32,
     pub keyint: u32,
     pub width: u32,
@@ -25,9 +23,19 @@ pub struct RtmpConfig {
     pub fps_num: u32,
     pub fps_den: u32,
     pub encoder: VideoEncoderKind,
+    /// `0` means automatic: logical CPUs, clamped to the encoder's own limit.
+    pub encoder_threads: u32,
     pub audio: AudioEncodeConfig,
 }
 
 pub trait StreamBackend: Send + Sync {
-    fn start_rtmp(&self, config: &RtmpConfig) -> ProResult<Box<dyn MediaOutput>>;
+    fn start_stream(&self, config: &StreamEncodeConfig) -> ProResult<Box<dyn StreamOutput>>;
+}
+
+/// An encoder plus a set of publish sockets. Destination calls may run on a
+/// thread other than the one that submits frames; implementations lock internally.
+pub trait StreamOutput: MediaOutput {
+    fn add_destination(&mut self, id: u64, url: &str) -> ProResult<()>;
+    fn remove_destination(&mut self, id: u64) -> ProResult<()>;
+    fn destination_stats(&self, id: u64) -> ProResult<OutputStats>;
 }

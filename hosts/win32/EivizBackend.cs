@@ -183,14 +183,18 @@ internal static class MutationJson
         IEnumerable<OutputEntry> outputs,
         HeadphoneEntry headphone,
         bool headphoneCopyMonitor,
-        ulong nextOutputId) =>
+        ulong nextOutputId,
+        IEnumerable<StreamEncoderEntry>? streamEncoders = null,
+        ulong nextStreamEncoderId = 0) =>
         JsonSerializer.Serialize(new SetSettingsWire
         {
             Settings = settings,
             Outputs = outputs,
             Headphone = headphone,
             HeadphoneCopyMonitor = headphoneCopyMonitor,
-            NextOutputId = nextOutputId
+            NextOutputId = nextOutputId,
+            StreamEncoders = streamEncoders,
+            NextStreamEncoderId = nextStreamEncoderId
         }, DocumentJson);
 
     private sealed class SetSettingsWire
@@ -201,6 +205,8 @@ internal static class MutationJson
         public HeadphoneEntry Headphone { get; set; } = new();
         public bool HeadphoneCopyMonitor { get; set; }
         public ulong NextOutputId { get; set; }
+        public IEnumerable<StreamEncoderEntry>? StreamEncoders { get; set; }
+        public ulong NextStreamEncoderId { get; set; }
     }
 
     private sealed class InputWire

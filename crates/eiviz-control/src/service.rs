@@ -13,7 +13,7 @@ use crate::port::{AutoApply, MixerPort, OverlayAutoApply};
 use crate::query::{Query, Snapshot};
 use crate::session::Document;
 use crate::session::mutate;
-use crate::session::reconcile::{plan, repair_live};
+use crate::session::reconcile::{plan, reinforce_streams, repair_live};
 use crate::session::store::CanonicalSessionStore;
 use crate::video_trigger::{self, VideoAction, VideoRoles};
 
@@ -438,7 +438,9 @@ impl ControlService {
         let previous_doc = self.store.document_cloned();
         let (committed, revision, previous) =
             self.store.replace(document, expected_revision, false)?;
-        let ops = plan(previous.as_ref(), &committed);
+        let previous_resources = self.resources.clone();
+        let mut ops = plan(previous.as_ref(), &committed);
+        reinforce_streams(&previous_resources, &committed, &mut ops);
         let mut statuses = Vec::new();
         for op in &ops {
             if let Err(error) = self.port.apply_reconcile(&committed, op, &mut statuses) {
@@ -965,6 +967,29 @@ mod tests {
             self.push_op(format!("remove_output {id}"));
             Ok(())
         }
+        fn stream_encoder_add(&mut self, spec: StreamEncoderApply) -> ControlResult<()> {
+            self.push_op(format!("stream_encoder {}", spec.id));
+            Ok(())
+        }
+        fn stream_encoder_remove(&mut self, id: u64) -> ControlResult<()> {
+            self.push_op(format!("remove_stream_encoder {id}"));
+            Ok(())
+        }
+        fn stream_destination_add(&mut self, spec: StreamDestinationApply) -> ControlResult<()> {
+            self.push_op(format!("stream_destination {}", spec.id));
+            if spec.url.is_empty() {
+                return Err(ControlError::invalid("RTMP destination requires a url"));
+            }
+            Ok(())
+        }
+        fn stream_destination_remove(
+            &mut self,
+            encoder_id: u64,
+            id: u64,
+        ) -> ControlResult<()> {
+            self.push_op(format!("remove_stream_destination {encoder_id} {id}"));
+            Ok(())
+        }
         fn audio_set_unit_device(&mut self, spec: UnitAudioApply) -> ControlResult<()> {
             self.push_op(format!("mu-bus {}", spec.unit_id));
             Ok(())
@@ -1149,7 +1174,7 @@ mod tests {
           "outputs": [
             { "id": 100, "name": "pgm", "transport": "Omt", "sourceKind": "MuProgram" },
             { "id": 101, "name": "deck", "transport": "DeckLink", "sourceKind": "MuProgram" },
-            { "id": 102, "name": "yt", "transport": "Rtmp", "sourceKind": "MuProgram" }
+            { "id": 102, "name": "yt", "transport": "Rtmp", "streamEncoderId": 1 }
           ]
         }"#,
             )

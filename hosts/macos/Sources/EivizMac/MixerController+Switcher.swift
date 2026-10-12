@@ -567,6 +567,9 @@ extension MixerController {
         if let index = session.outputs.firstIndex(where: { $0.id == entry.id }) {
             session.outputs[index] = entry
         }
+        if entry.transport == .rtmp {
+            return
+        }
         _ = mixer_output_remove(entry.id)
         guard entry.enabled else { return }
         if entry.transport == .rtmp, !entry.rtmpSecretRef.isEmpty {
@@ -629,7 +632,7 @@ extension MixerController {
                 .replacingOccurrences(of: "\"", with: "\\\"")
         }
         return """
-        {"device":"\(esc(entry.decklinkDevice))","mode":"\(esc(entry.decklinkMode))","externalKey":\(entry.decklinkExternalKey),"url":"\(esc(entry.rtmpUrl))","secretRef":"\(esc(entry.rtmpSecretRef))","videoBitrate":\(entry.rtmpVideoBitrate),"audioBitrate":\(entry.rtmpAudioBitrate),"keyint":\(entry.rtmpKeyint),"videoOnly":\(entry.rtmpVideoOnly)}
+        {"device":"\(esc(entry.decklinkDevice))","mode":"\(esc(entry.decklinkMode))","externalKey":\(entry.decklinkExternalKey),"url":"\(esc(entry.rtmpUrl))","secretRef":"\(esc(entry.rtmpSecretRef))"}
         """
     }
 

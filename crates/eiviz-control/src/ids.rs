@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 pub const SCENE_BASE: u64 = 0x0001_0000;
 pub const MULTIVIEW_BASE: u64 = 0x0002_0000;
+/// Live encode workers. Destinations stay on the output-row id.
+pub const STREAM_ENCODER_BASE: u64 = 0x0006_0000;
 pub const MU_SOURCE_FLAG: u64 = 0x8000_0000_0000_0000;
 pub const MU_BUS_PREVIEW: u64 = 0x1000_0000_0000_0000;
 pub const MU_ID_MASK: u64 = 0x0FFF_FFFF_FFFF_FFFF;
@@ -14,6 +16,14 @@ pub fn scene_gpu_id(scene_id: u64) -> u64 {
 
 pub fn multiview_gpu_id(layout_id: u64) -> u64 {
     MULTIVIEW_BASE | layout_id
+}
+
+pub fn stream_encoder_gpu_id(encoder_id: u64) -> u64 {
+    if encoder_id >= STREAM_ENCODER_BASE {
+        encoder_id
+    } else {
+        STREAM_ENCODER_BASE | encoder_id
+    }
 }
 
 pub fn mu_program(unit_id: u64) -> u64 {

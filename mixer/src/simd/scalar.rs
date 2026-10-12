@@ -1,12 +1,15 @@
 const Y_SCALE: f32 = 255.0 / 219.0;
+const C_SCALE: f32 = 255.0 / 224.0;
 const CR_R: f32 = 1.5748;
 const CB_B: f32 = 1.8556;
-const CB_G: f32 = 0.1873;
-const CR_G: f32 = 0.4681;
+const CB_G: f32 = 0.187324;
+const CR_G: f32 = 0.468124;
 
 #[inline]
 fn yuv_to_bgra(luma: f32, u: f32, v: f32) -> [u8; 4] {
     let yv = (luma - 16.0) * Y_SCALE;
+    let u = u * C_SCALE;
+    let v = v * C_SCALE;
     [
         (yv + CB_B * u).clamp(0.0, 255.0) as u8,
         (yv - CB_G * u - CR_G * v).clamp(0.0, 255.0) as u8,

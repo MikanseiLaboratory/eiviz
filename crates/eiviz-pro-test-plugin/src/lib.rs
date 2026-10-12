@@ -12,7 +12,7 @@ use eiviz_pro_api::{
     ABI_MAJOR, Entitlements, FEATURE_DECKLINK, FEATURE_LICENSE, FEATURE_RTMP, LAYOUT_UYVY,
     PRO_BUSY, PRO_DEVICE, PRO_INVALID, PRO_OK, ProApi, ProAudioView, ProCaptureCallbacks,
     ProCaptureStatsAbi, ProEntitlementsAbi, ProLicenseStatusAbi, ProOutputStatsAbi,
-    ProPlayoutConfig, ProRtmpConfig, ProStatus, ProVideoView, abi_hash, copy_to_buffer,
+    ProPlayoutConfig, ProStatus, ProStreamConfig, ProVideoView, abi_hash, copy_to_buffer,
 };
 
 const VERSION: &str = "0.3.0";
@@ -245,12 +245,45 @@ unsafe extern "C" fn playout_start(
     open_output(module, !config.is_null(), out)
 }
 
-unsafe extern "C" fn rtmp_start(
+unsafe extern "C" fn stream_start(
     module: *mut c_void,
-    config: *const ProRtmpConfig,
+    config: *const ProStreamConfig,
     out: *mut *mut c_void,
 ) -> ProStatus {
     open_output(module, !config.is_null(), out)
+}
+
+unsafe extern "C" fn stream_add_destination(
+    handle: *mut c_void,
+    _id: u64,
+    url: *const u8,
+    url_len: usize,
+) -> ProStatus {
+    guard(|| {
+        if handle != 3 as *mut c_void || url.is_null() && url_len != 0 {
+            return error("bad destination");
+        }
+        ProStatus::ok()
+    })
+}
+
+unsafe extern "C" fn stream_remove_destination(handle: *mut c_void, _id: u64) -> ProStatus {
+    guard(|| {
+        if handle != 3 as *mut c_void {
+            return error("bad destination");
+        }
+        ProStatus::ok()
+    })
+}
+
+unsafe extern "C" fn stream_destination_stats(
+    handle: *mut c_void,
+    _id: u64,
+    out: *mut ProOutputStatsAbi,
+    message: *mut u8,
+    message_cap: usize,
+) -> ProStatus {
+    unsafe { output_stats(handle, out, message, message_cap) }
 }
 
 fn open_output(module: *mut c_void, ok: bool, out: *mut *mut c_void) -> ProStatus {
@@ -304,6 +337,7 @@ unsafe extern "C" fn output_stats(
                 repeated: 0,
                 dropped: 0,
                 bitrate: 0,
+                encoder_threads: 0,
             };
         }
         if !message.is_null() && message_cap > 0 {
@@ -414,7 +448,10 @@ fn base_api() -> ProApi {
         capture_stats: Some(capture_stats),
         capture_destroy: Some(capture_destroy),
         playout_start: Some(playout_start),
-        rtmp_start: Some(rtmp_start),
+        stream_start: Some(stream_start),
+        stream_add_destination: Some(stream_add_destination),
+        stream_remove_destination: Some(stream_remove_destination),
+        stream_destination_stats: Some(stream_destination_stats),
         output_submit_video: Some(output_submit_video),
         output_submit_audio: Some(output_submit_audio),
         output_stats: Some(output_stats),

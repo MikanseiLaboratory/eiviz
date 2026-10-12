@@ -52,6 +52,8 @@ pub struct Document {
     #[serde(default)]
     pub next_overlay_id: u64,
     #[serde(default)]
+    pub stream_encoders: Vec<StreamEncoderDto>,
+    #[serde(default)]
     pub outputs: Vec<OutputDto>,
     #[serde(default)]
     pub multiviews: Vec<MultiviewDto>,
@@ -63,6 +65,8 @@ pub struct Document {
     pub next_unit_id: u64,
     #[serde(default)]
     pub next_output_id: u64,
+    #[serde(default)]
+    pub next_stream_encoder_id: u64,
     #[serde(default)]
     pub next_multiview_id: u64,
     #[serde(default)]
@@ -1237,14 +1241,44 @@ pub struct OutputDto {
     /// Name in the process secret table. The stream key itself is not stored.
     #[serde(default)]
     pub rtmp_secret_ref: String,
+    /// Encode profile shared by this destination. `0` when the row is not RTMP.
     #[serde(default)]
-    pub rtmp_video_bitrate: u32,
+    pub stream_encoder_id: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamEncoderDto {
+    pub id: u64,
     #[serde(default)]
-    pub rtmp_audio_bitrate: u32,
+    pub name: String,
     #[serde(default)]
-    pub rtmp_keyint: u32,
+    pub source_kind: OutputSourceKind,
     #[serde(default)]
-    pub rtmp_video_only: bool,
+    pub source_id: u64,
+    #[serde(default = "one")]
+    pub unit_id: u64,
+    #[serde(default)]
+    pub audio_unit_id: u64,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+    #[serde(default)]
+    pub fps_num: u32,
+    #[serde(default)]
+    pub fps_den: u32,
+    #[serde(default)]
+    pub video_bitrate: u32,
+    #[serde(default)]
+    pub audio_bitrate: u32,
+    #[serde(default)]
+    pub keyint: u32,
+    #[serde(default)]
+    pub video_only: bool,
+    /// `0` asks the encoder to pick a thread count from the CPU.
+    #[serde(default)]
+    pub encoder_threads: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

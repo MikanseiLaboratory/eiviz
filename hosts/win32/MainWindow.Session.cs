@@ -1048,7 +1048,9 @@ public partial class MainWindow
                     dialog.Outputs,
                     dialog.Headphone,
                     dialog.HeadphoneCopyMonitor,
-                    dialog.NextOutputId),
+                    dialog.NextOutputId,
+                    dialog.StreamEncoders,
+                    dialog.NextStreamEncoderId),
                 Loc.T("chrome.settings"));
             return;
         }
@@ -1113,6 +1115,10 @@ public partial class MainWindow
             : MixerNative.FormatUyvy;
         if (restartMedia)
             RestartMediaPumps();
+        _session.StreamEncoders.Clear();
+        foreach (var encoder in dialog.StreamEncoders)
+            _session.StreamEncoders.Add(encoder.Clone());
+        _session.NextStreamEncoderId = dialog.NextStreamEncoderId;
         ApplyOutputs(dialog.Outputs);
         RebuildMeters();
         App.ApplyVmixApi();
@@ -1183,9 +1189,15 @@ public partial class MainWindow
         var previous = _session.Outputs.ToList();
         var nextIds = next.Select(item => item.Id).ToHashSet();
         foreach (var existing in previous.Where(item => !nextIds.Contains(item.Id)))
+        {
+            if (existing.Transport == OutputTransport.Rtmp)
+                continue;
             MixerApply.RemoveOutput(existing.Id);
+        }
         foreach (var output in next)
         {
+            if (output.Transport == OutputTransport.Rtmp)
+                continue;
             var prior = previous.FirstOrDefault(item => item.Id == output.Id);
             if (prior is not null && SameOutput(prior, output))
                 continue;
@@ -1232,8 +1244,5 @@ public partial class MainWindow
         && left.DecklinkExternalKey == right.DecklinkExternalKey
         && left.RtmpUrl == right.RtmpUrl
         && left.RtmpSecretRef == right.RtmpSecretRef
-        && left.RtmpVideoBitrate == right.RtmpVideoBitrate
-        && left.RtmpAudioBitrate == right.RtmpAudioBitrate
-        && left.RtmpKeyint == right.RtmpKeyint
-        && left.RtmpVideoOnly == right.RtmpVideoOnly;
+        && left.StreamEncoderId == right.StreamEncoderId;
 }

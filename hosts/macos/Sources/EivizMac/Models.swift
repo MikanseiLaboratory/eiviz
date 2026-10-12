@@ -1118,16 +1118,13 @@ struct OutputEntry: Identifiable, Codable {
     var decklinkExternalKey: Bool = false
     var rtmpUrl: String = ""
     var rtmpSecretRef: String = ""
-    var rtmpVideoBitrate: UInt32 = 0
-    var rtmpAudioBitrate: UInt32 = 0
-    var rtmpKeyint: UInt32 = 0
-    var rtmpVideoOnly: Bool = false
+    var streamEncoderId: UInt64 = 0
 
     enum CodingKeys: String, CodingKey {
         case id, name, transport, sourceKind, sourceId, unitId, useGpu, enabled, audioUnitId
         case skipEncodeWhenNoReceivers, width, height, fpsNum, fpsDen
         case decklinkDevice, decklinkMode, decklinkExternalKey
-        case rtmpUrl, rtmpSecretRef, rtmpVideoBitrate, rtmpAudioBitrate, rtmpKeyint, rtmpVideoOnly
+        case rtmpUrl, rtmpSecretRef, streamEncoderId
     }
 
     init(
@@ -1150,10 +1147,7 @@ struct OutputEntry: Identifiable, Codable {
         decklinkExternalKey: Bool = false,
         rtmpUrl: String = "",
         rtmpSecretRef: String = "",
-        rtmpVideoBitrate: UInt32 = 0,
-        rtmpAudioBitrate: UInt32 = 0,
-        rtmpKeyint: UInt32 = 0,
-        rtmpVideoOnly: Bool = false
+        streamEncoderId: UInt64 = 0
     ) {
         self.id = id
         self.name = name
@@ -1174,10 +1168,7 @@ struct OutputEntry: Identifiable, Codable {
         self.decklinkExternalKey = decklinkExternalKey
         self.rtmpUrl = rtmpUrl
         self.rtmpSecretRef = rtmpSecretRef
-        self.rtmpVideoBitrate = rtmpVideoBitrate
-        self.rtmpAudioBitrate = rtmpAudioBitrate
-        self.rtmpKeyint = rtmpKeyint
-        self.rtmpVideoOnly = rtmpVideoOnly
+        self.streamEncoderId = streamEncoderId
     }
 
     init(from decoder: Decoder) throws {
@@ -1201,11 +1192,26 @@ struct OutputEntry: Identifiable, Codable {
         decklinkExternalKey = try container.decodeIfPresent(Bool.self, forKey: .decklinkExternalKey) ?? false
         rtmpUrl = try container.decodeIfPresent(String.self, forKey: .rtmpUrl) ?? ""
         rtmpSecretRef = try container.decodeIfPresent(String.self, forKey: .rtmpSecretRef) ?? ""
-        rtmpVideoBitrate = try container.decodeIfPresent(UInt32.self, forKey: .rtmpVideoBitrate) ?? 0
-        rtmpAudioBitrate = try container.decodeIfPresent(UInt32.self, forKey: .rtmpAudioBitrate) ?? 0
-        rtmpKeyint = try container.decodeIfPresent(UInt32.self, forKey: .rtmpKeyint) ?? 0
-        rtmpVideoOnly = try container.decodeIfPresent(Bool.self, forKey: .rtmpVideoOnly) ?? false
+        streamEncoderId = try container.decodeIfPresent(UInt64.self, forKey: .streamEncoderId) ?? 0
     }
+}
+
+struct StreamEncoderEntry: Identifiable, Codable {
+    var id: UInt64
+    var name: String = ""
+    var sourceKind: OutputSourceKind = .muProgram
+    var sourceId: UInt64 = 0
+    var unitId: UInt64 = 1
+    var audioUnitId: UInt64 = 1
+    var width: UInt32 = 1920
+    var height: UInt32 = 1080
+    var fpsNum: UInt32 = 60_000
+    var fpsDen: UInt32 = 1_001
+    var videoBitrate: UInt32 = 6_000_000
+    var audioBitrate: UInt32 = 128_000
+    var keyint: UInt32 = 120
+    var videoOnly: Bool = false
+    var encoderThreads: UInt32 = 0
 }
 
 enum MultiviewTemplate: String, Codable, CaseIterable, Identifiable {
@@ -1668,6 +1674,7 @@ struct MixerSessionData: Codable {
     var overlays: [OverlaySlot] = []
     var nextOverlayId: UInt64 = 1
     var outputs: [OutputEntry] = []
+    var streamEncoders: [StreamEncoderEntry] = []
     var multiviews: [MultiviewLayout] = []
     var headphone = HeadphoneEntry()
     var inputTags: [String] = []
@@ -1677,6 +1684,7 @@ struct MixerSessionData: Codable {
     var nextUnitId: UInt64 = 2
     var nextMonitorId: UInt64 = 1000
     var nextOutputId: UInt64 = 100
+    var nextStreamEncoderId: UInt64 = 1
     var nextMultiviewId: UInt64 = 1
     var selectedUnitId: UInt64 = 1
     var headphoneCopyMonitor: Bool = false
@@ -1684,9 +1692,9 @@ struct MixerSessionData: Codable {
     var headphoneListenId: UInt64 = 0
 
     enum CodingKeys: String, CodingKey {
-        case version, settings, inputs, scenes, scenePresets, units, transitions, overlays, nextOverlayId, outputs, multiviews, headphone
+        case version, settings, inputs, scenes, scenePresets, units, transitions, overlays, nextOverlayId, outputs, streamEncoders, multiviews, headphone
         case inputTags, sceneTags
-        case nextInputId, nextSceneId, nextUnitId, nextOutputId, nextMultiviewId
+        case nextInputId, nextSceneId, nextUnitId, nextOutputId, nextStreamEncoderId, nextMultiviewId
         case selectedUnitId, headphoneCopyMonitor, headphoneListenKind, headphoneListenId
     }
 
@@ -1846,6 +1854,8 @@ enum SessionFile {
         var object = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
         if object["headphoneListenKind"] == nil { object["headphoneListenKind"] = 0 }
         if object["headphoneListenId"] == nil { object["headphoneListenId"] = 0 }
+        if object["streamEncoders"] == nil { object["streamEncoders"] = [] }
+        if object["nextStreamEncoderId"] == nil { object["nextStreamEncoderId"] = 1 }
         let patched = try JSONSerialization.data(withJSONObject: object)
         var session = try JSONDecoder().decode(MixerSessionData.self, from: patched)
         session.assignMonitors()

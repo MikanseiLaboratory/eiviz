@@ -329,20 +329,21 @@ impl AudioGraph {
 
     pub fn device_groups(&self) -> Vec<(super::DeviceKey, Vec<(Arc<BusRing>, i32, i32)>)> {
         let mut groups: HashMap<DeviceKey, Vec<(Arc<BusRing>, i32, i32)>> = HashMap::new();
-        let push = |bus: &AudioBus, groups: &mut HashMap<DeviceKey, Vec<(Arc<BusRing>, i32, i32)>>| {
-            if !bus_output_armed(bus) {
-                return;
-            }
-            let key = DeviceKey {
-                kind: bus.device_kind,
-                id: bus.device_id.clone(),
+        let push =
+            |bus: &AudioBus, groups: &mut HashMap<DeviceKey, Vec<(Arc<BusRing>, i32, i32)>>| {
+                if !bus_output_armed(bus) {
+                    return;
+                }
+                let key = DeviceKey {
+                    kind: bus.device_kind,
+                    id: bus.device_id.clone(),
+                };
+                groups.entry(key).or_default().push((
+                    Arc::clone(&bus.ring),
+                    bus.map_left,
+                    bus.map_right,
+                ));
             };
-            groups.entry(key).or_default().push((
-                Arc::clone(&bus.ring),
-                bus.map_left,
-                bus.map_right,
-            ));
-        };
         for bus in self.unit_buses.values() {
             push(bus, &mut groups);
         }
@@ -397,7 +398,9 @@ impl AudioGraph {
                     };
                     if bus.mute { 0.0 } else { bus.gain.max(0.0) }
                 };
-                self.render_bus(unit_id, false, fader, snapshot, &spec_map, mix_inputs, frames);
+                self.render_bus(
+                    unit_id, false, fader, snapshot, &spec_map, mix_inputs, frames,
+                );
                 if unit_id == self.headphone_cue_unit {
                     self.scratch_master.clear();
                     self.scratch_master.extend_from_slice(&self.scratch_mixed);
@@ -406,8 +409,7 @@ impl AudioGraph {
                 if let Some(bus) = self.unit_buses.get_mut(&unit_id) {
                     bus.peak = crate::simd::peak_interleaved(&self.scratch_mixed);
                 }
-                if self.headphone_listen_kind == LISTEN_UNIT
-                    && unit_id == self.headphone_listen_id
+                if self.headphone_listen_kind == LISTEN_UNIT && unit_id == self.headphone_listen_id
                 {
                     listened_unit.clear();
                     listened_unit.extend_from_slice(&self.scratch_mixed);
