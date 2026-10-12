@@ -444,16 +444,6 @@ public partial class MainWindow
         SessionStore.Publish(_session);
     }
 
-    private void RemoveScene_Click(object sender, RoutedEventArgs e)
-    {
-        if (_selectedScene is null)
-        {
-            MessageBox.Show(this, Loc.T("msg.selectSceneDelete"));
-            return;
-        }
-        DeleteScene(_selectedScene);
-    }
-
     private void DeleteScene(SceneEntry removed)
     {
         if (RejectIfOnAirLock())
@@ -595,6 +585,11 @@ public partial class MainWindow
 
     private void AddUnit_Click(object sender, RoutedEventArgs e)
     {
+        if (!PlanGate.CanAddMixingUnit(_session.Units.Count))
+        {
+            PlanGate.Tip(this, "msg.planMixingUnit");
+            return;
+        }
         var draft = new MixingUnitEntry
         {
             Id = _session.NextUnitId,

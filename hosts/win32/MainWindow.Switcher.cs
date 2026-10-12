@@ -66,10 +66,6 @@ public partial class MainWindow
         }
         foreach (var kind in InputKindNames.TabKinds)
         {
-            if (kind == InputKind.DeckLink
-                && !InputKindNames.DeckLinkInputAllowed()
-                && !_session.Inputs.Exists(item => item.Kind == InputKind.DeckLink))
-                continue;
             var filter = ListFilter.ForKind(kind);
             var on = _inputFilter.Mode == ListFilterMode.Kind
                 && _inputFilter.Kind is { } selected
@@ -92,7 +88,19 @@ public partial class MainWindow
     private void AddFilterTab(Panel bar, string label, bool on, ListFilter filter, bool input)
     {
         var button = TransitionGroupTab(label, on);
-        button.Click += (_, _) => SelectListFilter(filter, input);
+        button.Click += (_, _) =>
+        {
+            if (input
+                && filter.Mode == ListFilterMode.Kind
+                && filter.Kind == InputKind.DeckLink
+                && !InputKindNames.DeckLinkInputAllowed()
+                && !_session.Inputs.Exists(item => item.Kind == InputKind.DeckLink))
+            {
+                PlanGate.Tip(Window.GetWindow(button), "msg.planDecklinkInput");
+                return;
+            }
+            SelectListFilter(filter, input);
+        };
         button.MouseRightButtonUp += (_, e) =>
         {
             OpenTagMenu(button, filter, input);

@@ -157,7 +157,6 @@ public partial class MainWindow : Window
         OpenRecentButton.IsEnabled = !locked;
         DeleteUnitButton.IsEnabled = !locked;
         DeleteInputButton.IsEnabled = !locked;
-        RemoveSceneButton.IsEnabled = !locked;
         foreach (var tile in ScenePanel.Children.OfType<SceneTile>())
             tile.SetCloseEnabled(!locked);
         RebuildStreamToggles();
@@ -173,7 +172,7 @@ public partial class MainWindow : Window
 
     protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
     {
-        if (OnAirLock.BlockClosing(this, e))
+        if (OnAirLock.BlockClosing(e))
             return;
         base.OnClosing(e);
     }

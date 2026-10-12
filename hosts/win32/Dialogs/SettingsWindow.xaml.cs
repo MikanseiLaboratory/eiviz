@@ -124,6 +124,9 @@ public partial class SettingsWindow : Window
     public ulong NextStreamEncoderId => _nextStreamEncoderId;
     private ulong _nextStreamEncoderId = 1;
     private bool _suppressOutputs;
+    private bool _suppressCategory;
+    private bool _fillingEncode;
+    private int _categoryIndex;
     private List<DeckLinkDeviceInfo>? _decklinkDevices;
     private string _decklinkDeviceError = "";
     private readonly Dictionary<string, (List<DeckLinkModeInfo> Modes, string Error)> _decklinkModes = new(StringComparer.Ordinal);
@@ -132,9 +135,21 @@ public partial class SettingsWindow : Window
 
     private void CategoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_suppressCategory)
+            return;
         if (DisplayPanel is null || PerformancePanel is null || MultiviewPanel is null || AudioBusPanel is null || AdvancedPanel is null || WebApiPanel is null || LicensePanel is null || StreamPanel is null)
             return;
         var index = CategoryList.SelectedIndex;
+        if (index == 3 && !PlanGate.EncodeSettingsOpen)
+        {
+            if (IsVisible)
+                PlanGate.Tip(this, "msg.planEncodeSettings");
+            _suppressCategory = true;
+            CategoryList.SelectedIndex = _categoryIndex;
+            _suppressCategory = false;
+            return;
+        }
+        _categoryIndex = index;
         DisplayPanel.Visibility = index == 0 ? Visibility.Visible : Visibility.Collapsed;
         PerformancePanel.Visibility = index == 1 ? Visibility.Visible : Visibility.Collapsed;
         OutputPanel.Visibility = index == 2 ? Visibility.Visible : Visibility.Collapsed;
@@ -569,6 +584,11 @@ public partial class SettingsWindow : Window
 
     private void AddEncode_Click(object sender, RoutedEventArgs e)
     {
+        if (!PlanGate.EncodeSettingsOpen)
+        {
+            PlanGate.Tip(this, "msg.planEncodeSettings");
+            return;
+        }
         if (OnAirLock.Active)
             return;
         StreamEncoders.Add(NewEncoder());
@@ -721,16 +741,48 @@ public partial class SettingsWindow : Window
 
         var size = new ComboBox { IsEnabled = !locked };
         FillEncodeSize(size, encoder);
+        var sizeTag = encoder.Width == 0 || encoder.Height == 0 ? "0x0" : $"{encoder.Width}x{encoder.Height}";
         size.SelectionChanged += (_, _) =>
         {
+            if (_fillingEncode)
+                return;
+            if (size.SelectedItem is ComboBoxItem picked && picked.Tag is string tag)
+            {
+                var pixels = EncodePixels(tag);
+                if (!PlanGate.AllowsEncodeSize(pixels.Width, pixels.Height))
+                {
+                    PlanGate.Tip(this, "msg.planEncodeSize");
+                    _fillingEncode = true;
+                    SelectTag(size, sizeTag);
+                    _fillingEncode = false;
+                    return;
+                }
+                sizeTag = tag;
+            }
             if (!OnAirLock.Active)
                 ApplyEncodeSize(size, encoder);
             Paint();
         };
         var fps = new ComboBox { IsEnabled = !locked };
         FillEncodeFps(fps, encoder);
+        var fpsTag = encoder.FpsNum == 0 || encoder.FpsDen == 0 ? "0/0" : $"{encoder.FpsNum}/{encoder.FpsDen}";
         fps.SelectionChanged += (_, _) =>
         {
+            if (_fillingEncode)
+                return;
+            if (fps.SelectedItem is ComboBoxItem picked && picked.Tag is string tag)
+            {
+                var rate = EncodeRate(tag);
+                if (!PlanGate.AllowsEncodeFps(rate.Num, rate.Den))
+                {
+                    PlanGate.Tip(this, "msg.planEncodeFps");
+                    _fillingEncode = true;
+                    SelectTag(fps, fpsTag);
+                    _fillingEncode = false;
+                    return;
+                }
+                fpsTag = tag;
+            }
             if (!OnAirLock.Active)
                 ApplyEncodeFps(fps, encoder);
             Paint();
@@ -1205,13 +1257,10 @@ public partial class SettingsWindow : Window
 
             var name = new TextBox { Text = output.Name, Margin = new Thickness(0, 0, 8, 6) };
             name.TextChanged += (_, _) => output.Name = name.Text.Trim();
-            var caps = MixerNative.QueryCapabilities();
-            var deckLinkAllowed = caps.DecklinkLinked != 0 && caps.DecklinkOutputLimit != 0;
             var transport = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !OnAirLock.Active };
             transport.Items.Add(new ComboBoxItem { Content = "OMT", Tag = OutputTransport.Omt });
             transport.Items.Add(new ComboBoxItem { Content = "NDI", Tag = OutputTransport.Ndi });
-            if (deckLinkAllowed || output.Transport == OutputTransport.DeckLink)
-                transport.Items.Add(new ComboBoxItem { Content = "DeckLink", Tag = OutputTransport.DeckLink });
+            transport.Items.Add(new ComboBoxItem { Content = "DeckLink", Tag = OutputTransport.DeckLink });
             foreach (ComboBoxItem item in transport.Items)
             {
                 if (item.Tag is OutputTransport tagged && tagged == output.Transport)
@@ -1219,8 +1268,24 @@ public partial class SettingsWindow : Window
             }
             transport.SelectionChanged += (_, _) =>
             {
+                if (_suppressOutputs)
+                    return;
                 if (transport.SelectedItem is ComboBoxItem item && item.Tag is OutputTransport value)
                 {
+                    if (value == OutputTransport.DeckLink
+                        && output.Transport != OutputTransport.DeckLink
+                        && !PlanGate.DeckLinkOutput)
+                    {
+                        PlanGate.Tip(this, "msg.planDecklinkOutput");
+                        _suppressOutputs = true;
+                        foreach (ComboBoxItem existing in transport.Items)
+                        {
+                            if (existing.Tag is OutputTransport tagged && tagged == output.Transport)
+                                transport.SelectedItem = existing;
+                        }
+                        _suppressOutputs = false;
+                        return;
+                    }
                     output.Transport = value;
                     if (value != OutputTransport.Omt)
                         output.UseGpu = false;
@@ -1679,6 +1744,30 @@ public partial class SettingsWindow : Window
                     output.UnitId = unit.Id;
                 break;
         }
+    }
+
+    private (uint Width, uint Height) EncodePixels(string tag)
+    {
+        if (tag == "0x0")
+            return (Settings.DefaultWidth, Settings.DefaultHeight);
+        var parts = tag.Split('x');
+        if (parts.Length == 2
+            && uint.TryParse(parts[0], out var width)
+            && uint.TryParse(parts[1], out var height))
+            return (width, height);
+        return (0, 0);
+    }
+
+    private (uint Num, uint Den) EncodeRate(string tag)
+    {
+        if (tag == "0/0")
+            return (Settings.MasterFpsNum, Settings.MasterFpsDen);
+        var parts = tag.Split('/');
+        if (parts.Length == 2
+            && uint.TryParse(parts[0], out var num)
+            && uint.TryParse(parts[1], out var den))
+            return (num, den);
+        return (0, 0);
     }
 
     private static void FillEncodeSize(ComboBox box, StreamEncoderEntry encoder)

@@ -215,7 +215,6 @@
                         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                                 <Button Content="+" Width="28" Click="AddScene_Click"/>
-                                <Button x:Name="RemoveSceneButton" Content="-" Width="28" Margin="4,0,0,0" Click="RemoveScene_Click"/>
                                 <Button Content="Edit" Width="48" Margin="4,0,0,0" Click="EditScene_Click"/>
                             </StackPanel>
                             <TextBlock Text="{Binding [chrome.scenes], Source={x:Static i18n:Loc.Source}}" FontWeight="Bold" VerticalAlignment="Center"/>

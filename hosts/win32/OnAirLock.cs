@@ -1,6 +1,3 @@
-using System.Windows;
-using Eiviz.Host.I18n;
-
 namespace Eiviz.Host;
 
 internal static class OnAirLock
@@ -30,12 +27,11 @@ internal static class OnAirLock
         return new CloseBypass();
     }
 
-    public static bool BlockClosing(Window window, System.ComponentModel.CancelEventArgs e)
+    public static bool BlockClosing(System.ComponentModel.CancelEventArgs e)
     {
         if (!ShouldCancelClose())
             return false;
         e.Cancel = true;
-        MessageBox.Show(window, Loc.T("msg.onAirLock"), Loc.T("chrome.onAirLock"));
         return true;
     }
 

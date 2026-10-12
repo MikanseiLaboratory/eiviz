@@ -30,10 +30,9 @@ public partial class AddInputWindow : Window
             InputKind.Video,
             InputKind.OMT,
             InputKind.NDI,
-            InputKind.UVC
+            InputKind.UVC,
+            InputKind.DeckLink
         };
-        if (InputKindNames.DeckLinkInputAllowed())
-            kinds.Add(InputKind.DeckLink);
         kinds.Add(InputKind.Mix);
         kinds.Add(InputKind.Audio);
         foreach (var kind in kinds)
@@ -201,6 +200,13 @@ public partial class AddInputWindow : Window
     {
         if (sender is not Button { Tag: InputKind kind } || (_lockKind && !SameCategory(kind, _kind)))
             return;
+        if (kind == InputKind.DeckLink
+            && _kind != InputKind.DeckLink
+            && !InputKindNames.DeckLinkInputAllowed())
+        {
+            PlanGate.Tip(this, "msg.planDecklinkInput");
+            return;
+        }
         _kind = kind;
         Highlight();
     }
