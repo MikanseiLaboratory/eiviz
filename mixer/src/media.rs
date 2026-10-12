@@ -1,7 +1,7 @@
 use std::os::windows::ffi::OsStrExt;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Condvar, Mutex, Once};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -1508,70 +1508,108 @@ fn wide(text: &str) -> Vec<u16> {
         .collect()
 }
 
-/// NV12 textures produced by Vulkan Video, kept until the RGBA pass that reads them
-/// has finished. A few stay in flight so that pass overlaps the next decode instead of
-/// stalling the shared GPU queue on every frame.
-struct VulkanNv12Hold<'a> {
-    device: &'a wgpu::Device,
-    pending: std::collections::VecDeque<VulkanNv12Source>,
+/// How many Vulkan Video frames may be in the NV12-to-RGBA pass at once.
+const NV12_IN_FLIGHT: usize = 3;
+
+/// Counts NV12 images whose RGBA pass has been submitted but not retired.
+///
+/// Completion is reported by `Queue::on_submitted_work_done`, which the render
+/// thread (or [`Nv12Flight::acquire`]) drives with `PollType::Poll`. Waiting on
+/// a submission index from this thread panics inside wgpu 30 when that poll
+/// races the render thread, and the panic kills playback so seek and transport
+/// controls no longer reach a live decoder.
+struct Nv12Flight {
+    count: Arc<Mutex<usize>>,
+    ready: Arc<Condvar>,
 }
 
-struct VulkanNv12Source {
-    index: wgpu::SubmissionIndex,
-    _texture: wgpu::Texture,
-}
-
-impl VulkanNv12Hold<'_> {
-    fn park(&mut self, texture: wgpu::Texture, index: wgpu::SubmissionIndex) {
-        self.pending.push_back(VulkanNv12Source {
-            index,
-            _texture: texture,
-        });
-        self.retire(false);
-        while self.pending.len() > 3 {
-            let before = self.pending.len();
-            self.retire(true);
-            if self.pending.len() == before {
-                break;
-            }
+impl Nv12Flight {
+    fn new() -> Self {
+        Self {
+            count: Arc::new(Mutex::new(0)),
+            ready: Arc::new(Condvar::new()),
         }
     }
 
-    fn retire(&mut self, block: bool) {
-        let timeout = if block {
-            Some(Duration::from_secs(2))
-        } else {
-            Some(Duration::ZERO)
-        };
-        while let Some(front) = self.pending.front() {
-            let done = self
-                .device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: Some(front.index.clone()),
-                    timeout,
-                })
-                .is_ok();
-            if !done {
-                break;
+    fn in_flight(&self) -> usize {
+        *self.count.lock_or_recover()
+    }
+
+    /// Reserves one slot, polling completed passes without naming a submission.
+    /// After two seconds the slot is taken anyway so a stuck GPU cannot freeze
+    /// seek and playback controls.
+    fn acquire(&self, device: &wgpu::Device) {
+        let start = Instant::now();
+        loop {
+            {
+                let mut count = self.count.lock_or_recover();
+                if *count < NV12_IN_FLIGHT {
+                    *count += 1;
+                    return;
+                }
             }
-            self.pending.pop_front();
-            if block {
-                break;
+            if start.elapsed() >= Duration::from_secs(2) {
+                *self.count.lock_or_recover() += 1;
+                return;
             }
+            {
+                let _guard = crate::device::lock_gpu_queue();
+                let _ = device.poll(wgpu::PollType::Poll);
+            }
+            let count = self.count.lock_or_recover();
+            if *count < NV12_IN_FLIGHT {
+                drop(count);
+                continue;
+            }
+            let (_count, _wait) = self
+                .ready
+                .wait_timeout(count, Duration::from_millis(2))
+                .unwrap_or_else(|error| error.into_inner());
+        }
+    }
+
+    /// Decrements the slot reserved by [`Nv12Flight::acquire`].
+    fn releaser(&self) -> impl FnOnce() + Send + 'static {
+        let count = Arc::clone(&self.count);
+        let ready = Arc::clone(&self.ready);
+        move || {
+            {
+                let mut held = count.lock_or_recover();
+                *held = held.saturating_sub(1);
+            }
+            ready.notify_one();
         }
     }
 }
 
-impl Drop for VulkanNv12Hold<'_> {
-    fn drop(&mut self) {
-        while !self.pending.is_empty() {
-            let before = self.pending.len();
-            self.retire(true);
-            if self.pending.len() == before {
-                self.pending.clear();
-                break;
-            }
+fn submit_vulkan_frame(
+    converter: &crate::convert::Nv12Converter,
+    ingest: &GpuIngest,
+    gpu_ring: &mut crate::convert::VideoGpuRing,
+    flight: &Nv12Flight,
+    nv12: wgpu::Texture,
+    width: u32,
+    height: u32,
+    pts: i64,
+    prefetch: &mut std::collections::VecDeque<Prefetched>,
+    ring_vram: &mut u64,
+) {
+    flight.acquire(&ingest.device);
+    match converter.convert_nv12_texture(
+        &ingest.device,
+        &ingest.queue,
+        gpu_ring,
+        nv12,
+        width,
+        height,
+        pts,
+        flight.releaser(),
+    ) {
+        Ok(gpu) => {
+            *ring_vram = gpu_ring.vram_bytes();
+            prefetch.push_back(Prefetched::Gpu(gpu));
         }
+        Err(error) => eprintln!("eiviz vulkan nv12: {error}"),
     }
 }
 
@@ -1620,10 +1658,7 @@ fn run_vulkan_h264_file(
     let file_prefetch = depth.max(3);
     let mut gpu_ring = crate::convert::VideoGpuRing::new(file_prefetch);
     let converter = crate::convert::Nv12Converter::new(&ingest.device);
-    let mut nv12_hold = VulkanNv12Hold {
-        device: &ingest.device,
-        pending: std::collections::VecDeque::new(),
-    };
+    let nv12_flight = Nv12Flight::new();
     let mut prefetch = std::collections::VecDeque::new();
     let mut ring_vram = 0u64;
     let mut clock_pts = -1i64;
@@ -1748,11 +1783,12 @@ fn run_vulkan_h264_file(
                         for frame in frames {
                             let size = frame.data.size();
                             let gpu_pts = frame.metadata.pts.map(|value| value as i64).unwrap_or(0);
-                            match converter.convert_nv12_texture(
-                                &ingest.device,
-                                &ingest.queue,
+                            submit_vulkan_frame(
+                                &converter,
+                                ingest,
                                 &mut gpu_ring,
-                                &frame.data,
+                                &nv12_flight,
+                                frame.data,
                                 if size.width > 0 { size.width } else { layout_w },
                                 if size.height > 0 {
                                     size.height
@@ -1760,14 +1796,9 @@ fn run_vulkan_h264_file(
                                     layout_h
                                 },
                                 gpu_pts,
-                            ) {
-                                Ok((gpu, index)) => {
-                                    nv12_hold.park(frame.data, index);
-                                    ring_vram = gpu_ring.vram_bytes();
-                                    prefetch.push_back(Prefetched::Gpu(gpu));
-                                }
-                                Err(error) => eprintln!("eiviz vulkan nv12: {error}"),
-                            }
+                                &mut prefetch,
+                                &mut ring_vram,
+                            );
                         }
                     }
                     Err(error) => eprintln!("eiviz vulkan flush: {error}"),
@@ -1821,22 +1852,18 @@ fn run_vulkan_h264_file(
                         layout_h
                     };
                     let gpu_pts = frame.metadata.pts.map(|value| value as i64).unwrap_or(pts);
-                    match converter.convert_nv12_texture(
-                        &ingest.device,
-                        &ingest.queue,
+                    submit_vulkan_frame(
+                        &converter,
+                        ingest,
                         &mut gpu_ring,
-                        &frame.data,
+                        &nv12_flight,
+                        frame.data,
                         w,
                         h,
                         gpu_pts,
-                    ) {
-                        Ok((gpu, index)) => {
-                            nv12_hold.park(frame.data, index);
-                            ring_vram = gpu_ring.vram_bytes();
-                            prefetch.push_back(Prefetched::Gpu(gpu));
-                        }
-                        Err(error) => eprintln!("eiviz vulkan nv12: {error}"),
-                    }
+                        &mut prefetch,
+                        &mut ring_vram,
+                    );
                 }
                 if preview {
                     present_due_file(
@@ -1983,6 +2010,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn vulkan_nv12_flight_releases_one_slot() {
+        let flight = Nv12Flight::new();
+        *flight.count.lock_or_recover() = 2;
+        assert_eq!(flight.in_flight(), 2);
+        (flight.releaser())();
+        assert_eq!(flight.in_flight(), 1);
+    }
+
+    #[test]
     fn frame_due_follows_pts_clock() {
         assert!(frame_due(0, -1, Duration::ZERO));
         assert!(!frame_due(400_000, 0, Duration::from_millis(20)));
@@ -2056,24 +2092,29 @@ mod tests {
                 .unwrap_or_else(|error| panic!("decode: {error}"));
             if let Some(frame) = frames.into_iter().next() {
                 let size = frame.data.size();
-                let (_gpu, index) = converter
+                let (done_tx, done_rx) = mpsc::sync_channel(1);
+                converter
                     .convert_nv12_texture(
                         &device.device,
                         &device.queue,
                         &mut ring,
-                        &frame.data,
+                        frame.data,
                         if size.width > 0 { size.width } else { width },
                         if size.height > 0 { size.height } else { height },
                         sample.0,
+                        move || {
+                            let _ = done_tx.send(());
+                        },
                     )
                     .unwrap_or_else(|error| panic!("nv12: {error}"));
-                device
-                    .device
-                    .poll(wgpu::PollType::Wait {
-                        submission_index: Some(index),
-                        timeout: Some(Duration::from_secs(2)),
-                    })
-                    .expect("nv12 submission");
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while done_rx.try_recv().is_err() {
+                    if Instant::now() >= deadline {
+                        panic!("nv12 submission");
+                    }
+                    let _ = device.device.poll(wgpu::PollType::Poll);
+                    thread::sleep(Duration::from_millis(1));
+                }
                 return;
             }
         }
