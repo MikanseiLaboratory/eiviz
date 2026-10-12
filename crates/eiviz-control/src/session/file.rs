@@ -11,9 +11,8 @@ use super::{
     HeadphoneDto, InputDto, InputKind, InternalColorFormat, MixSource, MuBusDto, MultiviewDto,
     MultiviewTemplate, MvLabelAnchor, MvLabelUnit, MvSlot, MvSlotKind, NdiBandwidth, OmtQuality,
     OutputDto, OutputSourceKind, OutputTransport, OverlaySlot, RgbColor, SceneDto, SceneLayer,
-    StreamEncoderDto,
-    SceneLayerGeom, SceneLayoutPreset, SessionSettings, SwitcherSceneFilter, TransitionPreset,
-    UnitDto, VideoPlayWhen, VideoTriggerWhen,
+    SceneLayerGeom, SceneLayoutPreset, SessionSettings, StreamEncoderDto, SwitcherSceneFilter,
+    TransitionPreset, UnitDto, VideoPlayWhen, VideoTriggerWhen,
 };
 
 mod pb {
@@ -348,7 +347,11 @@ fn document_to_pb(doc: &Document) -> pb::Document {
         transitions: doc.transitions.iter().map(transition_to_pb).collect(),
         overlays: doc.overlays.iter().map(overlay_to_pb).collect(),
         next_overlay_id: doc.next_overlay_id,
-        stream_encoders: doc.stream_encoders.iter().map(stream_encoder_to_pb).collect(),
+        stream_encoders: doc
+            .stream_encoders
+            .iter()
+            .map(stream_encoder_to_pb)
+            .collect(),
         next_stream_encoder_id: doc.next_stream_encoder_id,
         outputs: doc.outputs.iter().map(output_to_pb).collect(),
         multiviews: doc.multiviews.iter().map(multiview_to_pb).collect(),

@@ -1,3 +1,4 @@
+import EivizMixer
 import SwiftUI
 
 enum AppChrome {

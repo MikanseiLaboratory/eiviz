@@ -982,11 +982,7 @@ mod tests {
             }
             Ok(())
         }
-        fn stream_destination_remove(
-            &mut self,
-            encoder_id: u64,
-            id: u64,
-        ) -> ControlResult<()> {
+        fn stream_destination_remove(&mut self, encoder_id: u64, id: u64) -> ControlResult<()> {
             self.push_op(format!("remove_stream_destination {encoder_id} {id}"));
             Ok(())
         }

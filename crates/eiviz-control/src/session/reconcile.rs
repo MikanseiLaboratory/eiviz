@@ -1325,9 +1325,7 @@ fn diff_streams(previous: Option<&Document>, next: &Document, ops: &mut Vec<Reco
                 .iter()
                 .any(|encoder| encoder.id == output.stream_encoder_id)
         {
-            ops.push(ReconcileOp::AddStreamDestination(destination_apply(
-                output,
-            )));
+            ops.push(ReconcileOp::AddStreamDestination(destination_apply(output)));
         }
     }
 }
@@ -1413,10 +1411,12 @@ pub fn reinforce_streams(
             continue;
         }
         let encoder_down = trouble(encoder.id).is_some_and(needs_encoder)
-            || dests.iter().any(|dest| trouble(dest.id).is_some_and(needs_encoder));
-        let adding_encoder = ops.iter().any(|op| {
-            matches!(op, ReconcileOp::AddStreamEncoder(spec) if spec.id == encoder.id)
-        });
+            || dests
+                .iter()
+                .any(|dest| trouble(dest.id).is_some_and(needs_encoder));
+        let adding_encoder = ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::AddStreamEncoder(spec) if spec.id == encoder.id));
         if encoder_down && !adding_encoder {
             ops.push(ReconcileOp::RemoveStreamEncoder { id: encoder.id });
             ops.push(ReconcileOp::AddStreamEncoder(stream_encoder_apply(encoder)));
@@ -1426,13 +1426,11 @@ pub fn reinforce_streams(
             continue;
         }
         for dest in &dests {
-            let adding = ops.iter().any(|op| {
-                matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == dest.id)
-            });
+            let adding = ops.iter().any(
+                |op| matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == dest.id),
+            );
             if !adding {
-                ops.push(ReconcileOp::AddStreamDestination(destination_apply(
-                    dest,
-                )));
+                ops.push(ReconcileOp::AddStreamDestination(destination_apply(dest)));
             }
         }
     }
@@ -1690,8 +1688,13 @@ mod tests {
             crate::error::ControlError::unavailable("DeckLink is not linked in this build"),
             crate::error::ControlError::not_supported_plan("1080p60 exceeds this plan"),
         ] {
-            accept_io(Err(error), &mut statuses, crate::ids::ResourceKind::Output, 102)
-                .expect("live I/O must stay on the session");
+            accept_io(
+                Err(error),
+                &mut statuses,
+                crate::ids::ResourceKind::Output,
+                102,
+            )
+            .expect("live I/O must stay on the session");
         }
         assert_eq!(statuses.len(), 6);
         assert!(
@@ -1732,20 +1735,16 @@ mod tests {
         next.outputs[0].enabled = false;
         let ops = plan(Some(&prev), &next);
         assert!(
-            ops.iter().any(|op| matches!(
-                op,
-                ReconcileOp::RemoveStreamDestination { id: 102, .. }
-            ))
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::RemoveStreamDestination { id: 102, .. }))
         );
         assert!(
             !ops.iter()
                 .any(|op| matches!(op, ReconcileOp::RemoveStreamEncoder { .. }))
         );
         assert!(
-            !ops.iter().any(|op| matches!(
-                op,
-                ReconcileOp::RemoveStreamDestination { id: 103, .. }
-            ))
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::RemoveStreamDestination { id: 103, .. }))
         );
     }
 

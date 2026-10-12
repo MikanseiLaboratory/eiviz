@@ -210,7 +210,8 @@ enum MixerFFI {
         let n = buffer.withUnsafeMutableBufferPointer { ptr in
             mixer_decklink_enum_devices(ptr.baseAddress, ptr.count)
         }
-        return decodeDeckLink(buffer, n)
+        let decoded: (items: [DeckLinkDeviceInfo], error: String) = decodeDeckLink(buffer, n)
+        return (decoded.items, decoded.error)
     }
 
     static func deckLinkModes(deviceId: String) -> (modes: [DeckLinkModeInfo], error: String) {
