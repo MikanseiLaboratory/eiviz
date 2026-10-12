@@ -4797,6 +4797,32 @@ pub unsafe extern "C" fn mixer_license_clear() -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_license_email(out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_license_email", ERR_IO, || unsafe {
+        mixer_license_email_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_license_email_ffi(out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let text = match crate::pro::license_email() {
+        Ok(text) => text,
+        Err(code) => return code,
+    };
+    let bytes = text.as_bytes();
+    if cap < bytes.len() + 1 {
+        return ERR_BUFFER_TOO_SMALL;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len());
+        *out.add(bytes.len()) = 0;
+    }
+    OK
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_machine_fingerprint(out: *mut u8, cap: usize) -> i32 {
     ffi_guard("mixer_machine_fingerprint", ERR_IO, || unsafe {
         mixer_machine_fingerprint_ffi(out, cap)

@@ -1,7 +1,124 @@
 import AppKit
+import Darwin
 import EivizMixer
 import SwiftUI
 import UniformTypeIdentifiers
+
+final class LicenseReturnServer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fd: Int32 = -1
+    private var handler: ((String) -> Int32)?
+
+    func stop() {
+        lock.lock()
+        let current = fd
+        fd = -1
+        handler = nil
+        lock.unlock()
+        if current >= 0 {
+            Darwin.close(current)
+        }
+    }
+
+    func start(onTicket: @escaping (String) -> Int32) -> String? {
+        stop()
+        let sock = socket(AF_INET, SOCK_STREAM, 0)
+        if sock < 0 {
+            return nil
+        }
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0
+        addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let bound = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        if bound != 0 || listen(sock, 1) != 0 {
+            Darwin.close(sock)
+            return nil
+        }
+        var stored = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let named = withUnsafeMutablePointer(to: &stored) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(sock, $0, &length)
+            }
+        }
+        if named != 0 {
+            Darwin.close(sock)
+            return nil
+        }
+        let port = Int(UInt16(bigEndian: stored.sin_port))
+        lock.lock()
+        fd = sock
+        handler = onTicket
+        lock.unlock()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.acceptLoop(sock)
+        }
+        return "http://127.0.0.1:\(port)/callback"
+    }
+
+    private func invoke(_ ticket: String) -> Int32 {
+        lock.lock()
+        let handler = handler
+        lock.unlock()
+        return handler?(ticket) ?? -1
+    }
+
+    private func acceptLoop(_ sock: Int32) {
+        while true {
+            lock.lock()
+            let current = fd
+            lock.unlock()
+            if current != sock {
+                break
+            }
+            let client = accept(sock, nil, nil)
+            if client < 0 {
+                break
+            }
+            var buffer = [UInt8](repeating: 0, count: 8192)
+            let count = recv(client, &buffer, buffer.count, 0)
+            var ticket = ""
+            if count > 0, let text = String(bytes: buffer.prefix(count), encoding: .utf8) {
+                let line = text.prefix { $0 != "\r" && $0 != "\n" }
+                if let query = line.split(separator: " ").dropFirst().first?.split(separator: "?").dropFirst().first {
+                    for part in query.split(separator: "&") {
+                        let pair = part.split(separator: "=", maxSplits: 1)
+                        if pair.count == 2, pair[0] == "ticket" {
+                            ticket = String(pair[1]).removingPercentEncoding ?? ""
+                        }
+                    }
+                }
+            }
+            var code: Int32 = -1
+            if !ticket.isEmpty {
+                let value = ticket
+                code = DispatchQueue.main.sync {
+                    self.invoke(value)
+                }
+            }
+            let message = code == 0
+                ? "eivizにライセンスを登録しました。このタブを閉じてください。"
+                : "eivizへの登録に失敗しました。このタブを閉じて、表示されたチケットをライセンス入力欄へ貼り付けてください。"
+            let page = "<!DOCTYPE html><html lang=\"ja\"><meta charset=\"utf-8\"><title>eiviz</title><p>\(message)</p></html>"
+            let body = Data(page.utf8)
+            let header = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+            var response = Data(header.utf8)
+            response.append(body)
+            response.withUnsafeBytes { raw in
+                if let base = raw.baseAddress {
+                    _ = send(client, base, raw.count, 0)
+                }
+            }
+            Darwin.close(client)
+        }
+    }
+}
 
 struct SettingsView: View {
     @EnvironmentObject private var mixer: MixerController
@@ -340,13 +457,20 @@ struct SettingsView: View {
     @State private var licenseTicket = ""
     @State private var licenseStatus = ""
     @State private var licenseEdition = ""
+    @State private var licenseAccount = "-"
+    @State private var licenseExpiry = "-"
     @State private var licenseFingerprint = ""
+    @State private var licenseReturn = LicenseReturnServer()
 
     private var license: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(L10n.t("settings.license")).fontWeight(.bold)
             Text(L10n.t("settings.licenseEdition"))
             Text(licenseEdition)
+            Text(L10n.t("settings.licenseAccount"))
+            Text(licenseAccount)
+            Text(L10n.t("settings.licenseExpiry"))
+            Text(licenseExpiry)
             Text(licenseStatus).foregroundStyle(EivizTheme.dim)
             Text(L10n.t("settings.licenseTicket"))
             TextEditor(text: $licenseTicket)
@@ -370,12 +494,35 @@ struct SettingsView: View {
             Text(licenseFingerprint)
                 .font(.system(.body, design: .monospaced))
                 .textSelection(.enabled)
-            Button(L10n.t("settings.licenseCopy")) {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(licenseFingerprint, forType: .string)
+            HStack {
+                Button(L10n.t("settings.licenseCopy")) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(licenseFingerprint, forType: .string)
+                }
+                Button(L10n.t("settings.licenseOpen")) {
+                    var parts = URLComponents(string: L10n.t("settings.licenseUrl"))
+                    var items: [URLQueryItem] = []
+                    let prints = licenseFingerprint.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !prints.isEmpty {
+                        items.append(URLQueryItem(name: "fingerprints", value: prints))
+                    }
+                    if let callback = licenseReturn.start(onTicket: { ticket in
+                        licenseTicket = ticket
+                        let code = ticket.withCString { mixer_license_install($0) }
+                        refreshLicense()
+                        return code
+                    }) {
+                        items.append(URLQueryItem(name: "return", value: callback))
+                    }
+                    parts?.queryItems = items.isEmpty ? nil : items
+                    if let url = parts?.url {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
             }
         }
         .onAppear { refreshLicense() }
+        .onDisappear { licenseReturn.stop() }
     }
 
     private func refreshLicense() {
@@ -386,6 +533,8 @@ struct SettingsView: View {
         let rc = mixer_license_status(&status, &ticketId, ticketId.count)
         if rc != 0 {
             licenseStatus = L10n.t("settings.licenseUnavailable")
+            licenseAccount = "-"
+            licenseExpiry = "-"
             licenseFingerprint = ""
             return
         }
@@ -398,8 +547,22 @@ struct SettingsView: View {
         default: state = L10n.t("settings.licenseUnregistered")
         }
         let id = String(decoding: ticketId.prefix { $0 != 0 }, as: UTF8.self)
-        let expiry = status.expires_at > 0 ? String(status.expires_at) : "-"
-        licenseStatus = "\(state)  \(L10n.t("settings.licenseExpiry")): \(expiry)  \(id)"
+        licenseStatus = id.isEmpty ? state : "\(state)  \(id)"
+        var email = [UInt8](repeating: 0, count: 512)
+        if mixer_license_email(&email, email.count) == 0 {
+            let text = String(decoding: email.prefix { $0 != 0 }, as: UTF8.self)
+            licenseAccount = text.isEmpty ? "-" : text
+        } else {
+            licenseAccount = "-"
+        }
+        if status.expires_at > 0 {
+            let date = Date(timeIntervalSince1970: TimeInterval(status.expires_at))
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd HH:mm"
+            licenseExpiry = formatter.string(from: date)
+        } else {
+            licenseExpiry = "-"
+        }
         var fingerprint = [UInt8](repeating: 0, count: 4096)
         if mixer_machine_fingerprint(&fingerprint, fingerprint.count) == 0 {
             licenseFingerprint = String(decoding: fingerprint.prefix { $0 != 0 }, as: UTF8.self)

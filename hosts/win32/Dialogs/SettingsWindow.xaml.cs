@@ -1,3 +1,10 @@
+using System.Diagnostics;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using Eiviz.Host.I18n;
@@ -11,10 +18,13 @@ public partial class SettingsWindow : Window
 {
     private Session _session => ((App)Application.Current).Session;
     private ulong _nextOutputId;
+    private HttpListener? _licenseReturn;
+    private CancellationTokenSource? _licenseReturnCancel;
 
     public SettingsWindow(Session session, int category = 0)
     {
         InitializeComponent();
+        Closed += (_, _) => StopLicenseReturn();
         if (category > 0 && category < CategoryList.Items.Count)
             CategoryList.SelectedIndex = category;
         if (App.IsRemote && OpenMvButton is not null)
@@ -192,6 +202,89 @@ public partial class SettingsWindow : Window
             Clipboard.SetText(LicenseFingerprintBox.Text);
     }
 
+    private void LicenseOpen_Click(object sender, RoutedEventArgs e)
+    {
+        var url = Loc.T("settings.licenseUrl");
+        var query = new System.Collections.Generic.List<string>();
+        var fingerprints = LicenseFingerprintBox.Text.Trim();
+        if (!string.IsNullOrEmpty(fingerprints))
+            query.Add("fingerprints=" + Uri.EscapeDataString(fingerprints));
+        var callback = StartLicenseReturn();
+        if (callback is not null)
+            query.Add("return=" + Uri.EscapeDataString(callback));
+        if (query.Count > 0)
+            url += "?" + string.Join("&", query);
+        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+    }
+
+    private string? StartLicenseReturn()
+    {
+        StopLicenseReturn();
+        var probe = new TcpListener(IPAddress.Loopback, 0);
+        probe.Start();
+        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
+        probe.Stop();
+        var listener = new HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        try
+        {
+            listener.Start();
+        }
+        catch (HttpListenerException)
+        {
+            return null;
+        }
+        var cancel = new CancellationTokenSource();
+        _licenseReturn = listener;
+        _licenseReturnCancel = cancel;
+        _ = Task.Run(() => AcceptLicenseReturn(listener, cancel.Token));
+        return $"http://127.0.0.1:{port}/callback";
+    }
+
+    private void StopLicenseReturn()
+    {
+        _licenseReturnCancel?.Cancel();
+        _licenseReturn?.Close();
+        _licenseReturn = null;
+        _licenseReturnCancel = null;
+    }
+
+    private void AcceptLicenseReturn(HttpListener listener, CancellationToken cancel)
+    {
+        try
+        {
+            while (!cancel.IsCancellationRequested)
+            {
+                var context = listener.GetContext();
+                var ticket = context.Request.QueryString["ticket"] ?? "";
+                var code = -1;
+                if (!string.IsNullOrWhiteSpace(ticket))
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        code = MixerNative.LicenseInstall(ticket.Trim());
+                        LicenseTicketBox.Text = ticket.Trim();
+                        RefreshLicense();
+                        if (code == 0)
+                            RebuildOutputs();
+                    });
+                }
+                var message = code == 0
+                    ? "eivizにライセンスを登録しました。このタブを閉じてください。"
+                    : "eivizへの登録に失敗しました。このタブを閉じて、表示されたチケットをライセンス入力欄へ貼り付けてください。";
+                var body = Encoding.UTF8.GetBytes(
+                    $"<!DOCTYPE html><html lang=\"ja\"><meta charset=\"utf-8\"><title>eiviz</title><p>{message}</p></html>");
+                context.Response.ContentType = "text/html; charset=utf-8";
+                context.Response.ContentLength64 = body.Length;
+                context.Response.OutputStream.Write(body, 0, body.Length);
+                context.Response.OutputStream.Close();
+            }
+        }
+        catch (Exception ex) when (ex is HttpListenerException or ObjectDisposedException or IOException)
+        {
+        }
+    }
+
     private void RefreshLicense()
     {
         LicenseEditionText.Text = MainWindow.CurrentEdition() ?? "-";
@@ -201,6 +294,8 @@ public partial class SettingsWindow : Window
         if (status is null)
         {
             LicenseStatusText.Text = Loc.T("settings.licenseUnavailable");
+            LicenseAccountText.Text = "-";
+            LicenseExpiryText.Text = "-";
             LicenseFingerprintBox.Text = "";
             return;
         }
@@ -212,10 +307,12 @@ public partial class SettingsWindow : Window
             4 => Loc.T("settings.licenseBadSignature"),
             _ => Loc.T("settings.licenseUnregistered"),
         };
-        var expiry = status.Value.ExpiresAt > 0
+        var email = MixerNative.QueryLicenseEmail();
+        LicenseAccountText.Text = string.IsNullOrEmpty(email) ? "-" : email;
+        LicenseExpiryText.Text = status.Value.ExpiresAt > 0
             ? DateTimeOffset.FromUnixTimeSeconds(status.Value.ExpiresAt).ToLocalTime().ToString("yyyy-MM-dd HH:mm")
             : "-";
-        LicenseStatusText.Text = $"{state}  {Loc.T("settings.licenseExpiry")}: {expiry}  {ticketId}";
+        LicenseStatusText.Text = string.IsNullOrEmpty(ticketId) ? state : $"{state}  {ticketId}";
         LicenseFingerprintBox.Text = MixerNative.QueryFingerprint();
     }
 

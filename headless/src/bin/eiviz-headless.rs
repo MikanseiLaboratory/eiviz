@@ -48,8 +48,20 @@ fn install_license(path: &Path) -> Result<(), u8> {
             .ok()
             .and_then(|text| text.to_str().ok())
             .unwrap_or("");
+        let mut email_buf = [0u8; 512];
+        let email =
+            if unsafe { eiviz_mixer::mixer_license_email(email_buf.as_mut_ptr(), email_buf.len()) }
+                == 0
+            {
+                std::ffi::CStr::from_bytes_until_nul(&email_buf)
+                    .ok()
+                    .and_then(|text| text.to_str().ok())
+                    .unwrap_or("")
+            } else {
+                ""
+            };
         eprintln!(
-            "eiviz-headless license state={} plan={} expires={} ticket={id}",
+            "eiviz-headless license state={} plan={} expires={} ticket={id} email={email}",
             status.state, status.plan, status.expires_at
         );
     }

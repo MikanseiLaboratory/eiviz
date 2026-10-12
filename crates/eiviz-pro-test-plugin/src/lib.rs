@@ -432,6 +432,26 @@ unsafe extern "C" fn license_fingerprint(
     })
 }
 
+unsafe extern "C" fn license_email(
+    module: *mut c_void,
+    dst: *mut u8,
+    cap: usize,
+    written: *mut usize,
+) -> ProStatus {
+    guard(|| {
+        if module != module_ptr() {
+            return error("bad module");
+        }
+        let valid = LICENSE_OK.load(Ordering::SeqCst);
+        copy_to_buffer(
+            if valid { b"test@example.com" } else { b"" },
+            dst,
+            cap,
+            written,
+        )
+    })
+}
+
 fn base_api() -> ProApi {
     ProApi {
         struct_size: std::mem::size_of::<ProApi>() as u32,
@@ -462,6 +482,7 @@ fn base_api() -> ProApi {
         license_status: Some(license_status),
         license_clear: Some(license_clear),
         license_fingerprint: Some(license_fingerprint),
+        license_email: Some(license_email),
     }
 }
 

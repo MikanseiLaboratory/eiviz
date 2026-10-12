@@ -210,6 +210,7 @@ fn api_complete(api: &ProApi) -> bool {
         && api.license_status.is_some()
         && api.license_clear.is_some()
         && api.license_fingerprint.is_some()
+        && api.license_email.is_some()
 }
 
 fn query_snapshot(api: &ProApi, module: *mut c_void) -> Result<(Entitlements, u32), ()> {
@@ -645,6 +646,7 @@ impl LicenseBackend for LoadedPro {
             },
             expires_at: raw.expires_at,
             ticket_id: String::from_utf8_lossy(&ticket_id[..written]).into_owned(),
+            email: self.license_email(),
         }
     }
 
@@ -673,6 +675,19 @@ impl LicenseBackend for LoadedPro {
 }
 
 impl LoadedPro {
+    fn license_email(&self) -> String {
+        let Ok(bytes) = copy_plugin_bytes(self, |buffer, written| unsafe {
+            if let Some(email) = self.api.license_email {
+                email(self.module, buffer, 64 * 1024, written)
+            } else {
+                ProStatus::new(PRO_UNAVAILABLE)
+            }
+        }) else {
+            return String::new();
+        };
+        String::from_utf8(bytes).unwrap_or_default()
+    }
+
     fn open_output(
         &self,
         start: impl FnOnce(*mut *mut c_void) -> ProStatus,

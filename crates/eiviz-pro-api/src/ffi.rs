@@ -283,6 +283,8 @@ pub struct ProApi {
     pub license_clear: Option<unsafe extern "C" fn(*mut c_void) -> ProStatus>,
     pub license_fingerprint:
         Option<unsafe extern "C" fn(*mut c_void, *mut u8, usize, *mut usize) -> ProStatus>,
+    pub license_email:
+        Option<unsafe extern "C" fn(*mut c_void, *mut u8, usize, *mut usize) -> ProStatus>,
 }
 
 /// FNV-1a over the sizes of every struct that crosses the boundary.

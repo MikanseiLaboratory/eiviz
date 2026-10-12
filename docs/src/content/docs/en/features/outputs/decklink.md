@@ -3,6 +3,6 @@ title: Decklink
 description: Decklink output
 ---
 
-DeckLink input and output ship in the Pro module. A Community build returns `ERR_NOT_SUPPORTED_PLAN`. The host shows DeckLink only when `mixer_capabilities` reports that the module is linked and the plan allows it.
+DeckLink I/O requires the Pro module. Under the Community plan, calls return `ERR_NOT_SUPPORTED_PLAN`. The host UI displays DeckLink options only when `mixer_capabilities` indicates the module is loaded and permitted by the active plan.
 
-An official Pro package ships the signed module and `eiviz-pro.required`. Public builds do not include that module. Counts are listed in [Plans](/eiviz/en/introduction/plans/).
+Official Pro packages include the signed Pro module and `eiviz-pro.required`. Public open-source builds do not include this module. Channel limits are detailed in [Plans](/eiviz/en/introduction/plans/).

@@ -56,7 +56,7 @@ description: セッションに保存される設定ウィンドウの項目
 
 <img src="/eiviz/images/ja/introduction/settings/audio-aux.jpg" alt="ヘッドホン設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
-内部ミックスは48 kHzステレオです。このページではヘッドホンの出力デバイスを選択します。モニターする対象は、メーターのヘッドホンアイコンで選択します。各Mixing Unitの出力デバイスは、各Mixing Unitの設定ダイアログで選択します。詳細は[MU Bus](/eiviz/ja/concepts/audio-auxs/)と[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)を参照してください。
+内部ミックスは48 kHzステレオです。本項目ではヘッドホン出力に使用するデバイスを設定します。モニター対象は各メーターのヘッドホンアイコンで切り替えます。なお、各Mixing Unitのマスター出力デバイスは各Mixing Unitの設定ダイアログで指定します。詳細は[MU Bus](/eiviz/ja/concepts/audio-auxs/)と[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)を参照してください。
 
 - **None**: 内部ミックスのまま保持されます。デバイスへ出力する際はWASAPI共有またはASIOを使用します。
 
@@ -66,12 +66,12 @@ description: セッションに保存される設定ウィンドウの項目
 
 - **HTTP**: vMix互換HTTPサーバー（既定ポート: 8088）。Basic認証に対応。ポート競合時は警告を表示し、次のポート（+1）での起動を試行します。
 - **TCP**: vMix互換TCPサーバー（既定ポート: 8099）。認証には対応していません。
-- **WebSocket**: eivizネイティブのProtobuf制御API（既定ポート: 9400）。loopback以外へのbindには認証tokenが必須です。
+- **WebSocket**: eivizネイティブのProtobuf制御API（既定ポート: 9400）。ループバック（127.0.0.1）以外へバインドする場合は認証トークンが必須です。
 - **ブラウザのOrigin制限**: WebブラウザからWebSocketに接続する場合は、環境変数`EIVIZ_API_ALLOWED_ORIGINS`に対象のOriginまたは`*`を指定する必要があります。
 
 ## 詳細設定
 
-- **映像出力先ウィンドウの上限**: PreviewやProgram、Multiviewをリアルタイム表示するウィンドウ数の上限です（既定: 6）。設定の下に使用中の数を出します。上限を超えて開けなくなるのはDirectX 12のときだけです。不要なウィンドウを閉じると枠が空きます。
+- **映像出力先ウィンドウの上限**: Preview、Program、Multiviewをリアルタイム表示するウィンドウ数の上限です（既定: 6）。設定欄の下部に現在の使用数が表示されます。この上限はDirectX 12環境でのみ適用されます。不要なウィンドウを閉じるとスロットが解放されます。
 
 ## 環境設定（Preferences）
 

@@ -3,11 +3,11 @@ title: Plans
 description: Features and limits for Community, Professional, and Enterprise
 ---
 
-eiviz has three plans: Community, Professional, and Enterprise. Compositing, NDI/OMT, audio, and remote control are the same on every plan. The plan changes the Mixing Unit count, DeckLink, the RTMP picture size and frame rate, and the capability flags for recording, SRT, and hardware encode.
+eiviz offers three plans: Community, Professional, and Enterprise. Video compositing, NDI/OMT, audio processing, and remote control are available across all plans. Plans differ by Mixing Unit concurrency, DeckLink I/O channels, RTMP streaming resolution and frame rate limits, and capability flags for recording, SRT, and hardware encoding.
 
 ## Limits
 
-Width, height, and frame rate are checked separately. Crossing any one of them is refused. Frame rate is compared as `fps_num/fps_den`, and a rate equal to the cap is allowed.
+Width, height, and frame rate are evaluated independently. Exceeding any of these limits results in rejection. Frame rate is compared as an exact ratio (`fps_num/fps_den`), and rates up to and including the cap are allowed.
 
 | | Community | Professional | Enterprise |
 | --- | --- | --- | --- |
@@ -19,16 +19,30 @@ Width, height, and frame rate are checked separately. Crossing any one of them i
 | RTMP frame rate | 30 fps | 59.94 fps | Unlimited |
 | Recording / SRT / hardware encode | None | Capability flag only (not implemented) | Capability flag only (not implemented) |
 
-Professional 59.94 fps is `60000/1001`. Integer 60 fps (`60/1`) is over the cap even at 1920×1080 or below. Community 30 fps includes `30/1` and `30000/1001`. A portrait 1080×1920 is refused on Professional because the height is over 1080.
+Professional 59.94 fps is represented as `60000/1001`. Integer 60 fps (`60/1`) exceeds the limit even when resolution is 1920×1080 or lower. Community 30 fps includes both `30/1` and `30000/1001`. Portrait video (1080×1920) is rejected on Professional because its height exceeds 1080.
 
-Replacing a Mixing Unit that already has the same id does not consume another slot.
+Replacing an existing Mixing Unit with the same ID does not consume an additional slot.
 
-## How the plan is chosen
+## Plan Enforcement
 
-A valid license ticket selects the plan. The host installs the ticket and shows its status. The Pro module decides the plan.
+A valid license ticket determines the active plan. The host UI manages ticket installation and displays status, while the Pro module validates and enforces entitlements.
 
-An unregistered, expired, badly signed, or wrong-machine ticket is treated as Community. Expiry uses the later of the OS clock and a stored timestamp, so setting the clock back does not extend it. Outputs that are already running are not stopped when a ticket expires. A new call that exceeds the Community limits is refused.
+Missing, expired, invalidly signed, or mismatched-machine tickets default to the Community plan. Expiration uses the later of the system clock and a persisted timestamp, preventing clock rollback bypasses. Existing outputs continue running when a ticket expires, but subsequent operations exceeding Community limits are rejected.
 
-A public build with no module compiles in the Community limits only. DeckLink and RTMP are not linked, so a picture inside the Community cap still returns `ERR_IO`. A call outside the plan returns `ERR_NOT_SUPPORTED_PLAN` before the link check. An official package that contains `eiviz-pro.required` does not start when the module is missing, badly signed, or built for a different ABI, and it does not fall back to Community. Loading is described in [System architecture](/eiviz/en/introduction/architecture/).
+Public builds without a Pro module compile in Community limits only. Because DeckLink and RTMP implementations are not linked, even configurations within the Community cap return `ERR_IO`. Operations exceeding the active plan return `ERR_NOT_SUPPORTED_PLAN` prior to link verification. Official packages containing `eiviz-pro.required` fail startup if the module is missing, corrupted, or built for an incompatible ABI; they do not fall back to Community. See [System architecture](/eiviz/en/introduction/architecture/) for loading details.
 
-Only a development module built with `pro-dev` prefers the `EIVIZ_PLAN` environment variable over the ticket. The values are `community`, `professional` (`pro` is the same), and `enterprise`. A Release build without that feature ignores the variable.
+Only development modules built with the `pro-dev` feature allow the `EIVIZ_PLAN` environment variable to take precedence over installed tickets (accepted values: `community`, `professional`, `pro`, `enterprise`). Release builds ignore this variable.
+
+## Beta License
+
+During the v0.x beta, signing in with a Google account issues a complimentary Professional license. It is valid through 2027-03-31 23:59 JST. Each account can activate up to 3 machines (reissuing for the same machine does not count toward this limit).
+
+Beta tickets carry a `beta` flag and cannot be transferred to production releases.
+
+The activation portal is available at [eiviz beta license](https://eiviz-license.ruk1ium.workers.dev), or via the License section in Settings.
+
+1. In eiviz Settings, navigate to License and click **Open license site** (machine fingerprints are transferred automatically).
+2. Sign in with your Google account. The generated ticket is returned and installed into the application automatically.
+3. If navigating to the portal manually in a browser, paste your machine fingerprints, click **Issue**, and paste the generated ticket into the License field.
+
+Once applied, the License page displays the associated account email address and expiration date.
