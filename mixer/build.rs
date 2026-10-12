@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     println!("cargo:rerun-if-env-changed=NDI_SDK_DIR");
+    println!("cargo:rerun-if-env-changed=EIVIZ_PRO_MODULE_PUBLIC_KEY");
     if cfg!(windows) {
         copy_windows_ndi_dll();
     }
