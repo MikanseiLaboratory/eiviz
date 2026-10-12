@@ -254,6 +254,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rtmp_url_treats_missing_config_as_explicit_error() {
+        assert_eq!(
+            rtmp_url(&OutputExtras::default()).unwrap_err(),
+            "RTMP output requires a url"
+        );
+        assert_eq!(
+            rtmp_url(&OutputExtras {
+                url: "rtmp://example.invalid/live".into(),
+                secret_ref: "youtube".into(),
+                ..OutputExtras::default()
+            })
+            .unwrap_err(),
+            "RTMP secret 'youtube' is not set"
+        );
+        assert_eq!(
+            rtmp_url(&OutputExtras {
+                url: "rtmp://example.invalid/live/".into(),
+                ..OutputExtras::default()
+            })
+            .unwrap(),
+            "rtmp://example.invalid/live/"
+        );
+    }
+
+    #[test]
     fn community_module_has_no_pro_backends() {
         assert_eq!(module().module_name(), "community");
         assert!(module().license().is_none());

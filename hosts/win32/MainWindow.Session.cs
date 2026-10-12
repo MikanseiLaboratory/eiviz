@@ -419,6 +419,7 @@ public partial class MainWindow
         RebuildScenes();
         _overlay?.Reload(SelectedUnit);
         RebuildOverlayToggles();
+        RebuildStreamToggles();
         TickVideo();
         SessionStore.Publish(_session);
     }
@@ -502,6 +503,7 @@ public partial class MainWindow
         SelectScene(fallback);
         _overlay?.Reload(SelectedUnit);
         RebuildOverlayToggles();
+        RebuildStreamToggles();
         SessionStore.Publish(_session);
     }
 
@@ -548,6 +550,7 @@ public partial class MainWindow
         _tbarPresetIndex = 0;
         RebuildTransitions();
         RebuildOverlayToggles();
+        RebuildStreamToggles();
         if (!HostRole.IsRemote)
             MixerNative.AudioSetHeadphoneCue(unit.Id);
         SyncSelectedSceneFromMixer();
@@ -1223,5 +1226,14 @@ public partial class MainWindow
         && left.Width == right.Width
         && left.Height == right.Height
         && left.FpsNum == right.FpsNum
-        && left.FpsDen == right.FpsDen;
+        && left.FpsDen == right.FpsDen
+        && left.DecklinkDevice == right.DecklinkDevice
+        && left.DecklinkMode == right.DecklinkMode
+        && left.DecklinkExternalKey == right.DecklinkExternalKey
+        && left.RtmpUrl == right.RtmpUrl
+        && left.RtmpSecretRef == right.RtmpSecretRef
+        && left.RtmpVideoBitrate == right.RtmpVideoBitrate
+        && left.RtmpAudioBitrate == right.RtmpAudioBitrate
+        && left.RtmpKeyint == right.RtmpKeyint
+        && left.RtmpVideoOnly == right.RtmpVideoOnly;
 }

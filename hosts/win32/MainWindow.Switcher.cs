@@ -872,6 +872,33 @@ public partial class MainWindow
         return box;
     }
 
+    private void OpenStream_Click(object sender, RoutedEventArgs e) => OpenSettings(3);
+
+    internal void RebuildStreamToggles()
+    {
+        StreamTogglePanel.Children.Clear();
+        var locked = OnAirLock.Active;
+        foreach (var output in _session.Outputs)
+        {
+            if (output.Transport != OutputTransport.Rtmp)
+                continue;
+            var strip = new OverlayStrip(string.IsNullOrWhiteSpace(output.Name) ? "Stream" : output.Name, output.Enabled, on =>
+            {
+                if (RejectIfOnAirLock())
+                {
+                    RebuildStreamToggles();
+                    return;
+                }
+                output.Enabled = on;
+                SessionStore.Publish(_session);
+            })
+            {
+                IsEnabled = !locked
+            };
+            StreamTogglePanel.Children.Add(strip);
+        }
+    }
+
     internal void RebuildOverlayToggles()
     {
         OverlayTogglePanel.Children.Clear();
@@ -968,6 +995,7 @@ public partial class MainWindow
         Dispatcher.BeginInvoke(() =>
         {
             RebuildOverlayToggles();
+            RebuildStreamToggles();
             foreach (var switcher in _switchers.Values)
                 switcher.RebuildOverlays();
             _overlay?.RefreshEnabled();
@@ -992,6 +1020,7 @@ public partial class MainWindow
         {
             _overlay = null;
             RebuildOverlayToggles();
+            RebuildStreamToggles();
             foreach (var switcher in _switchers.Values)
                 switcher.RebuildOverlays();
         };

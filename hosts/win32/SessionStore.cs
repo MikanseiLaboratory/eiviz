@@ -68,6 +68,15 @@ internal static class SessionStore
     {
         if (Application.Current is App { Backend.IsRemote: true })
             return;
+        foreach (var output in session.Outputs)
+        {
+            if (output.Transport != OutputTransport.Rtmp || string.IsNullOrEmpty(output.RtmpSecretRef))
+                continue;
+            var key = CredentialStore.Load("rtmp/" + output.RtmpSecretRef);
+            if (string.IsNullOrEmpty(key))
+                continue;
+            MixerNative.ThrowIfFailed(MixerNative.SecretSet(output.RtmpSecretRef, key), "RTMP secret");
+        }
         MixerNative.SessionReplaceText(ToJson(session));
     }
 
@@ -223,23 +232,7 @@ internal static class SessionStore
             Transitions = [.. session.Transitions],
             Overlays = [.. session.Overlays],
             NextOverlayId = session.NextOverlayId,
-            Outputs = session.Outputs.Select(output => new OutputEntry
-            {
-                Id = output.Id,
-                Name = output.Name,
-                Transport = output.Transport,
-                SourceKind = output.SourceKind,
-                SourceId = output.SourceId,
-                UnitId = output.UnitId,
-                UseGpu = output.UseGpu,
-                Enabled = output.Enabled,
-                AudioUnitId = output.AudioUnitId,
-                SkipEncodeWhenNoReceivers = output.SkipEncodeWhenNoReceivers,
-                Width = output.Width,
-                Height = output.Height,
-                FpsNum = output.FpsNum,
-                FpsDen = output.FpsDen
-            }).ToList(),
+            Outputs = session.Outputs.Select(output => output.Clone()).ToList(),
             Multiviews = session.Multiviews.Select(MultiviewDto.From).ToList(),
             ScenePresets = session.ScenePresets.Select(preset => new SceneLayoutPreset
             {

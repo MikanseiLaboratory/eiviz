@@ -70,6 +70,7 @@ public partial class SettingsWindow : Window
             .Select(device => (device.Kind, device.Channels, device.Id, device.Name))
             .ToList();
         RebuildOutputs();
+        RebuildStreams();
         RebuildLayouts();
         RebuildBuses();
         ApplyOnAirLock();
@@ -94,12 +95,16 @@ public partial class SettingsWindow : Window
         var locked = OnAirLock.Active;
         if (AddOutputButton is not null)
             AddOutputButton.IsEnabled = !locked;
+        if (AddStreamButton is not null)
+            AddStreamButton.IsEnabled = !locked;
         if (FpsBox is not null)
             FpsBox.IsEnabled = !locked;
         if (SizeBox is not null)
             SizeBox.IsEnabled = !locked;
         if (OutputRows is not null)
             RebuildOutputs();
+        if (StreamRows is not null)
+            RebuildStreams();
     }
     public ulong NextOutputId => _nextOutputId;
     private bool _suppressOutputs;
@@ -111,18 +116,19 @@ public partial class SettingsWindow : Window
 
     private void CategoryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (DisplayPanel is null || PerformancePanel is null || MultiviewPanel is null || AudioBusPanel is null || AdvancedPanel is null || WebApiPanel is null || LicensePanel is null)
+        if (DisplayPanel is null || PerformancePanel is null || MultiviewPanel is null || AudioBusPanel is null || AdvancedPanel is null || WebApiPanel is null || LicensePanel is null || StreamPanel is null)
             return;
         var index = CategoryList.SelectedIndex;
         DisplayPanel.Visibility = index == 0 ? Visibility.Visible : Visibility.Collapsed;
         PerformancePanel.Visibility = index == 1 ? Visibility.Visible : Visibility.Collapsed;
         OutputPanel.Visibility = index == 2 ? Visibility.Visible : Visibility.Collapsed;
-        MultiviewPanel.Visibility = index == 3 ? Visibility.Visible : Visibility.Collapsed;
-        AudioBusPanel.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
-        WebApiPanel.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
-        AdvancedPanel.Visibility = index == 6 ? Visibility.Visible : Visibility.Collapsed;
-        LicensePanel.Visibility = index == 7 ? Visibility.Visible : Visibility.Collapsed;
-        if (index == 7)
+        StreamPanel.Visibility = index == 3 ? Visibility.Visible : Visibility.Collapsed;
+        MultiviewPanel.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
+        AudioBusPanel.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
+        WebApiPanel.Visibility = index == 6 ? Visibility.Visible : Visibility.Collapsed;
+        AdvancedPanel.Visibility = index == 7 ? Visibility.Visible : Visibility.Collapsed;
+        LicensePanel.Visibility = index == 8 ? Visibility.Visible : Visibility.Collapsed;
+        if (index == 8)
             RefreshLicense();
     }
 
@@ -538,6 +544,179 @@ public partial class SettingsWindow : Window
         RebuildOutputs();
     }
 
+    private void AddStream_Click(object sender, RoutedEventArgs e)
+    {
+        if (OnAirLock.Active)
+            return;
+        if (_nextOutputId < 100)
+            _nextOutputId = 100;
+        var fpsNum = Settings.MasterFpsNum == 0 ? 60_000u : Settings.MasterFpsNum;
+        var fpsDen = Settings.MasterFpsDen == 0 ? 1_001u : Settings.MasterFpsDen;
+        Outputs.Add(new OutputEntry
+        {
+            Id = _nextOutputId++,
+            Name = NextStreamName(),
+            Transport = OutputTransport.Rtmp,
+            SourceKind = OutputSourceKind.MuProgram,
+            UnitId = _session.Units.Count > 0 ? _session.Units[0].Id : 1,
+            AudioUnitId = _session.Units.Count > 0 ? _session.Units[0].Id : 1,
+            SkipEncodeWhenNoReceivers = false,
+            Enabled = false,
+            Width = Settings.DefaultWidth == 0 ? 1920 : Settings.DefaultWidth,
+            Height = Settings.DefaultHeight == 0 ? 1080 : Settings.DefaultHeight,
+            FpsNum = fpsNum,
+            FpsDen = fpsDen,
+            RtmpVideoBitrate = 6_000_000,
+            RtmpAudioBitrate = 128_000,
+            RtmpKeyint = 120
+        });
+        RebuildStreams();
+    }
+
+    private string NextStreamName()
+    {
+        const string prefix = "Stream";
+        if (Outputs.TrueForAll(item => item.Name != prefix))
+            return prefix;
+        for (var n = 2; n < 100; n++)
+        {
+            var name = prefix + " " + n;
+            if (Outputs.TrueForAll(item => item.Name != name))
+                return name;
+        }
+        return prefix;
+    }
+
+    private void RebuildStreams()
+    {
+        StreamRows.Children.Clear();
+        _suppressOutputs = true;
+        for (var i = 0; i < Outputs.Count; i++)
+        {
+            var index = i;
+            var output = Outputs[i];
+            if (output.Transport != OutputTransport.Rtmp)
+                continue;
+            StreamRows.Children.Add(BuildStreamRow(output, index));
+        }
+        _suppressOutputs = false;
+    }
+
+    private Border BuildStreamRow(OutputEntry output, int index)
+    {
+        var locked = OnAirLock.Active;
+        var box = new Border
+        {
+            BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44)),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(8),
+            Margin = new Thickness(0, 0, 0, 8)
+        };
+        var grid = new Grid();
+        for (var col = 0; col < 3; col++)
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+        for (var row = 0; row < 6; row++)
+            grid.RowDefinitions.Add(new RowDefinition());
+
+        var name = new TextBox { Text = output.Name, Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
+        name.TextChanged += (_, _) => output.Name = name.Text.Trim();
+        var remove = new Button { Content = "−", Width = 28, IsEnabled = !locked };
+        remove.Click += (_, _) =>
+        {
+            if (OnAirLock.Active)
+                return;
+            Outputs.RemoveAt(index);
+            RebuildStreams();
+        };
+
+        var server = Labeled(Loc.T("settings.streamServer"), output.RtmpUrl, !locked, value => output.RtmpUrl = value.Trim());
+        var key = new PasswordBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
+        if (!string.IsNullOrEmpty(output.RtmpSecretRef))
+            key.Password = CredentialStore.Load("rtmp/" + output.RtmpSecretRef);
+        key.PasswordChanged += (_, _) =>
+        {
+            if (key.Password.Length == 0)
+                return;
+            if (string.IsNullOrEmpty(output.RtmpSecretRef))
+                output.RtmpSecretRef = "stream-" + output.Id;
+            CredentialStore.Save("rtmp/" + output.RtmpSecretRef, key.Password);
+        };
+        var keyLabel = new TextBlock { Text = Loc.T("settings.streamKey"), Margin = new Thickness(0, 0, 8, 2) };
+
+        var videoKbps = output.RtmpVideoBitrate == 0 ? 6000u : output.RtmpVideoBitrate / 1000;
+        var audioKbps = output.RtmpAudioBitrate == 0 ? 128u : output.RtmpAudioBitrate / 1000;
+        var video = Labeled(Loc.T("settings.videoBitrate"), videoKbps.ToString(), !locked, value =>
+        {
+            if (uint.TryParse(value, out var kbps) && kbps > 0)
+                output.RtmpVideoBitrate = kbps * 1000;
+        });
+        var audio = Labeled(Loc.T("settings.audioBitrate"), audioKbps.ToString(), !locked, value =>
+        {
+            if (uint.TryParse(value, out var kbps) && kbps > 0)
+                output.RtmpAudioBitrate = kbps * 1000;
+        });
+        var keyint = Labeled(Loc.T("settings.keyframeInterval"), (output.RtmpKeyint == 0 ? 120 : output.RtmpKeyint).ToString(), !locked, value =>
+        {
+            if (uint.TryParse(value, out var frames) && frames > 0)
+                output.RtmpKeyint = frames;
+        });
+
+        var size = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
+        FillOutputSize(size, output);
+        size.SelectionChanged += (_, _) =>
+        {
+            if (!OnAirLock.Active)
+                ApplyOutputSize(size, output);
+        };
+        var fps = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
+        FillOutputFps(fps, output);
+        fps.SelectionChanged += (_, _) =>
+        {
+            if (!OnAirLock.Active)
+                ApplyOutputFps(fps, output);
+        };
+
+        Grid.SetColumnSpan(name, 3);
+        Grid.SetColumn(remove, 3);
+        Grid.SetRow(server, 1);
+        Grid.SetColumnSpan(server, 4);
+        Grid.SetRow(keyLabel, 2);
+        Grid.SetColumnSpan(keyLabel, 4);
+        Grid.SetRow(key, 3);
+        Grid.SetColumnSpan(key, 4);
+        Grid.SetRow(video, 4);
+        Grid.SetRow(audio, 4);
+        Grid.SetColumn(audio, 1);
+        Grid.SetRow(keyint, 4);
+        Grid.SetColumn(keyint, 2);
+        Grid.SetRow(size, 5);
+        Grid.SetRow(fps, 5);
+        Grid.SetColumn(fps, 1);
+        grid.Children.Add(name);
+        grid.Children.Add(remove);
+        grid.Children.Add(server);
+        grid.Children.Add(keyLabel);
+        grid.Children.Add(key);
+        grid.Children.Add(video);
+        grid.Children.Add(audio);
+        grid.Children.Add(keyint);
+        grid.Children.Add(size);
+        grid.Children.Add(fps);
+        box.Child = grid;
+        return box;
+    }
+
+    private static StackPanel Labeled(string label, string value, bool enabled, Action<string> changed)
+    {
+        var panel = new StackPanel { Margin = new Thickness(0, 0, 8, 6) };
+        panel.Children.Add(new TextBlock { Text = label, Margin = new Thickness(0, 0, 0, 2) });
+        var box = new TextBox { Text = value, IsEnabled = enabled };
+        box.TextChanged += (_, _) => changed(box.Text);
+        panel.Children.Add(box);
+        return panel;
+    }
+
     private void RebuildOutputs()
     {
         OutputRows.Children.Clear();
@@ -546,6 +725,8 @@ public partial class SettingsWindow : Window
         {
             var index = i;
             var output = Outputs[i];
+            if (output.Transport == OutputTransport.Rtmp)
+                continue;
             var box = new Border
             {
                 BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44)),
@@ -571,14 +752,11 @@ public partial class SettingsWindow : Window
             name.TextChanged += (_, _) => output.Name = name.Text.Trim();
             var caps = MixerNative.QueryCapabilities();
             var deckLinkAllowed = caps.DecklinkLinked != 0 && caps.DecklinkOutputLimit != 0;
-            var rtmpAllowed = caps.RtmpLinked != 0 && caps.RtmpMaxWidth != 0;
             var transport = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !OnAirLock.Active };
             transport.Items.Add(new ComboBoxItem { Content = "OMT", Tag = OutputTransport.Omt });
             transport.Items.Add(new ComboBoxItem { Content = "NDI", Tag = OutputTransport.Ndi });
             if (deckLinkAllowed || output.Transport == OutputTransport.DeckLink)
                 transport.Items.Add(new ComboBoxItem { Content = "DeckLink", Tag = OutputTransport.DeckLink });
-            if (rtmpAllowed || output.Transport == OutputTransport.Rtmp)
-                transport.Items.Add(new ComboBoxItem { Content = "RTMP", Tag = OutputTransport.Rtmp });
             foreach (ComboBoxItem item in transport.Items)
             {
                 if (item.Tag is OutputTransport tagged && tagged == output.Transport)
@@ -1127,23 +1305,7 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private static OutputEntry Clone(OutputEntry output) => new()
-    {
-        Id = output.Id,
-        Name = output.Name,
-        Transport = output.Transport,
-        SourceKind = output.SourceKind,
-        SourceId = output.SourceId,
-        UnitId = output.UnitId,
-        UseGpu = output.UseGpu,
-        Enabled = output.Enabled,
-        AudioUnitId = output.AudioUnitId,
-        SkipEncodeWhenNoReceivers = output.SkipEncodeWhenNoReceivers,
-        Width = output.Width,
-        Height = output.Height,
-        FpsNum = output.FpsNum,
-        FpsDen = output.FpsDen
-    };
+    private static OutputEntry Clone(OutputEntry output) => output.Clone();
 
     private static void SelectTag(ComboBox box, string tag)
     {

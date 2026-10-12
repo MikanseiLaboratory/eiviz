@@ -1030,6 +1030,33 @@ public sealed class OutputEntry
     public uint RtmpAudioBitrate { get; set; }
     public uint RtmpKeyint { get; set; }
     public bool RtmpVideoOnly { get; set; }
+
+    public OutputEntry Clone() => new()
+    {
+        Id = Id,
+        Name = Name,
+        Transport = Transport,
+        SourceKind = SourceKind,
+        SourceId = SourceId,
+        UnitId = UnitId,
+        UseGpu = UseGpu,
+        Enabled = Enabled,
+        AudioUnitId = AudioUnitId,
+        SkipEncodeWhenNoReceivers = SkipEncodeWhenNoReceivers,
+        Width = Width,
+        Height = Height,
+        FpsNum = FpsNum,
+        FpsDen = FpsDen,
+        DecklinkDevice = DecklinkDevice,
+        DecklinkMode = DecklinkMode,
+        DecklinkExternalKey = DecklinkExternalKey,
+        RtmpUrl = RtmpUrl,
+        RtmpSecretRef = RtmpSecretRef,
+        RtmpVideoBitrate = RtmpVideoBitrate,
+        RtmpAudioBitrate = RtmpAudioBitrate,
+        RtmpKeyint = RtmpKeyint,
+        RtmpVideoOnly = RtmpVideoOnly
+    };
 }
 
 public enum MvLabelUnit

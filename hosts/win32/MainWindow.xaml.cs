@@ -95,6 +95,7 @@ public partial class MainWindow : Window
         RebuildScenes();
         RebuildTransitions();
         RebuildOverlayToggles();
+        RebuildStreamToggles();
         RebuildMeters();
         _meterTimer.Tick += (_, _) => TickMeters();
         _meterTimer.Start();
@@ -156,6 +157,7 @@ public partial class MainWindow : Window
         RemoveSceneButton.IsEnabled = !locked;
         foreach (var tile in ScenePanel.Children.OfType<SceneTile>())
             tile.SetCloseEnabled(!locked);
+        RebuildStreamToggles();
     }
 
     private bool RejectIfOnAirLock()
@@ -190,6 +192,7 @@ public partial class MainWindow : Window
         }
         RebuildTransitions();
         RebuildOverlayToggles();
+        RebuildStreamToggles();
         RebuildMeters();
         ApplyAspect();
         FillVideoSources();

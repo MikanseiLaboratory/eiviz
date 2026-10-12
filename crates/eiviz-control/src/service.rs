@@ -953,6 +953,12 @@ mod tests {
         }
         fn output_add(&mut self, spec: OutputApply) -> ControlResult<()> {
             self.push_op(format!("output {}", spec.id));
+            if spec.transport == 2 {
+                return Err(ControlError::invalid("DeckLink output needs a device"));
+            }
+            if spec.transport == 3 {
+                return Err(ControlError::invalid("RTMP output requires a url"));
+            }
             Ok(())
         }
         fn output_remove(&mut self, id: u64) -> ControlResult<()> {
@@ -1128,6 +1134,29 @@ mod tests {
         }"#,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn replace_session_keeps_graph_when_pro_outputs_are_incomplete() {
+        on_big_stack(|| {
+            let mut svc = ControlService::new(FakeMixer::default());
+            let doc = parse(
+                br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "Bars", "kind": "Bars" }],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }],
+          "outputs": [
+            { "id": 100, "name": "pgm", "transport": "Omt", "sourceKind": "MuProgram" },
+            { "id": 101, "name": "deck", "transport": "DeckLink", "sourceKind": "MuProgram" },
+            { "id": 102, "name": "yt", "transport": "Rtmp", "sourceKind": "MuProgram" }
+          ]
+        }"#,
+            )
+            .unwrap();
+            svc.replace_session(doc, None, "1")
+                .expect("empty DeckLink/RTMP config must not abort replace");
+        });
     }
 
     #[test]

@@ -657,6 +657,8 @@ impl LoadedPro {
             submit_audio: self.api.output_submit_audio,
             stats_fn: self.api.output_stats,
             destroy_fn: self.api.output_destroy,
+            copy_last_error: self.api.copy_last_error,
+            module: self.module,
             handle,
         }))
     }
@@ -802,7 +804,33 @@ struct PluginOutput {
         unsafe extern "C" fn(*mut c_void, *mut ProOutputStatsAbi, *mut u8, usize) -> ProStatus,
     >,
     destroy_fn: Option<unsafe extern "C" fn(*mut c_void) -> ProStatus>,
+    copy_last_error:
+        Option<unsafe extern "C" fn(*mut c_void, *mut u8, usize, *mut usize) -> ProStatus>,
+    module: *mut c_void,
     handle: *mut c_void,
+}
+
+impl PluginOutput {
+    fn submit_error(&self, status: ProStatus, fallback: &str) -> ProError {
+        let mut buffer = [0u8; 512];
+        let mut written = 0usize;
+        if let Some(copy) = self.copy_last_error {
+            let _ = unsafe {
+                copy(
+                    self.module,
+                    buffer.as_mut_ptr(),
+                    buffer.len(),
+                    &mut written,
+                )
+            };
+        }
+        let message = String::from_utf8_lossy(&buffer[..written.min(buffer.len())]).into_owned();
+        ProError::device(if message.is_empty() {
+            format!("{fallback} {}", status.code)
+        } else {
+            message
+        })
+    }
 }
 
 unsafe impl Send for PluginOutput {}
@@ -841,10 +869,7 @@ impl MediaOutput for PluginOutput {
         if status.is_ok() {
             Ok(())
         } else {
-            Err(ProError::device(format!(
-                "pro video status {}",
-                status.code
-            )))
+            Err(self.submit_error(status, "pro video status"))
         }
     }
 
@@ -864,10 +889,7 @@ impl MediaOutput for PluginOutput {
         if status.is_ok() {
             Ok(())
         } else {
-            Err(ProError::device(format!(
-                "pro audio status {}",
-                status.code
-            )))
+            Err(self.submit_error(status, "pro audio status"))
         }
     }
 

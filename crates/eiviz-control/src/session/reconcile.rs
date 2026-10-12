@@ -289,7 +289,10 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
         if prev.is_some_and(|item| output_equal(item, output)) {
             continue;
         }
-        if prev.is_some() {
+        // Same RTMP ingest stays connected across a cut. Add retargets the
+        // bus; Remove would close the socket before that retarget runs.
+        let keep_rtmp = prev.is_some_and(|item| rtmp_link_equal(item, output));
+        if prev.is_some() && !keep_rtmp {
             ops.push(ReconcileOp::RemoveOutput { id: output.id });
         }
         ops.push(ReconcileOp::AddOutput(output_apply(output)));
@@ -690,12 +693,20 @@ fn accept_io(
             statuses.push(ready(kind, id));
             Ok(())
         }
-        Err(error) if matches!(error, crate::error::ControlError::Io { .. }) => {
-            statuses.push(retrying(kind, id, error.message()));
-            Ok(())
-        }
         Err(error) if matches!(error, crate::error::ControlError::NotSupportedPlan { .. }) => {
             statuses.push(failed(kind, id, error.message()));
+            Ok(())
+        }
+        Err(error)
+            if matches!(
+                error,
+                crate::error::ControlError::Io { .. }
+                    | crate::error::ControlError::InvalidArgument { .. }
+                    | crate::error::ControlError::Unavailable { .. }
+                    | crate::error::ControlError::Internal { .. }
+            ) =>
+        {
+            statuses.push(retrying(kind, id, error.message()));
             Ok(())
         }
         Err(error) => Err(error),
@@ -1173,6 +1184,21 @@ fn input_desired_equal(a: &InputDto, b: &InputDto) -> bool {
         && a.decklink_mode == b.decklink_mode
 }
 
+fn rtmp_link_equal(a: &OutputDto, b: &OutputDto) -> bool {
+    a.transport == OutputTransport::Rtmp
+        && b.transport == OutputTransport::Rtmp
+        && a.rtmp_url == b.rtmp_url
+        && a.rtmp_secret_ref == b.rtmp_secret_ref
+        && a.rtmp_video_bitrate == b.rtmp_video_bitrate
+        && a.rtmp_audio_bitrate == b.rtmp_audio_bitrate
+        && a.rtmp_keyint == b.rtmp_keyint
+        && a.rtmp_video_only == b.rtmp_video_only
+        && a.width == b.width
+        && a.height == b.height
+        && a.fps_num == b.fps_num
+        && a.fps_den == b.fps_den
+}
+
 fn output_equal(a: &OutputDto, b: &OutputDto) -> bool {
     a.transport == b.transport
         && a.name == b.name
@@ -1428,5 +1454,72 @@ mod tests {
                 preview
             } if *program == ids::scene_gpu_id(1) && *preview == ids::scene_gpu_id(1)
         )));
+    }
+
+    #[test]
+    fn incomplete_or_offline_io_does_not_abort_session() {
+        let mut statuses = Vec::new();
+        for error in [
+            crate::error::ControlError::invalid("RTMP output requires a url"),
+            crate::error::ControlError::invalid("DeckLink output needs a device"),
+            crate::error::ControlError::io("DeckLink device 'eiviz-out' was not found"),
+            crate::error::ControlError::from_abi(4, "device"),
+            crate::error::ControlError::unavailable("DeckLink is not linked in this build"),
+            crate::error::ControlError::not_supported_plan("1080p60 exceeds this plan"),
+        ] {
+            accept_io(Err(error), &mut statuses, crate::ids::ResourceKind::Output, 102)
+                .expect("live I/O must stay on the session");
+        }
+        assert_eq!(statuses.len(), 6);
+        assert!(
+            statuses
+                .iter()
+                .all(|status| status.phase != crate::live::ResourcePhase::Ready)
+        );
+    }
+
+    fn rtmp_doc(name: &str, url: &str) -> Document {
+        let json = format!(
+            r#"{{
+              "version": 2,
+              "inputs": [{{ "id": 2, "name": "Bars", "kind": "Bars" }}],
+              "scenes": [{{ "id": 1, "name": "Scene 1", "layers": [{{ "inputId": 2, "width": 1, "height": 1 }}] }}],
+              "units": [{{ "id": 1, "name": "MU 1" }}],
+              "outputs": [{{
+                "id": 102, "name": "{name}", "transport": "Rtmp", "sourceKind": "MuProgram",
+                "rtmpUrl": "{url}", "rtmpVideoBitrate": 6000000, "width": 1920, "height": 1080,
+                "fpsNum": 60000, "fpsDen": 1001
+              }}]
+            }}"#
+        );
+        parse(json.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn republish_keeps_rtmp_socket_when_the_ingest_is_unchanged() {
+        let prev = rtmp_doc("youtube", "rtmp://example/live");
+        let mut next = rtmp_doc("renamed", "rtmp://example/live");
+        next.outputs[0].source_id = 1;
+        let ops = plan(Some(&prev), &next);
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::RemoveOutput { id: 102 })),
+            "an unchanged ingest must not close the RTMP socket"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::AddOutput(spec) if spec.id == 102))
+        );
+    }
+
+    #[test]
+    fn republish_replaces_rtmp_when_the_url_changes() {
+        let prev = rtmp_doc("youtube", "rtmp://example/live");
+        let next = rtmp_doc("youtube", "rtmp://example/other");
+        let ops = plan(Some(&prev), &next);
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::RemoveOutput { id: 102 }))
+        );
     }
 }

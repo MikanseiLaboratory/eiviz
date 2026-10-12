@@ -475,24 +475,47 @@ pub(crate) fn render_loop(
                     };
                     // Mix/T-bar ticks discard the delay ring so present can
                     // show the live compose. Program send must do the same
-                    // or NDI/OMT freeze until mix is stable again.
-                    if output.cpu_video() && !output.has_custom_size() && output.bytes_per_pixel < 4
-                    {
-                        // Native size: send the delay/live packed bus so Auto/T-bar
-                        // keeps moving. Re-packing a cached RGBA view freezes on the
-                        // last bind-group source while mix is in flight.
+                    // or the output freezes until mix is stable again.
+                    // An explicit size that matches the bus (the Stream page
+                    // stores 1920x1080) is still the live packed bus. Scaling
+                    // also starts from that bus, not the cached RGBA view.
+                    if output.cpu_video() && output.bytes_per_pixel < 4 {
                         if let Some(packed) = frame_delay
                             .packed(output.unit_id, kind)
                             .or_else(|| composer.packed_texture(output.unit_id, kind))
                             .cloned()
                         {
-                            let width = packed.size().width.saturating_mul(2).max(2);
-                            let height = packed.size().height.max(1);
-                            let rb = readbacks.ensure(&device, output.output_id, width, height, 2);
-                            rb.copy_from(&mut encoder, &packed, pts);
-                            packed_copies.push((output.output_id, width, height));
+                            let native_w = packed.size().width.saturating_mul(2).max(2);
+                            let native_h = packed.size().height.max(1);
+                            let (want_w, want_h) = output.video_size(native_w, native_h);
+                            if (want_w, want_h) == (native_w, native_h) {
+                                let rb = readbacks.ensure(
+                                    &device,
+                                    output.output_id,
+                                    native_w,
+                                    native_h,
+                                    2,
+                                );
+                                rb.copy_from(&mut encoder, &packed, pts);
+                                packed_copies.push((output.output_id, native_w, native_h));
+                            } else {
+                                push_cpu_packed(
+                                    &mut composer,
+                                    &device,
+                                    &mut encoder,
+                                    &mut readbacks,
+                                    &mut packed_copies,
+                                    output,
+                                    &packed,
+                                    true,
+                                    pts,
+                                );
+                            }
+                            continue;
                         }
-                        continue;
+                        if !output.has_custom_size() {
+                            continue;
+                        }
                     }
                     let src = frame_delay
                         .rgba(output.unit_id, kind)

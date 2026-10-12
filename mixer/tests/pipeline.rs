@@ -17,7 +17,8 @@ use eiviz_mixer::{
     mixer_create, mixer_create_unit, mixer_create_with_backend, mixer_define_generator,
     mixer_define_mix_input, mixer_define_scene, mixer_destroy, mixer_generator_set_tone,
     mixer_omt_connect, mixer_omt_discover, mixer_omt_start_send, mixer_output_add, mixer_ping,
-    mixer_set_live_save, mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization, mixer_snapshot,
+    mixer_session_replace, mixer_set_live_save, mixer_set_ndi_gpu_upload,
+    mixer_set_rebar_optimization, mixer_snapshot,
     mixer_unit_acquire_frame, mixer_unit_cut, mixer_unit_detach_native, mixer_unit_get_state,
     mixer_unit_release_frame, mixer_unit_set_overlays, mixer_unit_set_state,
     mixer_validate_custom_wgsl, mixer_video_enum_captures, mixer_video_start,
@@ -2288,6 +2289,30 @@ fn unit_detach_completes_before_host_may_destroy_surface() {
     assert!(
         start.elapsed() < Duration::from_secs(2),
         "detach must acknowledge before the host destroys the native view"
+    );
+    mixer_destroy();
+}
+
+#[test]
+fn session_replace_survives_incomplete_pro_outputs() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    let json = br#"{
+      "version": 2,
+      "settings": { "masterFpsNum": 60000, "masterFpsDen": 1001 },
+      "inputs": [{ "id": 2, "name": "Bars", "kind": "Bars" }],
+      "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+      "units": [{ "id": 1, "name": "MU 1" }],
+      "outputs": [
+        { "id": 100, "name": "eiviz-pgm", "transport": "Omt", "sourceKind": "MuProgram", "useGpu": true, "audioUnitId": 1 },
+        { "id": 101, "name": "deck", "transport": "DeckLink", "sourceKind": "MuProgram", "unitId": 1 },
+        { "id": 102, "name": "yt", "transport": "Rtmp", "sourceKind": "MuProgram", "unitId": 1 }
+      ]
+    }"#;
+    let code = unsafe { mixer_session_replace(json.as_ptr(), json.len(), 0) };
+    assert_eq!(
+        code, OK,
+        "empty DeckLink device or RTMP URL must not abort the session"
     );
     mixer_destroy();
 }

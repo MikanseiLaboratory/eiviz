@@ -222,6 +222,44 @@ pub(crate) struct LiveUnit {
     custom_wgsl: Option<String>,
 }
 
+/// Connection settings. Routing fields can change without opening a new socket.
+#[derive(Clone, PartialEq, Eq)]
+struct RtmpLink {
+    url: String,
+    secret_ref: String,
+    video_bitrate: u32,
+    audio_bitrate: u32,
+    keyint: u32,
+    video_only: bool,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+}
+
+impl RtmpLink {
+    fn from_request(
+        extras: &crate::pro::OutputExtras,
+        width: u32,
+        height: u32,
+        fps_num: u32,
+        fps_den: u32,
+    ) -> Self {
+        Self {
+            url: extras.url.clone(),
+            secret_ref: extras.secret_ref.clone(),
+            video_bitrate: extras.video_bitrate,
+            audio_bitrate: extras.audio_bitrate,
+            keyint: extras.keyint,
+            video_only: extras.video_only,
+            width,
+            height,
+            fps_num,
+            fps_den,
+        }
+    }
+}
+
 pub(crate) struct LiveOutput {
     source_kind: u32,
     source_id: u64,
@@ -232,6 +270,7 @@ pub(crate) struct LiveOutput {
     fps_num: u32,
     fps_den: u32,
     transport: u32,
+    rtmp_link: Option<RtmpLink>,
     started_at: Instant,
     connections: Arc<AtomicU32>,
     video_sub: Arc<AtomicBool>,
@@ -3889,7 +3928,7 @@ fn picture_of(
 
 fn start_pro_output(
     transport: u32,
-    name: &str,
+    _name: &str,
     extras: &crate::pro::OutputExtras,
     unit_id: u64,
     width: u32,
@@ -3909,11 +3948,13 @@ fn start_pro_output(
             });
             return Err(ERR_IO);
         };
-        let device = if extras.device.is_empty() {
-            name.to_string()
-        } else {
-            extras.device.clone()
-        };
+        let device = extras.device.clone();
+        if device.is_empty() {
+            let _ = with_mixer(|mixer| {
+                set_error(&mixer.telemetry, "DeckLink output needs a device")
+            });
+            return Err(ERR_IO);
+        }
         return backend
             .start_playout(&eiviz_pro_api::DeckLinkPlayoutConfig {
                 device_id: device,
@@ -3928,7 +3969,7 @@ fn start_pro_output(
         Ok(url) => url,
         Err(error) => {
             let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
-            return Err(ERR_INVALID_ARGUMENT);
+            return Err(ERR_IO);
         }
     };
     let Some(backend) = crate::pro::module().streaming() else {
@@ -4094,6 +4135,34 @@ unsafe fn mixer_output_add_ex_ffi(
     } else {
         audio_unit_id
     };
+    // A scene cut republishes the session. The RTMP URL and encoder settings
+    // are unchanged, so the publisher must stay on the same socket. YouTube
+    // drops the ingest when the TCP connection is replaced.
+    if transport == OUT_RTMP {
+        let link = RtmpLink::from_request(&extras, width, height, fps_num, fps_den);
+        let kept = match with_mixer(|mixer| {
+            let mut shared = mixer.shared.lock_or_recover();
+            let Some(existing) = shared.outputs.get_mut(&output_id) else {
+                return false;
+            };
+            if existing.transport != OUT_RTMP || existing.rtmp_link.as_ref() != Some(&link) {
+                return false;
+            }
+            existing.source_kind = source_kind;
+            existing.source_id = source_id;
+            existing.unit_id = unit_id;
+            existing.audio_unit_id = audio_unit_id;
+            existing.skip_idle_encode = skip_idle_encode;
+            true
+        }) {
+            Ok(kept) => kept,
+            Err(code) => return code,
+        };
+        if kept {
+            crate::diag::info(&format!("output_keep id={output_id} transport={transport}"));
+            return OK;
+        }
+    }
     // Replace must not withdraw `_omt._tcp` for this instance name.
     // openmediatransport-rs keys DNS-SD by name; Drop of the old sender
     // would unregister the live row, and a second register of the same
@@ -4227,6 +4296,9 @@ unsafe fn mixer_output_add_ex_ffi(
                 fps_num: inherited.0,
                 fps_den: inherited.1,
                 transport,
+                rtmp_link: (transport == OUT_RTMP).then(|| {
+                    RtmpLink::from_request(&extras, width, height, fps_num, fps_den)
+                }),
                 started_at: Instant::now(),
                 connections,
                 video_sub,
