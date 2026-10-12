@@ -266,6 +266,9 @@ fn theme_charcoal() -> String {
 fn one() -> u64 {
     1
 }
+fn default_openh264() -> String {
+    "OpenH264".into()
+}
 fn default_true() -> bool {
     true
 }
@@ -1279,6 +1282,32 @@ pub struct StreamEncoderDto {
     /// `0` asks the encoder to pick a thread count from the CPU.
     #[serde(default)]
     pub encoder_threads: u32,
+    /// `0` sends each packet immediately. Otherwise the sender holds this many
+    /// milliseconds of encoded media, then releases it at 1x.
+    #[serde(default)]
+    pub buffer_ms: u32,
+    /// Only `OpenH264` is linked. Empty is the same encoder.
+    #[serde(default = "default_openh264")]
+    pub encoder: String,
+    /// `0` low, `1` medium, `2` high.
+    #[serde(default)]
+    pub complexity: u32,
+    #[serde(default = "one_u32")]
+    pub ref_frames: u32,
+    #[serde(default)]
+    pub cabac: bool,
+    #[serde(default = "default_true")]
+    pub deblock: bool,
+    /// Still regions are skipped. On is usually cheaper than encoding them.
+    #[serde(default = "default_true")]
+    pub background_detection: bool,
+    #[serde(default)]
+    pub adaptive_quant: bool,
+    #[serde(default)]
+    pub scene_change: bool,
+    /// Added on top of the measured video encode time.
+    #[serde(default)]
+    pub audio_delay_ms: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

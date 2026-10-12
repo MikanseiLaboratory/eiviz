@@ -558,6 +558,16 @@ impl StreamBackend for LoadedPro {
             fps_num: config.fps_num,
             fps_den: config.fps_den,
             encoder_threads: config.encoder_threads,
+            buffer_ms: config.buffer_ms,
+            encoder: 0,
+            complexity: config.complexity,
+            ref_frames: config.ref_frames,
+            cabac: u32::from(config.cabac),
+            deblock: u32::from(config.deblock),
+            background_detection: u32::from(config.background_detection),
+            adaptive_quant: u32::from(config.adaptive_quant),
+            scene_change: u32::from(config.scene_change),
+            audio_delay_ms: config.audio_delay_ms,
         };
         let mut handle = std::ptr::null_mut();
         let status = unsafe {

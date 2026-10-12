@@ -511,6 +511,16 @@ impl MixerPort for ProcessMixer {
                 spec.keyint,
                 u32::from(spec.video_only),
                 spec.encoder_threads,
+                spec.buffer_ms,
+                spec.encoder,
+                spec.complexity,
+                spec.ref_frames,
+                u32::from(spec.cabac),
+                u32::from(spec.deblock),
+                u32::from(spec.background_detection),
+                u32::from(spec.adaptive_quant),
+                u32::from(spec.scene_change),
+                spec.audio_delay_ms,
             )
         })
     }

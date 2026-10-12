@@ -157,6 +157,19 @@ pub struct ProStreamConfig {
     pub fps_den: u32,
     /// `0` means automatic.
     pub encoder_threads: u32,
+    /// `0` sends immediately. Otherwise hold this many milliseconds, then release at 1x.
+    pub buffer_ms: u32,
+    /// `0` is OpenH264. Any other value is rejected.
+    pub encoder: u32,
+    /// `0` low, `1` medium, `2` high.
+    pub complexity: u32,
+    pub ref_frames: u32,
+    pub cabac: u32,
+    pub deblock: u32,
+    pub background_detection: u32,
+    pub adaptive_quant: u32,
+    pub scene_change: u32,
+    pub audio_delay_ms: u32,
 }
 
 #[repr(C)]

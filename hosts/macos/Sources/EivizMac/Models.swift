@@ -1196,7 +1196,7 @@ struct OutputEntry: Identifiable, Codable {
     }
 }
 
-struct StreamEncoderEntry: Identifiable, Codable {
+struct StreamEncoderEntry: Identifiable {
     var id: UInt64
     var name: String = ""
     var sourceKind: OutputSourceKind = .muProgram
@@ -1212,6 +1212,86 @@ struct StreamEncoderEntry: Identifiable, Codable {
     var keyint: UInt32 = 120
     var videoOnly: Bool = false
     var encoderThreads: UInt32 = 0
+    /// Milliseconds to hold before the first send. Zero sends immediately.
+    var bufferMs: UInt32 = 0
+    var encoder: String = "OpenH264"
+    var complexity: UInt32 = 0
+    var refFrames: UInt32 = 1
+    var cabac: Bool = false
+    var deblock: Bool = true
+    var backgroundDetection: Bool = true
+    var adaptiveQuant: Bool = false
+    var sceneChange: Bool = false
+    /// Added on top of the measured video encode time.
+    var audioDelayMs: UInt32 = 0
+}
+
+extension StreamEncoderEntry: Codable {
+    enum CodingKeys: String, CodingKey {
+        case id, name, sourceKind, sourceId, unitId, audioUnitId
+        case width, height, fpsNum, fpsDen
+        case videoBitrate, audioBitrate, keyint, videoOnly, encoderThreads, bufferMs
+        case encoder, complexity, refFrames, cabac, deblock
+        case backgroundDetection, adaptiveQuant, sceneChange, audioDelayMs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UInt64.self, forKey: .id)
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        sourceKind = try container.decodeIfPresent(OutputSourceKind.self, forKey: .sourceKind) ?? .muProgram
+        sourceId = try container.decodeIfPresent(UInt64.self, forKey: .sourceId) ?? 0
+        unitId = try container.decodeIfPresent(UInt64.self, forKey: .unitId) ?? 1
+        audioUnitId = try container.decodeIfPresent(UInt64.self, forKey: .audioUnitId) ?? 1
+        width = try container.decodeIfPresent(UInt32.self, forKey: .width) ?? 1920
+        height = try container.decodeIfPresent(UInt32.self, forKey: .height) ?? 1080
+        fpsNum = try container.decodeIfPresent(UInt32.self, forKey: .fpsNum) ?? 60_000
+        fpsDen = try container.decodeIfPresent(UInt32.self, forKey: .fpsDen) ?? 1_001
+        videoBitrate = try container.decodeIfPresent(UInt32.self, forKey: .videoBitrate) ?? 6_000_000
+        audioBitrate = try container.decodeIfPresent(UInt32.self, forKey: .audioBitrate) ?? 128_000
+        keyint = try container.decodeIfPresent(UInt32.self, forKey: .keyint) ?? 120
+        videoOnly = try container.decodeIfPresent(Bool.self, forKey: .videoOnly) ?? false
+        encoderThreads = try container.decodeIfPresent(UInt32.self, forKey: .encoderThreads) ?? 0
+        bufferMs = try container.decodeIfPresent(UInt32.self, forKey: .bufferMs) ?? 0
+        encoder = try container.decodeIfPresent(String.self, forKey: .encoder) ?? "OpenH264"
+        complexity = try container.decodeIfPresent(UInt32.self, forKey: .complexity) ?? 0
+        refFrames = try container.decodeIfPresent(UInt32.self, forKey: .refFrames) ?? 1
+        cabac = try container.decodeIfPresent(Bool.self, forKey: .cabac) ?? false
+        deblock = try container.decodeIfPresent(Bool.self, forKey: .deblock) ?? true
+        backgroundDetection = try container.decodeIfPresent(Bool.self, forKey: .backgroundDetection) ?? true
+        adaptiveQuant = try container.decodeIfPresent(Bool.self, forKey: .adaptiveQuant) ?? false
+        sceneChange = try container.decodeIfPresent(Bool.self, forKey: .sceneChange) ?? false
+        audioDelayMs = try container.decodeIfPresent(UInt32.self, forKey: .audioDelayMs) ?? 0
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(sourceKind, forKey: .sourceKind)
+        try container.encode(sourceId, forKey: .sourceId)
+        try container.encode(unitId, forKey: .unitId)
+        try container.encode(audioUnitId, forKey: .audioUnitId)
+        try container.encode(width, forKey: .width)
+        try container.encode(height, forKey: .height)
+        try container.encode(fpsNum, forKey: .fpsNum)
+        try container.encode(fpsDen, forKey: .fpsDen)
+        try container.encode(videoBitrate, forKey: .videoBitrate)
+        try container.encode(audioBitrate, forKey: .audioBitrate)
+        try container.encode(keyint, forKey: .keyint)
+        try container.encode(videoOnly, forKey: .videoOnly)
+        try container.encode(encoderThreads, forKey: .encoderThreads)
+        try container.encode(bufferMs, forKey: .bufferMs)
+        try container.encode(self.encoder, forKey: .encoder)
+        try container.encode(complexity, forKey: .complexity)
+        try container.encode(refFrames, forKey: .refFrames)
+        try container.encode(cabac, forKey: .cabac)
+        try container.encode(deblock, forKey: .deblock)
+        try container.encode(backgroundDetection, forKey: .backgroundDetection)
+        try container.encode(adaptiveQuant, forKey: .adaptiveQuant)
+        try container.encode(sceneChange, forKey: .sceneChange)
+        try container.encode(audioDelayMs, forKey: .audioDelayMs)
+    }
 }
 
 enum MultiviewTemplate: String, Codable, CaseIterable, Identifiable {

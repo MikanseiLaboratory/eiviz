@@ -25,6 +25,20 @@ pub struct StreamEncodeConfig {
     pub encoder: VideoEncoderKind,
     /// `0` means automatic: logical CPUs, clamped to the encoder's own limit.
     pub encoder_threads: u32,
+    /// Milliseconds of encoded media to hold before the first send, then release
+    /// at 1x. `0` sends immediately and keeps only a few packets queued.
+    pub buffer_ms: u32,
+    /// `0` low, `1` medium, `2` high.
+    pub complexity: u32,
+    /// `0` is treated as one reference frame.
+    pub ref_frames: u32,
+    pub cabac: bool,
+    pub deblock: bool,
+    pub background_detection: bool,
+    pub adaptive_quant: bool,
+    pub scene_change: bool,
+    /// Extra delay added on top of the measured video encode time.
+    pub audio_delay_ms: u32,
     pub audio: AudioEncodeConfig,
 }
 

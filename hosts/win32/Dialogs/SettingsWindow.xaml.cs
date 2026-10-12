@@ -613,7 +613,10 @@ public partial class SettingsWindow : Window
             VideoBitrate = 6_000_000,
             AudioBitrate = 128_000,
             Keyint = 120,
-            EncoderThreads = 0
+            EncoderThreads = 0,
+            Encoder = "OpenH264",
+            RefFrames = 1,
+            Deblock = true
         };
     }
 
@@ -659,8 +662,10 @@ public partial class SettingsWindow : Window
         for (var col = 0; col < 3; col++)
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
-        for (var row = 0; row < 4; row++)
+        for (var row = 0; row < 8; row++)
             grid.RowDefinitions.Add(new RowDefinition());
+        var meters = new EncodeMeters();
+        void Paint() => PaintEncodeLoad(encoder, meters);
 
         var name = new TextBox { Text = encoder.Name, Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
         name.TextChanged += (_, _) => encoder.Name = name.Text.Trim();
@@ -676,71 +681,385 @@ public partial class SettingsWindow : Window
 
         var videoKbps = encoder.VideoBitrate == 0 ? 6000u : encoder.VideoBitrate / 1000;
         var audioKbps = encoder.AudioBitrate == 0 ? 128u : encoder.AudioBitrate / 1000;
-        var video = Labeled(Loc.T("settings.videoBitrate"), videoKbps.ToString(), !locked, value =>
-        {
-            if (uint.TryParse(value, out var kbps) && kbps > 0)
-                encoder.VideoBitrate = kbps * 1000;
-        });
-        var audio = Labeled(Loc.T("settings.audioBitrate"), audioKbps.ToString(), !locked, value =>
-        {
-            if (uint.TryParse(value, out var kbps) && kbps > 0)
-                encoder.AudioBitrate = kbps * 1000;
-        });
-        var keyint = Labeled(Loc.T("settings.keyframeInterval"), (encoder.Keyint == 0 ? 120 : encoder.Keyint).ToString(), !locked, value =>
-        {
-            if (uint.TryParse(value, out var frames) && frames > 0)
-                encoder.Keyint = frames;
-        });
+        var video = Metered(Loc.T("settings.videoBitrate"), Loc.T("settings.videoBitrateHint"), meters.Video,
+            NumberBox(videoKbps.ToString(), !locked, value =>
+            {
+                if (uint.TryParse(value, out var kbps) && kbps > 0)
+                    encoder.VideoBitrate = kbps * 1000;
+                Paint();
+            }));
+        var audio = Metered(Loc.T("settings.audioBitrate"), Loc.T("settings.audioBitrateHint"), meters.Audio,
+            NumberBox(audioKbps.ToString(), !locked, value =>
+            {
+                if (uint.TryParse(value, out var kbps) && kbps > 0)
+                    encoder.AudioBitrate = kbps * 1000;
+                Paint();
+            }));
+        var keyint = Metered(Loc.T("settings.keyframeInterval"), Loc.T("settings.keyframeIntervalHint"), meters.Keyint,
+            NumberBox((encoder.Keyint == 0 ? 120 : encoder.Keyint).ToString(), !locked, value =>
+            {
+                if (uint.TryParse(value, out var frames) && frames > 0)
+                    encoder.Keyint = frames;
+                Paint();
+            }));
+        var buffer = Metered(Loc.T("settings.sendBuffer"), Loc.T("settings.sendBufferHint"), meters.Buffer,
+            NumberBox(encoder.BufferMs.ToString(), !locked, value =>
+            {
+                if (uint.TryParse(value, out var ms))
+                    encoder.BufferMs = Math.Min(ms, 10_000);
+                Paint();
+            }));
 
-        var size = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
+        var size = new ComboBox { IsEnabled = !locked };
         FillEncodeSize(size, encoder);
         size.SelectionChanged += (_, _) =>
         {
             if (!OnAirLock.Active)
                 ApplyEncodeSize(size, encoder);
+            Paint();
         };
-        var fps = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
+        var fps = new ComboBox { IsEnabled = !locked };
         FillEncodeFps(fps, encoder);
         fps.SelectionChanged += (_, _) =>
         {
             if (!OnAirLock.Active)
                 ApplyEncodeFps(fps, encoder);
+            Paint();
         };
-        var threads = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
+        var threads = new ComboBox { IsEnabled = !locked };
         FillThreads(threads, encoder);
         threads.SelectionChanged += (_, _) =>
         {
-            if (OnAirLock.Active || threads.SelectedItem is not ComboBoxItem item || item.Tag is not string tag)
-                return;
-            if (uint.TryParse(tag, out var count))
+            if (!OnAirLock.Active && threads.SelectedItem is ComboBoxItem item && item.Tag is string tag
+                && uint.TryParse(tag, out var count))
                 encoder.EncoderThreads = count;
+            Paint();
         };
-        var threadLabel = new TextBlock { Text = Loc.T("settings.threads"), Margin = new Thickness(0, 0, 8, 2) };
+        var encoderBox = new ComboBox { IsEnabled = !locked };
+        encoderBox.Items.Add(new ComboBoxItem { Content = "OpenH264", Tag = "OpenH264" });
+        if (!string.IsNullOrEmpty(encoder.Encoder) && encoder.Encoder != "OpenH264")
+            encoderBox.Items.Add(new ComboBoxItem { Content = encoder.Encoder, Tag = encoder.Encoder });
+        SelectStringTag(encoderBox, string.IsNullOrEmpty(encoder.Encoder) ? "OpenH264" : encoder.Encoder);
+        encoderBox.SelectionChanged += (_, _) =>
+        {
+            if (!OnAirLock.Active && encoderBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+                encoder.Encoder = tag;
+            Paint();
+        };
+        var complexity = new ComboBox { IsEnabled = !locked };
+        complexity.Items.Add(new ComboBoxItem { Content = Loc.T("settings.complexityLow"), Tag = "0" });
+        complexity.Items.Add(new ComboBoxItem { Content = Loc.T("settings.complexityMedium"), Tag = "1" });
+        complexity.Items.Add(new ComboBoxItem { Content = Loc.T("settings.complexityHigh"), Tag = "2" });
+        SelectStringTag(complexity, encoder.Complexity > 2 ? "2" : encoder.Complexity.ToString());
+        complexity.SelectionChanged += (_, _) =>
+        {
+            if (!OnAirLock.Active && complexity.SelectedItem is ComboBoxItem item && item.Tag is string tag
+                && uint.TryParse(tag, out var level))
+                encoder.Complexity = level;
+            Paint();
+        };
+        var refs = new ComboBox { IsEnabled = !locked };
+        for (var n = 1; n <= 4; n++)
+            refs.Items.Add(new ComboBoxItem { Content = n.ToString(), Tag = n.ToString() });
+        SelectStringTag(refs, encoder.RefFrames is >= 1 and <= 4 ? encoder.RefFrames.ToString() : "1");
+        refs.SelectionChanged += (_, _) =>
+        {
+            if (!OnAirLock.Active && refs.SelectedItem is ComboBoxItem item && item.Tag is string tag
+                && uint.TryParse(tag, out var count))
+                encoder.RefFrames = count;
+            Paint();
+        };
+        var delay = Metered(Loc.T("settings.audioDelay"), Loc.T("settings.audioDelayHint"), meters.Delay,
+            NumberBox(encoder.AudioDelayMs.ToString(), !locked, value =>
+            {
+                if (uint.TryParse(value, out var ms))
+                    encoder.AudioDelayMs = Math.Min(ms, 1_000);
+                Paint();
+            }));
+        var entropy = new ComboBox { IsEnabled = !locked };
+        entropy.Items.Add(new ComboBoxItem { Content = "CAVLC", Tag = "0" });
+        entropy.Items.Add(new ComboBoxItem { Content = "CABAC", Tag = "1" });
+        SelectStringTag(entropy, encoder.Cabac ? "1" : "0");
+        entropy.SelectionChanged += (_, _) =>
+        {
+            if (!OnAirLock.Active && entropy.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+                encoder.Cabac = tag == "1";
+            Paint();
+        };
+        var toggles = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
+        toggles.Children.Add(MeteredToggle(Loc.T("settings.deblock"), Loc.T("settings.deblockHint"), encoder.Deblock, !locked, meters.Deblock, value =>
+        {
+            encoder.Deblock = value;
+            Paint();
+        }));
+        toggles.Children.Add(MeteredToggle(Loc.T("settings.backgroundDetect"), Loc.T("settings.backgroundDetectHint"), encoder.BackgroundDetection, !locked, meters.Background, value =>
+        {
+            encoder.BackgroundDetection = value;
+            Paint();
+        }));
+        toggles.Children.Add(MeteredToggle(Loc.T("settings.adaptiveQuant"), Loc.T("settings.adaptiveQuantHint"), encoder.AdaptiveQuant, !locked, meters.Quant, value =>
+        {
+            encoder.AdaptiveQuant = value;
+            Paint();
+        }));
+        toggles.Children.Add(MeteredToggle(Loc.T("settings.sceneChange"), Loc.T("settings.sceneChangeHint"), encoder.SceneChange, !locked, meters.Scene, value =>
+        {
+            encoder.SceneChange = value;
+            Paint();
+        }));
+        var load = LoadSummary(Loc.T("settings.encodeLoad"), Loc.T("settings.encodeLoadHint"), meters.Total);
+        var sizePanel = Metered(Loc.T("settings.encodeSize"), Loc.T("settings.encodeSizeHint"), meters.Size, size);
+        var fpsPanel = Metered(Loc.T("settings.encodeFps"), Loc.T("settings.encodeFpsHint"), meters.Fps, fps);
+        var threadPanel = Metered(Loc.T("settings.threads"), Loc.T("settings.threadsHint"), meters.Threads, threads);
+        var encoderPanel = Metered(Loc.T("settings.encoder"), Loc.T("settings.encoderHint"), meters.Encoder, encoderBox);
+        var complexityPanel = Metered(Loc.T("settings.complexity"), Loc.T("settings.complexityHint"), meters.Complexity, complexity);
+        var refsPanel = Metered(Loc.T("settings.refFrames"), Loc.T("settings.refFramesHint"), meters.Refs, refs);
+        var entropyPanel = Metered(Loc.T("settings.entropy"), Loc.T("settings.entropyHint"), meters.Entropy, entropy);
 
         Grid.SetColumnSpan(name, 3);
         Grid.SetColumn(remove, 3);
-        Grid.SetRow(video, 1);
-        Grid.SetRow(audio, 1);
+        Grid.SetRow(load, 1);
+        Grid.SetColumnSpan(load, 3);
+        Grid.SetRow(video, 2);
+        Grid.SetRow(audio, 2);
         Grid.SetColumn(audio, 1);
-        Grid.SetRow(keyint, 1);
+        Grid.SetRow(keyint, 2);
         Grid.SetColumn(keyint, 2);
-        Grid.SetRow(size, 2);
-        Grid.SetRow(fps, 2);
-        Grid.SetColumn(fps, 1);
-        Grid.SetRow(threadLabel, 3);
-        Grid.SetRow(threads, 3);
-        Grid.SetColumn(threads, 1);
+        Grid.SetRow(sizePanel, 3);
+        Grid.SetRow(fpsPanel, 3);
+        Grid.SetColumn(fpsPanel, 1);
+        Grid.SetRow(threadPanel, 4);
+        Grid.SetRow(buffer, 4);
+        Grid.SetColumn(buffer, 1);
+        Grid.SetRow(encoderPanel, 5);
+        Grid.SetRow(complexityPanel, 5);
+        Grid.SetColumn(complexityPanel, 1);
+        Grid.SetRow(refsPanel, 5);
+        Grid.SetColumn(refsPanel, 2);
+        Grid.SetRow(delay, 6);
+        Grid.SetRow(entropyPanel, 6);
+        Grid.SetColumn(entropyPanel, 1);
+        Grid.SetRow(toggles, 7);
+        Grid.SetColumnSpan(toggles, 3);
         grid.Children.Add(name);
         grid.Children.Add(remove);
+        grid.Children.Add(load);
         grid.Children.Add(video);
         grid.Children.Add(audio);
         grid.Children.Add(keyint);
-        grid.Children.Add(size);
-        grid.Children.Add(fps);
-        grid.Children.Add(threadLabel);
-        grid.Children.Add(threads);
+        grid.Children.Add(sizePanel);
+        grid.Children.Add(fpsPanel);
+        grid.Children.Add(threadPanel);
+        grid.Children.Add(buffer);
+        grid.Children.Add(encoderPanel);
+        grid.Children.Add(complexityPanel);
+        grid.Children.Add(refsPanel);
+        grid.Children.Add(delay);
+        grid.Children.Add(entropyPanel);
+        grid.Children.Add(toggles);
+        Paint();
         box.Child = grid;
         return box;
+    }
+
+    private static StackPanel LoadSummary(string label, string hint, ImpactGauge gauge)
+    {
+        var panel = new StackPanel { Margin = new Thickness(0, 0, 8, 8) };
+        var head = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(gauge, Dock.Right);
+        head.Children.Add(gauge);
+        head.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
+        panel.Children.Add(head);
+        panel.Children.Add(EncodeHint(hint));
+        return panel;
+    }
+
+    private static TextBox NumberBox(string value, bool enabled, Action<string> changed)
+    {
+        var box = new TextBox { Text = value, IsEnabled = enabled };
+        box.TextChanged += (_, _) => changed(box.Text);
+        return box;
+    }
+
+    private static StackPanel Metered(string label, string hint, ImpactGauge gauge, UIElement control)
+    {
+        var panel = new StackPanel { Margin = new Thickness(0, 0, 8, 8) };
+        var head = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 2) };
+        DockPanel.SetDock(gauge, Dock.Right);
+        head.Children.Add(gauge);
+        head.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
+        panel.Children.Add(head);
+        panel.Children.Add(control);
+        panel.Children.Add(EncodeHint(hint));
+        return panel;
+    }
+
+    private static StackPanel MeteredToggle(string label, string hint, bool value, bool enabled, ImpactGauge gauge, Action<bool> changed)
+    {
+        var box = new CheckBox
+        {
+            Content = label,
+            IsChecked = value,
+            IsEnabled = enabled,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        box.Checked += (_, _) => changed(true);
+        box.Unchecked += (_, _) => changed(false);
+        var panel = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+        var head = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(gauge, Dock.Right);
+        head.Children.Add(gauge);
+        head.Children.Add(box);
+        panel.Children.Add(head);
+        panel.Children.Add(EncodeHint(hint));
+        return panel;
+    }
+
+    private static TextBlock EncodeHint(string text) => new()
+    {
+        Text = text,
+        TextWrapping = TextWrapping.Wrap,
+        Foreground = System.Windows.Media.Brushes.Gray,
+        Margin = new Thickness(0, 2, 0, 0)
+    };
+
+    private static void PaintEncodeLoad(StreamEncoderEntry encoder, EncodeMeters meters)
+    {
+        var videoKbps = encoder.VideoBitrate == 0 ? 6000u : encoder.VideoBitrate / 1000;
+        meters.Video.Set(videoKbps switch { <= 2500 => 1, <= 4500 => 2, <= 8000 => 3, <= 12000 => 4, _ => 5 });
+        meters.Audio.Set(1);
+        var key = encoder.Keyint == 0 ? 120 : encoder.Keyint;
+        meters.Keyint.Set(key switch { < 30 => 5, < 60 => 4, < 90 => 3, < 180 => 2, _ => 1 });
+        var height = encoder.Height == 0 ? 1080 : encoder.Height;
+        meters.Size.Set(height switch { >= 2160 => 5, >= 1440 => 4, >= 1080 => 3, >= 720 => 2, _ => 1 });
+        var fps = encoder.FpsDen == 0 || encoder.FpsNum == 0 ? 60d : encoder.FpsNum / (double)encoder.FpsDen;
+        meters.Fps.Set(fps >= 59 ? 5 : fps >= 50 ? 4 : fps >= 30 ? 2 : 1);
+        meters.Threads.Set(encoder.EncoderThreads switch { 1 => 5, 2 => 4, 3 => 3, _ => 1 });
+        meters.Buffer.Set(0);
+        meters.Encoder.Set(4);
+        meters.Complexity.Set(encoder.Complexity switch { 0 => 1, 1 => 3, _ => 5 });
+        var refs = encoder.RefFrames is >= 1 and <= 4 ? (int)encoder.RefFrames : 1;
+        meters.Refs.Set(refs);
+        meters.Delay.Set(0);
+        meters.Entropy.Set(encoder.Cabac ? 4 : 1);
+        meters.Deblock.Set(encoder.Deblock ? 2 : 1);
+        meters.Background.Set(encoder.BackgroundDetection ? 1 : 3);
+        meters.Quant.Set(encoder.AdaptiveQuant ? 3 : 1);
+        meters.Scene.Set(encoder.SceneChange ? 3 : 1);
+        meters.Total.Set(EncodeLoadPips(encoder));
+    }
+
+    private static int EncodeLoadPips(StreamEncoderEntry encoder)
+    {
+        var score = encoder.Complexity switch { 0 => 8, 1 => 18, _ => 30 };
+        var refs = encoder.RefFrames is >= 1 and <= 4 ? (int)encoder.RefFrames : 1;
+        score += refs * 4;
+        if (encoder.Cabac)
+            score += 10;
+        if (encoder.Deblock)
+            score += 6;
+        score += encoder.BackgroundDetection ? 2 : 6;
+        if (encoder.AdaptiveQuant)
+            score += 6;
+        if (encoder.SceneChange)
+            score += 6;
+        score += encoder.EncoderThreads switch { 1 => 16, 2 => 8, 3 => 4, _ => 0 };
+        var pixels = encoder.Width == 0 || encoder.Height == 0
+            ? 1920L * 1080
+            : (long)encoder.Width * encoder.Height;
+        score += pixels > 1920L * 1080 ? 28 : pixels >= 1920L * 1080 ? 12 : 6;
+        var fpsMilli = encoder.FpsDen == 0 || encoder.FpsNum == 0
+            ? 60_000
+            : (int)((long)encoder.FpsNum * 1000 / encoder.FpsDen);
+        score += fpsMilli >= 50_000 ? 10 : 4;
+        var kbps = encoder.VideoBitrate == 0 ? 6000 : (int)(encoder.VideoBitrate / 1000);
+        score += Math.Min(kbps / 2000, 8);
+        if (encoder.Keyint is > 0 and < 60)
+            score += 4;
+        score += 8;
+        return Math.Clamp((int)Math.Round((score - 45) * 10d / 90d), 1, 10);
+    }
+
+    private sealed class EncodeMeters
+    {
+        public ImpactGauge Total { get; } = new(10);
+        public ImpactGauge Video { get; } = new(5);
+        public ImpactGauge Audio { get; } = new(5);
+        public ImpactGauge Keyint { get; } = new(5);
+        public ImpactGauge Size { get; } = new(5);
+        public ImpactGauge Fps { get; } = new(5);
+        public ImpactGauge Threads { get; } = new(5);
+        public ImpactGauge Buffer { get; } = new(5);
+        public ImpactGauge Encoder { get; } = new(5);
+        public ImpactGauge Complexity { get; } = new(5);
+        public ImpactGauge Refs { get; } = new(5);
+        public ImpactGauge Delay { get; } = new(5);
+        public ImpactGauge Entropy { get; } = new(5);
+        public ImpactGauge Deblock { get; } = new(5);
+        public ImpactGauge Background { get; } = new(5);
+        public ImpactGauge Quant { get; } = new(5);
+        public ImpactGauge Scene { get; } = new(5);
+    }
+
+    private sealed class ImpactGauge : StackPanel
+    {
+        private readonly Border[] _pips;
+        private static readonly System.Windows.Media.SolidColorBrush Empty = Frozen(0x33, 0x33, 0x33);
+        private static readonly System.Windows.Media.SolidColorBrush Light = Frozen(0x7D, 0xC8, 0x7D);
+        private static readonly System.Windows.Media.SolidColorBrush Mid = Frozen(0xE0, 0xC3, 0x6A);
+        private static readonly System.Windows.Media.SolidColorBrush Heavy = Frozen(0xE0, 0x78, 0x78);
+
+        public ImpactGauge(int count)
+        {
+            Orientation = Orientation.Horizontal;
+            VerticalAlignment = VerticalAlignment.Center;
+            Margin = new Thickness(8, 0, 0, 0);
+            _pips = new Border[count];
+            var wide = count > 5;
+            for (var i = 0; i < count; i++)
+            {
+                var pip = new Border
+                {
+                    Width = wide ? 7 : 10,
+                    Height = 8,
+                    Margin = new Thickness(1, 0, 1, 0),
+                    CornerRadius = new CornerRadius(1),
+                    Background = Empty
+                };
+                _pips[i] = pip;
+                Children.Add(pip);
+            }
+        }
+
+        public void Set(int level)
+        {
+            level = Math.Clamp(level, 0, _pips.Length);
+            var ratio = _pips.Length == 0 ? 0d : (double)level / _pips.Length;
+            var fill = ratio >= 0.75 ? Heavy : ratio >= 0.45 ? Mid : Light;
+            for (var i = 0; i < _pips.Length; i++)
+                _pips[i].Background = i < level ? fill : Empty;
+        }
+
+        private static System.Windows.Media.SolidColorBrush Frozen(byte r, byte g, byte b)
+        {
+            var brush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(r, g, b));
+            brush.Freeze();
+            return brush;
+        }
+    }
+
+    private static void SelectStringTag(ComboBox box, string tag)
+    {
+        foreach (var item in box.Items)
+        {
+            if (item is ComboBoxItem choice && choice.Tag is string value && value == tag)
+            {
+                box.SelectedItem = choice;
+                return;
+            }
+        }
+        if (box.Items.Count > 0)
+            box.SelectedIndex = 0;
     }
 
     private void RebuildStreams()

@@ -4276,6 +4276,16 @@ pub unsafe extern "C" fn mixer_stream_encoder_add(
     keyint: u32,
     video_only: u32,
     encoder_threads: u32,
+    buffer_ms: u32,
+    encoder: u32,
+    complexity: u32,
+    ref_frames: u32,
+    cabac: u32,
+    deblock: u32,
+    background_detection: u32,
+    adaptive_quant: u32,
+    scene_change: u32,
+    audio_delay_ms: u32,
 ) -> i32 {
     ffi_guard("mixer_stream_encoder_add", ERR_DEVICE, || {
         stream_encoder_add_ffi(
@@ -4293,6 +4303,16 @@ pub unsafe extern "C" fn mixer_stream_encoder_add(
             keyint,
             video_only,
             encoder_threads,
+            buffer_ms,
+            encoder,
+            complexity,
+            ref_frames,
+            cabac,
+            deblock,
+            background_detection,
+            adaptive_quant,
+            scene_change,
+            audio_delay_ms,
         )
     })
 }
@@ -4312,6 +4332,16 @@ fn stream_encoder_add_ffi(
     keyint: u32,
     video_only: u32,
     encoder_threads: u32,
+    buffer_ms: u32,
+    encoder: u32,
+    complexity: u32,
+    ref_frames: u32,
+    cabac: u32,
+    deblock: u32,
+    background_detection: u32,
+    adaptive_quant: u32,
+    scene_change: u32,
+    audio_delay_ms: u32,
 ) -> i32 {
     if (width == 0) != (height == 0) || (fps_num == 0) != (fps_den == 0) {
         return ERR_INVALID_ARGUMENT;
@@ -4329,6 +4359,12 @@ fn stream_encoder_add_ffi(
         let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
         return ERR_IO;
     };
+    if encoder != 0 {
+        let message = "video encoder is not available";
+        crate::diag::error(&format!("stream encoder id={encoder_id}: {message}"));
+        let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
+        return ERR_INVALID_ARGUMENT;
+    }
     let started = backend.start_stream(&eiviz_pro_api::StreamEncodeConfig {
         video_bitrate: if video_bitrate == 0 {
             4_500_000
@@ -4342,6 +4378,15 @@ fn stream_encoder_add_ffi(
         fps_den,
         encoder: eiviz_pro_api::VideoEncoderKind::OpenH264,
         encoder_threads,
+        buffer_ms,
+        complexity,
+        ref_frames,
+        cabac: cabac != 0,
+        deblock: deblock != 0,
+        background_detection: background_detection != 0,
+        adaptive_quant: adaptive_quant != 0,
+        scene_change: scene_change != 0,
+        audio_delay_ms,
         audio: eiviz_pro_api::AudioEncodeConfig {
             bitrate: if audio_bitrate == 0 {
                 128_000

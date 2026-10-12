@@ -116,7 +116,10 @@ internal static class SessionStore
                 VideoBitrate = 6_000_000,
                 AudioBitrate = 128_000,
                 Keyint = 120,
-                EncoderThreads = 0
+                EncoderThreads = 0,
+                Encoder = "OpenH264",
+                RefFrames = 1,
+                Deblock = true
             });
         }
         var id = session.StreamEncoders[0].Id;

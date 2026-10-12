@@ -344,6 +344,18 @@ pub struct StreamEncoderApply {
     pub video_only: bool,
     /// `0` means automatic.
     pub encoder_threads: u32,
+    /// `0` sends immediately.
+    pub buffer_ms: u32,
+    /// `0` is OpenH264.
+    pub encoder: u32,
+    pub complexity: u32,
+    pub ref_frames: u32,
+    pub cabac: bool,
+    pub deblock: bool,
+    pub background_detection: bool,
+    pub adaptive_quant: bool,
+    pub scene_change: bool,
+    pub audio_delay_ms: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]

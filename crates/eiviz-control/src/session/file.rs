@@ -1070,6 +1070,16 @@ fn stream_encoder_to_pb(encoder: &StreamEncoderDto) -> pb::StreamEncoder {
         keyint: encoder.keyint,
         video_only: encoder.video_only,
         encoder_threads: encoder.encoder_threads,
+        buffer_ms: encoder.buffer_ms,
+        encoder: encoder.encoder.clone(),
+        complexity: encoder.complexity,
+        ref_frames: encoder.ref_frames,
+        cabac: encoder.cabac,
+        deblock: Some(encoder.deblock),
+        background_detection: Some(encoder.background_detection),
+        adaptive_quant: encoder.adaptive_quant,
+        scene_change: encoder.scene_change,
+        audio_delay_ms: encoder.audio_delay_ms,
     }
 }
 
@@ -1090,6 +1100,24 @@ fn stream_encoder_from_pb(encoder: pb::StreamEncoder) -> Result<StreamEncoderDto
         keyint: encoder.keyint,
         video_only: encoder.video_only,
         encoder_threads: encoder.encoder_threads,
+        buffer_ms: encoder.buffer_ms,
+        encoder: if encoder.encoder.is_empty() {
+            super::default_openh264()
+        } else {
+            encoder.encoder
+        },
+        complexity: encoder.complexity,
+        ref_frames: if encoder.ref_frames == 0 {
+            1
+        } else {
+            encoder.ref_frames
+        },
+        cabac: encoder.cabac,
+        deblock: encoder.deblock.unwrap_or(true),
+        background_detection: encoder.background_detection.unwrap_or(true),
+        adaptive_quant: encoder.adaptive_quant,
+        scene_change: encoder.scene_change,
+        audio_delay_ms: encoder.audio_delay_ms,
     })
 }
 

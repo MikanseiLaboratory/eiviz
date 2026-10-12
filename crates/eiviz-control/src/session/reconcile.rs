@@ -1245,6 +1245,16 @@ fn encoder_equal(a: &StreamEncoderDto, b: &StreamEncoderDto) -> bool {
         && a.keyint == b.keyint
         && a.video_only == b.video_only
         && a.encoder_threads == b.encoder_threads
+        && a.buffer_ms == b.buffer_ms
+        && a.encoder == b.encoder
+        && a.complexity == b.complexity
+        && a.ref_frames == b.ref_frames
+        && a.cabac == b.cabac
+        && a.deblock == b.deblock
+        && a.background_detection == b.background_detection
+        && a.adaptive_quant == b.adaptive_quant
+        && a.scene_change == b.scene_change
+        && a.audio_delay_ms == b.audio_delay_ms
 }
 
 fn destination_equal(a: &OutputDto, b: &OutputDto) -> bool {
@@ -1380,6 +1390,19 @@ fn stream_encoder_apply(encoder: &StreamEncoderDto) -> StreamEncoderApply {
         keyint: encoder.keyint,
         video_only: encoder.video_only,
         encoder_threads: encoder.encoder_threads,
+        buffer_ms: encoder.buffer_ms,
+        encoder: match encoder.encoder.as_str() {
+            "" | "OpenH264" => 0,
+            _ => u32::MAX,
+        },
+        complexity: encoder.complexity,
+        ref_frames: encoder.ref_frames,
+        cabac: encoder.cabac,
+        deblock: encoder.deblock,
+        background_detection: encoder.background_detection,
+        adaptive_quant: encoder.adaptive_quant,
+        scene_change: encoder.scene_change,
+        audio_delay_ms: encoder.audio_delay_ms,
     }
 }
 

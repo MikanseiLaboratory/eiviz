@@ -1070,6 +1070,16 @@ public sealed class StreamEncoderEntry
     public uint Keyint { get; set; } = 120;
     public bool VideoOnly { get; set; }
     public uint EncoderThreads { get; set; }
+    public uint BufferMs { get; set; }
+    public string Encoder { get; set; } = "OpenH264";
+    public uint Complexity { get; set; }
+    public uint RefFrames { get; set; } = 1;
+    public bool Cabac { get; set; }
+    public bool Deblock { get; set; } = true;
+    public bool BackgroundDetection { get; set; } = true;
+    public bool AdaptiveQuant { get; set; }
+    public bool SceneChange { get; set; }
+    public uint AudioDelayMs { get; set; }
 
     public StreamEncoderEntry Clone() => new()
     {
@@ -1087,7 +1097,17 @@ public sealed class StreamEncoderEntry
         AudioBitrate = AudioBitrate,
         Keyint = Keyint,
         VideoOnly = VideoOnly,
-        EncoderThreads = EncoderThreads
+        EncoderThreads = EncoderThreads,
+        BufferMs = BufferMs,
+        Encoder = Encoder,
+        Complexity = Complexity,
+        RefFrames = RefFrames,
+        Cabac = Cabac,
+        Deblock = Deblock,
+        BackgroundDetection = BackgroundDetection,
+        AdaptiveQuant = AdaptiveQuant,
+        SceneChange = SceneChange,
+        AudioDelayMs = AudioDelayMs
     };
 }
 

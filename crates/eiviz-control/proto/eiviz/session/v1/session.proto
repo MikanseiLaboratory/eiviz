@@ -309,6 +309,20 @@ message StreamEncoder {
   bool video_only = 14;
   // 0 means automatic.
   uint32 encoder_threads = 15;
+  // 0 sends immediately. Otherwise hold this many milliseconds, then release at 1x.
+  uint32 buffer_ms = 16;
+  // Empty and "OpenH264" are the only accepted encoder.
+  string encoder = 17;
+  // 0 low, 1 medium, 2 high.
+  uint32 complexity = 18;
+  uint32 ref_frames = 19;
+  bool cabac = 20;
+  optional bool deblock = 21;
+  // Unset means on. Detection skips work on still regions, so it is the faster default.
+  optional bool background_detection = 22;
+  bool adaptive_quant = 23;
+  bool scene_change = 24;
+  uint32 audio_delay_ms = 25;
 }
 
 message Output {
