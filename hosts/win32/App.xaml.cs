@@ -227,7 +227,7 @@ public partial class App : Application
         var user = settings.VmixApiUser ?? "";
         var password = settings.VmixApiPassword ?? "";
         ApplyHttpApi(app, settings, port, user, password);
-        ApplyTcpApi(app, settings);
+        ApplyTcpApi(settings);
         ApplyNativeApi(app, settings);
     }
 
@@ -254,9 +254,7 @@ public partial class App : Application
                     owner is null
                         ? $"vMix HTTP API listen failed on port {port}; listening on {next}"
                         : $"vMix HTTP API listen failed on port {port}; in use by {owner}; listening on {next}");
-                app.Dispatcher.BeginInvoke(
-                    () => ShowHttpListenMoved(port, next, owner),
-                    DispatcherPriority.ApplicationIdle);
+                QueueApiWarning(() => ShowHttpListenMoved(port, next, owner));
                 return;
             }
             if (retry != 5)
@@ -275,9 +273,7 @@ public partial class App : Application
             owner is null
                 ? $"vMix HTTP API listen failed on port {port}; disabled"
                 : $"vMix HTTP API listen failed on port {port}; in use by {owner}; disabled");
-        app.Dispatcher.BeginInvoke(
-            () => ShowHttpListenFailed(port, owner),
-            DispatcherPriority.ApplicationIdle);
+        QueueApiWarning(() => ShowHttpListenFailed(port, owner));
     }
 
     private static string? ListenOwner(string ownerName) =>
@@ -298,7 +294,7 @@ public partial class App : Application
         }
     }
 
-    private static void ApplyTcpApi(App app, SessionSettings settings)
+    private static void ApplyTcpApi(SessionSettings settings)
     {
         var enabled = settings.VmixTcpEnabledValue;
         var code = MixerNative.TcpConfigure(enabled ? 1u : 0u);
@@ -317,9 +313,7 @@ public partial class App : Application
             owner is null
                 ? "vMix TCP API listen failed on port 8099; disabled"
                 : $"vMix TCP API listen failed on port 8099; in use by {owner}; disabled");
-        app.Dispatcher.BeginInvoke(
-            () => ShowTcpListenFailed(owner),
-            DispatcherPriority.ApplicationIdle);
+        QueueApiWarning(() => ShowTcpListenFailed(owner));
     }
 
     private static void ApplyNativeApi(App app, SessionSettings settings)
@@ -354,9 +348,7 @@ public partial class App : Application
             owner is null
                 ? $"Protobuf WebSocket API listen failed on port {port}; disabled"
                 : $"Protobuf WebSocket API listen failed on port {port}; in use by {owner}; disabled");
-        app.Dispatcher.BeginInvoke(
-            () => ShowWsListenFailed(port, owner),
-            DispatcherPriority.ApplicationIdle);
+        QueueApiWarning(() => ShowWsListenFailed(port, owner));
     }
 
     private static void ShowHttpListenMoved(uint port, uint next, string? owner)
@@ -391,14 +383,41 @@ public partial class App : Application
         ShowApiWarning(text);
     }
 
+    private static void QueueApiWarning(Action show)
+    {
+        // ApplicationIdle never runs while the 16ms UI timer is queued, so the
+        // warning dialog was logged and then never shown.
+        var app = (App)Current;
+        app.Dispatcher.BeginInvoke(show, DispatcherPriority.Normal);
+    }
+
     private static void ShowApiWarning(string text)
     {
         var title = Loc.T("settings.webApi");
-        var window = Current.MainWindow;
-        if (window is null)
+        var window = Current?.MainWindow;
+        if (window is not { IsVisible: true })
+        {
+            if (window is not null)
+            {
+                void OnShown(object? sender, EventArgs e)
+                {
+                    window.ContentRendered -= OnShown;
+                    ShowApiWarning(text);
+                }
+                window.ContentRendered += OnShown;
+                return;
+            }
             MessageBox.Show(text, title, MessageBoxButton.OK, MessageBoxImage.Warning);
-        else
+            return;
+        }
+        try
+        {
             MessageBox.Show(window, text, title, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (InvalidOperationException)
+        {
+            MessageBox.Show(text, title, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void AttachInputs()
