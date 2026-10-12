@@ -250,4 +250,4 @@ DeckLink, RTMP, and paid-plan limits live in a signed Pro module. The mixer load
 
 A call the plan does not allow returns `ERR_NOT_SUPPORTED_PLAN`. A missing backend returns `ERR_IO`. The plan check comes first. Hosts show DeckLink and RTMP only from `mixer_capabilities`. They do not use a compile-time Pro flag.
 
-A paid plan is a signed ticket. The Pro module embeds the Ed25519 public key, checks expiry against the later of the OS clock and a stored timestamp, and accepts the machine when a majority of salted fingerprints match. The host installs the ticket and displays the status. It does not decide the plan.
+A paid plan is a signed ticket. The Pro module embeds the Ed25519 public key, checks expiry against the later of the OS clock and a stored timestamp, and accepts the machine when a majority of salted fingerprints match. The host installs the ticket and displays the status. It does not decide the plan. The limits for each plan are listed in [Plans](/eiviz/en/introduction/plans/).
