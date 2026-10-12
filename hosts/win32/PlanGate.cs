@@ -1,4 +1,6 @@
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
 using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 
@@ -36,6 +38,27 @@ internal static class PlanGate
 
     public static void Tip(Window? owner, string key) =>
         StatusToast.ShowTip(owner, Loc.T(key));
+
+    public static Border HoverDisabled(FrameworkElement choice, string key, bool fade = false)
+    {
+        choice.IsEnabled = false;
+        if (fade)
+            choice.Opacity = 0.45;
+        return new Border
+        {
+            Background = Brushes.Transparent,
+            Child = choice,
+            ToolTip = Loc.T(key),
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+    }
+
+    public static void BlockComboItem(ComboBoxItem item, string key)
+    {
+        item.ToolTip = Loc.T(key);
+        ToolTipService.SetShowOnDisabled(item, true);
+        item.IsEnabled = false;
+    }
 
     private static bool RemoteOr(Func<MixerCapabilities, bool> allow)
     {

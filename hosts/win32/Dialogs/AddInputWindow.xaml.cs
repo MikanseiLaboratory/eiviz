@@ -36,7 +36,7 @@ public partial class AddInputWindow : Window
         kinds.Add(InputKind.Mix);
         kinds.Add(InputKind.Audio);
         foreach (var kind in kinds)
-            CategoryPanel.Children.Add(CategoryButton(kind));
+            CategoryPanel.Children.Add(PresentCategory(kind));
         StillRecent.ItemsSource = StillHistory.ToArray();
         VideoRecent.ItemsSource = VideoHistory.ToArray();
         Highlight();
@@ -188,11 +188,18 @@ public partial class AddInputWindow : Window
             }
         }
         Highlight();
-        foreach (Button button in CategoryPanel.Children)
+        foreach (var button in CategoryButtons())
         {
             if (button.Tag is not InputKind kind)
                 continue;
-            button.IsEnabled = !_lockKind || SameCategory(kind, input.Kind);
+            var open = !_lockKind || SameCategory(kind, input.Kind);
+            if (kind == InputKind.DeckLink
+                && input.Kind != InputKind.DeckLink
+                && !InputKindNames.DeckLinkInputAllowed())
+                open = false;
+            button.IsEnabled = open;
+            if (button.Parent is Border host && kind == InputKind.DeckLink)
+                host.ToolTip = open ? null : Loc.T("msg.planDecklinkInput");
         }
     }
 
@@ -200,13 +207,8 @@ public partial class AddInputWindow : Window
     {
         if (sender is not Button { Tag: InputKind kind } || (_lockKind && !SameCategory(kind, _kind)))
             return;
-        if (kind == InputKind.DeckLink
-            && _kind != InputKind.DeckLink
-            && !InputKindNames.DeckLinkInputAllowed())
-        {
-            PlanGate.Tip(this, "msg.planDecklinkInput");
+        if (!((Button)sender).IsEnabled)
             return;
-        }
         _kind = kind;
         Highlight();
     }
@@ -226,7 +228,7 @@ public partial class AddInputWindow : Window
             RefreshDeckLink();
         UpdateAudioModePanels();
         MixBusBox.IsEnabled = MixTargetBox.SelectedItem is MixTargetItem { IsMultiview: false };
-        foreach (Button button in CategoryPanel.Children)
+        foreach (var button in CategoryButtons())
             button.Background = Equals(button.Tag, _kind)
                 ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x2E, 0x6B, 0x3C))
                 : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x33, 0x33, 0x33));
@@ -248,9 +250,33 @@ public partial class AddInputWindow : Window
         return button;
     }
 
+    private UIElement PresentCategory(InputKind kind)
+    {
+        var button = CategoryButton(kind);
+        if (kind != InputKind.DeckLink || InputKindNames.DeckLinkInputAllowed())
+            return button;
+        return PlanGate.HoverDisabled(button, "msg.planDecklinkInput");
+    }
+
+    private IEnumerable<Button> CategoryButtons()
+    {
+        foreach (var child in CategoryPanel.Children)
+        {
+            switch (child)
+            {
+                case Button button:
+                    yield return button;
+                    break;
+                case Decorator { Child: Button wrapped }:
+                    yield return wrapped;
+                    break;
+            }
+        }
+    }
+
     private void EnsureDeckLinkCategory()
     {
-        foreach (Button button in CategoryPanel.Children)
+        foreach (var button in CategoryButtons())
         {
             if (button.Tag is InputKind.DeckLink)
                 return;
@@ -264,7 +290,7 @@ public partial class AddInputWindow : Window
                 break;
             }
         }
-        CategoryPanel.Children.Insert(insert, CategoryButton(InputKind.DeckLink));
+        CategoryPanel.Children.Insert(insert, PresentCategory(InputKind.DeckLink));
     }
 
     private void RefreshDeckLink_Click(object sender, RoutedEventArgs e) => RefreshDeckLink();

@@ -1260,7 +1260,10 @@ public partial class SettingsWindow : Window
             var transport = new ComboBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !OnAirLock.Active };
             transport.Items.Add(new ComboBoxItem { Content = "OMT", Tag = OutputTransport.Omt });
             transport.Items.Add(new ComboBoxItem { Content = "NDI", Tag = OutputTransport.Ndi });
-            transport.Items.Add(new ComboBoxItem { Content = "DeckLink", Tag = OutputTransport.DeckLink });
+            var deckLink = new ComboBoxItem { Content = "DeckLink", Tag = OutputTransport.DeckLink };
+            if (output.Transport != OutputTransport.DeckLink && !PlanGate.DeckLinkOutput)
+                PlanGate.BlockComboItem(deckLink, "msg.planDecklinkOutput");
+            transport.Items.Add(deckLink);
             foreach (ComboBoxItem item in transport.Items)
             {
                 if (item.Tag is OutputTransport tagged && tagged == output.Transport)
@@ -1276,7 +1279,6 @@ public partial class SettingsWindow : Window
                         && output.Transport != OutputTransport.DeckLink
                         && !PlanGate.DeckLinkOutput)
                     {
-                        PlanGate.Tip(this, "msg.planDecklinkOutput");
                         _suppressOutputs = true;
                         foreach (ComboBoxItem existing in transport.Items)
                         {
