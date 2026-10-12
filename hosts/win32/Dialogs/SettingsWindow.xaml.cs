@@ -1325,17 +1325,26 @@ public partial class SettingsWindow : Window
                     output.AudioUnitId = choice.Id;
             };
 
+            var planBlocked = output.Transport == OutputTransport.DeckLink && !PlanGate.DeckLinkOutput;
             var enabled = new CheckBox
             {
                 Content = "Enabled",
-                IsChecked = output.Enabled,
-                IsEnabled = !locked,
+                IsChecked = output.Enabled && !planBlocked,
+                IsEnabled = !locked && !planBlocked,
                 Foreground = System.Windows.Media.Brushes.White,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 8, 6)
             };
-            enabled.Checked += (_, _) => output.Enabled = true;
-            enabled.Unchecked += (_, _) => output.Enabled = false;
+            if (planBlocked)
+            {
+                enabled.ToolTip = Loc.T("msg.planDecklinkOutput");
+                ToolTipService.SetShowOnDisabled(enabled, true);
+            }
+            else
+            {
+                enabled.Checked += (_, _) => output.Enabled = true;
+                enabled.Unchecked += (_, _) => output.Enabled = false;
+            }
 
             var skipIdle = new CheckBox
             {

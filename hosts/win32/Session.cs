@@ -355,6 +355,9 @@ public sealed class InputEntry
     public string AudioProcessExe { get; set; } = "";
     public string AudioProcessAumid { get; set; } = "";
     public string DecklinkMode { get; set; } = "";
+    public bool Unavailable =>
+        Kind == InputKind.DeckLink && !InputKindNames.DeckLinkInputAllowed();
+    public string? UnavailableTip => Unavailable ? Loc.T("msg.planDecklinkInput") : null;
     public bool VideoStartsPlaying =>
         VideoPlayWhen is VideoPlayWhen.Never or VideoPlayWhen.Always;
 

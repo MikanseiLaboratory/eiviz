@@ -199,6 +199,16 @@
                         <ListBox x:Name="InputList" Background="{DynamicResource ListBackground}" Foreground="{DynamicResource TextForeground}" BorderBrush="{DynamicResource ButtonBorder}"
                                  SelectionChanged="InputList_SelectionChanged"
                                  MouseDoubleClick="InputList_DoubleClick">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Unavailable}" Value="True">
+                                            <Setter Property="Opacity" Value="0.45"/>
+                                            <Setter Property="ToolTip" Value="{Binding UnavailableTip}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
                             <ListBox.ContextMenu>
                                 <ContextMenu>
                                     <MenuItem Header="{Binding [input.relinkFolder], Source={x:Static i18n:Loc.Source}}" Click="RelinkMedia_Click"/>
