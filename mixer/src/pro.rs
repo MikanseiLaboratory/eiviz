@@ -69,6 +69,10 @@ pub fn machine_fingerprint() -> Result<String, i32> {
         .map_err(license_error)
 }
 
+pub fn license_email() -> Result<String, i32> {
+    Ok(license_backend()?.status().email)
+}
+
 fn license_error(error: ProError) -> i32 {
     match error.kind {
         ProErrorKind::InvalidArgument | ProErrorKind::NotSupportedPlan => ERR_INVALID_ARGUMENT,

@@ -432,6 +432,7 @@ int32_t mixer_capabilities(EivizCapabilities *out);
 int32_t mixer_license_install(const char *ticket);
 int32_t mixer_license_status(EivizLicenseStatus *out, uint8_t *ticket_id, size_t cap);
 int32_t mixer_license_clear(void);
+int32_t mixer_license_email(uint8_t *out, size_t cap);
 int32_t mixer_machine_fingerprint(uint8_t *out, size_t cap);
 int32_t mixer_secret_set(const char *name, const char *value);
 int32_t mixer_decklink_connect(uint64_t id, const char *device, const char *mode, uint32_t frame_buffer_frames);

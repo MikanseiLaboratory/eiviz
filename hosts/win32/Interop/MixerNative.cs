@@ -424,8 +424,26 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_license_status")]
     internal static unsafe partial int LicenseStatus(MixerLicenseStatus* status, byte* ticketId, nuint cap);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_license_email")]
+    internal static unsafe partial int LicenseEmail(byte* buffer, nuint cap);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_machine_fingerprint")]
     internal static unsafe partial int MachineFingerprint(byte* buffer, nuint cap);
+
+    internal static string QueryLicenseEmail()
+    {
+        var buffer = new byte[512];
+        unsafe
+        {
+            fixed (byte* ptr = buffer)
+            {
+                if (LicenseEmail(ptr, (nuint)buffer.Length) != 0)
+                    return "";
+            }
+        }
+        var end = Array.IndexOf(buffer, (byte)0);
+        return System.Text.Encoding.UTF8.GetString(buffer, 0, end < 0 ? buffer.Length : end);
+    }
 
     internal static MixerLicenseStatus? QueryLicenseStatus(out string ticketId)
     {

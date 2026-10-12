@@ -46,6 +46,8 @@ pub struct LicenseStatus {
     pub plan: Plan,
     pub expires_at: i64,
     pub ticket_id: String,
+    /// Address recorded by the issuer. Empty when the ticket has no email.
+    pub email: String,
 }
 
 impl LicenseStatus {
@@ -55,6 +57,7 @@ impl LicenseStatus {
             plan: Plan::Community,
             expires_at: 0,
             ticket_id: String::new(),
+            email: String::new(),
         }
     }
 }

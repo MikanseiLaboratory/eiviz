@@ -32,3 +32,17 @@ An unregistered, expired, badly signed, or wrong-machine ticket is treated as Co
 A public build with no module compiles in the Community limits only. DeckLink and RTMP are not linked, so a picture inside the Community cap still returns `ERR_IO`. A call outside the plan returns `ERR_NOT_SUPPORTED_PLAN` before the link check. An official package that contains `eiviz-pro.required` does not start when the module is missing, badly signed, or built for a different ABI, and it does not fall back to Community. Loading is described in [System architecture](/eiviz/en/introduction/architecture/).
 
 Only a development module built with `pro-dev` prefers the `EIVIZ_PLAN` environment variable over the ticket. The values are `community`, `professional` (`pro` is the same), and `enterprise`. A Release build without that feature ignores the variable.
+
+## Beta license
+
+During the v0.x beta, signing in with a Google account issues a Professional license at no charge. It is valid through 2027-03-31 23:59 Japan time. One account can issue three machines. Issuing again for the same machine does not count toward that limit.
+
+The ticket carries a `beta` flag. It does not carry over to a release license.
+
+The issuer is the [eiviz beta license site](https://eiviz-license.ruk1ium.workers.dev). The License page in settings opens the same site.
+
+1. Open License in the eiviz settings and choose Open license site. The app sends the fingerprints.
+2. Sign in with Google. The ticket returns to the app and is installed.
+3. If you opened the site in a browser yourself, paste the fingerprints, issue a ticket, and paste that ticket into License.
+
+After it applies, the License page shows the account email address and the expiry.
