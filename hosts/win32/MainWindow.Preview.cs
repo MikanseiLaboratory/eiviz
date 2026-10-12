@@ -169,6 +169,7 @@ public partial class MainWindow
 
     internal void CloseMultiview(ulong layoutId)
     {
+        using var _ = OnAirLock.AllowClose();
         foreach (var window in _multiviews.Where(item => item.LayoutId == layoutId).ToArray())
             window.Close();
     }

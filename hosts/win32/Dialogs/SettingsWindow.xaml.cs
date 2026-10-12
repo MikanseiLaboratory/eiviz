@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
 using Eiviz.Host.Media;
+using Eiviz.Host.Preview;
 
 namespace Eiviz.Host.Dialogs;
 
@@ -90,6 +91,7 @@ public partial class SettingsWindow : Window
         WebApiWsPortBox.Text = Settings.NativeApiPort.ToString();
         WebApiUserBox.Text = Settings.VmixApiUser;
         WebApiPasswordBox.Password = Settings.VmixApiPassword;
+        RefreshFlipBudgetUsage();
     }
 
     public SessionSettings Settings { get; }
@@ -142,8 +144,22 @@ public partial class SettingsWindow : Window
         WebApiPanel.Visibility = index == 6 ? Visibility.Visible : Visibility.Collapsed;
         AdvancedPanel.Visibility = index == 7 ? Visibility.Visible : Visibility.Collapsed;
         LicensePanel.Visibility = index == 8 ? Visibility.Visible : Visibility.Collapsed;
+        if (index == 7)
+            RefreshFlipBudgetUsage();
         if (index == 8)
             RefreshLicense();
+    }
+
+    private void RefreshFlipBudgetUsage()
+    {
+        var dx12 = MixerNative.Backend() == 1;
+        FlipBudgetLabel.Visibility = dx12 ? Visibility.Visible : Visibility.Collapsed;
+        FlipBudgetBox.Visibility = dx12 ? Visibility.Visible : Visibility.Collapsed;
+        FlipBudgetHelp.Visibility = dx12 ? Visibility.Visible : Visibility.Collapsed;
+        FlipBudgetDx12Note.Visibility = dx12 ? Visibility.Collapsed : Visibility.Visible;
+        FlipBudgetUsage.Text = dx12
+            ? Loc.Format("settings.flipBudgetUsage", FlipBudget.Used, FlipBudget.Limit)
+            : Loc.Format("settings.flipBudgetUsageOnly", FlipBudget.Used);
     }
 
     private void LicenseInstall_Click(object sender, RoutedEventArgs e)
@@ -514,6 +530,11 @@ public partial class SettingsWindow : Window
 
     private void DeleteMv_Click(object sender, RoutedEventArgs e)
     {
+        if (OnAirLock.Active)
+        {
+            MessageBox.Show(this, Loc.T("msg.onAirLock"), Loc.T("chrome.onAirLock"));
+            return;
+        }
         if (MvList.SelectedItem is not MultiviewLayout layout)
             return;
         if (Owner is MainWindow main)

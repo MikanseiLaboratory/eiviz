@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Windows;
+using Eiviz.Host;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -52,6 +53,13 @@ public partial class InputPreviewWindow : Window
     {
         Title = name;
         TitleText.Text = name;
+    }
+
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        if (OnAirLock.BlockClosing(this, e))
+            return;
+        base.OnClosing(e);
     }
 
     private void Fullscreen_Click(object sender, RoutedEventArgs e) => ToggleFullscreen();

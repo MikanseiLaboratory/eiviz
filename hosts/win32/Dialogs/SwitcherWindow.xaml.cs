@@ -58,6 +58,13 @@ public partial class SwitcherWindow : Window
         };
     }
 
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        if (OnAirLock.BlockClosing(this, e))
+            return;
+        base.OnClosing(e);
+    }
+
     public ulong UnitId => _unit.Id;
 
     private void OnTop_Click(object sender, RoutedEventArgs e)

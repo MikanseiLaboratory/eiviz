@@ -171,6 +171,13 @@ public partial class MainWindow : Window
         return true;
     }
 
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        if (OnAirLock.BlockClosing(this, e))
+            return;
+        base.OnClosing(e);
+    }
+
     internal void ReloadFromSession()
     {
         var selectedUnit = _session.SelectedUnitId;
@@ -357,6 +364,8 @@ public partial class MainWindow : Window
 
     private void Disconnect_Click(object sender, RoutedEventArgs e)
     {
+        if (RejectIfOnAirLock())
+            return;
         var app = (App)Application.Current;
         _overlay?.Close();
         CloseAllSwitchers();

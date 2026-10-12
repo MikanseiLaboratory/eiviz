@@ -344,7 +344,8 @@ public partial class MainWindow
             HostLog.WriteException(ex);
         }
         MessageBox.Show(this, Loc.T("error.mixerFatal"), Loc.T("app.title"));
-        Application.Current.Shutdown();
+        using (OnAirLock.AllowClose())
+            Application.Current.Shutdown();
         return true;
     }
 

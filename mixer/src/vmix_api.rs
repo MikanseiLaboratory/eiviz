@@ -245,10 +245,12 @@ fn handle_request(request: Request, config: &ApiConfig) {
     if let Some(name) = function {
         match dispatch_function(&name, &params) {
             Ok(()) => {
-                crate::diag::http_info(&format!(
-                    "200 Function={name} {}",
-                    summarize_params(&params)
-                ));
+                if !name.eq_ignore_ascii_case("ActivatorRefresh") {
+                    crate::diag::http_info(&format!(
+                        "200 Function={name} {}",
+                        summarize_params(&params)
+                    ));
+                }
             }
             Err(DispatchError::Unknown(message)) => {
                 crate::diag::http_warn(&format!("404 Function={name} {message}"));
@@ -296,6 +298,9 @@ pub(crate) fn dispatch_function(
     name: &str,
     params: &HashMap<String, String>,
 ) -> Result<(), DispatchError> {
+    if name.eq_ignore_ascii_case("ActivatorRefresh") {
+        return Ok(());
+    }
     match name {
         "Cut" | "CutDirect" | "Fade" | "PreviewInput" | "ActiveInput" | "Snapshot"
         | "SnapshotInput" => {}

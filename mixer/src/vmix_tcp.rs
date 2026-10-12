@@ -97,7 +97,6 @@ pub unsafe fn listen_owner_c(out: *mut u8, cap: usize) -> i32 {
 fn stop_worker() {
     let (stop, join) = {
         let mut slot = tcp_slot().lock_or_recover();
-        slot.listen_owner = None;
         (slot.stop.take(), slot.join.take())
     };
     if let Some(stop) = stop {
@@ -397,9 +396,12 @@ fn function_reply(rest: &str) -> String {
         None => (rest, ""),
     };
     let params = crate::vmix_api::parse_query(query);
+    let quiet = name.eq_ignore_ascii_case("ActivatorRefresh");
     match crate::vmix_api::dispatch_function(name, &params) {
         Ok(()) => {
-            crate::diag::http_info(&format!("tcp FUNCTION {name} OK"));
+            if !quiet {
+                crate::diag::http_info(&format!("tcp FUNCTION {name} OK"));
+            }
             "FUNCTION OK Completed\r\n".into()
         }
         Err(crate::vmix_api::DispatchError::Unknown(message))
@@ -782,6 +784,14 @@ mod tests {
         assert_eq!(
             xml_text("vmix/inputs/input[1]/@title", xml).unwrap(),
             "Scene 1"
+        );
+    }
+
+    #[test]
+    fn activator_refresh_completes_without_work() {
+        assert_eq!(
+            dispatch_line("FUNCTION ActivatorRefresh"),
+            Reply::Line("FUNCTION OK Completed\r\n".into())
         );
     }
 

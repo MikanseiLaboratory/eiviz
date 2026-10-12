@@ -203,5 +203,4 @@ fn stop_worker() {
     if let Some(join) = slot.join.take() {
         crate::diag::join_timeout(join, Duration::from_secs(2), "native-ws");
     }
-    slot.listen_owner = None;
 }
