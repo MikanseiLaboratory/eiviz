@@ -4,12 +4,17 @@ import EivizMixer
 import SwiftUI
 import UniformTypeIdentifiers
 
-final class LicenseReturnServer {
+final class LicenseReturnServer: @unchecked Sendable {
+    private let lock = NSLock()
     private var fd: Int32 = -1
+    private var handler: ((String) -> Int32)?
 
     func stop() {
+        lock.lock()
         let current = fd
         fd = -1
+        handler = nil
+        lock.unlock()
         if current >= 0 {
             Darwin.close(current)
         }
@@ -47,15 +52,31 @@ final class LicenseReturnServer {
             return nil
         }
         let port = Int(UInt16(bigEndian: stored.sin_port))
+        lock.lock()
         fd = sock
+        handler = onTicket
+        lock.unlock()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.acceptLoop(sock, onTicket: onTicket)
+            self?.acceptLoop(sock)
         }
         return "http://127.0.0.1:\(port)/callback"
     }
 
-    private func acceptLoop(_ sock: Int32, onTicket: @escaping (String) -> Int32) {
-        while fd == sock {
+    private func invoke(_ ticket: String) -> Int32 {
+        lock.lock()
+        let handler = handler
+        lock.unlock()
+        return handler?(ticket) ?? -1
+    }
+
+    private func acceptLoop(_ sock: Int32) {
+        while true {
+            lock.lock()
+            let current = fd
+            lock.unlock()
+            if current != sock {
+                break
+            }
             let client = accept(sock, nil, nil)
             if client < 0 {
                 break
@@ -76,8 +97,9 @@ final class LicenseReturnServer {
             }
             var code: Int32 = -1
             if !ticket.isEmpty {
-                DispatchQueue.main.sync {
-                    code = onTicket(ticket)
+                let value = ticket
+                code = DispatchQueue.main.sync {
+                    self.invoke(value)
                 }
             }
             let message = code == 0
