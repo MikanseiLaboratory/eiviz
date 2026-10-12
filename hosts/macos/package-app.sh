@@ -21,6 +21,11 @@ assemble() {
   if [ -f "$DIR/libndi.6.dylib" ]; then
     cp "$DIR/libndi.6.dylib" "$app/Contents/MacOS/"
   fi
+  if [ -f "$DIR/libeiviz_pro.dylib" ]; then
+    cp "$DIR/libeiviz_pro.dylib" "$app/Contents/MacOS/"
+    cp "$DIR/libeiviz_pro.dylib.manifest" "$app/Contents/MacOS/"
+    cp "$DIR/eiviz-pro.required" "$app/Contents/MacOS/"
+  fi
   cp "$plist" "$app/Contents/Info.plist"
   if [ -n "${EIVIZ_VERSION:-}" ]; then
     /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $EIVIZ_VERSION" "$app/Contents/Info.plist"

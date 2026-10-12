@@ -77,11 +77,21 @@ jobs:
     needs: meta
     runs-on: windows-latest
     timeout-minutes: 90
+    env:
+      EIVIZ_PRO_MODULE_PUBLIC_KEY: ${{ secrets.EIVIZ_PRO_MODULE_PUBLIC_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Require Pro module public key
+        shell: bash
+        run: |
+          if ! printf '%s' "$EIVIZ_PRO_MODULE_PUBLIC_KEY" | grep -Eq '^[0-9a-fA-F]{64}$'; then
+            echo "Set the EIVIZ_PRO_MODULE_PUBLIC_KEY secret to the 64 hex character module public key" >&2
+            exit 1
+          fi
 
       - name: Setup NDI SDK and LLVM
         uses: ./.github/actions/setup-ndi-windows
@@ -152,6 +162,14 @@ jobs:
           Copy-Item "${{ github.workspace }}\LICENSE" "${{ github.workspace }}\publish\win-x64\" -ErrorAction SilentlyContinue
           Copy-Item "${{ github.workspace }}\NOTICE" "${{ github.workspace }}\publish\win-x64\" -ErrorAction SilentlyContinue
 
+      - name: Bundle signed Pro module
+        shell: bash
+        env:
+          EIVIZ_PRO_REPO_TOKEN: ${{ secrets.EIVIZ_PRO_REPO_TOKEN }}
+        run: |
+          chmod +x packaging/fetch-pro-module.sh
+          packaging/fetch-pro-module.sh "${{ needs.meta.outputs.tag }}" x86_64-pc-windows-msvc eiviz_pro.dll publish/win-x64
+
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
 
@@ -191,11 +209,20 @@ jobs:
     needs: meta
     runs-on: macos-latest
     timeout-minutes: 60
+    env:
+      EIVIZ_PRO_MODULE_PUBLIC_KEY: ${{ secrets.EIVIZ_PRO_MODULE_PUBLIC_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Require Pro module public key
+        run: |
+          if ! printf '%s' "$EIVIZ_PRO_MODULE_PUBLIC_KEY" | grep -Eq '^[0-9a-fA-F]{64}$'; then
+            echo "Set the EIVIZ_PRO_MODULE_PUBLIC_KEY secret to the 64 hex character module public key" >&2
+            exit 1
+          fi
 
       - name: Setup NDI SDK
         uses: ./.github/actions/setup-ndi-macos
@@ -222,6 +249,13 @@ jobs:
           chmod +x hosts/macos/build.sh
           hosts/macos/build.sh
 
+      - name: Bundle signed Pro module
+        env:
+          EIVIZ_PRO_REPO_TOKEN: ${{ secrets.EIVIZ_PRO_REPO_TOKEN }}
+        run: |
+          chmod +x packaging/fetch-pro-module.sh
+          packaging/fetch-pro-module.sh "${{ needs.meta.outputs.tag }}" aarch64-apple-darwin libeiviz_pro.dylib pro-module
+
       - name: Package
         run: |
           TAG="${{ needs.meta.outputs.tag }}"
@@ -232,6 +266,9 @@ jobs:
           cp "$BIN/eiviz-remote" "$STAGING/"
           cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
           cp "$BIN/libeiviz_remote.dylib" "$STAGING/"
+          cp pro-module/libeiviz_pro.dylib "$STAGING/"
+          cp pro-module/libeiviz_pro.dylib.manifest "$STAGING/"
+          cp pro-module/eiviz-pro.required "$STAGING/"
           cp target/release/eiviz-headless "$STAGING/"
           cp target/release/eivizctl "$STAGING/"
           cp headless/eiviz-headless.example.env "$STAGING/"
@@ -277,11 +314,20 @@ jobs:
     needs: meta
     runs-on: macos-latest
     timeout-minutes: 60
+    env:
+      EIVIZ_PRO_MODULE_PUBLIC_KEY: ${{ secrets.EIVIZ_PRO_MODULE_PUBLIC_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Require Pro module public key
+        run: |
+          if ! printf '%s' "$EIVIZ_PRO_MODULE_PUBLIC_KEY" | grep -Eq '^[0-9a-fA-F]{64}$'; then
+            echo "Set the EIVIZ_PRO_MODULE_PUBLIC_KEY secret to the 64 hex character module public key" >&2
+            exit 1
+          fi
 
       - name: Setup NDI SDK
         uses: ./.github/actions/setup-ndi-macos
@@ -310,6 +356,13 @@ jobs:
           BIN="$(cd hosts/macos && swift build -c release --arch x86_64 --show-bin-path)"
           file "$BIN/eiviz-mac" | grep -E "x86_64|i386"
 
+      - name: Bundle signed Pro module
+        env:
+          EIVIZ_PRO_REPO_TOKEN: ${{ secrets.EIVIZ_PRO_REPO_TOKEN }}
+        run: |
+          chmod +x packaging/fetch-pro-module.sh
+          packaging/fetch-pro-module.sh "${{ needs.meta.outputs.tag }}" x86_64-apple-darwin libeiviz_pro.dylib pro-module
+
       - name: Package
         run: |
           TAG="${{ needs.meta.outputs.tag }}"
@@ -320,6 +373,9 @@ jobs:
           cp "$BIN/eiviz-remote" "$STAGING/"
           cp "$BIN/libeiviz_mixer.dylib" "$STAGING/"
           cp "$BIN/libeiviz_remote.dylib" "$STAGING/"
+          cp pro-module/libeiviz_pro.dylib "$STAGING/"
+          cp pro-module/libeiviz_pro.dylib.manifest "$STAGING/"
+          cp pro-module/eiviz-pro.required "$STAGING/"
           cp target/x86_64-apple-darwin/release/eiviz-headless "$STAGING/"
           cp target/x86_64-apple-darwin/release/eivizctl "$STAGING/"
           cp headless/eiviz-headless.example.env "$STAGING/"
