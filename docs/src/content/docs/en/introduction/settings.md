@@ -120,7 +120,7 @@ Endpoints and Functions are in [Compatibility APIs](/eiviz/en/developers/compati
 
 ### Video output destination window limit
 
-Used for real-time Preview, Program, and Multiview (DirectX 12 only).  
+Used for real-time Preview, Program, and Multiview. The setting shows how many are in use. The cap is enforced on DirectX 12.  
 A Switcher UI shows Preview and Program, so it uses 2 slots. The main Preview/Program, each open Multiview, Scene Editor, and the Overlay window count the same way. Scene tiles and input-preview thumbs do not count.
 
 Auto starts at 6. You can raise it in Settings, but it may become unstable.  

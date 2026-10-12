@@ -152,14 +152,7 @@ public partial class SettingsWindow : Window
 
     private void RefreshFlipBudgetUsage()
     {
-        var dx12 = MixerNative.Backend() == 1;
-        FlipBudgetLabel.Visibility = dx12 ? Visibility.Visible : Visibility.Collapsed;
-        FlipBudgetBox.Visibility = dx12 ? Visibility.Visible : Visibility.Collapsed;
-        FlipBudgetHelp.Visibility = dx12 ? Visibility.Visible : Visibility.Collapsed;
-        FlipBudgetDx12Note.Visibility = dx12 ? Visibility.Collapsed : Visibility.Visible;
-        FlipBudgetUsage.Text = dx12
-            ? Loc.Format("settings.flipBudgetUsage", FlipBudget.Used, FlipBudget.Limit)
-            : Loc.Format("settings.flipBudgetUsageOnly", FlipBudget.Used);
+        FlipBudgetUsage.Text = Loc.Format("settings.flipBudgetUsage", FlipBudget.Used, FlipBudget.Limit);
     }
 
     private void LicenseInstall_Click(object sender, RoutedEventArgs e)

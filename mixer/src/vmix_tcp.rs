@@ -395,9 +395,6 @@ fn function_reply(rest: &str) -> String {
         Some((name, query)) => (name, query.trim()),
         None => (rest, ""),
     };
-    if name.eq_ignore_ascii_case("ActivatorRefresh") {
-        return "FUNCTION OK Completed\r\n".into();
-    }
     let params = crate::vmix_api::parse_query(query);
     match crate::vmix_api::dispatch_function(name, &params) {
         Ok(()) => {
@@ -784,14 +781,6 @@ mod tests {
         assert_eq!(
             xml_text("vmix/inputs/input[1]/@title", xml).unwrap(),
             "Scene 1"
-        );
-    }
-
-    #[test]
-    fn activator_refresh_completes_without_work() {
-        assert_eq!(
-            dispatch_line("FUNCTION ActivatorRefresh"),
-            Reply::Line("FUNCTION OK Completed\r\n".into())
         );
     }
 
