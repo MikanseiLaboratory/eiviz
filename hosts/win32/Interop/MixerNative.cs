@@ -554,6 +554,20 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_copy_runtime_stats")]
     internal static unsafe partial int CopyRuntimeStats(MixerRuntimeStats* stats);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_stream_destination_stats")]
+    internal static unsafe partial int StreamDestinationStats(
+        ulong encoderId,
+        ulong destinationId,
+        uint* connected,
+        ulong* videoFrames,
+        ulong* dropped,
+        uint* bitrate,
+        uint* encoderThreads,
+        uint* mediaLagMs,
+        uint* sentFpsMilli,
+        byte* message,
+        nuint messageCap);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_copy_input_stats")]
     internal static unsafe partial int CopyInputStats(InputRuntimeStats* stats, uint capacity);
 

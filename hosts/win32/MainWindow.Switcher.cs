@@ -1,4 +1,5 @@
 using System.Linq;
+using System.Text;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -877,6 +878,7 @@ public partial class MainWindow
     internal void RebuildStreamToggles()
     {
         StreamTogglePanel.Children.Clear();
+        _streamStrips.Clear();
         var locked = OnAirLock.Active;
         foreach (var output in _session.Outputs)
         {
@@ -890,13 +892,100 @@ public partial class MainWindow
                     return;
                 }
                 output.Enabled = on;
+                if (!on)
+                    _streamDownSince.Remove(output.Id);
                 SessionStore.Publish(_session);
             })
             {
                 IsEnabled = !locked
             };
+            _streamStrips[output.Id] = strip;
             StreamTogglePanel.Children.Add(strip);
         }
+        RefreshStreamLamps(force: true);
+    }
+
+    internal void RefreshStreamLamps(bool force = false)
+    {
+        if (HostRole.IsRemote)
+            return;
+        if (!force)
+        {
+            if (++_streamLampTick < 10)
+                return;
+            _streamLampTick = 0;
+        }
+        foreach (var output in _session.Outputs)
+        {
+            if (output.Transport != OutputTransport.Rtmp)
+                continue;
+            if (!_streamStrips.TryGetValue(output.Id, out var strip))
+                continue;
+            if (!output.Enabled)
+            {
+                strip.SetLamp(StripLamp.Off, null);
+                _streamDownSince.Remove(output.Id);
+                continue;
+            }
+            var (lamp, tip) = ReadStreamLamp(output);
+            strip.SetLamp(lamp, tip);
+        }
+    }
+
+    (StripLamp Lamp, string? Tip) ReadStreamLamp(OutputEntry output)
+    {
+        uint connected = 0, bitrate = 0, threads = 0, lag = 0, fps = 0;
+        ulong frames = 0, dropped = 0;
+        var message = new byte[256];
+        int code;
+        var encoder = output.StreamEncoderId >= 0x0006_0000
+            ? output.StreamEncoderId
+            : 0x0006_0000 | output.StreamEncoderId;
+        unsafe
+        {
+            fixed (byte* text = message)
+            {
+                code = MixerNative.StreamDestinationStats(
+                    encoder,
+                    output.Id,
+                    &connected,
+                    &frames,
+                    &dropped,
+                    &bitrate,
+                    &threads,
+                    &lag,
+                    &fps,
+                    text,
+                    (nuint)message.Length);
+            }
+        }
+        var detail = MessageText(message);
+        if (code == 0 && connected != 0)
+        {
+            _streamDownSince.Remove(output.Id);
+            var encoderFps = _session.StreamEncoders.FirstOrDefault(item => item.Id == output.StreamEncoderId);
+            var target = encoderFps is { FpsDen: > 0 }
+                ? (uint)((ulong)encoderFps.FpsNum * 1000 / encoderFps.FpsDen)
+                : 0;
+            var slow = lag >= 400 || (fps > 0 && target > 0 && fps * 100 < target * 85);
+            if (!slow)
+                return (StripLamp.On, null);
+            return (StripLamp.Warn, Loc.Format("status.streamSlow", fps / 1000.0, target / 1000.0, lag, dropped));
+        }
+        if (!_streamDownSince.ContainsKey(output.Id))
+            _streamDownSince[output.Id] = DateTime.UtcNow;
+        var downFor = DateTime.UtcNow - _streamDownSince[output.Id];
+        if (!string.IsNullOrWhiteSpace(detail) || downFor >= TimeSpan.FromSeconds(3))
+            return (StripLamp.Fault, string.IsNullOrWhiteSpace(detail) ? Loc.T("status.streamFault") : detail);
+        return (StripLamp.Warn, Loc.T("status.streamConnecting"));
+    }
+
+    static string MessageText(byte[] message)
+    {
+        var end = Array.IndexOf(message, (byte)0);
+        if (end < 0)
+            end = message.Length;
+        return Encoding.UTF8.GetString(message, 0, end).Trim();
     }
 
     internal void RebuildOverlayToggles()

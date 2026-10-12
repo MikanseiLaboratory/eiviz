@@ -318,6 +318,7 @@ public partial class MainWindow
         }
         ResourceText.Text = _resources.Line();
         RefreshStatusBar();
+        RefreshStreamLamps();
         TickVideo();
     }
 

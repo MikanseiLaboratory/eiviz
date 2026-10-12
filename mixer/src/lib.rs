@@ -4420,10 +4420,7 @@ fn stream_encoder_add_ffi(
                 if let Err(error) =
                     lock_stream(&audio_output).submit_audio(crate::pro::audio_frame(&packet))
                 {
-                    crate::diag::error_throttled(&format!(
-                        "stream send audio: {}",
-                        error.message
-                    ));
+                    crate::diag::error_throttled(&format!("stream send audio: {}", error.message));
                 }
             }
         });
@@ -4610,6 +4607,10 @@ pub unsafe extern "C" fn mixer_stream_destination_stats(
     dropped: *mut u64,
     bitrate: *mut u32,
     encoder_threads: *mut u32,
+    media_lag_ms: *mut u32,
+    sent_fps_milli: *mut u32,
+    message: *mut u8,
+    message_cap: usize,
 ) -> i32 {
     ffi_guard("mixer_stream_destination_stats", ERR_DEVICE, || {
         if connected.is_null() || video_frames.is_null() || dropped.is_null() || bitrate.is_null() {
@@ -4637,14 +4638,22 @@ pub unsafe extern "C" fn mixer_stream_destination_stats(
                     if !encoder_threads.is_null() {
                         *encoder_threads = stats.encoder_threads;
                     }
+                    if !media_lag_ms.is_null() {
+                        *media_lag_ms = stats.media_lag_ms;
+                    }
+                    if !sent_fps_milli.is_null() {
+                        *sent_fps_milli = stats.sent_fps_milli;
+                    }
+                    if !message.is_null() && message_cap > 0 {
+                        let bytes = stats.message.as_bytes();
+                        let n = bytes.len().min(message_cap - 1);
+                        std::ptr::copy_nonoverlapping(bytes.as_ptr(), message, n);
+                        *message.add(n) = 0;
+                    }
                 }
                 OK
             }
-            Err(error) => {
-                let code = crate::pro::pro_code(error.clone());
-                let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error.message));
-                code
-            }
+            Err(error) => crate::pro::pro_code(error),
         }
     })
 }

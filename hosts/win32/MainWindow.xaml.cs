@@ -35,6 +35,9 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _meterTimer = new() { Interval = TimeSpan.FromMilliseconds(50) };
     private readonly DispatcherTimer _tbarTimer = new() { Interval = TimeSpan.FromMilliseconds(16) };
     private readonly Dictionary<ulong, MeterStrip> _meters = [];
+    private readonly Dictionary<ulong, OverlayStrip> _streamStrips = [];
+    private readonly Dictionary<ulong, DateTime> _streamDownSince = [];
+    private int _streamLampTick;
     private readonly ResourceMonitor _resources = new();
     private bool _sceneEditorOpen;
     private long _sceneEditorGuard;
