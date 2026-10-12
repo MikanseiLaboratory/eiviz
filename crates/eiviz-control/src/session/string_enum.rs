@@ -101,6 +101,8 @@ mod tests {
         assert_pair("Omt", "omt", OutputTransport::Omt);
         assert_pair("Ndi", "ndi", OutputTransport::Ndi);
         assert_pair("DeckLink", "deckLink", OutputTransport::DeckLink);
+        assert_pair("Rtmp", "rtmp", OutputTransport::Rtmp);
+        assert_pair("DeckLink", "deckLink", InputKind::DeckLink);
         assert_pair("Wasapi", "wasapi", AudioDeviceKind::Wasapi);
         assert_pair("CoreAudio", "coreAudio", AudioDeviceKind::CoreAudio);
         assert_pair("Auto", "auto", Renderer::Auto);

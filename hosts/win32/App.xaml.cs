@@ -31,6 +31,7 @@ public partial class App : Application
         {
             if (MixerNative.Ping() != 0x4549_5649)
                 throw new InvalidOperationException("The Rust mixer ABI does not match this host.");
+            LoadRequiredProModule(e.Args);
             Session = Session.Default();
             if (HostRole.IsRemote)
                 BootRemoteMixer();
@@ -138,6 +139,18 @@ public partial class App : Application
         MainWindow = next;
         next.Show();
         previous?.Close();
+    }
+
+    private static void LoadRequiredProModule(string[] args)
+    {
+        string? path = null;
+        for (var i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] == "--pro-module")
+                path = args[i + 1];
+        }
+        if (MixerNative.ProPrepare(path) != 0)
+            throw new InvalidOperationException(MixerNative.QueryProError());
     }
 
     private void BootMixer()
@@ -395,6 +408,15 @@ public partial class App : Application
                         input.BandwidthSave,
                         input.KeepFullOnMultiview,
                         input.OmtQuality);
+                    break;
+                case InputKind.DeckLink when network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
+                    MixerNative.ThrowIfFailed(
+                        MixerNative.ConnectDeckLink(
+                            input.Id,
+                            input.PathOrAddress,
+                            input.DecklinkMode,
+                            input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u)),
+                        "DeckLink connect");
                     break;
                 case InputKind.NDI when network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
                     MixerApply.ConnectNdi(

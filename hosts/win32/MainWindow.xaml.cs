@@ -35,6 +35,9 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _meterTimer = new() { Interval = TimeSpan.FromMilliseconds(50) };
     private readonly DispatcherTimer _tbarTimer = new() { Interval = TimeSpan.FromMilliseconds(16) };
     private readonly Dictionary<ulong, MeterStrip> _meters = [];
+    private readonly Dictionary<ulong, OverlayStrip> _streamStrips = [];
+    private readonly Dictionary<ulong, DateTime> _streamDownSince = [];
+    private int _streamLampTick;
     private readonly ResourceMonitor _resources = new();
     private bool _sceneEditorOpen;
     private long _sceneEditorGuard;
@@ -50,10 +53,36 @@ public partial class MainWindow : Window
     private ICollectionView? _inputView;
     private Session _session => ((App)Application.Current).Session;
 
+    internal void ApplyEditionTitle()
+    {
+        Title = EditionTitle();
+    }
+
+    internal static string? CurrentEdition()
+    {
+        if (!MixerNative.TryQueryCapabilities(out var caps))
+            return null;
+        return caps.Plan switch
+        {
+            0 => "Community",
+            1 => "Professional",
+            2 => "Enterprise",
+            _ => null,
+        };
+    }
+
+    private static string EditionTitle()
+    {
+        var edition = CurrentEdition();
+        if (edition is null)
+            return Loc.T(HostRole.IsRemote ? "app.titleRemote" : "app.title");
+        return Loc.Format(HostRole.IsRemote ? "app.titleRemoteEdition" : "app.titleEdition", edition);
+    }
+
     public MainWindow()
     {
         InitializeComponent();
-        Title = Loc.T(HostRole.IsRemote ? "app.titleRemote" : "app.title");
+        ApplyEditionTitle();
         ApplyRemoteChrome();
         BindInputList();
         RebuildInputTabs();
@@ -69,6 +98,7 @@ public partial class MainWindow : Window
         RebuildScenes();
         RebuildTransitions();
         RebuildOverlayToggles();
+        RebuildStreamToggles();
         RebuildMeters();
         _meterTimer.Tick += (_, _) => TickMeters();
         _meterTimer.Start();
@@ -130,6 +160,7 @@ public partial class MainWindow : Window
         RemoveSceneButton.IsEnabled = !locked;
         foreach (var tile in ScenePanel.Children.OfType<SceneTile>())
             tile.SetCloseEnabled(!locked);
+        RebuildStreamToggles();
     }
 
     private bool RejectIfOnAirLock()
@@ -164,6 +195,7 @@ public partial class MainWindow : Window
         }
         RebuildTransitions();
         RebuildOverlayToggles();
+        RebuildStreamToggles();
         RebuildMeters();
         ApplyAspect();
         FillVideoSources();

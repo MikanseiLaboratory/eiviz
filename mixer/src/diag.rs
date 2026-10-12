@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
@@ -72,6 +73,38 @@ pub fn warn(message: &str) {
 pub fn error(message: &str) {
     init();
     write("ERROR", message);
+}
+
+/// Live send failures can repeat every audio packet. Keep the first line
+/// and a heartbeat so the log stays readable.
+pub fn warn_throttled(key: &str, message: &str) {
+    const WINDOW: Duration = Duration::from_secs(5);
+    static LAST: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    let map = LAST.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut last) = map.lock() {
+        if let Some(prev) = last.get(key)
+            && prev.elapsed() < WINDOW
+        {
+            return;
+        }
+        last.insert(key.to_string(), Instant::now());
+    }
+    warn(message);
+}
+
+pub fn error_throttled(message: &str) {
+    const WINDOW: Duration = Duration::from_secs(2);
+    static LAST: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    let map = LAST.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut last) = map.lock() {
+        if let Some(prev) = last.get(message)
+            && prev.elapsed() < WINDOW
+        {
+            return;
+        }
+        last.insert(message.to_string(), Instant::now());
+    }
+    error(message);
 }
 
 pub fn http_info(message: &str) {

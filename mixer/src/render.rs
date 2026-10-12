@@ -279,6 +279,7 @@ pub(crate) fn render_loop(
                     video_sub: Arc::clone(&output.video_sub),
                     use_gpu: output.use_gpu,
                     skip_idle_encode: output.skip_idle_encode,
+                    bytes_per_pixel: output.bytes_per_pixel,
                     tx: output.tx.clone(),
                     pace: Arc::clone(&output.pace),
                     audio_send: output.audio_send.clone(),
@@ -474,23 +475,47 @@ pub(crate) fn render_loop(
                     };
                     // Mix/T-bar ticks discard the delay ring so present can
                     // show the live compose. Program send must do the same
-                    // or NDI/OMT freeze until mix is stable again.
-                    if output.cpu_video() && !output.has_custom_size() {
-                        // Native size: send the delay/live packed bus so Auto/T-bar
-                        // keeps moving. Re-packing a cached RGBA view freezes on the
-                        // last bind-group source while mix is in flight.
+                    // or the output freezes until mix is stable again.
+                    // An explicit size that matches the bus (the Stream page
+                    // stores 1920x1080) is still the live packed bus. Scaling
+                    // also starts from that bus, not the cached RGBA view.
+                    if output.cpu_video() && output.bytes_per_pixel < 4 {
                         if let Some(packed) = frame_delay
                             .packed(output.unit_id, kind)
                             .or_else(|| composer.packed_texture(output.unit_id, kind))
                             .cloned()
                         {
-                            let width = packed.size().width.saturating_mul(2).max(2);
-                            let height = packed.size().height.max(1);
-                            let rb = readbacks.ensure(&device, output.output_id, width, height);
-                            rb.copy_from(&mut encoder, &packed, pts);
-                            packed_copies.push((output.output_id, width, height));
+                            let native_w = packed.size().width.saturating_mul(2).max(2);
+                            let native_h = packed.size().height.max(1);
+                            let (want_w, want_h) = output.video_size(native_w, native_h);
+                            if (want_w, want_h) == (native_w, native_h) {
+                                let rb = readbacks.ensure(
+                                    &device,
+                                    output.output_id,
+                                    native_w,
+                                    native_h,
+                                    2,
+                                );
+                                rb.copy_from(&mut encoder, &packed, pts);
+                                packed_copies.push((output.output_id, native_w, native_h));
+                            } else {
+                                push_cpu_packed(
+                                    &mut composer,
+                                    &device,
+                                    &mut encoder,
+                                    &mut readbacks,
+                                    &mut packed_copies,
+                                    output,
+                                    &packed,
+                                    true,
+                                    pts,
+                                );
+                            }
+                            continue;
                         }
-                        continue;
+                        if !output.has_custom_size() {
+                            continue;
+                        }
                     }
                     let src = frame_delay
                         .rgba(output.unit_id, kind)
@@ -787,12 +812,17 @@ pub(crate) fn emit_packed(
                 rb.advance(device);
             }
             if let Some((packed, content_pts)) = rb.latest() {
+                let bpp = outputs_snap
+                    .iter()
+                    .find(|output| output.output_id == *key)
+                    .map(|output| output.bytes_per_pixel.max(2))
+                    .unwrap_or(2);
                 let data: Arc<[u8]> = packed.to_vec().into();
                 last_frames().lock_or_recover().insert(
                     *key,
                     Acquired {
                         data: Arc::clone(&data),
-                        stride: width * 2,
+                        stride: width * bpp,
                         pts: content_pts,
                     },
                 );
@@ -803,7 +833,7 @@ pub(crate) fn emit_packed(
                     let _ = output.tx.send(SendCmd::Video {
                         width: *width,
                         height: *height,
-                        stride: width * 2,
+                        stride: width * output.bytes_per_pixel.max(2),
                         pts: content_pts,
                         data: Arc::clone(&data),
                         fps_n: output.fps_n,
@@ -863,9 +893,21 @@ fn push_cpu_packed(
 ) {
     let (src_w, src_h) = logical_size(src, packed_src);
     let (width, height) = output.video_size(src_w, src_h);
+    if output.bytes_per_pixel >= 4 {
+        let Some(rgba) =
+            composer.rgba_readback(device, encoder, output.output_id, src, width, height)
+        else {
+            return;
+        };
+        let rgba = rgba.clone();
+        let rb = readbacks.ensure(device, output.output_id, width, height, 4);
+        rb.copy_from(encoder, &rgba, pts);
+        packed_copies.push((output.output_id, width, height));
+        return;
+    }
     if packed_src && (width, height) == (src_w, src_h) {
         // Already UYVY at the requested size: read it back untouched.
-        let rb = readbacks.ensure(device, output.output_id, src_w, src_h);
+        let rb = readbacks.ensure(device, output.output_id, src_w, src_h, 2);
         rb.copy_from(encoder, src, pts);
         packed_copies.push((output.output_id, src_w, src_h));
         return;
@@ -890,7 +932,7 @@ fn push_cpu_packed(
     };
     let packed_w = packed.size().width.saturating_mul(2).max(2);
     let packed_h = packed.size().height.max(1);
-    let rb = readbacks.ensure(device, output.output_id, packed_w, packed_h);
+    let rb = readbacks.ensure(device, output.output_id, packed_w, packed_h, 2);
     rb.copy_from(encoder, packed, pts);
     packed_copies.push((output.output_id, packed_w, packed_h));
 }

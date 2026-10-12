@@ -405,6 +405,7 @@ fn input_type(kind: InputKind) -> String {
         InputKind::UVC => "Capture",
         InputKind::Mix => "Mix",
         InputKind::Audio => "Audio",
+        InputKind::DeckLink => "DeckLink",
     }
     .into()
 }

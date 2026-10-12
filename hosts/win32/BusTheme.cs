@@ -19,7 +19,7 @@ internal static class BusTheme
     public static SolidColorBrush InactiveBrush(SessionSettings settings) => new(Inactive(settings));
 
     public static SolidColorBrush ContrastText(Color background) =>
-        0.299 * background.R + 0.587 * background.G + 0.114 * background.B >= 140
+        0.2126 * background.R + 0.7152 * background.G + 0.0722 * background.B >= 140
             ? new SolidColorBrush(Color.FromRgb(0x11, 0x11, 0x11))
             : Brushes.White;
 

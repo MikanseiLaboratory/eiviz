@@ -218,6 +218,19 @@ message Capabilities {
   bool presentation_abi = 5;
   bool native_api = 6;
   bool vmix_http = 7;
+  uint32 plan = 8;
+  uint32 mixing_unit_limit = 9;
+  uint32 decklink_input_limit = 10;
+  uint32 decklink_output_limit = 11;
+  uint32 rtmp_max_width = 12;
+  uint32 rtmp_max_height = 13;
+  uint32 rtmp_max_fps_num = 14;
+  uint32 rtmp_max_fps_den = 15;
+  bool recording = 16;
+  bool srt = 17;
+  bool hardware_encode = 18;
+  bool decklink_linked = 19;
+  bool rtmp_linked = 20;
 }
 
 message Snapshot {

@@ -679,6 +679,22 @@ extension MixerController {
                     input.keepFullOnMultiview ? EIVIZ_SAVE_FLAG_MULTIVIEW : 0
                 )
             }
+        case .deckLink:
+            if let device = input.pathOrAddress {
+                MixerFFI.withCString(device) { devicePtr in
+                    MixerFFI.withCString(input.decklinkMode) { mode in
+                        fail(
+                            mixer_decklink_connect(
+                                input.id,
+                                devicePtr,
+                                mode,
+                                max(1, min(8, input.frameBufferFrames))
+                            ),
+                            "DeckLink connect"
+                        )
+                    }
+                }
+            }
         case .ndi:
             if let address = input.pathOrAddress {
                 MixerFFI.withCString(address) { cstr in

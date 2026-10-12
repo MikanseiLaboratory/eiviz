@@ -52,9 +52,9 @@ pub(crate) fn spawn_output_worker(
     Ok(OutputWorker { tx, join })
 }
 
-pub(crate) fn shutdown_output_worker(worker: OutputWorker) {
+pub(crate) fn shutdown_output_worker(worker: OutputWorker) -> bool {
     let _ = worker.tx.send(SendCmd::Shutdown);
-    crate::diag::join_timeout(worker.join, Duration::from_secs(2), "send");
+    crate::diag::join_timeout(worker.join, Duration::from_secs(2), "send")
 }
 
 fn send_worker(
@@ -323,7 +323,7 @@ pub(crate) fn apply_send_cmd(sender: &mut OutputHandle, cmd: SendCmd, omt_gpu: &
                 sender.send_video_uyvy(width, height, stride, pts, data, fps_n, fps_d)
             })) {
                 Ok(Ok(())) => {}
-                Ok(Err(error)) => crate::diag::error(&format!("omt send video: {error}")),
+                Ok(Err(error)) => crate::diag::error_throttled(&format!("omt send video: {error}")),
                 Err(_) => crate::diag::mark_fatal("omt send video panicked"),
             }
         }
@@ -364,7 +364,7 @@ pub(crate) fn apply_send_cmd(sender: &mut OutputHandle, cmd: SendCmd, omt_gpu: &
                 sender.send_audio(&packet)
             })) {
                 Ok(Ok(())) => {}
-                Ok(Err(error)) => crate::diag::error(&format!("send audio: {error}")),
+                Ok(Err(error)) => crate::diag::error_throttled(&format!("send audio: {error}")),
                 Err(_) => crate::diag::mark_fatal("send audio panicked"),
             }
         }

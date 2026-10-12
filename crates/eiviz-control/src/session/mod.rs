@@ -52,6 +52,8 @@ pub struct Document {
     #[serde(default)]
     pub next_overlay_id: u64,
     #[serde(default)]
+    pub stream_encoders: Vec<StreamEncoderDto>,
+    #[serde(default)]
     pub outputs: Vec<OutputDto>,
     #[serde(default)]
     pub multiviews: Vec<MultiviewDto>,
@@ -63,6 +65,8 @@ pub struct Document {
     pub next_unit_id: u64,
     #[serde(default)]
     pub next_output_id: u64,
+    #[serde(default)]
+    pub next_stream_encoder_id: u64,
     #[serde(default)]
     pub next_multiview_id: u64,
     #[serde(default)]
@@ -262,6 +266,9 @@ fn theme_charcoal() -> String {
 fn one() -> u64 {
     1
 }
+fn default_openh264() -> String {
+    "OpenH264".into()
+}
 fn default_true() -> bool {
     true
 }
@@ -417,6 +424,7 @@ session_string_enum! {
         UVC,
         Mix,
         Audio,
+        DeckLink,
     }
 }
 
@@ -474,6 +482,7 @@ session_string_enum! {
         Omt,
         Ndi,
         DeckLink,
+        Rtmp,
     }
 }
 
@@ -649,6 +658,9 @@ pub struct InputDto {
     pub audio_process_exe: String,
     #[serde(default)]
     pub audio_process_aumid: String,
+    /// DeckLink display mode id. The device id is `path_or_address`.
+    #[serde(default)]
+    pub decklink_mode: String,
 }
 
 session_string_enum! {
@@ -1221,6 +1233,81 @@ pub struct OutputDto {
     pub fps_num: u32,
     #[serde(default)]
     pub fps_den: u32,
+    #[serde(default)]
+    pub decklink_device: String,
+    #[serde(default)]
+    pub decklink_mode: String,
+    #[serde(default)]
+    pub decklink_external_key: bool,
+    #[serde(default)]
+    pub rtmp_url: String,
+    /// Name in the process secret table. The stream key itself is not stored.
+    #[serde(default)]
+    pub rtmp_secret_ref: String,
+    /// Encode profile shared by this destination. `0` when the row is not RTMP.
+    #[serde(default)]
+    pub stream_encoder_id: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamEncoderDto {
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub source_kind: OutputSourceKind,
+    #[serde(default)]
+    pub source_id: u64,
+    #[serde(default = "one")]
+    pub unit_id: u64,
+    #[serde(default)]
+    pub audio_unit_id: u64,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+    #[serde(default)]
+    pub fps_num: u32,
+    #[serde(default)]
+    pub fps_den: u32,
+    #[serde(default)]
+    pub video_bitrate: u32,
+    #[serde(default)]
+    pub audio_bitrate: u32,
+    #[serde(default)]
+    pub keyint: u32,
+    #[serde(default)]
+    pub video_only: bool,
+    /// `0` asks the encoder to pick a thread count from the CPU.
+    #[serde(default)]
+    pub encoder_threads: u32,
+    /// `0` sends each packet immediately. Otherwise the sender holds this many
+    /// milliseconds of encoded media, then releases it at 1x.
+    #[serde(default)]
+    pub buffer_ms: u32,
+    /// Only `OpenH264` is linked. Empty is the same encoder.
+    #[serde(default = "default_openh264")]
+    pub encoder: String,
+    /// `0` low, `1` medium, `2` high.
+    #[serde(default)]
+    pub complexity: u32,
+    #[serde(default = "one_u32")]
+    pub ref_frames: u32,
+    #[serde(default)]
+    pub cabac: bool,
+    #[serde(default = "default_true")]
+    pub deblock: bool,
+    /// Still regions are skipped. On is usually cheaper than encoding them.
+    #[serde(default = "default_true")]
+    pub background_detection: bool,
+    #[serde(default)]
+    pub adaptive_quant: bool,
+    #[serde(default)]
+    pub scene_change: bool,
+    /// Added on top of the measured video encode time.
+    #[serde(default)]
+    pub audio_delay_ms: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

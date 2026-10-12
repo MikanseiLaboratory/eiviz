@@ -30,8 +30,8 @@ use crate::upload::{AUDIO_RATE, AudioInputStore};
 pub use capture::{AudioCaptureSpec, AudioCaptureStore};
 #[cfg_attr(not(windows), allow(unused_imports))]
 pub use graph::{
-    AudioGraph, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI, HEADPHONE_BUS, LINK_FOLLOW,
-    MixedAudio,
+    AudioGraph, DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_NONE, DEVICE_WASAPI, HEADPHONE_BUS,
+    LINK_FOLLOW, MixedAudio,
 };
 pub use info::{AudioBusInfo, AudioDeviceInfo};
 pub use process::processes_json;

@@ -98,7 +98,7 @@ fn soft() -> f32 {
 }
 
 fn luma(c: vec4<f32>) -> f32 {
-    return dot(c.rgb, vec3<f32>(0.299, 0.587, 0.114));
+    return dot(c.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
 fn hash21(p: vec2<f32>) -> f32 {

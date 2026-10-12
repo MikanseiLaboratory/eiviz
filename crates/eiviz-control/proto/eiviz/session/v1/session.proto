@@ -51,6 +51,8 @@ message Document {
   Headphone headphone = 23;
   uint32 headphone_listen_kind = 24;
   uint64 headphone_listen_id = 25;
+  repeated StreamEncoder stream_encoders = 26;
+  uint64 next_stream_encoder_id = 27;
 }
 
 message SessionSettings {
@@ -129,6 +131,7 @@ message Input {
   string audio_process_exe = 38;
   string audio_process_aumid = 39;
   repeated uint64 audio_units = 40;
+  string decklink_mode = 41;
 }
 
 message SceneLayer {
@@ -289,6 +292,39 @@ message MixingUnit {
   MuBus audio = 17;
 }
 
+message StreamEncoder {
+  uint64 id = 1;
+  string name = 2;
+  OutputSourceKind source_kind = 3;
+  uint64 source_id = 4;
+  uint64 unit_id = 5;
+  uint64 audio_unit_id = 6;
+  uint32 width = 7;
+  uint32 height = 8;
+  uint32 fps_num = 9;
+  uint32 fps_den = 10;
+  uint32 video_bitrate = 11;
+  uint32 audio_bitrate = 12;
+  uint32 keyint = 13;
+  bool video_only = 14;
+  // 0 means automatic.
+  uint32 encoder_threads = 15;
+  // 0 sends immediately. Otherwise hold this many milliseconds, then release at 1x.
+  uint32 buffer_ms = 16;
+  // Empty and "OpenH264" are the only accepted encoder.
+  string encoder = 17;
+  // 0 low, 1 medium, 2 high.
+  uint32 complexity = 18;
+  uint32 ref_frames = 19;
+  bool cabac = 20;
+  optional bool deblock = 21;
+  // Unset means on. Detection skips work on still regions, so it is the faster default.
+  optional bool background_detection = 22;
+  bool adaptive_quant = 23;
+  bool scene_change = 24;
+  uint32 audio_delay_ms = 25;
+}
+
 message Output {
   uint64 id = 1;
   string name = 2;
@@ -307,6 +343,14 @@ message Output {
   uint32 fps_num = 13;
   uint32 fps_den = 14;
   uint64 audio_unit_id = 15;
+  string decklink_device = 16;
+  string decklink_mode = 17;
+  bool decklink_external_key = 18;
+  string rtmp_url = 19;
+  string rtmp_secret_ref = 20;
+  reserved 21, 22, 23, 24;
+  reserved "rtmp_video_bitrate", "rtmp_audio_bitrate", "rtmp_keyint", "rtmp_video_only";
+  uint64 stream_encoder_id = 25;
 }
 
 message MvSlot {
@@ -380,6 +424,7 @@ enum InputKind {
   INPUT_KIND_UVC = 8;
   INPUT_KIND_MIX = 9;
   INPUT_KIND_AUDIO = 10;
+  INPUT_KIND_DECK_LINK = 11;
 }
 
 enum MixSource {
@@ -432,6 +477,7 @@ enum OutputTransport {
   OUTPUT_TRANSPORT_OMT = 1;
   OUTPUT_TRANSPORT_NDI = 2;
   OUTPUT_TRANSPORT_DECK_LINK = 3;
+  OUTPUT_TRANSPORT_RTMP = 4;
 }
 
 enum OutputSourceKind {

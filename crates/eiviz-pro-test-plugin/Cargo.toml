@@ -1,0 +1,15 @@
+[package]
+name = "eiviz_pro_test_plugin"
+version = "0.3.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Signed stand-in used to test the Pro module loader"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+eiviz-pro-api.workspace = true

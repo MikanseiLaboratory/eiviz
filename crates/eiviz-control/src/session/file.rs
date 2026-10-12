@@ -11,8 +11,8 @@ use super::{
     HeadphoneDto, InputDto, InputKind, InternalColorFormat, MixSource, MuBusDto, MultiviewDto,
     MultiviewTemplate, MvLabelAnchor, MvLabelUnit, MvSlot, MvSlotKind, NdiBandwidth, OmtQuality,
     OutputDto, OutputSourceKind, OutputTransport, OverlaySlot, RgbColor, SceneDto, SceneLayer,
-    SceneLayerGeom, SceneLayoutPreset, SessionSettings, SwitcherSceneFilter, TransitionPreset,
-    UnitDto, VideoPlayWhen, VideoTriggerWhen,
+    SceneLayerGeom, SceneLayoutPreset, SessionSettings, StreamEncoderDto, SwitcherSceneFilter,
+    TransitionPreset, UnitDto, VideoPlayWhen, VideoTriggerWhen,
 };
 
 mod pb {
@@ -347,6 +347,12 @@ fn document_to_pb(doc: &Document) -> pb::Document {
         transitions: doc.transitions.iter().map(transition_to_pb).collect(),
         overlays: doc.overlays.iter().map(overlay_to_pb).collect(),
         next_overlay_id: doc.next_overlay_id,
+        stream_encoders: doc
+            .stream_encoders
+            .iter()
+            .map(stream_encoder_to_pb)
+            .collect(),
+        next_stream_encoder_id: doc.next_stream_encoder_id,
         outputs: doc.outputs.iter().map(output_to_pb).collect(),
         multiviews: doc.multiviews.iter().map(multiview_to_pb).collect(),
         next_input_id: doc.next_input_id,
@@ -387,6 +393,12 @@ fn document_from_pb(doc: pb::Document) -> Result<Document, String> {
             .collect(),
         overlays: doc.overlays.into_iter().map(overlay_from_pb).collect(),
         next_overlay_id: doc.next_overlay_id,
+        stream_encoders: doc
+            .stream_encoders
+            .into_iter()
+            .map(stream_encoder_from_pb)
+            .collect::<Result<_, _>>()?,
+        next_stream_encoder_id: doc.next_stream_encoder_id,
         outputs: doc
             .outputs
             .into_iter()
@@ -565,6 +577,7 @@ fn input_to_pb(input: &InputDto) -> pb::Input {
         audio_map_right: input.audio_map_right,
         audio_process_exe: input.audio_process_exe.clone(),
         audio_process_aumid: input.audio_process_aumid.clone(),
+        decklink_mode: input.decklink_mode.clone(),
     }
 }
 
@@ -612,6 +625,7 @@ fn input_from_pb(input: pb::Input) -> Result<InputDto, String> {
         audio_map_right: input.audio_map_right,
         audio_process_exe: input.audio_process_exe,
         audio_process_aumid: input.audio_process_aumid,
+        decklink_mode: input.decklink_mode,
     })
 }
 
@@ -1030,7 +1044,81 @@ fn output_to_pb(output: &OutputDto) -> pb::Output {
         height: output.height,
         fps_num: output.fps_num,
         fps_den: output.fps_den,
+        decklink_device: output.decklink_device.clone(),
+        decklink_mode: output.decklink_mode.clone(),
+        decklink_external_key: output.decklink_external_key,
+        rtmp_url: output.rtmp_url.clone(),
+        rtmp_secret_ref: output.rtmp_secret_ref.clone(),
+        stream_encoder_id: output.stream_encoder_id,
     }
+}
+
+fn stream_encoder_to_pb(encoder: &StreamEncoderDto) -> pb::StreamEncoder {
+    pb::StreamEncoder {
+        id: encoder.id,
+        name: encoder.name.clone(),
+        source_kind: source_kind_to_pb(encoder.source_kind).into(),
+        source_id: encoder.source_id,
+        unit_id: encoder.unit_id,
+        audio_unit_id: encoder.audio_unit_id,
+        width: encoder.width,
+        height: encoder.height,
+        fps_num: encoder.fps_num,
+        fps_den: encoder.fps_den,
+        video_bitrate: encoder.video_bitrate,
+        audio_bitrate: encoder.audio_bitrate,
+        keyint: encoder.keyint,
+        video_only: encoder.video_only,
+        encoder_threads: encoder.encoder_threads,
+        buffer_ms: encoder.buffer_ms,
+        encoder: encoder.encoder.clone(),
+        complexity: encoder.complexity,
+        ref_frames: encoder.ref_frames,
+        cabac: encoder.cabac,
+        deblock: Some(encoder.deblock),
+        background_detection: Some(encoder.background_detection),
+        adaptive_quant: encoder.adaptive_quant,
+        scene_change: encoder.scene_change,
+        audio_delay_ms: encoder.audio_delay_ms,
+    }
+}
+
+fn stream_encoder_from_pb(encoder: pb::StreamEncoder) -> Result<StreamEncoderDto, String> {
+    Ok(StreamEncoderDto {
+        id: encoder.id,
+        name: encoder.name,
+        source_kind: source_kind_from_pb(encoder.source_kind)?,
+        source_id: encoder.source_id,
+        unit_id: encoder.unit_id,
+        audio_unit_id: encoder.audio_unit_id,
+        width: encoder.width,
+        height: encoder.height,
+        fps_num: encoder.fps_num,
+        fps_den: encoder.fps_den,
+        video_bitrate: encoder.video_bitrate,
+        audio_bitrate: encoder.audio_bitrate,
+        keyint: encoder.keyint,
+        video_only: encoder.video_only,
+        encoder_threads: encoder.encoder_threads,
+        buffer_ms: encoder.buffer_ms,
+        encoder: if encoder.encoder.is_empty() {
+            super::default_openh264()
+        } else {
+            encoder.encoder
+        },
+        complexity: encoder.complexity,
+        ref_frames: if encoder.ref_frames == 0 {
+            1
+        } else {
+            encoder.ref_frames
+        },
+        cabac: encoder.cabac,
+        deblock: encoder.deblock.unwrap_or(true),
+        background_detection: encoder.background_detection.unwrap_or(true),
+        adaptive_quant: encoder.adaptive_quant,
+        scene_change: encoder.scene_change,
+        audio_delay_ms: encoder.audio_delay_ms,
+    })
 }
 
 fn output_from_pb(output: pb::Output) -> Result<OutputDto, String> {
@@ -1049,6 +1137,12 @@ fn output_from_pb(output: pb::Output) -> Result<OutputDto, String> {
         height: output.height,
         fps_num: output.fps_num,
         fps_den: output.fps_den,
+        decklink_device: output.decklink_device,
+        decklink_mode: output.decklink_mode,
+        decklink_external_key: output.decklink_external_key,
+        rtmp_url: output.rtmp_url,
+        rtmp_secret_ref: output.rtmp_secret_ref,
+        stream_encoder_id: output.stream_encoder_id,
     })
 }
 
@@ -1268,7 +1362,7 @@ proto_enum!(
     OutputTransport,
     pb::OutputTransport,
     "output transport",
-    { Omt => Omt, Ndi => Ndi, DeckLink => DeckLink }
+    { Omt => Omt, Ndi => Ndi, DeckLink => DeckLink, Rtmp => Rtmp }
 );
 proto_enum!(
     source_kind_to_pb,
@@ -1362,6 +1456,7 @@ fn input_kind_to_pb(kind: InputKind) -> pb::InputKind {
         InputKind::UVC => pb::InputKind::Uvc,
         InputKind::Mix => pb::InputKind::Mix,
         InputKind::Audio => pb::InputKind::Audio,
+        InputKind::DeckLink => pb::InputKind::DeckLink,
     }
 }
 
@@ -1378,6 +1473,7 @@ fn input_kind_from_pb(value: i32) -> Result<InputKind, String> {
         Ok(pb::InputKind::Uvc) => Ok(InputKind::UVC),
         Ok(pb::InputKind::Mix) => Ok(InputKind::Mix),
         Ok(pb::InputKind::Audio) => Ok(InputKind::Audio),
+        Ok(pb::InputKind::DeckLink) => Ok(InputKind::DeckLink),
         Err(_) => Err(unknown("input kind", value)),
     }
 }

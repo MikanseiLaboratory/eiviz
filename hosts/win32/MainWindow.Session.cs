@@ -208,6 +208,10 @@ public partial class MainWindow
                 || (dialog.Kind == InputKind.Mix
                     && input.MixSource == dialog.ResultMixSource
                     && input.MixTargetId == dialog.ResultMixTargetId
+                    && input.FrameBufferFrames == dialog.ResultFrameBufferFrames)
+                || (dialog.Kind == InputKind.DeckLink
+                    && input.PathOrAddress == dialog.ResultPath
+                    && input.DecklinkMode == dialog.ResultDecklinkMode
                     && input.FrameBufferFrames == dialog.ResultFrameBufferFrames));
         if (!App.IsRemote && replacing && !keepLive && !input.IsBuiltin && (!wasGenerator || !nowGenerator))
         {
@@ -226,9 +230,10 @@ public partial class MainWindow
         input.ToneHz = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneHz : 0;
         input.ToneLevelDbfs = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneLevelDbfs : -20;
         input.UseGpu = dialog.Kind == InputKind.OMT && dialog.ResultUseGpu;
-        input.FrameBufferFrames = dialog.Kind is InputKind.OMT or InputKind.NDI or InputKind.Video or InputKind.UVC or InputKind.Mix
+        input.FrameBufferFrames = dialog.Kind is InputKind.OMT or InputKind.NDI or InputKind.Video or InputKind.UVC or InputKind.Mix or InputKind.DeckLink
             ? dialog.ResultFrameBufferFrames
             : 1;
+        input.DecklinkMode = dialog.Kind == InputKind.DeckLink ? dialog.ResultDecklinkMode : "";
         input.MixSource = dialog.Kind == InputKind.Mix ? dialog.ResultMixSource : MixSource.MuProgram;
         input.MixTargetId = dialog.Kind == InputKind.Mix ? dialog.ResultMixTargetId : 0;
         if (dialog.Kind == InputKind.Mix)
@@ -319,6 +324,17 @@ public partial class MainWindow
                     dialog.ResultFrameBufferFrames,
                     input.NdiBandwidth);
                 break;
+            case InputKind.DeckLink:
+                if (string.IsNullOrWhiteSpace(dialog.ResultPath))
+                    throw new InvalidOperationException(Loc.T("settings.decklinkNone"));
+                MixerNative.ThrowIfFailed(
+                    MixerNative.ConnectDeckLink(
+                        input.Id,
+                        dialog.ResultPath,
+                        input.DecklinkMode,
+                        input.FrameBufferFrames),
+                    "DeckLink connect");
+                break;
             case InputKind.UVC:
                 input.CaptureWidth = dialog.ResultCaptureWidth;
                 input.CaptureHeight = dialog.ResultCaptureHeight;
@@ -403,6 +419,7 @@ public partial class MainWindow
         RebuildScenes();
         _overlay?.Reload(SelectedUnit);
         RebuildOverlayToggles();
+        RebuildStreamToggles();
         TickVideo();
         SessionStore.Publish(_session);
     }
@@ -486,6 +503,7 @@ public partial class MainWindow
         SelectScene(fallback);
         _overlay?.Reload(SelectedUnit);
         RebuildOverlayToggles();
+        RebuildStreamToggles();
         SessionStore.Publish(_session);
     }
 
@@ -532,6 +550,7 @@ public partial class MainWindow
         _tbarPresetIndex = 0;
         RebuildTransitions();
         RebuildOverlayToggles();
+        RebuildStreamToggles();
         if (!HostRole.IsRemote)
             MixerNative.AudioSetHeadphoneCue(unit.Id);
         SyncSelectedSceneFromMixer();
@@ -1029,7 +1048,9 @@ public partial class MainWindow
                     dialog.Outputs,
                     dialog.Headphone,
                     dialog.HeadphoneCopyMonitor,
-                    dialog.NextOutputId),
+                    dialog.NextOutputId,
+                    dialog.StreamEncoders,
+                    dialog.NextStreamEncoderId),
                 Loc.T("chrome.settings"));
             return;
         }
@@ -1094,6 +1115,10 @@ public partial class MainWindow
             : MixerNative.FormatUyvy;
         if (restartMedia)
             RestartMediaPumps();
+        _session.StreamEncoders.Clear();
+        foreach (var encoder in dialog.StreamEncoders)
+            _session.StreamEncoders.Add(encoder.Clone());
+        _session.NextStreamEncoderId = dialog.NextStreamEncoderId;
         ApplyOutputs(dialog.Outputs);
         RebuildMeters();
         App.ApplyVmixApi();
@@ -1164,9 +1189,15 @@ public partial class MainWindow
         var previous = _session.Outputs.ToList();
         var nextIds = next.Select(item => item.Id).ToHashSet();
         foreach (var existing in previous.Where(item => !nextIds.Contains(item.Id)))
+        {
+            if (existing.Transport == OutputTransport.Rtmp)
+                continue;
             MixerApply.RemoveOutput(existing.Id);
+        }
         foreach (var output in next)
         {
+            if (output.Transport == OutputTransport.Rtmp)
+                continue;
             var prior = previous.FirstOrDefault(item => item.Id == output.Id);
             if (prior is not null && SameOutput(prior, output))
                 continue;
@@ -1207,5 +1238,11 @@ public partial class MainWindow
         && left.Width == right.Width
         && left.Height == right.Height
         && left.FpsNum == right.FpsNum
-        && left.FpsDen == right.FpsDen;
+        && left.FpsDen == right.FpsDen
+        && left.DecklinkDevice == right.DecklinkDevice
+        && left.DecklinkMode == right.DecklinkMode
+        && left.DecklinkExternalKey == right.DecklinkExternalKey
+        && left.RtmpUrl == right.RtmpUrl
+        && left.RtmpSecretRef == right.RtmpSecretRef
+        && left.StreamEncoderId == right.StreamEncoderId;
 }

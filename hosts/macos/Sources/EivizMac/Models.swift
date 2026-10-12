@@ -12,6 +12,7 @@ enum InputKind: String, Codable, CaseIterable {
     case uvc = "UVC"
     case mix = "Mix"
     case audio = "Audio"
+    case deckLink = "DeckLink"
 
     var category: String {
         switch self {
@@ -23,6 +24,7 @@ enum InputKind: String, Codable, CaseIterable {
         case .uvc: return "UVC"
         case .mix: return "Mix"
         case .audio: return "Audio"
+        case .deckLink: return "DeckLink"
         }
     }
 
@@ -32,6 +34,7 @@ enum InputKind: String, Codable, CaseIterable {
         case "OMT", "Omt": self = .omt
         case "NDI", "Ndi": self = .ndi
         case "UVC", "Uvc": self = .uvc
+        case "DeckLink", "deckLink", "decklink": self = .deckLink
         default:
             guard let value = InputKind(rawValue: raw) else {
                 throw DecodingError.dataCorrupted(
@@ -47,7 +50,13 @@ enum InputKind: String, Codable, CaseIterable {
         try container.encode(rawValue)
     }
 
-    static let tabKinds: [InputKind] = [.color, .still, .video, .omt, .ndi, .uvc, .mix, .audio]
+    static let tabKinds: [InputKind] = [.color, .still, .video, .omt, .ndi, .uvc, .deckLink, .mix, .audio]
+
+    static func deckLinkInputAllowed() -> Bool {
+        var caps = EivizCapabilities()
+        guard mixer_capabilities(&caps) == 0 else { return false }
+        return caps.decklink_linked != 0 && caps.decklink_input_limit != 0
+    }
 
     var hasVideo: Bool { self != .audio }
 
@@ -119,11 +128,13 @@ enum OutputTransport: String, Codable, Hashable {
     case omt = "Omt"
     case ndi = "Ndi"
     case deckLink = "DeckLink"
+    case rtmp = "Rtmp"
     var rawValueU32: UInt32 {
         switch self {
         case .omt: return 0
         case .ndi: return 1
         case .deckLink: return 2
+        case .rtmp: return 3
         }
     }
 }
@@ -280,6 +291,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var audioMapRight: Int32 = 1
     var audioProcessExe: String = ""
     var audioProcessAumid: String = ""
+    var decklinkMode: String = ""
     var isBuiltin: Bool { id <= EIVIZ_SRC_BLUE }
     var videoStartsPlaying: Bool { videoPlayWhen == .never || videoPlayWhen == .always }
 
@@ -305,7 +317,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         case guid, captureWidth, captureHeight, captureFpsNum, captureFpsDen, tags
         case mixSource, mixTargetId
         case audioCaptureMode, audioDeviceKind, audioDeviceId, audioMapLeft, audioMapRight
-        case audioProcessExe, audioProcessAumid
+        case audioProcessExe, audioProcessAumid, decklinkMode
     }
 
     init(
@@ -398,6 +410,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         audioMapRight = try container.decodeIfPresent(Int32.self, forKey: .audioMapRight) ?? 1
         audioProcessExe = try container.decodeIfPresent(String.self, forKey: .audioProcessExe) ?? ""
         audioProcessAumid = try container.decodeIfPresent(String.self, forKey: .audioProcessAumid) ?? ""
+        decklinkMode = try container.decodeIfPresent(String.self, forKey: .decklinkMode) ?? ""
         if kind != .mix {
             mixSource = .muProgram
             mixTargetId = 0
@@ -1100,10 +1113,18 @@ struct OutputEntry: Identifiable, Codable {
     var height: UInt32 = 0
     var fpsNum: UInt32 = 0
     var fpsDen: UInt32 = 0
+    var decklinkDevice: String = ""
+    var decklinkMode: String = ""
+    var decklinkExternalKey: Bool = false
+    var rtmpUrl: String = ""
+    var rtmpSecretRef: String = ""
+    var streamEncoderId: UInt64 = 0
 
     enum CodingKeys: String, CodingKey {
         case id, name, transport, sourceKind, sourceId, unitId, useGpu, enabled, audioUnitId
         case skipEncodeWhenNoReceivers, width, height, fpsNum, fpsDen
+        case decklinkDevice, decklinkMode, decklinkExternalKey
+        case rtmpUrl, rtmpSecretRef, streamEncoderId
     }
 
     init(
@@ -1120,7 +1141,13 @@ struct OutputEntry: Identifiable, Codable {
         width: UInt32 = 0,
         height: UInt32 = 0,
         fpsNum: UInt32 = 0,
-        fpsDen: UInt32 = 0
+        fpsDen: UInt32 = 0,
+        decklinkDevice: String = "",
+        decklinkMode: String = "",
+        decklinkExternalKey: Bool = false,
+        rtmpUrl: String = "",
+        rtmpSecretRef: String = "",
+        streamEncoderId: UInt64 = 0
     ) {
         self.id = id
         self.name = name
@@ -1136,6 +1163,12 @@ struct OutputEntry: Identifiable, Codable {
         self.height = height
         self.fpsNum = fpsNum
         self.fpsDen = fpsDen
+        self.decklinkDevice = decklinkDevice
+        self.decklinkMode = decklinkMode
+        self.decklinkExternalKey = decklinkExternalKey
+        self.rtmpUrl = rtmpUrl
+        self.rtmpSecretRef = rtmpSecretRef
+        self.streamEncoderId = streamEncoderId
     }
 
     init(from decoder: Decoder) throws {
@@ -1154,6 +1187,110 @@ struct OutputEntry: Identifiable, Codable {
         height = try container.decodeIfPresent(UInt32.self, forKey: .height) ?? 0
         fpsNum = try container.decodeIfPresent(UInt32.self, forKey: .fpsNum) ?? 0
         fpsDen = try container.decodeIfPresent(UInt32.self, forKey: .fpsDen) ?? 0
+        decklinkDevice = try container.decodeIfPresent(String.self, forKey: .decklinkDevice) ?? ""
+        decklinkMode = try container.decodeIfPresent(String.self, forKey: .decklinkMode) ?? ""
+        decklinkExternalKey = try container.decodeIfPresent(Bool.self, forKey: .decklinkExternalKey) ?? false
+        rtmpUrl = try container.decodeIfPresent(String.self, forKey: .rtmpUrl) ?? ""
+        rtmpSecretRef = try container.decodeIfPresent(String.self, forKey: .rtmpSecretRef) ?? ""
+        streamEncoderId = try container.decodeIfPresent(UInt64.self, forKey: .streamEncoderId) ?? 0
+    }
+}
+
+struct StreamEncoderEntry: Identifiable {
+    var id: UInt64
+    var name: String = ""
+    var sourceKind: OutputSourceKind = .muProgram
+    var sourceId: UInt64 = 0
+    var unitId: UInt64 = 1
+    var audioUnitId: UInt64 = 1
+    var width: UInt32 = 1920
+    var height: UInt32 = 1080
+    var fpsNum: UInt32 = 60_000
+    var fpsDen: UInt32 = 1_001
+    var videoBitrate: UInt32 = 6_000_000
+    var audioBitrate: UInt32 = 128_000
+    var keyint: UInt32 = 120
+    var videoOnly: Bool = false
+    var encoderThreads: UInt32 = 0
+    /// Milliseconds to hold before the first send. Zero sends immediately.
+    var bufferMs: UInt32 = 0
+    var encoder: String = "OpenH264"
+    var complexity: UInt32 = 0
+    var refFrames: UInt32 = 1
+    var cabac: Bool = false
+    var deblock: Bool = true
+    var backgroundDetection: Bool = true
+    var adaptiveQuant: Bool = false
+    var sceneChange: Bool = false
+    /// Added on top of the measured video encode time.
+    var audioDelayMs: UInt32 = 0
+}
+
+extension StreamEncoderEntry: Codable {
+    enum CodingKeys: String, CodingKey {
+        case id, name, sourceKind, sourceId, unitId, audioUnitId
+        case width, height, fpsNum, fpsDen
+        case videoBitrate, audioBitrate, keyint, videoOnly, encoderThreads, bufferMs
+        case encoder, complexity, refFrames, cabac, deblock
+        case backgroundDetection, adaptiveQuant, sceneChange, audioDelayMs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UInt64.self, forKey: .id)
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        sourceKind = try container.decodeIfPresent(OutputSourceKind.self, forKey: .sourceKind) ?? .muProgram
+        sourceId = try container.decodeIfPresent(UInt64.self, forKey: .sourceId) ?? 0
+        unitId = try container.decodeIfPresent(UInt64.self, forKey: .unitId) ?? 1
+        audioUnitId = try container.decodeIfPresent(UInt64.self, forKey: .audioUnitId) ?? 1
+        width = try container.decodeIfPresent(UInt32.self, forKey: .width) ?? 1920
+        height = try container.decodeIfPresent(UInt32.self, forKey: .height) ?? 1080
+        fpsNum = try container.decodeIfPresent(UInt32.self, forKey: .fpsNum) ?? 60_000
+        fpsDen = try container.decodeIfPresent(UInt32.self, forKey: .fpsDen) ?? 1_001
+        videoBitrate = try container.decodeIfPresent(UInt32.self, forKey: .videoBitrate) ?? 6_000_000
+        audioBitrate = try container.decodeIfPresent(UInt32.self, forKey: .audioBitrate) ?? 128_000
+        keyint = try container.decodeIfPresent(UInt32.self, forKey: .keyint) ?? 120
+        videoOnly = try container.decodeIfPresent(Bool.self, forKey: .videoOnly) ?? false
+        encoderThreads = try container.decodeIfPresent(UInt32.self, forKey: .encoderThreads) ?? 0
+        bufferMs = try container.decodeIfPresent(UInt32.self, forKey: .bufferMs) ?? 0
+        encoder = try container.decodeIfPresent(String.self, forKey: .encoder) ?? "OpenH264"
+        complexity = try container.decodeIfPresent(UInt32.self, forKey: .complexity) ?? 0
+        refFrames = try container.decodeIfPresent(UInt32.self, forKey: .refFrames) ?? 1
+        cabac = try container.decodeIfPresent(Bool.self, forKey: .cabac) ?? false
+        deblock = try container.decodeIfPresent(Bool.self, forKey: .deblock) ?? true
+        backgroundDetection = try container.decodeIfPresent(Bool.self, forKey: .backgroundDetection) ?? true
+        adaptiveQuant = try container.decodeIfPresent(Bool.self, forKey: .adaptiveQuant) ?? false
+        sceneChange = try container.decodeIfPresent(Bool.self, forKey: .sceneChange) ?? false
+        audioDelayMs = try container.decodeIfPresent(UInt32.self, forKey: .audioDelayMs) ?? 0
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(sourceKind, forKey: .sourceKind)
+        try container.encode(sourceId, forKey: .sourceId)
+        try container.encode(unitId, forKey: .unitId)
+        try container.encode(audioUnitId, forKey: .audioUnitId)
+        try container.encode(width, forKey: .width)
+        try container.encode(height, forKey: .height)
+        try container.encode(fpsNum, forKey: .fpsNum)
+        try container.encode(fpsDen, forKey: .fpsDen)
+        try container.encode(videoBitrate, forKey: .videoBitrate)
+        try container.encode(audioBitrate, forKey: .audioBitrate)
+        try container.encode(keyint, forKey: .keyint)
+        try container.encode(videoOnly, forKey: .videoOnly)
+        try container.encode(encoderThreads, forKey: .encoderThreads)
+        try container.encode(bufferMs, forKey: .bufferMs)
+        try container.encode(self.encoder, forKey: .encoder)
+        try container.encode(complexity, forKey: .complexity)
+        try container.encode(refFrames, forKey: .refFrames)
+        try container.encode(cabac, forKey: .cabac)
+        try container.encode(deblock, forKey: .deblock)
+        try container.encode(backgroundDetection, forKey: .backgroundDetection)
+        try container.encode(adaptiveQuant, forKey: .adaptiveQuant)
+        try container.encode(sceneChange, forKey: .sceneChange)
+        try container.encode(audioDelayMs, forKey: .audioDelayMs)
     }
 }
 
@@ -1617,6 +1754,7 @@ struct MixerSessionData: Codable {
     var overlays: [OverlaySlot] = []
     var nextOverlayId: UInt64 = 1
     var outputs: [OutputEntry] = []
+    var streamEncoders: [StreamEncoderEntry] = []
     var multiviews: [MultiviewLayout] = []
     var headphone = HeadphoneEntry()
     var inputTags: [String] = []
@@ -1626,6 +1764,7 @@ struct MixerSessionData: Codable {
     var nextUnitId: UInt64 = 2
     var nextMonitorId: UInt64 = 1000
     var nextOutputId: UInt64 = 100
+    var nextStreamEncoderId: UInt64 = 1
     var nextMultiviewId: UInt64 = 1
     var selectedUnitId: UInt64 = 1
     var headphoneCopyMonitor: Bool = false
@@ -1633,9 +1772,9 @@ struct MixerSessionData: Codable {
     var headphoneListenId: UInt64 = 0
 
     enum CodingKeys: String, CodingKey {
-        case version, settings, inputs, scenes, scenePresets, units, transitions, overlays, nextOverlayId, outputs, multiviews, headphone
+        case version, settings, inputs, scenes, scenePresets, units, transitions, overlays, nextOverlayId, outputs, streamEncoders, multiviews, headphone
         case inputTags, sceneTags
-        case nextInputId, nextSceneId, nextUnitId, nextOutputId, nextMultiviewId
+        case nextInputId, nextSceneId, nextUnitId, nextOutputId, nextStreamEncoderId, nextMultiviewId
         case selectedUnitId, headphoneCopyMonitor, headphoneListenKind, headphoneListenId
     }
 
@@ -1795,6 +1934,8 @@ enum SessionFile {
         var object = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
         if object["headphoneListenKind"] == nil { object["headphoneListenKind"] = 0 }
         if object["headphoneListenId"] == nil { object["headphoneListenId"] = 0 }
+        if object["streamEncoders"] == nil { object["streamEncoders"] = [] }
+        if object["nextStreamEncoderId"] == nil { object["nextStreamEncoderId"] = 1 }
         let patched = try JSONSerialization.data(withJSONObject: object)
         var session = try JSONDecoder().decode(MixerSessionData.self, from: patched)
         session.assignMonitors()

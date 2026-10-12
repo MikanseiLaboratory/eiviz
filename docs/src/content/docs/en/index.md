@@ -13,6 +13,7 @@ This site covers how to use eiviz, why it exists, and how it is meant to be run 
 - [About eiviz](/eiviz/en/introduction/about/) — motivation and technology choices
 - [Mikansei Laboratory](/eiviz/en/introduction/mikansei-laboratory/) — the community behind eiviz
 - [System requirements](/eiviz/en/introduction/requirements/) — supported environments and hardware
+- [Plans](/eiviz/en/introduction/plans/) — limits for Community, Professional, and Enterprise
 - [Settings](/eiviz/en/introduction/settings/) — items in the Settings window
 - [System architecture](/eiviz/en/introduction/architecture/) — mixer and UI hosts
 

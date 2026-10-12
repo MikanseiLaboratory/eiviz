@@ -79,7 +79,7 @@ extension RgbColor {
     }
 
     var headerForeground: Color {
-        let luma = 0.299 * Double(r) + 0.587 * Double(g) + 0.114 * Double(b)
+        let luma = 0.2126 * Double(r) + 0.7152 * Double(g) + 0.0722 * Double(b)
         return luma >= 140
             ? Color(red: 17 / 255, green: 17 / 255, blue: 17 / 255)
             : Color.white

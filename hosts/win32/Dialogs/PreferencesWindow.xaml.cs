@@ -128,6 +128,8 @@ public partial class PreferencesWindow : Window
         AppPrefs.Current.Save();
         Loc.Apply(language);
         ThemeService.Apply(theme);
+        if (Application.Current.MainWindow is MainWindow window)
+            window.ApplyEditionTitle();
     }
 
     private void BindDocsLink()

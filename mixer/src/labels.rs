@@ -8,7 +8,7 @@ const MIN_PX: f32 = 8.0;
 const MAX_PX: f32 = 128.0;
 
 pub fn contrast_rgb(rgb: [u8; 3]) -> [u8; 3] {
-    let luma = 0.299 * f32::from(rgb[0]) + 0.587 * f32::from(rgb[1]) + 0.114 * f32::from(rgb[2]);
+    let luma = 0.2126 * f32::from(rgb[0]) + 0.7152 * f32::from(rgb[1]) + 0.0722 * f32::from(rgb[2]);
     if luma >= 140.0 {
         [0x11, 0x11, 0x11]
     } else {

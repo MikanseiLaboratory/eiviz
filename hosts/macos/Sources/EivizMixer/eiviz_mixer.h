@@ -10,6 +10,7 @@ extern "C" {
 
 #define EIVIZ_OK 0
 #define EIVIZ_ERR_BUFFER_TOO_SMALL 6
+#define EIVIZ_ERR_NOT_SUPPORTED_PLAN 7
 
 #define EIVIZ_SRC_COLOR 1ull
 #define EIVIZ_SRC_BARS 2ull
@@ -106,6 +107,29 @@ extern "C" {
 #define EIVIZ_OUT_OMT 0u
 #define EIVIZ_OUT_NDI 1u
 #define EIVIZ_OUT_DECKLINK 2u
+#define EIVIZ_OUT_RTMP 3u
+
+typedef struct EivizCapabilities {
+    uint32_t plan;
+    uint32_t mixing_unit_limit;
+    uint32_t decklink_input_limit;
+    uint32_t decklink_output_limit;
+    uint32_t rtmp_max_width;
+    uint32_t rtmp_max_height;
+    uint32_t rtmp_max_fps_num;
+    uint32_t rtmp_max_fps_den;
+    uint32_t recording;
+    uint32_t srt;
+    uint32_t hardware_encode;
+    uint32_t decklink_linked;
+    uint32_t rtmp_linked;
+} EivizCapabilities;
+
+typedef struct EivizLicenseStatus {
+    uint32_t state;
+    uint32_t plan;
+    int64_t expires_at;
+} EivizLicenseStatus;
 
 #define EIVIZ_SRC_KIND_SCENE 0u
 #define EIVIZ_SRC_KIND_MU_PREVIEW 1u
@@ -277,6 +301,11 @@ typedef struct EivizMixerRuntimeStats {
     uint32_t output_decklink;
     uint32_t output_omt_subscribed;
     uint32_t output_ndi_connections;
+    uint32_t stream_slow;
+    uint32_t stream_lag_ms;
+    uint32_t stream_fps_milli;
+    uint32_t stream_target_fps_milli;
+    uint64_t stream_dropped;
 } EivizMixerRuntimeStats;
 
 typedef struct EivizInputRuntimeStats {
@@ -332,6 +361,8 @@ typedef struct EivizAudioBusInfo {
 } EivizAudioBusInfo;
 
 uint32_t mixer_ping(void);
+int32_t mixer_pro_prepare(const char *path);
+int32_t mixer_pro_copy_error(uint8_t *out, size_t cap);
 int32_t mixer_create(uint64_t adapter_luid, uint32_t fps_num, uint32_t fps_den);
 int32_t mixer_create_with_backend(uint32_t backend, uint64_t adapter_luid, uint32_t fps_num, uint32_t fps_den);
 uint32_t mixer_backend(void);
@@ -396,6 +427,16 @@ int32_t mixer_set_live_save(uint64_t id, uint32_t mode, uint32_t flags);
 int32_t mixer_omt_set_quality(uint64_t id, uint32_t quality);
 int32_t mixer_omt_start_send(uint64_t unit_id, const char *name);
 int32_t mixer_output_add(uint64_t output_id, uint32_t transport, const char *name, uint32_t source_kind, uint64_t source_id, uint64_t unit_id, uint32_t use_gpu, uint64_t audio_bus_id, uint32_t skip_idle_encode, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den);
+int32_t mixer_output_add_ex(uint64_t output_id, uint32_t transport, const char *name, uint32_t source_kind, uint64_t source_id, uint64_t unit_id, uint32_t use_gpu, uint64_t audio_bus_id, uint32_t skip_idle_encode, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, const char *config_json);
+int32_t mixer_capabilities(EivizCapabilities *out);
+int32_t mixer_license_install(const char *ticket);
+int32_t mixer_license_status(EivizLicenseStatus *out, uint8_t *ticket_id, size_t cap);
+int32_t mixer_license_clear(void);
+int32_t mixer_machine_fingerprint(uint8_t *out, size_t cap);
+int32_t mixer_secret_set(const char *name, const char *value);
+int32_t mixer_decklink_connect(uint64_t id, const char *device, const char *mode, uint32_t frame_buffer_frames);
+int32_t mixer_decklink_enum_devices(uint8_t *out, size_t cap);
+int32_t mixer_decklink_enum_modes(const char *device, uint8_t *out, size_t cap);
 int32_t mixer_snapshot(uint64_t unit_id, uint32_t kind, const char *path);
 int32_t mixer_output_remove(uint64_t output_id);
 int32_t mixer_omt_discover(uint8_t *out, size_t cap);

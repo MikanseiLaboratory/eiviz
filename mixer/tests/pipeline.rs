@@ -4,23 +4,24 @@ use std::time::{Duration, Instant};
 
 use eiviz_mixer::{
     BACKEND_DX12, BACKEND_METAL, EASING_IN_OUT, ERR_DEVICE, ERR_INVALID_ARGUMENT, ERR_IO,
-    ERR_NOT_CREATED, GEN_BARS, GEN_SOLID, INCOMING_PROGRAM, MULTIVIEW_BASE, MixerRebarInfo,
-    MixerStats, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_OMT, OUTPUT_PROGRAM,
-    OUTPUT_SOURCE, OverlayDesc, Rect, SCENE_BASE, SRC_BARS, SRC_BLUE, SRC_COLOR,
-    SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM, TRANSITION_BLOOM,
-    TRANSITION_CUBE, TRANSITION_CUBE_ZOOM, TRANSITION_DATAMOSH, TRANSITION_DIP, TRANSITION_FADE,
-    TRANSITION_FLY_ROTATE, TRANSITION_GLITCH, TRANSITION_HEART, TRANSITION_LOREZ,
+    ERR_NOT_CREATED, ERR_NOT_SUPPORTED_PLAN, GEN_BARS, GEN_SOLID, INCOMING_PROGRAM, MULTIVIEW_BASE,
+    MixerCapabilities, MixerRebarInfo, MixerStats, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK,
+    OUT_DECKLINK, OUT_OMT, OUTPUT_PROGRAM, OUTPUT_SOURCE, OverlayDesc, Rect, SCENE_BASE, SRC_BARS,
+    SRC_BLUE, SRC_COLOR, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
+    TRANSITION_BLOOM, TRANSITION_CUBE, TRANSITION_CUBE_ZOOM, TRANSITION_DATAMOSH, TRANSITION_DIP,
+    TRANSITION_FADE, TRANSITION_FLY_ROTATE, TRANSITION_GLITCH, TRANSITION_HEART, TRANSITION_LOREZ,
     TRANSITION_METAMIX, TRANSITION_MULTITASK, TRANSITION_OPTICAL_FLOW, TRANSITION_PAGE_CURL,
     TRANSITION_PARTS, TRANSITION_PIXEL_SORT, TRANSITION_SLIDE, TRANSITION_STAR, TRANSITION_SWIRL,
     TRANSITION_TILE, TRANSITION_VISUAL_DISSOLVE, TRANSITION_WIPE, UnitState, VideoCaptureInfo,
-    mixer_audio_set_input, mixer_copy_rebar_info, mixer_copy_stats, mixer_create,
-    mixer_create_unit, mixer_create_with_backend, mixer_define_generator, mixer_define_mix_input,
-    mixer_define_scene, mixer_destroy, mixer_generator_set_tone, mixer_omt_connect,
-    mixer_omt_discover, mixer_omt_start_send, mixer_output_add, mixer_ping, mixer_set_live_save,
-    mixer_set_ndi_gpu_upload, mixer_set_rebar_optimization, mixer_snapshot,
-    mixer_unit_acquire_frame, mixer_unit_cut, mixer_unit_detach_native, mixer_unit_get_state,
-    mixer_unit_release_frame, mixer_unit_set_overlays, mixer_unit_set_state,
-    mixer_validate_custom_wgsl, mixer_video_enum_captures, mixer_video_start,
+    mixer_audio_set_input, mixer_capabilities, mixer_copy_rebar_info, mixer_copy_stats,
+    mixer_create, mixer_create_unit, mixer_create_with_backend, mixer_define_generator,
+    mixer_define_mix_input, mixer_define_scene, mixer_destroy, mixer_generator_set_tone,
+    mixer_omt_connect, mixer_omt_discover, mixer_omt_start_send, mixer_output_add, mixer_ping,
+    mixer_session_replace, mixer_set_live_save, mixer_set_ndi_gpu_upload,
+    mixer_set_rebar_optimization, mixer_snapshot, mixer_unit_acquire_frame, mixer_unit_cut,
+    mixer_unit_detach_native, mixer_unit_get_state, mixer_unit_release_frame,
+    mixer_unit_set_overlays, mixer_unit_set_state, mixer_validate_custom_wgsl,
+    mixer_video_enum_captures, mixer_video_start,
 };
 #[cfg(target_os = "linux")]
 use eiviz_mixer::{BACKEND_VULKAN, mixer_backend};
@@ -1302,8 +1303,32 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
                 0,
                 0
             ),
-            ERR_IO
+            ERR_NOT_SUPPORTED_PLAN
         );
+        let mut caps = MixerCapabilities {
+            plan: 99,
+            mixing_unit_limit: 0,
+            decklink_input_limit: 1,
+            decklink_output_limit: 1,
+            rtmp_max_width: 0,
+            rtmp_max_height: 0,
+            rtmp_max_fps_num: 0,
+            rtmp_max_fps_den: 0,
+            recording: 1,
+            srt: 1,
+            hardware_encode: 1,
+            decklink_linked: 1,
+            rtmp_linked: 1,
+        };
+        assert_eq!(mixer_capabilities(&mut caps), OK);
+        assert_eq!(caps.plan, 0);
+        assert_eq!(caps.mixing_unit_limit, 4);
+        assert_eq!(caps.decklink_output_limit, 0);
+        assert_eq!(caps.decklink_linked, 0);
+        assert_eq!(mixer_create_unit(3, 320, 180), OK);
+        assert_eq!(mixer_create_unit(4, 320, 180), OK);
+        assert_eq!(mixer_create_unit(5, 320, 180), ERR_NOT_SUPPORTED_PLAN);
+        assert_eq!(mixer_create_unit(1, 320, 180), OK);
     }
     mixer_destroy();
 }
@@ -2189,18 +2214,30 @@ fn scene_camera_zoom_fills_the_frame_from_the_center() {
     thread::sleep(Duration::from_millis(300));
     let corner = snap_pixel(scene, 4, 4);
     let middle = snap_pixel(scene, 160, 90);
-    assert!(is_black(corner), "corner {corner:?} should be the empty background");
-    assert!(is_red(middle), "center {middle:?} should be the color layer");
+    assert!(
+        is_black(corner),
+        "corner {corner:?} should be the empty background"
+    );
+    assert!(
+        is_red(middle),
+        "center {middle:?} should be the color layer"
+    );
 
     let zoomed = eiviz_mixer::EivizSceneCamera {
         x: 0.5,
         y: 0.5,
         zoom: 2.0,
     };
-    assert_eq!(unsafe { eiviz_mixer::mixer_scene_camera_define(scene, zoomed) }, OK);
+    assert_eq!(
+        unsafe { eiviz_mixer::mixer_scene_camera_define(scene, zoomed) },
+        OK
+    );
     thread::sleep(Duration::from_millis(300));
     let corner = snap_pixel(scene, 4, 4);
-    assert!(is_red(corner), "zoomed corner {corner:?} should show the center layer");
+    assert!(
+        is_red(corner),
+        "zoomed corner {corner:?} should show the center layer"
+    );
 
     let too_wide = eiviz_mixer::EivizSceneCamera {
         x: 0.5,
@@ -2252,6 +2289,30 @@ fn unit_detach_completes_before_host_may_destroy_surface() {
     assert!(
         start.elapsed() < Duration::from_secs(2),
         "detach must acknowledge before the host destroys the native view"
+    );
+    mixer_destroy();
+}
+
+#[test]
+fn session_replace_survives_incomplete_pro_outputs() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    let json = br#"{
+      "version": 2,
+      "settings": { "masterFpsNum": 60000, "masterFpsDen": 1001 },
+      "inputs": [{ "id": 2, "name": "Bars", "kind": "Bars" }],
+      "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+      "units": [{ "id": 1, "name": "MU 1" }],
+      "outputs": [
+        { "id": 100, "name": "eiviz-pgm", "transport": "Omt", "sourceKind": "MuProgram", "useGpu": true, "audioUnitId": 1 },
+        { "id": 101, "name": "deck", "transport": "DeckLink", "sourceKind": "MuProgram", "unitId": 1 },
+        { "id": 102, "name": "yt", "transport": "Rtmp", "streamEncoderId": 1 }
+      ]
+    }"#;
+    let code = unsafe { mixer_session_replace(json.as_ptr(), json.len(), 0) };
+    assert_eq!(
+        code, OK,
+        "empty DeckLink device or RTMP URL must not abort the session"
     );
     mixer_destroy();
 }

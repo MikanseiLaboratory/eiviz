@@ -1,0 +1,12 @@
+[package]
+name = "eiviz_pro_empty_plugin"
+version = "0.3.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Cdylib without the Pro entry point, used to test a missing symbol"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]

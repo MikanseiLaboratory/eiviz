@@ -20,11 +20,17 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VsOut {
     return out;
 }
 
+// Limited-range BT.709. The inverse is uyvy_to_rgba.wgsl; HD encode and preview share it.
 fn rgb_to_yuv(rgb: vec3<f32>) -> vec3<f32> {
-    let y = 0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
-    let u = -0.169 * rgb.r - 0.331 * rgb.g + 0.500 * rgb.b + 0.5;
-    let v = 0.500 * rgb.r - 0.419 * rgb.g - 0.081 * rgb.b + 0.5;
-    return clamp(vec3<f32>(y, u, v), vec3<f32>(0.0), vec3<f32>(1.0));
+    let y = 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b;
+    let cb = -0.114572 * rgb.r - 0.385428 * rgb.g + 0.5 * rgb.b;
+    let cr = 0.5 * rgb.r - 0.454153 * rgb.g - 0.045847 * rgb.b;
+    let studio = vec3<f32>(
+        y * (219.0 / 255.0) + (16.0 / 255.0),
+        cb * (224.0 / 255.0) + 0.5,
+        cr * (224.0 / 255.0) + 0.5,
+    );
+    return clamp(studio, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 @fragment

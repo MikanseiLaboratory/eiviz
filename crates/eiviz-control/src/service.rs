@@ -10,10 +10,10 @@ use crate::ids::Resolver;
 use crate::lifecycle::Lifecycle;
 use crate::live::ResourceStatus;
 use crate::port::{AutoApply, MixerPort, OverlayAutoApply};
-use crate::query::{Capabilities, Query, Snapshot};
+use crate::query::{Query, Snapshot};
 use crate::session::Document;
 use crate::session::mutate;
-use crate::session::reconcile::{plan, repair_live};
+use crate::session::reconcile::{plan, reinforce_streams, repair_live};
 use crate::session::store::CanonicalSessionStore;
 use crate::video_trigger::{self, VideoAction, VideoRoles};
 
@@ -170,7 +170,7 @@ impl ControlService {
             document,
             live,
             resources: self.resources.clone(),
-            capabilities: Capabilities::default(),
+            capabilities: self.port.capabilities(),
             lifecycle: self.lifecycle,
             epoch: self.epoch.clone(),
         })
@@ -438,7 +438,9 @@ impl ControlService {
         let previous_doc = self.store.document_cloned();
         let (committed, revision, previous) =
             self.store.replace(document, expected_revision, false)?;
-        let ops = plan(previous.as_ref(), &committed);
+        let previous_resources = self.resources.clone();
+        let mut ops = plan(previous.as_ref(), &committed);
+        reinforce_streams(&previous_resources, &committed, &mut ops);
         let mut statuses = Vec::new();
         for op in &ops {
             if let Err(error) = self.port.apply_reconcile(&committed, op, &mut statuses) {
@@ -953,10 +955,35 @@ mod tests {
         }
         fn output_add(&mut self, spec: OutputApply) -> ControlResult<()> {
             self.push_op(format!("output {}", spec.id));
+            if spec.transport == 2 {
+                return Err(ControlError::invalid("DeckLink output needs a device"));
+            }
+            if spec.transport == 3 {
+                return Err(ControlError::invalid("RTMP output requires a url"));
+            }
             Ok(())
         }
         fn output_remove(&mut self, id: u64) -> ControlResult<()> {
             self.push_op(format!("remove_output {id}"));
+            Ok(())
+        }
+        fn stream_encoder_add(&mut self, spec: StreamEncoderApply) -> ControlResult<()> {
+            self.push_op(format!("stream_encoder {}", spec.id));
+            Ok(())
+        }
+        fn stream_encoder_remove(&mut self, id: u64) -> ControlResult<()> {
+            self.push_op(format!("remove_stream_encoder {id}"));
+            Ok(())
+        }
+        fn stream_destination_add(&mut self, spec: StreamDestinationApply) -> ControlResult<()> {
+            self.push_op(format!("stream_destination {}", spec.id));
+            if spec.url.is_empty() {
+                return Err(ControlError::invalid("RTMP destination requires a url"));
+            }
+            Ok(())
+        }
+        fn stream_destination_remove(&mut self, encoder_id: u64, id: u64) -> ControlResult<()> {
+            self.push_op(format!("remove_stream_destination {encoder_id} {id}"));
             Ok(())
         }
         fn audio_set_unit_device(&mut self, spec: UnitAudioApply) -> ControlResult<()> {
@@ -1128,6 +1155,29 @@ mod tests {
         }"#,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn replace_session_keeps_graph_when_pro_outputs_are_incomplete() {
+        on_big_stack(|| {
+            let mut svc = ControlService::new(FakeMixer::default());
+            let doc = parse(
+                br#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "Bars", "kind": "Bars" }],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }],
+          "outputs": [
+            { "id": 100, "name": "pgm", "transport": "Omt", "sourceKind": "MuProgram" },
+            { "id": 101, "name": "deck", "transport": "DeckLink", "sourceKind": "MuProgram" },
+            { "id": 102, "name": "yt", "transport": "Rtmp", "streamEncoderId": 1 }
+          ]
+        }"#,
+            )
+            .unwrap();
+            svc.replace_session(doc, None, "1")
+                .expect("empty DeckLink/RTMP config must not abort replace");
+        });
     }
 
     #[test]

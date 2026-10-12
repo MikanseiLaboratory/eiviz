@@ -23,6 +23,82 @@ const EXIT_GPU: u8 = 4;
 const EXIT_BIND: u8 = 5;
 const EXIT_OTHER: u8 = 6;
 
+#[cfg(feature = "runtime")]
+fn install_license(path: &Path) -> Result<(), u8> {
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        eprintln!("eiviz-headless error=license {error}");
+        EXIT_ARGS
+    })?;
+    let ticket = std::ffi::CString::new(text.trim()).map_err(|_| {
+        eprintln!("eiviz-headless error=license ticket contains a nul");
+        EXIT_ARGS
+    })?;
+    let rc = unsafe { eiviz_mixer::mixer_license_install(ticket.as_ptr()) };
+    let mut status = eiviz_mixer::MixerLicenseStatus {
+        state: 0,
+        plan: 0,
+        expires_at: 0,
+    };
+    let mut ticket_id = [0u8; 128];
+    let status_rc = unsafe {
+        eiviz_mixer::mixer_license_status(&mut status, ticket_id.as_mut_ptr(), ticket_id.len())
+    };
+    if status_rc == 0 {
+        let id = std::ffi::CStr::from_bytes_until_nul(&ticket_id)
+            .ok()
+            .and_then(|text| text.to_str().ok())
+            .unwrap_or("");
+        eprintln!(
+            "eiviz-headless license state={} plan={} expires={} ticket={id}",
+            status.state, status.plan, status.expires_at
+        );
+    }
+    let mut caps = eiviz_mixer::MixerCapabilities {
+        plan: 0,
+        mixing_unit_limit: 0,
+        decklink_input_limit: 0,
+        decklink_output_limit: 0,
+        rtmp_max_width: 0,
+        rtmp_max_height: 0,
+        rtmp_max_fps_num: 0,
+        rtmp_max_fps_den: 0,
+        recording: 0,
+        srt: 0,
+        hardware_encode: 0,
+        decklink_linked: 0,
+        rtmp_linked: 0,
+    };
+    if unsafe { eiviz_mixer::mixer_capabilities(&mut caps) } == 0 {
+        eprintln!("eiviz-headless capabilities plan={}", caps.plan);
+    }
+    if rc != 0 {
+        eprintln!("eiviz-headless error=license code={rc}");
+        return Err(EXIT_ARGS);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "runtime")]
+fn load_process_secrets() {
+    for (key, value) in std::env::vars() {
+        let Some(name) = key.strip_prefix("EIVIZ_SECRET_") else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let Ok(name) = std::ffi::CString::new(name) else {
+            continue;
+        };
+        let Ok(value) = std::ffi::CString::new(value) else {
+            continue;
+        };
+        unsafe {
+            eiviz_mixer::mixer_secret_set(name.as_ptr(), value.as_ptr());
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "eiviz-headless", about = "Headless eiviz daemon")]
 struct Cli {
@@ -77,6 +153,13 @@ enum Cmd {
             help = "Uploaded media directory (default: OS local app data/eiviz/media)"
         )]
         media_directory: Option<PathBuf>,
+        /// Install a signed license ticket, then print the plan from capabilities.
+        #[arg(long)]
+        license: Option<PathBuf>,
+        /// Absolute or relative path of a signed Pro module. Without this flag,
+        /// `eiviz-pro.required` next to the executable selects the module.
+        #[arg(long)]
+        pro_module: Option<PathBuf>,
     },
 }
 
@@ -111,7 +194,16 @@ fn main() -> ExitCode {
             bind,
             renderer,
             media_directory,
-        } => match run_daemon(session, bind, renderer, media_directory) {
+            license,
+            pro_module,
+        } => match run_daemon(
+            session,
+            bind,
+            renderer,
+            media_directory,
+            license,
+            pro_module,
+        ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(code) => ExitCode::from(code),
         },
@@ -208,16 +300,32 @@ fn run_daemon(
     bind: Option<String>,
     renderer: Option<String>,
     media_directory: Option<PathBuf>,
+    license: Option<PathBuf>,
+    pro_module: Option<PathBuf>,
 ) -> Result<(), u8> {
     #[cfg(not(feature = "runtime"))]
     {
-        let _ = (session, bind, renderer, media_directory);
+        let _ = (
+            session,
+            bind,
+            renderer,
+            media_directory,
+            license,
+            pro_module,
+        );
         eprintln!("eiviz-headless error=runtime binary built without mixer runtime");
         Err(EXIT_OTHER)
     }
     #[cfg(feature = "runtime")]
     {
-        run_daemon_runtime(session, bind, renderer, media_directory)
+        run_daemon_runtime(
+            session,
+            bind,
+            renderer,
+            media_directory,
+            license,
+            pro_module,
+        )
     }
 }
 
@@ -227,6 +335,8 @@ fn run_daemon_runtime(
     bind: Option<String>,
     renderer: Option<String>,
     media_directory: Option<PathBuf>,
+    license: Option<PathBuf>,
+    pro_module: Option<PathBuf>,
 ) -> Result<(), u8> {
     let prefs = eiviz_headless::HeadlessPrefs::load().map_err(|error| {
         eprintln!("eiviz-headless error=prefs {error}");
@@ -264,7 +374,15 @@ fn run_daemon_runtime(
         eprintln!("eiviz-headless error=runtime {error}");
         EXIT_OTHER
     })?;
+    if let Err(error) = eiviz_mixer::prepare_pro_module(pro_module.as_deref()) {
+        eprintln!("eiviz-headless error=pro {error}");
+        return Err(EXIT_ARGS);
+    }
     rt.block_on(async move {
+        if let Some(path) = license.as_ref() {
+            install_license(path)?;
+        }
+        load_process_secrets();
         {
             let mut svc = eiviz_mixer::control_service().lock().map_err(|_| {
                 eprintln!("eiviz-headless error=runtime control lock");

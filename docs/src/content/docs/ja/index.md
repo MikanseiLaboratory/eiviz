@@ -13,6 +13,7 @@ WindowsとmacOSに対応しています。Linux対応は実験的です。
 - [eivizについて](/eiviz/ja/introduction/about/) — 開発動機と技術選定
 - [未完成成果物研究所](/eiviz/ja/introduction/mikansei-laboratory/) — 開発コミュニティ
 - [システム要件](/eiviz/ja/introduction/requirements/) — 対応環境とハードウェア
+- [プラン](/eiviz/ja/introduction/plans/) — Community、Professional、Enterpriseの上限
 - [設定](/eiviz/ja/introduction/settings/) — 設定ウィンドウの項目
 - [システムアーキテクチャ](/eiviz/ja/introduction/architecture/) — MixerとUIの構成
 

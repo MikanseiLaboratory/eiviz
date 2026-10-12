@@ -16,7 +16,8 @@ public enum InputKind
     NDI,
     UVC,
     Mix,
-    Audio
+    Audio,
+    DeckLink
 }
 
 public enum AudioCaptureMode
@@ -59,7 +60,8 @@ public enum OutputTransport
 {
     Omt = 0,
     Ndi = 1,
-    DeckLink = 2
+    DeckLink = 2,
+    Rtmp = 3
 }
 
 public enum OutputSourceKind
@@ -352,6 +354,7 @@ public sealed class InputEntry
     public int AudioMapRight { get; set; } = 1;
     public string AudioProcessExe { get; set; } = "";
     public string AudioProcessAumid { get; set; } = "";
+    public string DecklinkMode { get; set; } = "";
     public bool VideoStartsPlaying =>
         VideoPlayWhen is VideoPlayWhen.Never or VideoPlayWhen.Always;
 
@@ -393,6 +396,7 @@ internal static class InputKindNames
         InputKind.OMT,
         InputKind.NDI,
         InputKind.UVC,
+        InputKind.DeckLink,
         InputKind.Mix,
         InputKind.Audio
     ];
@@ -407,6 +411,7 @@ internal static class InputKindNames
         InputKind.UVC => "UVC",
         InputKind.Mix => "Mix",
         InputKind.Audio => "Audio",
+        InputKind.DeckLink => "DeckLink",
         _ => kind.ToString()
     };
 
@@ -439,6 +444,12 @@ internal static class InputKindNames
     private static bool SceneUses(Session session, ulong sceneGpuId, ulong sourceId) =>
         session.Scenes.Any(scene =>
             scene.GpuId == sceneGpuId && scene.Layers.Any(layer => layer.InputId == sourceId));
+
+    public static bool DeckLinkInputAllowed()
+    {
+        var caps = MixerNative.QueryCapabilities();
+        return caps.DecklinkLinked != 0 && caps.DecklinkInputLimit != 0;
+    }
 
     public static bool SameCategory(InputKind left, InputKind right) =>
         left == right || (IsColour(left) && IsColour(right));
@@ -1010,6 +1021,94 @@ public sealed class OutputEntry
     public uint Height { get; set; }
     public uint FpsNum { get; set; }
     public uint FpsDen { get; set; }
+    public string DecklinkDevice { get; set; } = "";
+    public string DecklinkMode { get; set; } = "";
+    public bool DecklinkExternalKey { get; set; }
+    public string RtmpUrl { get; set; } = "";
+    public string RtmpSecretRef { get; set; } = "";
+    public ulong StreamEncoderId { get; set; }
+
+    public OutputEntry Clone() => new()
+    {
+        Id = Id,
+        Name = Name,
+        Transport = Transport,
+        SourceKind = SourceKind,
+        SourceId = SourceId,
+        UnitId = UnitId,
+        UseGpu = UseGpu,
+        Enabled = Enabled,
+        AudioUnitId = AudioUnitId,
+        SkipEncodeWhenNoReceivers = SkipEncodeWhenNoReceivers,
+        Width = Width,
+        Height = Height,
+        FpsNum = FpsNum,
+        FpsDen = FpsDen,
+        DecklinkDevice = DecklinkDevice,
+        DecklinkMode = DecklinkMode,
+        DecklinkExternalKey = DecklinkExternalKey,
+        RtmpUrl = RtmpUrl,
+        RtmpSecretRef = RtmpSecretRef,
+        StreamEncoderId = StreamEncoderId
+    };
+}
+
+public sealed class StreamEncoderEntry
+{
+    public ulong Id { get; set; }
+    public string Name { get; set; } = "";
+    public OutputSourceKind SourceKind { get; set; } = OutputSourceKind.MuProgram;
+    public ulong SourceId { get; set; }
+    public ulong UnitId { get; set; } = 1;
+    public ulong AudioUnitId { get; set; } = 1;
+    public uint Width { get; set; } = 1920;
+    public uint Height { get; set; } = 1080;
+    public uint FpsNum { get; set; } = 60_000;
+    public uint FpsDen { get; set; } = 1_001;
+    public uint VideoBitrate { get; set; } = 6_000_000;
+    public uint AudioBitrate { get; set; } = 128_000;
+    public uint Keyint { get; set; } = 120;
+    public bool VideoOnly { get; set; }
+    public uint EncoderThreads { get; set; }
+    public uint BufferMs { get; set; }
+    public string Encoder { get; set; } = "OpenH264";
+    public uint Complexity { get; set; }
+    public uint RefFrames { get; set; } = 1;
+    public bool Cabac { get; set; }
+    public bool Deblock { get; set; } = true;
+    public bool BackgroundDetection { get; set; } = true;
+    public bool AdaptiveQuant { get; set; }
+    public bool SceneChange { get; set; }
+    public uint AudioDelayMs { get; set; }
+
+    public StreamEncoderEntry Clone() => new()
+    {
+        Id = Id,
+        Name = Name,
+        SourceKind = SourceKind,
+        SourceId = SourceId,
+        UnitId = UnitId,
+        AudioUnitId = AudioUnitId,
+        Width = Width,
+        Height = Height,
+        FpsNum = FpsNum,
+        FpsDen = FpsDen,
+        VideoBitrate = VideoBitrate,
+        AudioBitrate = AudioBitrate,
+        Keyint = Keyint,
+        VideoOnly = VideoOnly,
+        EncoderThreads = EncoderThreads,
+        BufferMs = BufferMs,
+        Encoder = Encoder,
+        Complexity = Complexity,
+        RefFrames = RefFrames,
+        Cabac = Cabac,
+        Deblock = Deblock,
+        BackgroundDetection = BackgroundDetection,
+        AdaptiveQuant = AdaptiveQuant,
+        SceneChange = SceneChange,
+        AudioDelayMs = AudioDelayMs
+    };
 }
 
 public enum MvLabelUnit
@@ -1183,6 +1282,7 @@ public sealed class Session
     public List<TransitionPreset> Transitions { get; } = [];
     public List<OverlaySlot> Overlays { get; } = [];
     public List<OutputEntry> Outputs { get; } = [];
+    public List<StreamEncoderEntry> StreamEncoders { get; } = [];
     public List<MultiviewLayout> Multiviews { get; } = [];
     public List<SceneLayoutPreset> ScenePresets { get; } = [];
     public List<string> InputTags { get; } = [];
@@ -1192,6 +1292,7 @@ public sealed class Session
     public ulong NextUnitId { get; set; } = 1;
     public ulong NextMonitorId { get; set; } = 1000;
     public ulong NextOutputId { get; set; } = 100;
+    public ulong NextStreamEncoderId { get; set; } = 1;
     public ulong NextMultiviewId { get; set; } = 1;
     public ulong NextOverlayId { get; set; } = 1;
     public ulong SelectedUnitId { get; set; } = 1;

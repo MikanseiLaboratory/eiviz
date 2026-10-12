@@ -11,6 +11,7 @@ pub enum ControlError {
     Conflict { message: String },
     Unavailable { message: String },
     PermissionDenied { message: String },
+    NotSupportedPlan { message: String },
     Io { message: String },
     Internal { message: String },
 }
@@ -52,6 +53,12 @@ impl ControlError {
         }
     }
 
+    pub fn not_supported_plan(message: impl Into<String>) -> Self {
+        Self::NotSupportedPlan {
+            message: message.into(),
+        }
+    }
+
     pub fn io(message: impl Into<String>) -> Self {
         Self::Io {
             message: message.into(),
@@ -72,6 +79,7 @@ impl ControlError {
             | Self::Conflict { message }
             | Self::Unavailable { message }
             | Self::PermissionDenied { message }
+            | Self::NotSupportedPlan { message }
             | Self::Io { message }
             | Self::Internal { message } => message,
         }
@@ -85,14 +93,13 @@ impl ControlError {
             Self::Conflict { .. } => "CONFLICT",
             Self::Unavailable { .. } => "UNAVAILABLE",
             Self::PermissionDenied { .. } => "PERMISSION_DENIED",
+            Self::NotSupportedPlan { .. } => "NOT_SUPPORTED_PLAN",
             Self::Io { .. } => "IO",
             Self::Internal { .. } => "INTERNAL",
         }
     }
 
-    /// Existing C ABI integer mapping. New semantic codes still collapse onto
-    /// the historical 1..=5 range so hosts compiled against the current header
-    /// keep working.
+    /// C ABI integer mapping. `7` is `ERR_NOT_SUPPORTED_PLAN`.
     pub fn to_abi(&self) -> i32 {
         match self {
             Self::Conflict { message } if message.contains("already created") => 1,
@@ -104,6 +111,7 @@ impl ControlError {
             | Self::PermissionDenied { .. } => 3,
             Self::Internal { .. } => 4,
             Self::Io { .. } => 5,
+            Self::NotSupportedPlan { .. } => 7,
         }
     }
 
@@ -128,6 +136,11 @@ impl ControlError {
                 message
             }),
             5 => Self::io(message),
+            7 => Self::not_supported_plan(if message.is_empty() {
+                "not included in this plan".into()
+            } else {
+                message
+            }),
             other => Self::internal(format!("abi {other}: {message}")),
         }
     }
@@ -136,6 +149,7 @@ impl ControlError {
         match self {
             Self::InvalidArgument { .. } | Self::Ambiguous { .. } => 400,
             Self::PermissionDenied { .. } => 401,
+            Self::NotSupportedPlan { .. } => 403,
             Self::NotFound { .. } => 404,
             Self::Conflict { .. } => 409,
             Self::Unavailable { .. } => 503,
@@ -168,5 +182,11 @@ mod tests {
         assert_eq!(ControlError::unavailable("x").to_abi(), 2);
         assert_eq!(ControlError::internal("x").to_abi(), 4);
         assert_eq!(ControlError::io("x").to_abi(), 5);
+        assert_eq!(ControlError::not_supported_plan("x").to_abi(), 7);
+        assert_eq!(
+            ControlError::from_abi(7, "plan").code(),
+            "NOT_SUPPORTED_PLAN"
+        );
+        assert_eq!(ControlError::not_supported_plan("x").http_status(), 403);
     }
 }
