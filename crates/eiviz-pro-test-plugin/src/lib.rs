@@ -338,6 +338,8 @@ unsafe extern "C" fn output_stats(
                 dropped: 0,
                 bitrate: 0,
                 encoder_threads: 0,
+                media_lag_ms: 0,
+                sent_fps_milli: 0,
             };
         }
         if !message.is_null() && message_cap > 0 {

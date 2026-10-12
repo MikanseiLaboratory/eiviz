@@ -41,6 +41,10 @@ pub struct OutputStats {
     pub repeated: u64,
     pub dropped: u64,
     pub bitrate: u32,
+    /// How far the latest sent media timestamp sits behind the connection clock.
+    pub media_lag_ms: u32,
+    /// Video frames actually written to the socket, per second, times 1000.
+    pub sent_fps_milli: u32,
     pub message: String,
     /// Threads the encoder is actually using. `0` when this stat is not an encoder.
     pub encoder_threads: u32,

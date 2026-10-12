@@ -6469,6 +6469,66 @@ unsafe fn mixer_copy_stats_ffi(out: *mut MixerStats) -> i32 {
     .unwrap_or_else(|code| code)
 }
 
+struct StreamPace {
+    slow: u32,
+    lag_ms: u32,
+    fps_milli: u32,
+    target_fps_milli: u32,
+    dropped: u64,
+}
+
+fn stream_pace(shared: &Shared) -> StreamPace {
+    let mut pace = StreamPace {
+        slow: 0,
+        lag_ms: 0,
+        fps_milli: 0,
+        target_fps_milli: 0,
+        dropped: 0,
+    };
+    for output in shared.outputs.values() {
+        if output.transport != OUT_RTMP {
+            continue;
+        }
+        let Some(stream) = &output.stream else {
+            continue;
+        };
+        let stats = lock_stream(stream).stats();
+        pace.dropped = pace.dropped.saturating_add(stats.dropped);
+        let target = fps_times_1000(output.fps_num, output.fps_den);
+        let warmed = output.started_at.elapsed() >= std::time::Duration::from_secs(3);
+        // sent_fps_milli stays 0 until the first one-second window closes.
+        let fps_low = stats.sent_fps_milli > 0
+            && stats.sent_fps_milli.saturating_mul(100) < target.saturating_mul(85);
+        let behind = stats.connected && warmed && (stats.media_lag_ms >= 400 || fps_low);
+        if behind || stats.media_lag_ms >= pace.lag_ms {
+            pace.lag_ms = stats.media_lag_ms;
+            pace.fps_milli = stats.sent_fps_milli;
+            pace.target_fps_milli = target;
+        }
+        if behind {
+            pace.slow = 1;
+        }
+    }
+    if pace.slow != 0 {
+        crate::diag::warn_throttled(
+            "stream behind realtime",
+            &format!(
+                "stream behind realtime: sent {:.1} fps, target {:.1} fps, lag {} ms, dropped {}",
+                pace.fps_milli as f32 / 1000.0,
+                pace.target_fps_milli as f32 / 1000.0,
+                pace.lag_ms,
+                pace.dropped
+            ),
+        );
+    }
+    pace
+}
+
+fn fps_times_1000(num: u32, den: u32) -> u32 {
+    let den = u64::from(den.max(1));
+    (u64::from(num) * 1_000 / den) as u32
+}
+
 fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis() as u64
 }
@@ -6509,6 +6569,7 @@ unsafe fn mixer_copy_runtime_stats_ffi(out: *mut MixerRuntimeStats) -> i32 {
                 _ => {}
             }
         }
+        let pace = stream_pace(&shared);
         unsafe {
             *out = MixerRuntimeStats {
                 uptime_ms: elapsed_ms(shared.clock.epoch()),
@@ -6519,6 +6580,11 @@ unsafe fn mixer_copy_runtime_stats_ffi(out: *mut MixerRuntimeStats) -> i32 {
                 output_decklink,
                 output_omt_subscribed,
                 output_ndi_connections,
+                stream_slow: pace.slow,
+                stream_lag_ms: pace.lag_ms,
+                stream_fps_milli: pace.fps_milli,
+                stream_target_fps_milli: pace.target_fps_milli,
+                stream_dropped: pace.dropped,
             };
         }
         OK

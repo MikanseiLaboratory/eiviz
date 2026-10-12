@@ -655,7 +655,7 @@ mod tests {
 
     #[test]
     fn runtime_stats_are_fixed_width() {
-        assert_eq!(size_of::<MixerRuntimeStats>(), 48);
+        assert_eq!(size_of::<MixerRuntimeStats>(), 72);
         assert_eq!(align_of::<MixerRuntimeStats>(), 8);
         assert_eq!(size_of::<InputRuntimeStats>(), 24);
         assert_eq!(size_of::<OutputRuntimeStats>(), 32);
@@ -673,6 +673,13 @@ pub struct MixerRuntimeStats {
     pub output_decklink: u32,
     pub output_omt_subscribed: u32,
     pub output_ndi_connections: u32,
+    /// 1 when a live RTMP send is behind the frame rate or the media clock.
+    pub stream_slow: u32,
+    pub stream_lag_ms: u32,
+    /// Video frames written to the socket per second, times 1000.
+    pub stream_fps_milli: u32,
+    pub stream_target_fps_milli: u32,
+    pub stream_dropped: u64,
 }
 
 #[repr(C)]

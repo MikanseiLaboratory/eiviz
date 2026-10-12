@@ -1148,6 +1148,11 @@ internal struct MixerRuntimeStats
     public uint OutputDeckLink;
     public uint OutputOmtSubscribed;
     public uint OutputNdiConnections;
+    public uint StreamSlow;
+    public uint StreamLagMs;
+    public uint StreamFpsMilli;
+    public uint StreamTargetFpsMilli;
+    public ulong StreamDropped;
 }
 
 [StructLayout(LayoutKind.Sequential)]

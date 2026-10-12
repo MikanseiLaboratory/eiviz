@@ -187,6 +187,8 @@ pub struct ProOutputStatsAbi {
     pub dropped: u64,
     pub bitrate: u32,
     pub encoder_threads: u32,
+    pub media_lag_ms: u32,
+    pub sent_fps_milli: u32,
 }
 
 /// Function table. `struct_size` is the plugin's view of this struct.

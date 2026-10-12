@@ -126,11 +126,14 @@ public partial class ResourceMonitorWindow : Window
         var extra = stats.ComposeVramBytes > 0 || stats.DelayVramBytes > 0
             ? $"    Compose {FormatBytes(stats.ComposeVramBytes)}    Delay {FormatBytes(stats.DelayVramBytes)}"
             : "";
+        var stream = runtime.StreamTargetFpsMilli > 0 || runtime.StreamFpsMilli > 0 || runtime.StreamDropped > 0
+            ? $"    Stream {runtime.StreamFpsMilli / 1000.0:0.0}/{runtime.StreamTargetFpsMilli / 1000.0:0.0} fps    lag {runtime.StreamLagMs} ms    drop {runtime.StreamDropped}"
+            : "";
         SummaryText.Text =
             $"Uptime {FormatUptime(runtime.UptimeMs)}    Skipped {runtime.RenderSkipped}    Lost {runtime.InputQueueDropped}    " +
             $"OMT {runtime.OutputOmt} (sub {runtime.OutputOmtSubscribed})    NDI {runtime.OutputNdi} (conn {runtime.OutputNdiConnections})    " +
             $"Inputs {session.Inputs.Count}    GPU {gpuText}    RAM {ramText}    VRAM {vramText}{extra}    " +
-            $"Render {stats.RenderMs:0.0} / {stats.FrameBudgetMs:0.0} ms";
+            $"Render {stats.RenderMs:0.0} / {stats.FrameBudgetMs:0.0} ms{stream}";
     }
 
     private static string FormatUptime(ulong ms)

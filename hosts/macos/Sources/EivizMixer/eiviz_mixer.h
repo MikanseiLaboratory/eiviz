@@ -301,6 +301,11 @@ typedef struct EivizMixerRuntimeStats {
     uint32_t output_decklink;
     uint32_t output_omt_subscribed;
     uint32_t output_ndi_connections;
+    uint32_t stream_slow;
+    uint32_t stream_lag_ms;
+    uint32_t stream_fps_milli;
+    uint32_t stream_target_fps_milli;
+    uint64_t stream_dropped;
 } EivizMixerRuntimeStats;
 
 typedef struct EivizInputRuntimeStats {

@@ -915,6 +915,8 @@ impl MediaOutput for PluginOutput {
             dropped: 0,
             bitrate: 0,
             encoder_threads: 0,
+            media_lag_ms: 0,
+            sent_fps_milli: 0,
         };
         let mut message = [0u8; 256];
         let Some(stats) = self.stats_fn else {
@@ -934,6 +936,8 @@ impl MediaOutput for PluginOutput {
             repeated: raw.repeated,
             dropped: raw.dropped,
             bitrate: raw.bitrate,
+            media_lag_ms: raw.media_lag_ms,
+            sent_fps_milli: raw.sent_fps_milli,
             message: String::from_utf8_lossy(&message[..message_len]).into_owned(),
             encoder_threads: raw.encoder_threads,
         }
@@ -1002,6 +1006,8 @@ impl StreamOutput for PluginStream {
             dropped: 0,
             bitrate: 0,
             encoder_threads: 0,
+            media_lag_ms: 0,
+            sent_fps_milli: 0,
         };
         let mut message = [0u8; 256];
         let status = unsafe {
@@ -1026,6 +1032,8 @@ impl StreamOutput for PluginStream {
             repeated: raw.repeated,
             dropped: raw.dropped,
             bitrate: raw.bitrate,
+            media_lag_ms: raw.media_lag_ms,
+            sent_fps_milli: raw.sent_fps_milli,
             message: String::from_utf8_lossy(&message[..message_len]).into_owned(),
             encoder_threads: raw.encoder_threads,
         })

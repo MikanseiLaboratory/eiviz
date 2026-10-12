@@ -19,6 +19,11 @@ internal sealed class ResourceMonitor : IDisposable
     private float _vram;
     private float _renderMs;
     private float _budgetMs = 16.67f;
+    private uint _streamSlow;
+    private uint _streamLagMs;
+    private uint _streamFpsMilli;
+    private uint _streamTargetFpsMilli;
+    private ulong _streamDropped;
     private string _line = "";
     private string? _warning;
 
@@ -69,12 +74,21 @@ internal sealed class ResourceMonitor : IDisposable
         }
         _ram = SampleRam(_process.WorkingSet64);
         MixerStats stats = default;
+        MixerRuntimeStats runtime = default;
         unsafe
         {
             if (MixerNative.CopyStats(&stats) == 0)
             {
                 _renderMs = stats.RenderMs;
                 _budgetMs = stats.FrameBudgetMs > 0.1f ? stats.FrameBudgetMs : 16.67f;
+            }
+            if (MixerNative.CopyRuntimeStats(&runtime) == 0)
+            {
+                _streamSlow = runtime.StreamSlow;
+                _streamLagMs = runtime.StreamLagMs;
+                _streamFpsMilli = runtime.StreamFpsMilli;
+                _streamTargetFpsMilli = runtime.StreamTargetFpsMilli;
+                _streamDropped = runtime.StreamDropped;
             }
         }
         try
@@ -104,7 +118,10 @@ internal sealed class ResourceMonitor : IDisposable
     private string FormatLine()
     {
         var gpuText = _gpu is { } gpu ? $"{gpu:0}%" : I18n.Loc.T("resources.unmeasured");
-        return $"CPU {_cpu:0}%   GPU {gpuText}   RAM {_ram:0}%   VRAM {_vram:0}%   Render {_renderMs:0.0} ms / {_budgetMs:0.0} ms";
+        var stream = _streamTargetFpsMilli > 0 || _streamFpsMilli > 0 || _streamDropped > 0
+            ? $"   Stream {_streamFpsMilli / 1000.0:0.0}/{_streamTargetFpsMilli / 1000.0:0.0} fps   lag {_streamLagMs} ms   drop {_streamDropped}"
+            : "";
+        return $"CPU {_cpu:0}%   GPU {gpuText}   RAM {_ram:0}%   VRAM {_vram:0}%   Render {_renderMs:0.0} ms / {_budgetMs:0.0} ms{stream}";
     }
 
     private string? FormatWarning()
@@ -116,7 +133,20 @@ internal sealed class ResourceMonitor : IDisposable
         if (_vram >= 85) hits.Add($"VRAM {_vram:0}%");
         if (_budgetMs > 0 && _renderMs >= _budgetMs * 0.85f)
             hits.Add($"Render {_renderMs:0.0} ms");
-        return hits.Count == 0 ? null : "High load: " + string.Join("  ", hits);
+        if (_streamSlow != 0)
+        {
+            hits.Add(I18n.Loc.Format(
+                "status.streamSlow",
+                _streamFpsMilli / 1000.0,
+                _streamTargetFpsMilli / 1000.0,
+                _streamLagMs,
+                _streamDropped));
+        }
+        if (hits.Count == 0)
+            return null;
+        return _streamSlow != 0 && hits.Count == 1
+            ? hits[0]
+            : "High load: " + string.Join("  ", hits);
     }
 
     public void Dispose()
