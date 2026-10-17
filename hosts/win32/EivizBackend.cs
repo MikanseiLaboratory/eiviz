@@ -6,6 +6,8 @@ using Eiviz.Host.Interop;
 using Eiviz.Host.Media;
 using Eiviz.Host.Preview;
 
+using Eiviz.Host.I18n;
+
 namespace Eiviz.Host;
 
 internal enum HostConnectionMode
@@ -37,6 +39,30 @@ internal interface IEivizBackend
     bool Auto(ulong unitId, MixingUnitEntry unit, TransitionPreset preset);
     bool SetMix(ulong unitId, float mix, TransitionPreset? preset);
     bool OverlayAuto(ulong unitId, ulong overlayId, uint durationMs, bool toOn);
+    /// <summary>
+    /// Replay transport. Local mode keeps the mark bookkeeping in the host, which
+    /// is why the mark calls return values; in remote mode the core owns it and
+    /// the mark calls return null.
+    /// </summary>
+    bool ReplayRecord(bool on);
+    ulong? ReplayMarkIn();
+    /// <summary>
+    /// Takes the Mark Out. <c>created</c> carries the event when the host owns the
+    /// mark; in remote mode the core creates it and the session document brings it
+    /// back, so <c>created</c> stays null and the return value alone says whether
+    /// the mark was taken. <c>false</c> means it was refused and the range stays
+    /// open for another try.
+    /// </summary>
+    bool ReplayMarkOut(string name, out (string Uuid, ulong InFrame, ulong OutFrame)? created);
+    bool ReplayCue(uint channel, string clipUid);
+    bool ReplayTransport(uint channel, bool playing, int speedMilli, long seekFrame);
+    bool ReplayJumpToNow(uint channel);
+    /// <summary>Recorded frame range of one angle, or null when it has none.</summary>
+    (ulong First, ulong Last)? ReplayAngleRange(uint angleId);
+    /// <summary>MP4 export of recorded segments. Returns the progress JSON.</summary>
+    bool ReplayExportStart(string json, out string error);
+    string ReplayExportProgress();
+    bool ReplayExportCancel();
     bool SceneGoTo(ulong sceneId, ulong stateId);
     bool SceneSequence(ulong sceneId, ulong sequenceId, uint op);
     bool VideoPlay(ulong inputId, bool playing);
@@ -412,6 +438,92 @@ internal sealed class LocalEivizBackend : IEivizBackend
     public bool SceneGoTo(ulong sceneId, ulong stateId) =>
         MixerNative.SceneGoTo(MixerNative.SceneGpuId(sceneId), stateId) == 0;
 
+    public bool ReplayRecord(bool on) => MixerNative.ReplayRecord(on ? 1u : 0u) == 0;
+
+    public ulong? ReplayMarkIn()
+    {
+        unsafe
+        {
+            ulong frame = 0;
+            return MixerNative.ReplayMarkIn(&frame) == 0 ? frame : null;
+        }
+    }
+
+    public bool ReplayMarkOut(string name, out (string Uuid, ulong InFrame, ulong OutFrame)? created)
+    {
+        _ = name;
+        created = null;
+        unsafe
+        {
+            ulong inFrame = 0;
+            ulong outFrame = 0;
+            var uuid = new byte[80];
+            fixed (byte* ptr = uuid)
+            {
+                if (MixerNative.ReplayMarkOut(&inFrame, &outFrame, ptr, (nuint)uuid.Length) != 0)
+                    return false;
+            }
+            created = (System.Text.Encoding.UTF8.GetString(uuid).TrimEnd('\0'), inFrame, outFrame);
+            return true;
+        }
+    }
+
+    public bool ReplayCue(uint channel, string clipUid)
+    {
+        if (Application.Current is not App app)
+            return false;
+        var root = ReplayModel.Parse(app.Session);
+        if (root is null)
+            return false;
+        foreach (var clip in ReplayModel.Clips(root, ReplayModel.EnsurePlaylist(root)))
+        {
+            if (clip.Uid != clipUid)
+                continue;
+            return MixerNative.ReplayCue(channel, clip.AngleId, clip.InFrame, clip.OutFrame, clip.RecordingUuid) == 0;
+        }
+        return false;
+    }
+
+    public bool ReplayTransport(uint channel, bool playing, int speedMilli, long seekFrame) =>
+        MixerNative.ReplayTransport(channel, playing ? 1u : 0u, speedMilli, seekFrame) == 0;
+
+    public bool ReplayJumpToNow(uint channel) => MixerNative.ReplayJumpToNow(channel) == 0;
+    public (ulong First, ulong Last)? ReplayAngleRange(uint angleId)
+    {
+        ulong first = 0;
+        ulong last = 0;
+        unsafe
+        {
+            if (MixerNative.ReplayAngleRange(angleId, &first, &last) == 0)
+                return null;
+        }
+        return (first, last);
+    }
+
+    public bool ReplayExportStart(string json, out string error)
+    {
+        var status = MixerNative.ReplayExportStart(json);
+        error = status == 0 ? "" : Loc.T("replay.exportFailed");
+        return status == 0;
+    }
+
+    public string ReplayExportProgress()
+    {
+        var buffer = new byte[1024];
+        unsafe
+        {
+            fixed (byte* pointer = buffer)
+            {
+                nuint written = 0;
+                if (MixerNative.ReplayExportProgress(pointer, (nuint)buffer.Length, &written) != 0)
+                    return "";
+                return System.Text.Encoding.UTF8.GetString(buffer, 0, (int)written);
+            }
+        }
+    }
+
+    public bool ReplayExportCancel() => MixerNative.ReplayExportCancel() == 0;
+
     public bool SceneSequence(ulong sceneId, ulong sequenceId, uint op) =>
         MixerNative.SceneSequence(MixerNative.SceneGpuId(sceneId), sequenceId, op) == 0;
 
@@ -666,6 +778,43 @@ internal sealed class RemoteEivizBackend : IEivizBackend
 
     public bool OverlayAuto(ulong unitId, ulong overlayId, uint durationMs, bool toOn) =>
         MixerRemote.OverlayAuto(_handle, unitId, overlayId, durationMs, toOn ? 1u : 0u) == 0;
+
+    public bool ReplayRecord(bool on) => MixerRemote.ReplayRecord(_handle, on ? 1u : 0u) == 0;
+
+    /// <summary>The remote core keeps the mark, so there is no frame to return.</summary>
+    public ulong? ReplayMarkIn()
+    {
+        MixerRemote.ReplayMarkIn(_handle);
+        return null;
+    }
+
+    /// <summary>The remote core creates the event from the mark, so nothing is returned.</summary>
+    public bool ReplayMarkOut(string name, out (string Uuid, ulong InFrame, ulong OutFrame)? created)
+    {
+        created = null;
+        return MixerRemote.ReplayMarkOut(_handle, name) == 0;
+    }
+
+    public bool ReplayCue(uint channel, string clipUid) =>
+        MixerRemote.ReplayCue(_handle, channel, clipUid) == 0;
+
+    public bool ReplayTransport(uint channel, bool playing, int speedMilli, long seekFrame) =>
+        MixerRemote.ReplayTransport(_handle, channel, playing ? 1u : 0u, speedMilli, seekFrame) == 0;
+
+    public bool ReplayJumpToNow(uint channel) => MixerRemote.ReplayJumpToNow(_handle, channel) == 0;
+    public (ulong First, ulong Last)? ReplayAngleRange(uint angleId) => null;
+
+    public bool ReplayExportStart(string json, out string error)
+    {
+        // The file is written by the machine that owns the recording, so a remote
+        // session must run the export there, not here.
+        error = Loc.T("replay.exportLocalOnly");
+        return false;
+    }
+
+    public string ReplayExportProgress() => "";
+
+    public bool ReplayExportCancel() => false;
 
     public bool SceneGoTo(ulong sceneId, ulong stateId) =>
         MixerRemote.SceneGoTo(_handle, sceneId, stateId) == 0;
@@ -1284,6 +1433,29 @@ internal sealed class DisconnectedRemoteBackend : IEivizBackend
     public bool Auto(ulong unitId, MixingUnitEntry unit, TransitionPreset preset) { _ = (unitId, unit, preset); return false; }
     public bool SetMix(ulong unitId, float mix, TransitionPreset? preset) { _ = (unitId, mix, preset); return false; }
     public bool OverlayAuto(ulong unitId, ulong overlayId, uint durationMs, bool toOn) { _ = (unitId, overlayId, durationMs, toOn); return false; }
+
+    public bool ReplayRecord(bool on) { _ = on; return false; }
+    public ulong? ReplayMarkIn() => null;
+    public bool ReplayMarkOut(string name, out (string Uuid, ulong InFrame, ulong OutFrame)? created)
+    {
+        _ = name;
+        created = null;
+        return false;
+    }
+    public bool ReplayCue(uint channel, string clipUid) { _ = (channel, clipUid); return false; }
+    public bool ReplayTransport(uint channel, bool playing, int speedMilli, long seekFrame) { _ = (channel, playing, speedMilli, seekFrame); return false; }
+    public bool ReplayJumpToNow(uint channel) { _ = channel; return false; }
+    public (ulong First, ulong Last)? ReplayAngleRange(uint angleId) => null;
+
+    public bool ReplayExportStart(string json, out string error)
+    {
+        error = "";
+        return false;
+    }
+
+    public string ReplayExportProgress() => "";
+
+    public bool ReplayExportCancel() => false;
     public bool SceneGoTo(ulong sceneId, ulong stateId) { _ = (sceneId, stateId); return false; }
     public bool SceneSequence(ulong sceneId, ulong sequenceId, uint op) { _ = (sceneId, sequenceId, op); return false; }
     public bool VideoPlay(ulong inputId, bool playing) { _ = (inputId, playing); return false; }
@@ -1442,3 +1614,6 @@ internal static class InputHostDiscovery
         }
     }
 }
+
+
+

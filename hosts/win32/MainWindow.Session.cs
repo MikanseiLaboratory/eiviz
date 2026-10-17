@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -19,6 +20,52 @@ namespace Eiviz.Host;
 public partial class MainWindow
 {
     private bool _uploadingMedia;
+    private ReplayWindow? _replayWindow;
+    private ReplaySettingsWindow? _replaySettingsWindow;
+
+    private bool HasReplayInput => _session.Inputs.Any(input => input.Kind == InputKind.Replay);
+
+    private void Replay_Click(object sender, RoutedEventArgs e)
+    {
+        if (!HasReplayInput)
+            return;
+        if (_replayWindow is not null)
+        {
+            _replayWindow.Activate();
+            return;
+        }
+        _replayWindow = new ReplayWindow(_session) { Owner = this };
+        _replayWindow.Closed += (_, _) => _replayWindow = null;
+        _replayWindow.Show();
+    }
+
+    private void ReplaySetup_Click(object sender, RoutedEventArgs e)
+    {
+        if (!HasReplayInput)
+            return;
+        if (_replaySettingsWindow is not null)
+        {
+            _replaySettingsWindow.Activate();
+            return;
+        }
+        _replaySettingsWindow = new ReplaySettingsWindow(_session) { Owner = this };
+        _replaySettingsWindow.Closed += (_, _) => _replaySettingsWindow = null;
+        _replaySettingsWindow.Show();
+    }
+
+    /// Replay is available only while the project has a Replay input. Without one
+    /// the chrome hides both entry points and closes anything already open.
+    private void RefreshReplayUi()
+    {
+        var visibility = HasReplayInput ? Visibility.Visible : Visibility.Collapsed;
+        ReplayButton.Visibility = visibility;
+        ReplaySetupButton.Visibility = visibility;
+        if (!HasReplayInput)
+        {
+            _replayWindow?.Close();
+            _replaySettingsWindow?.Close();
+        }
+    }
 
     private async void AddInput_Click(object sender, RoutedEventArgs e)
     {
@@ -28,9 +75,29 @@ public partial class MainWindow
         dialog.BindTags(_session);
         if (dialog.ShowDialog() != true)
             return;
-        if (dialog.Kind is not (InputKind.Color or InputKind.Bars or InputKind.Mix or InputKind.Audio) && dialog.ResultPath is null)
+        if (dialog.Kind is not (InputKind.Color or InputKind.Bars or InputKind.Mix or InputKind.Audio or InputKind.Replay) && dialog.ResultPath is null)
             return;
-        var id = _session.NextInputId++;
+        var id = dialog.Kind == InputKind.Replay
+            ? NextReplayInputId()
+            : _session.NextInputId++;
+        if (dialog.Kind == InputKind.Replay && _session.Inputs.Any(item => item.Id == id))
+        {
+            MessageBox.Show(this, Loc.T("replay.channelsFull"), Loc.T("msg.addInput"));
+            return;
+        }
+        // The plan caps channels as well as angles. The core would refuse the
+        // document with a bare code, so say which limit was reached here.
+        if (dialog.Kind == InputKind.Replay
+            && PlanGate.TryReplayLimits(out var angleLimit, out var channelLimit)
+            && channelLimit != uint.MaxValue
+            && _session.Inputs.Count(item => item.Kind == InputKind.Replay) >= channelLimit)
+        {
+            MessageBox.Show(
+                this,
+                Loc.Format("replay.planLimits", angleLimit, channelLimit),
+                Loc.T("msg.addInput"));
+            return;
+        }
         var input = new InputEntry
         {
             Id = id,
@@ -365,10 +432,68 @@ public partial class MainWindow
                 input.AudioProcessAumid = dialog.ResultAudioProcessAumid ?? "";
                 MixerApply.StartAudioCapture(input);
                 break;
+            case InputKind.Replay:
+                EnsureReplayConfiguration(input.Id);
+                break;
             default:
                 throw new InvalidOperationException($"{dialog.Kind} is not available.");
         }
         SessionStore.Publish(_session);
+        RefreshReplayUi();
+    }
+
+    /// Replay channel inputs own this band. It must match
+    /// `REPLAY_CHANNEL_BASE` in `eiviz-control::session::replay`, which is
+    /// `0x0008_0000`; `0x0005_0000` belongs to the remote video sources.
+    private const ulong ReplayChannelBase = 0x0008_0000;
+
+    private ulong NextReplayInputId()
+    {
+        for (var index = 0UL; index < 26; index++)
+        {
+            var id = ReplayChannelBase | (index + 1);
+            if (_session.Inputs.All(input => input.Id != id))
+                return id;
+        }
+        return 0;
+    }
+
+    private void EnsureReplayConfiguration(ulong inputId)
+    {
+        if (string.IsNullOrWhiteSpace(_session.ReplayJson))
+        {
+            var unit = _session.Units.FirstOrDefault() ?? throw new InvalidOperationException("A Mixing Unit is required for Replay.");
+            var channel = inputId - ReplayChannelBase - 1;
+            var letter = channel < 26 ? ((char)('A' + (int)channel)).ToString() : channel.ToString();
+            _session.ReplayJson = $$"""
+                {
+                  "enabled": false,
+                  "storage": [],
+                  "format": { "width": {{unit.Width}}, "height": {{unit.Height}}, "fpsNum": {{unit.FpsNum}}, "fpsDen": {{unit.FpsDen}}, "profile": "Sq", "segmentFrames": 120 },
+                  "channels": [{ "index": {{channel}}, "inputId": {{inputId}} }],
+                  "angles": [],
+                  "events": [],
+                  "playlists": []
+                }
+                """;
+            _session.Inputs.FirstOrDefault(item => item.Id == inputId)!.Name = $"Replay {letter}";
+        }
+        else
+        {
+            using var document = JsonDocument.Parse(_session.ReplayJson);
+            var root = document.RootElement;
+            var channels = root.TryGetProperty("channels", out var existing)
+                ? existing.EnumerateArray().Select(item => item.GetRawText()).ToList()
+                : [];
+            var channel = inputId - ReplayChannelBase - 1;
+            channels.Add($$"""{"index":{{channel}},"inputId":{{inputId}}}""");
+            var properties = root.EnumerateObject()
+                .Where(property => property.Name != "channels")
+                .Select(property => $"\"{property.Name}\":{property.Value.GetRawText()}");
+            _session.ReplayJson = "{" + string.Join(",", properties.Append($"\"channels\":[{string.Join(",", channels)}]")) + "}";
+            _session.Inputs.FirstOrDefault(item => item.Id == inputId)!.Name = $"Replay {(char)('A' + (int)channel)}";
+        }
+        MixerNative.ThrowIfFailed(MixerNative.ReplayConfigure(_session.ReplayJson), "Replay configure");
     }
 
     private void RemoveInput_Click(object sender, RoutedEventArgs e)
@@ -386,6 +511,8 @@ public partial class MainWindow
             return;
         }
         if (TryRemoteMutate(MutationJson.DeleteInput(input.Id), Loc.T("msg.selectInputDelete")))
+            return;
+        if (input.Kind == InputKind.Replay && !RemoveReplayChannel(input.Id))
             return;
         CloseInputPreview(input.Id);
         CloseAudioInput(input.Id);
@@ -422,6 +549,50 @@ public partial class MainWindow
         RebuildStreamToggles();
         TickVideo();
         SessionStore.Publish(_session);
+        RefreshReplayUi();
+    }
+
+    private bool RemoveReplayChannel(ulong inputId)
+    {
+        if (string.IsNullOrWhiteSpace(_session.ReplayJson))
+            return true;
+        using var document = JsonDocument.Parse(_session.ReplayJson);
+        var root = document.RootElement;
+        var channels = root.TryGetProperty("channels", out var existing)
+            ? existing.EnumerateArray()
+                .Where(item => !item.TryGetProperty("inputId", out var id) || id.GetUInt64() != inputId)
+                .Select(item => item.GetRawText())
+                .ToList()
+            : [];
+        // The channel index is what an animation step cues, and it follows the
+        // reserved input id.
+        var channelIndex = inputId > ReplayChannelBase
+            ? (uint)(inputId - ReplayChannelBase - 1)
+            : 0;
+        if (channels.Count == 0)
+        {
+            if (MessageBox.Show(
+                    this,
+                    "Removing the last Replay input removes its replay settings, events, and playlists from this session. Continue?",
+                    "Remove Replay",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                return false;
+            _session.ReplayJson = "";
+            // Scene sequences that cued a channel go with Replay: a cue to a channel
+            // nobody owns would stop the session loading.
+            ReplayCues.ClearAll(_session.Scenes);
+            MixerNative.ThrowIfFailed(MixerNative.ReplayConfigure("null"), "Replay configure");
+            return true;
+        }
+        var properties = root.EnumerateObject()
+            .Where(property => property.Name != "channels")
+            .Select(property => $"\"{property.Name}\":{property.Value.GetRawText()}");
+        _session.ReplayJson = "{" + string.Join(",", properties.Append($"\"channels\":[{string.Join(",", channels)}]")) + "}";
+        // Only the cues that named this channel are dead.
+        ReplayCues.Clear(_session.Scenes, channel: channelIndex);
+        MixerNative.ThrowIfFailed(MixerNative.ReplayConfigure(_session.ReplayJson), "Replay configure");
+        return true;
     }
 
     private void AddScene_Click(object sender, RoutedEventArgs e)
@@ -511,10 +682,47 @@ public partial class MainWindow
                 continue;
             names.Add(string.IsNullOrWhiteSpace(unit.Name) ? $"Mixing Unit {unit.Id}" : unit.Name);
         }
+        // A Replay angle records this scene's composited output, so the scene is not
+        // free to delete while the angle names it.
+        if (ReplayModel.Parse(_session) is { } replay && replay["angles"] is JsonArray angles)
+        {
+            foreach (var item in angles)
+            {
+                if (item is not JsonObject angle
+                    || (angle["sceneId"]?.GetValue<ulong>() ?? 0) != scene.Id)
+                {
+                    continue;
+                }
+                names.Add("Replay " + (angle["name"]?.GetValue<string>() ?? "angle"));
+            }
+        }
         message = names.Count == 0
             ? ""
             : Loc.Format("msg.sceneInUse", string.Join(Environment.NewLine, names));
         return names.Count > 0;
+    }
+
+    /// <summary>
+    /// True when a Replay angle records this mixing unit's program mix, which makes
+    /// the unit the wrong thing to delete.
+    /// </summary>
+    private bool ReplayRecordsUnit(ulong unitId, out string message)
+    {
+        if (ReplayModel.Parse(_session) is { } replay && replay["angles"] is JsonArray angles)
+        {
+            foreach (var item in angles)
+            {
+                if (item is not JsonObject angle)
+                    continue;
+                var audio = angle["audio"]?.GetValue<string>() ?? "Silent";
+                if (audio != "Unit" || (angle["audioUnitId"]?.GetValue<ulong>() ?? 0) != unitId)
+                    continue;
+                message = Loc.Format("msg.unitReplayAudio", angle["name"]?.GetValue<string>() ?? "");
+                return true;
+            }
+        }
+        message = "";
+        return false;
     }
 
     private bool UnitShowsScene(MixingUnitEntry unit, SceneEntry scene)
@@ -701,6 +909,11 @@ public partial class MainWindow
             return;
         }
         var unit = SelectedUnit;
+        if (ReplayRecordsUnit(unit.Id, out var replayMessage))
+        {
+            MessageBox.Show(this, replayMessage, Loc.T("replay.windowTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         if (TryRemoteMutate(MutationJson.DeleteUnit(unit.Id), Loc.T("chrome.delete")))
             return;
         foreach (var output in _session.Outputs.Where(item => item.UnitId == unit.Id).ToArray())

@@ -557,6 +557,51 @@ fn mix_session_multiview_raw_id_program_is_not_black() {
     mixer_destroy();
 }
 
+/// The compact multi-angle view: a scene whose layers are other scenes. The host
+/// relies on this to show every replay angle inside one present surface.
+#[test]
+fn a_scene_of_scenes_shows_them() {
+    mixer_destroy();
+    assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+    assert_eq!(mixer_create_unit(1, 320, 180), OK);
+    let color = full_layer(SRC_COLOR);
+    // One angle scene, then a multiview scene that shows it. The id sits in the
+    // multiview band but far above anything a session uses.
+    let angle_layer = full_layer(scene_id(1));
+    unsafe {
+        assert_eq!(mixer_define_scene(scene_id(1), 320, 180, 1, &color), OK);
+        assert_eq!(
+            mixer_define_scene(MULTIVIEW_BASE | 0x7F, 640, 360, 1, &angle_layer),
+            OK
+        );
+        let state = UnitState {
+            program_source: MULTIVIEW_BASE | 0x7F,
+            preview_source: SRC_BARS,
+            mix: 0.0,
+            ..UnitState::default()
+        };
+        assert_eq!(mixer_unit_set_state(1, &state), OK);
+    }
+
+    let path = std::env::temp_dir().join(format!(
+        "eiviz-compact-mv-{}-{}.png",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    ));
+    let sample = wait_snapshot_rgb(1, &path, Duration::from_secs(4));
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        sample.0 > 160.0 && sample.1 < 80.0,
+        "a scene of scenes should show the angle scene, got r={} b={}",
+        sample.0,
+        sample.1
+    );
+    mixer_destroy();
+}
+
 /// Multiview OMT must keep accepting peers while Program GPU encode is also live.
 /// A raw layout id (not `MULTIVIEW_BASE | id`) must still address the mosaic.
 #[test]
@@ -1319,6 +1364,9 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
             hardware_encode: 1,
             decklink_linked: 1,
             rtmp_linked: 1,
+            replay_angle_limit: 0,
+            replay_channel_limit: 0,
+            replay_linked: 0,
         };
         assert_eq!(mixer_capabilities(&mut caps), OK);
         assert_eq!(caps.plan, 0);
@@ -2332,3 +2380,4 @@ fn vulkan_backend_is_explicit() {
     assert_eq!(mixer_create_unit(1, 320, 180), OK);
     mixer_destroy();
 }
+

@@ -46,6 +46,8 @@
                     <Button x:Name="DeleteUnitButton" Content="{Binding [chrome.delete], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="DeleteUnit_Click"/>
                     <Button Content="{Binding [chrome.open], Source={x:Static i18n:Loc.Source}}" Width="64" Margin="4,0,0,0" Click="OpenSwitcher_Click"/>
                 </StackPanel>
+                <TextBlock x:Name="ReplayText" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                           Foreground="{DynamicResource HudForeground}" Margin="12,0,12,0"/>
                 <TextBlock x:Name="WarnText" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
                            Foreground="{DynamicResource WarnForeground}" Margin="12,0,12,0"/>
             </DockPanel>
@@ -255,6 +257,10 @@
                                 Width="88" Height="28" Margin="0,0,8,0" Click="OpenStream_Click"/>
                         <Button Content="{Binding [chrome.overlay], Source={x:Static i18n:Loc.Source}}"
                                 Width="88" Height="28" Click="OpenOverlay_Click"/>
+                        <Button x:Name="ReplayButton" Content="{Binding [chrome.replay], Source={x:Static i18n:Loc.Source}}"
+                                Width="88" Height="28" Margin="8,0,0,0" Visibility="Collapsed" Click="Replay_Click"/>
+                        <Button x:Name="ReplaySetupButton" Content="{Binding [chrome.replaySetup], Source={x:Static i18n:Loc.Source}}"
+                                Width="104" Height="28" Margin="8,0,0,0" Visibility="Collapsed" Click="ReplaySetup_Click"/>
                     </StackPanel>
                     <Grid>
                         <Grid.ColumnDefinitions>

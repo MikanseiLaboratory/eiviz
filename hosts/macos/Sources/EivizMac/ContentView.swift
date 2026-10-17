@@ -636,6 +636,12 @@ struct ContentView: View {
             .buttonStyle(MixerButtonStyle())
             Button(L10n.t("chrome.overlay")) { mixer.openOverlay() }
                 .buttonStyle(MixerButtonStyle())
+            if mixer.hasReplayInput {
+                Button(L10n.t("chrome.replay")) { mixer.openReplay() }
+                    .buttonStyle(MixerButtonStyle())
+                Button(L10n.t("chrome.replaySetup")) { mixer.openReplaySettings() }
+                    .buttonStyle(MixerButtonStyle())
+            }
         }
         .padding(8)
         .background(EivizTheme.panel)

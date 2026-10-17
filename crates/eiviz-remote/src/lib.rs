@@ -803,6 +803,109 @@ pub unsafe extern "C" fn mixer_remote_upload(
     })
 }
 
+pub fn replay_record(handle: i32, on: u32) -> i32 {
+    let Some(session) = session(handle) else {
+        return ERR_NOT_CREATED;
+    };
+    spawn_live(handle, async move {
+        map_result(session.replay_record(on != 0).await)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_remote_replay_record(handle: i32, on: u32) -> i32 {
+    guarded("mixer_remote_replay_record", || replay_record(handle, on))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_remote_replay_mark_in(handle: i32) -> i32 {
+    guarded("mixer_remote_replay_mark_in", || {
+        let Some(session) = session(handle) else {
+            return ERR_NOT_CREATED;
+        };
+        spawn_live(
+            handle,
+            async move { map_result(session.replay_mark_in().await) },
+        )
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_remote_replay_mark_out(handle: i32, name: *const c_char) -> i32 {
+    guarded("mixer_remote_replay_mark_out", || {
+        let name = if name.is_null() {
+            String::new()
+        } else {
+            unsafe { std::ffi::CStr::from_ptr(name) }
+                .to_string_lossy()
+                .into_owned()
+        };
+        let Some(session) = session(handle) else {
+            return ERR_NOT_CREATED;
+        };
+        spawn_live(handle, async move {
+            map_result(session.replay_mark_out(&name).await)
+        })
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_remote_replay_cue(
+    handle: i32,
+    channel: u32,
+    clip_uid: *const c_char,
+) -> i32 {
+    guarded("mixer_remote_replay_cue", || {
+        if clip_uid.is_null() {
+            return ERR_INVALID_ARGUMENT;
+        }
+        let clip_uid = unsafe { std::ffi::CStr::from_ptr(clip_uid) }
+            .to_string_lossy()
+            .into_owned();
+        let Some(session) = session(handle) else {
+            return ERR_NOT_CREATED;
+        };
+        let clip_uid = clip_uid.to_string();
+        spawn_live(handle, async move {
+            map_result(session.replay_cue(channel, &clip_uid).await)
+        })
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_remote_replay_transport(
+    handle: i32,
+    channel: u32,
+    playing: u32,
+    speed_milli: i32,
+    seek_frame: i64,
+) -> i32 {
+    guarded("mixer_remote_replay_transport", || {
+        let Some(session) = session(handle) else {
+            return ERR_NOT_CREATED;
+        };
+        spawn_live(handle, async move {
+            map_result(
+                session
+                    .replay_transport(channel, playing != 0, speed_milli, seek_frame)
+                    .await,
+            )
+        })
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_remote_replay_jump_to_now(handle: i32, channel: u32) -> i32 {
+    guarded("mixer_remote_replay_jump_to_now", || {
+        let Some(session) = session(handle) else {
+            return ERR_NOT_CREATED;
+        };
+        spawn_live(handle, async move {
+            map_result(session.replay_jump_to_now(channel).await)
+        })
+    })
+}
+
 fn join_timeout(handle: JoinHandle<()>, timeout: Duration) {
     let (tx, rx) = mpsc::channel();
     if thread::Builder::new()

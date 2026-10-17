@@ -31,7 +31,8 @@ public partial class AddInputWindow : Window
             InputKind.OMT,
             InputKind.NDI,
             InputKind.UVC,
-            InputKind.DeckLink
+            InputKind.DeckLink,
+            InputKind.Replay
         };
         kinds.Add(InputKind.Mix);
         kinds.Add(InputKind.Audio);
@@ -104,7 +105,7 @@ public partial class AddInputWindow : Window
         NameBox.Text = input.Name;
         IdLabel.Visibility = Visibility.Visible;
         IdLabel.Text = $"ID {input.Id}   GUID {input.Guid}";
-        _lockKind = input.IsBuiltin;
+        _lockKind = input.IsBuiltin || input.Kind == InputKind.Replay;
         _kind = input.Kind is InputKind.Bars or InputKind.Black ? InputKind.Color : input.Kind;
         if (input.Kind == InputKind.Bars)
             BarsRadio.IsChecked = true;
@@ -224,6 +225,8 @@ public partial class AddInputWindow : Window
         DeckLinkPanel.Visibility = VisibleIf(InputKind.DeckLink);
         MixPanel.Visibility = VisibleIf(InputKind.Mix);
         AudioPanel.Visibility = VisibleIf(InputKind.Audio);
+        // Replay has no source-specific fields. Its channel and recording
+        // settings are configured in the dedicated Replay windows.
         if (_kind == InputKind.DeckLink && !_decklinkLoaded)
             RefreshDeckLink();
         UpdateAudioModePanels();
@@ -253,6 +256,8 @@ public partial class AddInputWindow : Window
     private UIElement PresentCategory(InputKind kind)
     {
         var button = CategoryButton(kind);
+        if (kind == InputKind.Replay && !PlanGate.ReplayRecord)
+            return PlanGate.HoverDisabled(button, "settings.replayPlan");
         if (kind != InputKind.DeckLink || InputKindNames.DeckLinkInputAllowed())
             return button;
         return PlanGate.HoverDisabled(button, "msg.planDecklinkInput");
@@ -674,6 +679,10 @@ public partial class AddInputWindow : Window
                 ResultCaptureFpsNum = mode.FpsNum;
                 ResultCaptureFpsDen = mode.FpsDen == 0 ? 1 : mode.FpsDen;
                 ResultFrameBufferFrames = ReadBuffer(UvcBufferBox, 3);
+                break;
+            case InputKind.Replay:
+                ResultPath = "";
+                ResultName = "Replay";
                 break;
             default:
                 return;

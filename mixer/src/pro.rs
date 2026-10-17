@@ -155,6 +155,9 @@ pub fn fill_capabilities(out: &mut MixerCapabilities) {
         hardware_encode: u32::from(ent.hardware_encode),
         decklink_linked: u32::from(decklink),
         rtmp_linked: u32::from(rtmp),
+        replay_angle_limit: ent.replay_angles.abi_count(),
+        replay_channel_limit: ent.replay_channels.abi_count(),
+        replay_linked: u32::from(module().replay().is_some()),
     };
     let _ = Plan::Community;
 }

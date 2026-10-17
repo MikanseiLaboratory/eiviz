@@ -61,6 +61,10 @@ pub(crate) fn render_loop(
                     prepared,
                     reply,
                 } => {
+                    crate::diag::info(&format!(
+                        "render attach unit={unit_id:#x} kind={kind} prepared={}",
+                        prepared.is_some()
+                    ));
                     let code = match panic::catch_unwind(AssertUnwindSafe(|| {
                         presenters.attach(&device, unit_id, kind, surface, width, height, prepared)
                     })) {
@@ -365,7 +369,15 @@ pub(crate) fn render_loop(
                 .iter()
                 .map(|item| (item.source_kind, item.source_id))
                 .collect();
-            let roles = collect_source_roles(&scene_specs, &snapshot, &role_sources, &output_refs);
+            let mut roles = collect_source_roles(&scene_specs, &snapshot, &role_sources, &output_refs);
+            // Angle scenes stay rendered whenever Replay has angles configured,
+            // so the Replay window can show them before recording starts. Only the
+            // recording set is forced to full receive quality.
+            for id in crate::replay::engine().live_angle_scene_ids() {
+                used_scenes.insert(id);
+            }
+            let replay_scenes = crate::replay::engine().replay_scene_ids();
+            mark_replay_scenes(&scene_specs, &replay_scenes, &mut roles);
             {
                 let guard = shared.lock_or_recover();
                 for (id, receiver) in &guard.receivers {
@@ -376,8 +388,9 @@ pub(crate) fn render_loop(
             }
             {
                 let live_units: HashSet<u64> = snapshot.iter().map(|snap| snap.id).collect();
-                let live_outputs: HashSet<u64> =
+                let mut live_outputs: HashSet<u64> =
                     outputs_snap.iter().map(|item| item.output_id).collect();
+                live_outputs.extend(crate::replay::engine().record_targets().into_iter().map(|target| target.readback_key));
                 let live_sources: HashSet<u64> = uploads.lock_or_recover().ids().collect();
                 composer.retain_live(&live_sources, &live_units, &live_outputs);
                 frame_delay.retain(&live_units);
@@ -495,6 +508,7 @@ pub(crate) fn render_loop(
                                     native_w,
                                     native_h,
                                     2,
+                                    crate::readback::READBACK_SLOTS,
                                 );
                                 rb.copy_from(&mut encoder, &packed, pts);
                                 packed_copies.push((output.output_id, native_w, native_h));
@@ -678,6 +692,28 @@ pub(crate) fn render_loop(
                 pts,
             );
             thumbs.capture(&device, &mut composer, &mut encoder, frame_i, &thumbs_snap);
+            let replay_targets = crate::replay::engine().record_targets();
+            for target in &replay_targets {
+                let Some(src) = composer.scene_texture(target.scene_gpu_id).cloned() else {
+                    // The angle has no picture this frame. Counted: a frame the
+                    // recorder never saw must not vanish silently.
+                    crate::replay::engine().note_replaced(target.angle_id, 1);
+                    continue;
+                };
+                push_replay_packed(
+                    &mut composer,
+                    &device,
+                    &mut encoder,
+                    &mut readbacks,
+                    target.readback_key,
+                    target.angle_id,
+                    target.width,
+                    target.height,
+                    &src,
+                    pts,
+                    frame_i,
+                );
+            }
             device.submit(Some(encoder.finish()));
             flush_snapshots(
                 &device,
@@ -688,6 +724,7 @@ pub(crate) fn render_loop(
             );
             thumbs.advance(&device);
             emit_packed(&mut readbacks, &device, &packed_copies, &outputs_snap);
+            emit_replay(&mut readbacks, &device, &replay_targets);
             emit_gpu_encode(&gpu_copies, pts);
             if presenters.any_monitor_due(frame_i) {
                 let monitor_epoch = composer.gpu_epoch() ^ frame_delay.epoch().rotate_left(8);
@@ -900,14 +937,14 @@ fn push_cpu_packed(
             return;
         };
         let rgba = rgba.clone();
-        let rb = readbacks.ensure(device, output.output_id, width, height, 4);
+        let rb = readbacks.ensure(device, output.output_id, width, height, 4, crate::readback::READBACK_SLOTS);
         rb.copy_from(encoder, &rgba, pts);
         packed_copies.push((output.output_id, width, height));
         return;
     }
     if packed_src && (width, height) == (src_w, src_h) {
         // Already UYVY at the requested size: read it back untouched.
-        let rb = readbacks.ensure(device, output.output_id, src_w, src_h, 2);
+        let rb = readbacks.ensure(device, output.output_id, src_w, src_h, 2, crate::readback::READBACK_SLOTS);
         rb.copy_from(encoder, src, pts);
         packed_copies.push((output.output_id, src_w, src_h));
         return;
@@ -932,9 +969,75 @@ fn push_cpu_packed(
     };
     let packed_w = packed.size().width.saturating_mul(2).max(2);
     let packed_h = packed.size().height.max(1);
-    let rb = readbacks.ensure(device, output.output_id, packed_w, packed_h, 2);
+    let rb = readbacks.ensure(device, output.output_id, packed_w, packed_h, 2, crate::readback::READBACK_SLOTS);
     rb.copy_from(encoder, packed, pts);
     packed_copies.push((output.output_id, packed_w, packed_h));
+}
+
+fn push_replay_packed(
+    composer: &mut Composer,
+    device: &GpuDevice,
+    encoder: &mut wgpu::CommandEncoder,
+    readbacks: &mut ReadbackStore,
+    key: u64,
+    angle_id: u32,
+    width: u32,
+    height: u32,
+    src: &wgpu::Texture,
+    pts: i64,
+    frame_index: u64,
+) {
+    let picture = if src.size().width == width && src.size().height == height {
+        src.clone()
+    } else {
+        // Decision: one replay format. A scene that is not already that size is scaled.
+        let Some(scaled) = composer
+            .scale_rgba(device, encoder, key, src, width, height, false)
+            .cloned()
+        else {
+            // The scene could not be scaled this frame. Counted: a frame that
+            // silently vanishes from a recording is worse than a visible drop.
+            crate::replay::engine().note_replaced(angle_id, 1);
+            return;
+        };
+        scaled
+    };
+    // The recorder gets a deeper ring: a map takes a few frames to come back, and
+    // with a preview-sized ring those frames are lost.
+    crate::replay::engine().note_pushed();
+    let rb = readbacks.ensure(device, key, width, height, 4, crate::readback::READBACK_RECORD_SLOTS);
+    if rb.matches(width, height) {
+        rb.copy_from_frame(encoder, &picture, pts, frame_index);
+    } else {
+        crate::replay::engine().note_replaced(angle_id, 1);
+    }
+}
+
+fn emit_replay(
+    readbacks: &mut ReadbackStore,
+    device: &GpuDevice,
+    targets: &[crate::replay::RecordTarget],
+) {
+    for target in targets {
+        let Some(rb) = readbacks.get_mut(target.readback_key) else {
+            continue;
+        };
+        rb.advance(device);
+        let replaced = rb.take_replaced();
+        if replaced > 0 {
+            crate::replay::engine().note_replaced(target.angle_id, replaced);
+        }
+        // Every frame that finished goes to the recorder, in order. Taking one
+        // per tick made the recording follow the readback latency instead of the
+        // render rate, which lost frames even when nothing was overloaded.
+        let stride = (target.width.max(1) * 4) as usize;
+        while let Some((data, pts, captured)) = rb.take_latest() {
+            // Stamp the frame the picture actually came from. Labelling it with
+            // the frame that happened to be rendering when the readback completed
+            // biased every Mark In/Out by the readback latency.
+            crate::replay::engine().offer_frame(target.angle_id, captured, pts, data, stride);
+        }
+    }
 }
 
 fn push_scaled_gpu(
@@ -1300,3 +1403,6 @@ mod tests {
         );
     }
 }
+
+
+

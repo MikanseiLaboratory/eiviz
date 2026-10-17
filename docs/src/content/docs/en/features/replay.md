@@ -1,0 +1,67 @@
+---
+title: Instant Replay
+description: Record every camera, mark the moments that matter, and play them back on air
+---
+
+Instant Replay records a set of scenes continuously so the operator can cut a clip out of the last few minutes and play it back while the show continues. It needs a Professional license and the Pro module.
+
+## Adding Replay to a project
+
+Replay exists only while the project has a Replay input.
+
+1. **Add Input** and pick the **Replay** category. The category appears only when the plan and the module allow Replay.
+2. Each Replay input is one replay channel, named `Replay A`, `Replay B`, and so on, up to 26.
+
+Until a Replay input exists, the Replay window and Replay Setup are not available, and nothing about Replay is written to the session. Removing the last Replay input asks for confirmation and removes its settings, events, and playlists with it. A scene animation that cues a removed channel loses that cue rather than breaking the session.
+
+## Replay Setup
+
+Replay Setup is a dedicated window, opened from the main window. It holds everything the recording needs:
+
+- **Storage**: one or more drives. Angles record to the first drive unless they are assigned to another one, and an angle belongs to exactly one drive. Remaining time is free space minus the reserve, summed over the drives in the set.
+- **Profile**: HQ, SQ, or LQ. Quality is never reduced automatically.
+- **Segment frames**: how many frames one segment file holds.
+- **Encode queue**: unencoded frames kept per angle (default 6, range 2–60).
+- **Write buffer**: bytes held before a segment is written (default 512 MiB, range 64–8192).
+- **Reserve**: space left untouched on every drive (MiB).
+- **Overflow**: drop frames, or stop recording, when encoding falls behind.
+- **When the disk is full**: stop recording and report, overwrite the oldest segments, or overwrite everything except the clips and protected events still in use.
+- **New clips**: the transition clips get when they are added later.
+- **Angles**: one per scene. Each angle records that scene's composited output, and can take its audio from a mixing unit's program mix or record silence.
+- **Add every new event to the playlist automatically**: uses the angle selected in the Replay window. Clips are never filed against a guessed camera.
+
+The angle set is fixed while recording: stop the recording before adding or removing angles.
+
+## The Replay window
+
+The Replay window is the operator's surface.
+
+- **Angles**: every angle is shown live. Click one to make it the angle the mark and the playlist use. More than four angles are shown together in one compact view.
+- **Record / Stop**: starts and stops the recording. The state line shows the remaining time, or that the storage is full, and the health line shows written and read-back frames, frames lost at the readback, encoder and writer losses, segments, queue depth, and write latency. Problems are also spelled out in words, for example "storage low" or "encoder behind".
+- **Mark In (I)** and **Mark Out (O)**: mark the clip. The in point, out point, and duration are shown as timecode, and the marks and the recording position are drawn on the angle's waveform. Cancel mark clears the range.
+- **Event list**: every marked event with its range and duration. Events can be protected from retention, renamed, deleted, and added to the playlist. Deleting an event keeps the clips that came from it.
+- **Playlist**: the clips a channel plays, in order. A clip can be cued, removed, tagged, and edited: transition (Cut or Dissolve), transition timing (Overwrap or Additive), transition length, gain (−60 to +12 dB), keep pitch, playback speed, and where its audio comes from (its own angle, another angle, or silence).
+- **Transport**: play, pause, step one frame, jog, 25 %, 50 %, 100 %, and Live to jump back to the recording edge. Stepping and jogging stay inside the mark.
+- **Keyboard**: `I` and `O` mark, `Space` plays or pauses, `←` and `→` step one frame, and `L` returns to the recording edge.
+- **Export**: write the selected clip, the whole playlist, one angle, or every angle to an MP4. Export runs on the machine that owns the recording.
+
+## Transitions
+
+A clip's transition comes from the playlist's **New clips** setting unless the clip sets its own.
+
+- **Overwrap** shares the transition duration between the two clips: the outgoing clip's tail overlaps the incoming clip's head.
+- **Additive** inserts the duration between the clips, so the playlist becomes `A + duration + B` long. The outgoing clip's last frame and the incoming clip's first frame are held for the insertion and dissolve across it.
+
+A Dissolve with a duration of zero, and a Cut, occupy no time at all.
+
+## Driving Replay from an automation panel
+
+The vMix-compatible API can record, mark, cue, and play Replay channels, so a Stream Deck or Companion can run a replay. See the [function reference](/en/developers/function-reference/) for the Replay functions.
+
+A scene's animation can also cue Replay: a sequence step can name a channel and a clip (or the newest clip on the channel) and start it, so a running order plays clips by its own timecode.
+
+## Remote
+
+A Remote can drive Replay: the recording, the marks, the cue, and the transport go to the machine that owns the recording, and the session document comes back with the events and clips they created.
+
+The recording itself stays there. Recording state, health, the waveform, the angle previews, and MP4 export only exist on the machine that owns the recording, so the Replay window says so instead of showing figures from a machine that is not recording. Take the marks on the recording machine when the operator needs to see the frames.

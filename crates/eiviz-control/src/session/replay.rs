@@ -1,0 +1,1009 @@
+//! Instant-replay session model. Stage 1 records one angle and plays one clip on channel A.
+
+use serde::{Deserialize, Serialize};
+
+use super::{Document, InputDto, InputKind};
+
+/// Source-id band for Replay channel inputs. `0x0005_0000` holds the host's
+/// remote preview/program/multiview video sources and `0x0007_0000` holds
+/// remote mixing unit ids, so Replay takes `0x0008_0000`.
+pub const REPLAY_CHANNEL_BASE: u64 = 0x0008_0000;
+
+session_string_enum! {
+    #[derive(Default)]
+    pub enum ReplayProfile {
+        Hq,
+        #[default]
+        Sq,
+        Lq,
+    }
+}
+
+session_string_enum! {
+    #[derive(Default)]
+    pub enum ReplayOverflowPolicy {
+        #[default]
+        DropFrames,
+        StopRecording,
+    }
+}
+
+session_string_enum! {
+    #[derive(Default)]
+    pub enum ReplayRetention {
+        #[default]
+        StopWhenFull,
+        Overwrite,
+        OverwriteUnprotected,
+    }
+}
+
+session_string_enum! {
+    /// Where an angle's audio comes from. `Unit` records the mixing unit's
+    /// program mix; its id lives on `AngleDto::audio_unit_id`.
+    #[derive(Default)]
+    pub enum AngleAudio {
+        #[default]
+        Silent,
+        Unit,
+    }
+}
+
+session_string_enum! {
+    #[derive(Default)]
+    pub enum AngleRecordMode {
+        #[default]
+        Composite,
+    }
+}
+
+session_string_enum! {
+    #[derive(Default)]
+    pub enum ClipSourceKind {
+        #[default]
+        Angle,
+        Asset,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayDto {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub storage: Vec<ReplayStorageDto>,
+    #[serde(default)]
+    pub format: ReplayFormatDto,
+    #[serde(default)]
+    pub buffering: ReplayBufferingDto,
+    #[serde(default)]
+    pub warnings: ReplayWarningsDto,
+    #[serde(default)]
+    pub retention: ReplayRetention,
+    #[serde(default)]
+    pub angles: Vec<AngleDto>,
+    #[serde(default)]
+    pub events: Vec<ReplayEventDto>,
+    #[serde(default)]
+    pub playlists: Vec<PlaylistDto>,
+    #[serde(default)]
+    pub channels: Vec<ChannelDto>,
+    #[serde(default)]
+    pub auto_add_to_playlist: bool,
+    /// Angle the operator is watching. Event creation and playlist auto-add use
+    /// it, so the control layer never guesses which camera a clip came from.
+    #[serde(default)]
+    pub active_angle_id: Option<u32>,
+    #[serde(default = "one_u32")]
+    pub next_angle_id: u32,
+    #[serde(default = "one_u64")]
+    pub next_event_id: u64,
+    #[serde(default = "one_u64")]
+    pub next_playlist_id: u64,
+}
+
+fn one_u32() -> u32 {
+    1
+}
+
+fn one_u64() -> u64 {
+    1
+}
+
+impl Default for ReplayDto {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            storage: Vec::new(),
+            format: ReplayFormatDto::default(),
+            buffering: ReplayBufferingDto::default(),
+            warnings: ReplayWarningsDto::default(),
+            retention: ReplayRetention::StopWhenFull,
+            angles: Vec::new(),
+            events: Vec::new(),
+            playlists: Vec::new(),
+            channels: Vec::new(),
+            auto_add_to_playlist: false,
+            active_angle_id: None,
+            next_angle_id: 1,
+            next_event_id: 1,
+            next_playlist_id: 1,
+        }
+    }
+}
+
+impl ReplayDto {
+    /// Keep explicitly created channels well-formed. Replay channels are never
+    /// invented while loading a session.
+    pub fn normalize(&mut self) {
+        self.buffering.encode_queue_frames = self.buffering.encode_queue_frames.clamp(0, 60);
+        if self.buffering.encode_queue_frames != 0 && self.buffering.encode_queue_frames < 2 {
+            self.buffering.encode_queue_frames = 2;
+        }
+        self.channels.sort_by_key(|channel| channel.index);
+        // Hosts may publish a Replay document without the counters (the win32
+        // window builds the settings JSON by hand), so repair them from the ids
+        // that already exist. Without this the next mark-out reuses id 1.
+        self.next_event_id = self
+            .next_event_id
+            .max(highest(self.events.iter().map(|event| event.id)).saturating_add(1))
+            .max(1);
+        self.next_playlist_id = self
+            .next_playlist_id
+            .max(highest(self.playlists.iter().map(|list| list.id)).saturating_add(1))
+            .max(1);
+        self.next_angle_id = self
+            .next_angle_id
+            .max(
+                u32::try_from(
+                    highest(self.angles.iter().map(|angle| u64::from(angle.id))).saturating_add(1),
+                )
+                .unwrap_or(u32::MAX),
+            )
+            .max(1);
+    }
+
+    /// Allocates the next event id and advances the counter.
+    pub fn reserve_event_id(&mut self) -> u64 {
+        let highest = highest(self.events.iter().map(|event| event.id));
+        let id = self.next_event_id.max(highest.saturating_add(1)).max(1);
+        self.next_event_id = id.saturating_add(1);
+        id
+    }
+
+    /// Allocates the next playlist id and advances the counter.
+    pub fn reserve_playlist_id(&mut self) -> u64 {
+        let highest = highest(self.playlists.iter().map(|list| list.id));
+        let id = self.next_playlist_id.max(highest.saturating_add(1)).max(1);
+        self.next_playlist_id = id.saturating_add(1);
+        id
+    }
+
+    /// Records a Mark Out. The event is always filed; the clip is filed only when
+    /// the document asks for it, and it inherits the playlist's default
+    /// transition. The UI offers that setting as "new clips", so it has to mean
+    /// the same thing on this path as it does in the hosts.
+    ///
+    /// Returns the new event id.
+    pub fn note_mark_out(
+        &mut self,
+        uuid: &str,
+        in_frame: u64,
+        out_frame: u64,
+        name: &str,
+    ) -> Result<u64, String> {
+        let id = self.reserve_event_id();
+        self.events.push(ReplayEventDto {
+            id,
+            recording_uuid: uuid.to_string(),
+            in_frame,
+            out_frame,
+            name: name.to_string(),
+            tags: Vec::new(),
+            protected: false,
+        });
+        if !self.auto_add_to_playlist {
+            return Ok(id);
+        }
+        // The operator's current angle is explicit state. Guessing the first angle
+        // would silently file the clip against the wrong camera.
+        let angle_id = self.active_angle_id.ok_or_else(|| {
+            "Select a Replay angle before adding events to a playlist".to_string()
+        })?;
+        if !self.angles.iter().any(|angle| angle.id == angle_id) {
+            return Err(format!("Replay angle {angle_id} does not exist"));
+        }
+        // A playlist without an id is not a playlist the operator made, so it is
+        // replaced rather than appended to.
+        let playlist_id = match self.playlists.first() {
+            Some(list) if list.id != 0 => list.id,
+            _ => {
+                let playlist_id = self.reserve_playlist_id();
+                self.playlists.push(PlaylistDto {
+                    id: playlist_id,
+                    name: "Replay".into(),
+                    revision: 1,
+                    clips: Vec::new(),
+                    default_transition: ClipTransitionDto::default(),
+                });
+                playlist_id
+            }
+        };
+        let Some(list) = self
+            .playlists
+            .iter_mut()
+            .find(|list| list.id == playlist_id)
+        else {
+            return Ok(id);
+        };
+        list.revision = list.revision.saturating_add(1);
+        let transition = list.default_transition;
+        list.clips.push(ClipDto {
+            uid: format!("clip-{id}"),
+            source: ClipSourceKind::Angle,
+            angle_id,
+            source_event: Some(id),
+            recording_uuid: uuid.to_string(),
+            in_frame,
+            out_frame,
+            transition,
+            ..ClipDto::default()
+        });
+        Ok(id)
+    }
+}
+
+fn highest(values: impl Iterator<Item = u64>) -> u64 {
+    values.max().unwrap_or(0)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayStorageDto {
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub angle_ids: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayFormatDto {
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+    #[serde(default)]
+    pub fps_num: u32,
+    #[serde(default)]
+    pub fps_den: u32,
+    #[serde(default)]
+    pub profile: ReplayProfile,
+    #[serde(default)]
+    pub segment_frames: u32,
+}
+
+impl Default for ReplayFormatDto {
+    fn default() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            fps_num: 0,
+            fps_den: 0,
+            profile: ReplayProfile::Sq,
+            segment_frames: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayBufferingDto {
+    #[serde(default = "encode_queue_default")]
+    pub encode_queue_frames: u32,
+    #[serde(default = "write_buffer_default")]
+    pub write_buffer_mb: u32,
+    #[serde(default)]
+    pub overflow_policy: ReplayOverflowPolicy,
+    #[serde(default = "reserve_default")]
+    pub reserve_mb: u32,
+}
+
+fn encode_queue_default() -> u32 {
+    6
+}
+fn write_buffer_default() -> u32 {
+    512
+}
+fn reserve_default() -> u32 {
+    2048
+}
+
+impl Default for ReplayBufferingDto {
+    fn default() -> Self {
+        Self {
+            encode_queue_frames: 6,
+            write_buffer_mb: 512,
+            overflow_policy: ReplayOverflowPolicy::DropFrames,
+            reserve_mb: 2048,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayWarningsDto {
+    #[serde(default = "warn_secs")]
+    pub remaining_warn_secs: u32,
+    #[serde(default = "alert_secs")]
+    pub remaining_alert_secs: u32,
+    #[serde(default = "critical_secs")]
+    pub remaining_critical_secs: u32,
+}
+
+fn warn_secs() -> u32 {
+    600
+}
+fn alert_secs() -> u32 {
+    300
+}
+fn critical_secs() -> u32 {
+    60
+}
+
+impl Default for ReplayWarningsDto {
+    fn default() -> Self {
+        Self {
+            remaining_warn_secs: 600,
+            remaining_alert_secs: 300,
+            remaining_critical_secs: 60,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AngleDto {
+    pub id: u32,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub scene_id: u64,
+    #[serde(default)]
+    pub audio: AngleAudio,
+    /// Mixing unit whose program mix feeds this angle when `audio` is `Unit`.
+    #[serde(default)]
+    pub audio_unit_id: u64,
+    #[serde(default)]
+    pub record_mode: AngleRecordMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayEventDto {
+    pub id: u64,
+    #[serde(default)]
+    pub recording_uuid: String,
+    #[serde(default)]
+    pub in_frame: u64,
+    #[serde(default)]
+    pub out_frame: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub protected: bool,
+}
+
+session_string_enum! {
+    /// Which recording a clip's audio comes from. `Angle` names another angle,
+    /// so a clip can play one angle's picture with a different angle's sound.
+    #[derive(Default)]
+    pub enum ClipAudio {
+        /// Whatever the clip's own angle recorded.
+        #[default]
+        FollowAngle,
+        Silent,
+        Angle,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipDto {
+    #[serde(default)]
+    pub uid: String,
+    #[serde(default)]
+    pub source: ClipSourceKind,
+    #[serde(default)]
+    pub angle_id: u32,
+    #[serde(default)]
+    pub asset_path: String,
+    #[serde(default)]
+    pub source_event: Option<u64>,
+    #[serde(default)]
+    pub recording_uuid: String,
+    #[serde(default)]
+    pub in_frame: u64,
+    #[serde(default)]
+    pub out_frame: u64,
+    #[serde(default = "speed_one")]
+    pub speed: f32,
+    #[serde(default)]
+    pub gain_db: f32,
+    /// Free-form tags, with suggestions from the session's replay catalog.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Hold the pitch when the clip plays at something other than normal speed.
+    #[serde(default)]
+    pub preserve_pitch: bool,
+    /// Audio source for this clip.
+    #[serde(default)]
+    pub audio: ClipAudio,
+    /// Angle whose recording supplies the audio when `audio` is `Angle`.
+    #[serde(default)]
+    pub audio_angle_id: u32,
+    #[serde(default)]
+    pub transition: ClipTransitionDto,
+}
+
+fn speed_one() -> f32 {
+    1.0
+}
+
+impl Default for ClipDto {
+    fn default() -> Self {
+        Self {
+            uid: String::new(),
+            source: ClipSourceKind::Angle,
+            angle_id: 0,
+            asset_path: String::new(),
+            source_event: None,
+            recording_uuid: String::new(),
+            in_frame: 0,
+            out_frame: 0,
+            speed: 1.0,
+            gain_db: 0.0,
+            tags: Vec::new(),
+            preserve_pitch: false,
+            audio: ClipAudio::FollowAngle,
+            audio_angle_id: 0,
+            transition: ClipTransitionDto::default(),
+        }
+    }
+}
+
+session_string_enum! {
+    #[derive(Default)]
+    pub enum ReplayTransitionKind {
+        #[default]
+        Cut,
+        Dissolve,
+    }
+}
+
+session_string_enum! {
+    /// How the transition spends its time. `Overwrap` takes the duration out of
+    /// the two clips by overlapping them; `Additive` inserts it between them.
+    #[derive(Default)]
+    pub enum ReplayTransitionTiming {
+        #[default]
+        Overwrap,
+        Additive,
+    }
+}
+
+/// Transition out of one clip and into the next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipTransitionDto {
+    #[serde(default)]
+    pub kind: ReplayTransitionKind,
+    #[serde(default)]
+    pub timing: ReplayTransitionTiming,
+    #[serde(default)]
+    pub duration_frames: u32,
+}
+
+/// Accepts both the structured form and the bare kind name that earlier sessions
+/// stored (`"Cut"`, `"Dissolve"`).
+impl<'de> Deserialize<'de> for ClipTransitionDto {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Kind(String),
+            #[serde(rename_all = "camelCase")]
+            Full {
+                #[serde(default)]
+                kind: ReplayTransitionKind,
+                #[serde(default)]
+                timing: ReplayTransitionTiming,
+                #[serde(default)]
+                duration_frames: u32,
+            },
+        }
+        Ok(match Raw::deserialize(deserializer)? {
+            Raw::Kind(name) => Self {
+                kind: ReplayTransitionKind::from_str_loose(&name).unwrap_or_default(),
+                ..Self::default()
+            },
+            Raw::Full {
+                kind,
+                timing,
+                duration_frames,
+            } => Self {
+                kind,
+                timing,
+                duration_frames,
+            },
+        })
+    }
+}
+
+impl Default for ClipTransitionDto {
+    fn default() -> Self {
+        Self {
+            kind: ReplayTransitionKind::Cut,
+            timing: ReplayTransitionTiming::Overwrap,
+            duration_frames: 0,
+        }
+    }
+}
+
+impl ClipTransitionDto {
+    pub fn is_cut(self) -> bool {
+        self.kind == ReplayTransitionKind::Cut || self.duration_frames == 0
+    }
+
+    /// Frames the transition occupies on the timeline. A cut takes none.
+    pub fn frames(self) -> u32 {
+        if self.is_cut() {
+            0
+        } else {
+            self.duration_frames
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistDto {
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub revision: u64,
+    #[serde(default)]
+    pub clips: Vec<ClipDto>,
+    /// Transition for clips that leave their own at the default `Cut`.
+    #[serde(default)]
+    pub default_transition: ClipTransitionDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelDto {
+    pub index: u32,
+    #[serde(default)]
+    pub playlist_id: Option<u64>,
+    #[serde(default)]
+    pub input_id: u64,
+}
+
+pub fn replay_channel_gpu_id(index: u32) -> u64 {
+    REPLAY_CHANNEL_BASE | u64::from(index.saturating_add(1))
+}
+
+pub fn channel_letter(index: u32) -> char {
+    char::from_u32(u32::from('A') + index).unwrap_or('A')
+}
+
+/// Add one explicit Replay channel input. The first call creates the replay
+/// document; no Replay state is present in a default session.
+pub fn add_channel_input(doc: &mut Document) -> Result<u32, String> {
+    let replay = doc.replay.get_or_insert_with(ReplayDto::default);
+    replay.normalize();
+    let index = (0..26u32)
+        .find(|index| {
+            !replay
+                .channels
+                .iter()
+                .any(|channel| channel.index == *index)
+        })
+        .ok_or_else(|| "all Replay channels A-Z already exist".to_string())?;
+    let id = replay_channel_gpu_id(index);
+    if doc.inputs.iter().any(|input| input.id == id) {
+        return Err(format!(
+            "Replay channel {} input already exists",
+            channel_letter(index)
+        ));
+    }
+    replay.channels.push(ChannelDto {
+        index,
+        playlist_id: None,
+        input_id: id,
+    });
+    replay.normalize();
+    doc.inputs.push(replay_input(
+        id,
+        format!("Replay {}", channel_letter(index)),
+    ));
+    Ok(index)
+}
+
+/// Channel index an input id names, when it sits in the reserved band.
+pub fn replay_channel_index(input_id: u64) -> Option<u32> {
+    let offset = input_id.checked_sub(REPLAY_CHANNEL_BASE)?;
+    let index = u32::try_from(offset.checked_sub(1)?).ok()?;
+    (index < 26).then_some(index)
+}
+
+/// Gives an explicitly added Replay input the channel it owns.
+///
+/// A client can add the input itself (the session API's `UpsertInput`), and Replay
+/// exists only because that input does, so the document follows the input instead
+/// of the other way round. Idempotent: an input that already owns its channel is
+/// left alone.
+pub fn adopt_channel_input(doc: &mut Document, input_id: u64) -> Result<u32, String> {
+    // The id decides the channel, so the letter the operator sees matches the
+    // input they added. An id outside the band is not a Replay channel.
+    let index = replay_channel_index(input_id)
+        .ok_or_else(|| format!("input {input_id} is not a Replay channel id"))?;
+    let replay = doc.replay.get_or_insert_with(ReplayDto::default);
+    replay.normalize();
+    if let Some(channel) = replay
+        .channels
+        .iter()
+        .find(|channel| channel.index == index)
+    {
+        if channel.input_id == input_id {
+            return Ok(index);
+        }
+        return Err(format!(
+            "Replay channel {} already belongs to another input",
+            channel_letter(index)
+        ));
+    }
+    replay.channels.push(ChannelDto {
+        index,
+        playlist_id: None,
+        input_id,
+    });
+    replay.normalize();
+    Ok(index)
+}
+
+/// Drops every animation cue that names a channel, because the channel it cues is
+/// gone. A cue without its channel makes the session unloadable, so it goes with
+/// the channel.
+pub fn clear_cues_for_channel(doc: &mut Document, channel: u32) -> usize {
+    let mut cleared = 0;
+    for scene in &mut doc.scenes {
+        for sequence in &mut scene.sequences {
+            for step in &mut sequence.steps {
+                if step
+                    .replay
+                    .as_ref()
+                    .is_some_and(|action| action.channel == channel)
+                {
+                    step.replay = None;
+                    cleared += 1;
+                }
+            }
+        }
+    }
+    cleared
+}
+
+/// Drops every animation cue, for when Replay itself is removed. The step still
+/// changes the scene; only the cue to a channel that no longer exists goes away.
+pub fn clear_all_cues(doc: &mut Document) -> usize {
+    let mut cleared = 0;
+    for scene in &mut doc.scenes {
+        for sequence in &mut scene.sequences {
+            for step in &mut sequence.steps {
+                if step.replay.take().is_some() {
+                    cleared += 1;
+                }
+            }
+        }
+    }
+    cleared
+}
+
+/// Remove the input's channel metadata. The caller decides whether removing
+/// the last channel has been explicitly confirmed; this function removes the
+/// whole optional replay document when it becomes empty.
+pub fn remove_channel_input(doc: &mut Document, input_id: u64) -> bool {
+    let Some(replay) = doc.replay.as_mut() else {
+        return false;
+    };
+    let before = replay.channels.len();
+    replay
+        .channels
+        .retain(|channel| channel.input_id != input_id);
+    if before == replay.channels.len() {
+        return false;
+    }
+    if replay.channels.is_empty() {
+        doc.replay = None;
+    }
+    true
+}
+
+fn replay_input(id: u64, name: String) -> InputDto {
+    InputDto {
+        id,
+        guid: format!("replay-{id:x}"),
+        name,
+        kind: InputKind::Replay,
+        path_or_address: None,
+        color_r: 0.0,
+        color_g: 0.0,
+        color_b: 0.0,
+        scroll: false,
+        tone_hz: 0.0,
+        tone_level_dbfs: -20.0,
+        audio_units: Vec::new(),
+        gain: 1.0,
+        mute: false,
+        use_gpu: false,
+        frame_buffer_frames: 1,
+        bandwidth_save: Default::default(),
+        keep_full_on_multiview: false,
+        omt_quality: Default::default(),
+        ndi_bandwidth: Default::default(),
+        video_loop: false,
+        video_play_when: Default::default(),
+        video_restart_when: Default::default(),
+        video_pause_when: Default::default(),
+        capture_width: 0,
+        capture_height: 0,
+        capture_fps_num: 0,
+        capture_fps_den: 0,
+        tags: Vec::new(),
+        mix_source: Default::default(),
+        mix_target_id: 0,
+        audio_capture_mode: Default::default(),
+        audio_device_kind: Default::default(),
+        audio_device_id: String::new(),
+        audio_map_left: 0,
+        audio_map_right: 1,
+        audio_process_exe: String::new(),
+        audio_process_aumid: String::new(),
+        decklink_mode: String::new(),
+    }
+}
+
+pub fn profile_code(profile: ReplayProfile) -> u32 {
+    match profile {
+        ReplayProfile::Hq => 0,
+        ReplayProfile::Sq => 1,
+        ReplayProfile::Lq => 2,
+    }
+}
+
+pub fn overflow_code(policy: ReplayOverflowPolicy) -> u32 {
+    match policy {
+        ReplayOverflowPolicy::DropFrames => 0,
+        ReplayOverflowPolicy::StopRecording => 1,
+    }
+}
+
+pub fn retention_code(retention: ReplayRetention) -> u32 {
+    match retention {
+        ReplayRetention::StopWhenFull => 0,
+        ReplayRetention::Overwrite => 1,
+        ReplayRetention::OverwriteUnprotected => 2,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(id: u64) -> ReplayEventDto {
+        ReplayEventDto {
+            id,
+            recording_uuid: "rec".into(),
+            in_frame: 10,
+            out_frame: 20,
+            name: format!("Replay {id}"),
+            tags: Vec::new(),
+            protected: false,
+        }
+    }
+
+    #[test]
+    fn normalize_repairs_a_counter_a_host_left_at_one() {
+        // The win32 window builds the settings JSON without the counters, so the
+        // next mark-out would otherwise reuse an id that already exists.
+        let mut replay = ReplayDto::default();
+        replay.events.push(event(1));
+        replay.events.push(event(4));
+        replay.playlists.push(PlaylistDto {
+            id: 9,
+            name: "Replay".into(),
+            revision: 1,
+            clips: Vec::new(),
+            default_transition: ClipTransitionDto::default(),
+        });
+        replay.normalize();
+        assert_eq!(replay.next_event_id, 5);
+        assert_eq!(replay.next_playlist_id, 10);
+    }
+
+    #[test]
+    fn reserve_event_id_never_repeats_an_existing_id() {
+        let mut replay = ReplayDto::default();
+        replay.next_event_id = 1;
+        replay.events.push(event(7));
+        assert_eq!(replay.reserve_event_id(), 8);
+        assert_eq!(replay.reserve_event_id(), 9);
+        assert_eq!(replay.next_event_id, 10);
+    }
+
+    #[test]
+    fn channel_inputs_use_the_replay_band_only() {
+        let mut doc: Document = serde_json::from_str("{\"version\":2}").unwrap();
+        let index = add_channel_input(&mut doc).unwrap();
+        assert_eq!(index, 0);
+        let id = doc.inputs[0].id;
+        assert!(id >= REPLAY_CHANNEL_BASE && id < REPLAY_CHANNEL_BASE + 0x1_0000);
+        assert_eq!(channel_letter(index), 'A');
+        assert_eq!(doc.inputs[0].kind, InputKind::Replay);
+    }
+
+    #[test]
+    fn transition_accepts_the_bare_kind_name_and_the_full_form() {
+        // Earlier sessions stored just the kind name.
+        let bare: ClipTransitionDto = serde_json::from_str("\"Dissolve\"").unwrap();
+        assert_eq!(bare.kind, ReplayTransitionKind::Dissolve);
+        assert_eq!(bare.timing, ReplayTransitionTiming::Overwrap);
+        assert_eq!(bare.duration_frames, 0);
+
+        let full: ClipTransitionDto =
+            serde_json::from_str(r#"{"kind":"Dissolve","timing":"Additive","durationFrames":24}"#)
+                .unwrap();
+        assert_eq!(full.kind, ReplayTransitionKind::Dissolve);
+        assert_eq!(full.timing, ReplayTransitionTiming::Additive);
+        assert_eq!(full.duration_frames, 24);
+        assert_eq!(full.frames(), 24);
+    }
+
+    #[test]
+    fn a_cut_never_occupies_timeline_frames() {
+        let cut = ClipTransitionDto {
+            kind: ReplayTransitionKind::Cut,
+            timing: ReplayTransitionTiming::Additive,
+            duration_frames: 30,
+        };
+        assert!(cut.is_cut());
+        assert_eq!(cut.frames(), 0);
+
+        let dissolve = ClipTransitionDto {
+            kind: ReplayTransitionKind::Dissolve,
+            ..cut
+        };
+        assert!(!dissolve.is_cut());
+        assert_eq!(dissolve.frames(), 30);
+    }
+
+    /// The playlist's default transition is what the UI offers as "new clips", so
+    /// a clip added by Mark Out has to come out with it.
+    #[test]
+    fn a_marked_out_clip_inherits_the_playlists_default_transition() {
+        let mut replay = ReplayDto::default();
+        replay.auto_add_to_playlist = true;
+        replay.active_angle_id = Some(1);
+        replay.angles.push(AngleDto {
+            id: 1,
+            name: "A".into(),
+            scene_id: 1,
+            audio: AngleAudio::Silent,
+            audio_unit_id: 0,
+            record_mode: AngleRecordMode::Composite,
+        });
+        let default = ClipTransitionDto {
+            kind: ReplayTransitionKind::Dissolve,
+            timing: ReplayTransitionTiming::Additive,
+            duration_frames: 25,
+        };
+        replay.playlists.push(PlaylistDto {
+            id: 3,
+            name: "Replay".into(),
+            revision: 1,
+            clips: Vec::new(),
+            default_transition: default,
+        });
+
+        let id = replay.note_mark_out("rec", 10, 40, "Replay 1").unwrap();
+        assert_eq!(id, 1);
+        assert_eq!(replay.events.len(), 1);
+        assert_eq!(replay.playlists[0].revision, 2, "the playlist changed");
+        let clip = &replay.playlists[0].clips[0];
+        assert_eq!(clip.transition, default, "the default transition applies");
+        assert_eq!(clip.source_event, Some(1));
+        assert_eq!(clip.angle_id, 1);
+        assert_eq!(clip.recording_uuid, "rec");
+        assert_eq!((clip.in_frame, clip.out_frame), (10, 40));
+    }
+
+    /// Without the setting the event is still filed, and the playlist untouched:
+    /// the operator asked for an event, not for a clip.
+    #[test]
+    fn a_marked_out_event_stays_out_of_the_playlist_when_not_asked() {
+        let mut replay = ReplayDto::default();
+        replay.auto_add_to_playlist = false;
+        replay.playlists.push(PlaylistDto {
+            id: 3,
+            name: "Replay".into(),
+            revision: 1,
+            clips: Vec::new(),
+            default_transition: ClipTransitionDto::default(),
+        });
+
+        replay.note_mark_out("rec", 0, 30, "Replay 1").unwrap();
+        assert_eq!(replay.events.len(), 1);
+        assert!(replay.playlists[0].clips.is_empty());
+        assert_eq!(replay.playlists[0].revision, 1);
+    }
+
+    /// The clip's camera is the operator's selection. A document that never said
+    /// which angle is watched cannot file one.
+    #[test]
+    fn a_marked_out_clip_needs_a_selected_angle() {
+        let mut replay = ReplayDto::default();
+        replay.auto_add_to_playlist = true;
+        replay.angles.push(AngleDto {
+            id: 1,
+            name: "A".into(),
+            scene_id: 1,
+            audio: AngleAudio::Silent,
+            audio_unit_id: 0,
+            record_mode: AngleRecordMode::Composite,
+        });
+
+        let error = replay.note_mark_out("rec", 0, 30, "Replay 1").unwrap_err();
+        assert!(error.contains("angle"), "{error}");
+        assert!(replay.playlists.is_empty(), "no playlist was invented");
+        assert_eq!(replay.events.len(), 1, "the event is still filed");
+
+        // A selection that names an angle the document does not have is refused
+        // rather than filed against the wrong camera.
+        replay.active_angle_id = Some(7);
+        assert!(
+            replay
+                .note_mark_out("rec", 0, 30, "Replay 2")
+                .unwrap_err()
+                .contains("7")
+        );
+        assert!(replay.playlists.is_empty());
+        assert_eq!(replay.events.len(), 2);
+    }
+
+    /// The first marked-out clip creates the playlist it is filed in.
+    #[test]
+    fn a_marked_out_clip_creates_the_playlist_it_needs() {
+        let mut replay = ReplayDto::default();
+        replay.auto_add_to_playlist = true;
+        replay.active_angle_id = Some(2);
+        replay.angles.push(AngleDto {
+            id: 2,
+            name: "B".into(),
+            scene_id: 2,
+            audio: AngleAudio::Silent,
+            audio_unit_id: 0,
+            record_mode: AngleRecordMode::Composite,
+        });
+
+        replay.note_mark_out("rec", 5, 35, "Replay 1").unwrap();
+        assert_eq!(replay.playlists.len(), 1);
+        assert_eq!(replay.playlists[0].id, 1);
+        assert_eq!(replay.playlists[0].clips.len(), 1);
+        assert_eq!(replay.playlists[0].clips[0].angle_id, 2);
+    }
+}

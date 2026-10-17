@@ -57,6 +57,7 @@ macro_rules! session_string_enum {
     };
 }
 
+#[allow(unused_imports)]
 pub(crate) use session_string_enum;
 
 #[cfg(test)]

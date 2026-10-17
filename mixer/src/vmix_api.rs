@@ -296,6 +296,9 @@ pub(crate) fn dispatch_function(
     name: &str,
     params: &HashMap<String, String>,
 ) -> Result<(), DispatchError> {
+    if let Some(result) = dispatch_replay(name, params) {
+        return result;
+    }
     match name {
         "Cut" | "CutDirect" | "Fade" | "PreviewInput" | "ActiveInput" | "Snapshot"
         | "SnapshotInput" => {}
@@ -389,6 +392,146 @@ pub(crate) fn dispatch_function(
             }
         }
         _ => unreachable!("function allow-list"),
+    }
+}
+
+fn dispatch_replay(
+    name: &str,
+    params: &HashMap<String, String>,
+) -> Option<Result<(), DispatchError>> {
+    if !REPLAY_FUNCTIONS.contains(&name) {
+        return None;
+    }
+    Some(replay_command(name, params).map(execute_replay).and_then(|inner| inner))
+}
+
+/// Every vMix function this layer maps to Replay.
+const REPLAY_FUNCTIONS: [&str; 9] = [
+    "ReplayStartRecording",
+    "ReplayStopRecording",
+    "ReplayMarkIn",
+    "ReplayMarkOut",
+    "ReplayCue",
+    "ReplayPlay",
+    "ReplayPause",
+    "ReplayJumpToNow",
+    "ReplayChangeSpeed",
+];
+
+fn replay_command(
+    name: &str,
+    params: &HashMap<String, String>,
+) -> Result<eiviz_control::Command, DispatchError> {
+    let command = match name {
+        "ReplayStartRecording" => eiviz_control::Command::ReplayRecord { on: true },
+        "ReplayStopRecording" => eiviz_control::Command::ReplayRecord { on: false },
+        "ReplayMarkIn" => eiviz_control::Command::ReplayMarkIn,
+        "ReplayMarkOut" => eiviz_control::Command::ReplayMarkOut {
+            name: params.get("Value").cloned().unwrap_or_default(),
+        },
+        // Cue a clip onto a channel. An empty Value cues the newest clip on the
+        // channel, which is the clip the operator just marked.
+        "ReplayCue" => eiviz_control::Command::ReplayCue {
+            channel: replay_channel(params)?,
+            clip_uid: params.get("Value").cloned().unwrap_or_default(),
+        },
+        "ReplayPlay" => eiviz_control::Command::ReplayTransport {
+            channel: replay_channel(params)?,
+            playing: true,
+            speed_milli: replay_speed(params)?,
+            seek_frame: -1,
+        },
+        // A pause keeps the speed the channel already has; the mixer reads zero as
+        // "do not change it".
+        "ReplayPause" => eiviz_control::Command::ReplayTransport {
+            channel: replay_channel(params)?,
+            playing: false,
+            speed_milli: 0,
+            seek_frame: -1,
+        },
+        "ReplayJumpToNow" => eiviz_control::Command::ReplayJumpToNow {
+            channel: replay_channel(params)?,
+        },
+        // Changing the speed also starts playback, which is what an operator means
+        // by pressing a speed button.
+        "ReplayChangeSpeed" => eiviz_control::Command::ReplayTransport {
+            channel: replay_channel(params)?,
+            playing: true,
+            speed_milli: replay_speed(params)?,
+            seek_frame: -1,
+        },
+        other => {
+            return Err(DispatchError::Unknown(format!("unknown Function {other}")));
+        }
+    };
+    Ok(command)
+}
+
+/// Replay channel from `Channel`, which vMix writes as a letter (`A`) or a number.
+/// A channel nobody has is an error: playing the wrong one silently would be worse
+/// than refusing.
+fn replay_channel(params: &HashMap<String, String>) -> Result<u32, DispatchError> {
+    let Some(value) = params.get("Channel") else {
+        return Ok(0);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(0);
+    }
+    if let Ok(index) = value.parse::<u32>() {
+        return (index < 26)
+            .then_some(index)
+            .ok_or_else(|| DispatchError::BadRequest(format!("bad replay channel {value}")));
+    }
+    match value.as_bytes() {
+        [byte] => {
+            let letter = byte.to_ascii_uppercase();
+            if letter.is_ascii_uppercase() {
+                Ok(u32::from(letter - b'A'))
+            } else {
+                Err(DispatchError::BadRequest(format!(
+                    "bad replay channel {value}"
+                )))
+            }
+        }
+        _ => Err(DispatchError::BadRequest(format!(
+            "bad replay channel {value}"
+        ))),
+    }
+}
+
+/// Playback speed from `Value`, a multiple of normal speed. A missing value means
+/// normal speed; a value that is not a positive number is refused.
+fn replay_speed(params: &HashMap<String, String>) -> Result<i32, DispatchError> {
+    let Some(value) = params.get("Value") else {
+        return Ok(1000);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(1000);
+    }
+    let speed = value
+        .parse::<f64>()
+        .ok()
+        .filter(|speed| speed.is_finite() && *speed > 0.0)
+        .ok_or_else(|| DispatchError::BadRequest(format!("bad replay speed {value}")))?;
+    Ok((speed * 1000.0).round() as i32)
+}
+
+fn execute_replay(command: eiviz_control::Command) -> Result<(), DispatchError> {
+    let result = crate::runtime::control().lock().map(|mut svc| {
+        svc.execute(
+            eiviz_control::RequestKey {
+                client_instance_id: "vmix".into(),
+                request_id: String::new(),
+            },
+            command,
+        )
+    });
+    match result {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(error)) => Err(DispatchError::Failed(error.message().to_string())),
+        Err(_) => Err(DispatchError::Failed("control lock".into())),
     }
 }
 
@@ -503,6 +646,7 @@ fn empty_document() -> Document {
         scene_presets: Vec::new(),
         input_tags: Vec::new(),
         scene_tags: Vec::new(),
+        replay_tags: Vec::new(),
         settings: Default::default(),
         inputs: Vec::new(),
         scenes: Vec::new(),
@@ -524,6 +668,7 @@ fn empty_document() -> Document {
         headphone_copy_monitor: false,
         headphone_listen_kind: 0,
         headphone_listen_id: 0,
+        replay: Default::default(),
     })
 }
 
@@ -684,6 +829,60 @@ mod tests {
         match dispatch_function("Zoom", &params) {
             Err(DispatchError::Unknown(_)) | Err(DispatchError::BadRequest(_)) => {}
             other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    /// vMix writes the replay channel as a letter, and some tools send a number.
+    /// A channel nobody has is refused instead of playing channel A.
+    #[test]
+    fn replay_channel_accepts_a_letter_or_a_number_and_refuses_junk() {
+        let mut params = HashMap::new();
+        assert_eq!(super::replay_channel(&params).unwrap(), 0, "default is channel A");
+        for (value, want) in [
+            ("0", 0),
+            ("2", 2),
+            ("A", 0),
+            ("a", 0),
+            ("B", 1),
+            ("z", 25),
+            (" 3 ", 3),
+        ] {
+            params.insert("Channel".into(), value.into());
+            assert_eq!(
+                super::replay_channel(&params).unwrap(),
+                want,
+                "Channel={value}"
+            );
+        }
+        for value in ["26", "-1", "abc", "AB", "?"] {
+            params.insert("Channel".into(), value.into());
+            assert!(
+                super::replay_channel(&params).is_err(),
+                "Channel={value} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn replay_speed_is_a_multiple_of_normal_speed() {
+        let mut params = HashMap::new();
+        assert_eq!(super::replay_speed(&params).unwrap(), 1000);
+        params.insert("Value".into(), String::new());
+        assert_eq!(super::replay_speed(&params).unwrap(), 1000);
+        for (value, want) in [("0.5", 500), ("1", 1000), ("2", 2000), ("0.25", 250)] {
+            params.insert("Value".into(), value.into());
+            assert_eq!(
+                super::replay_speed(&params).unwrap(),
+                want,
+                "Value={value}"
+            );
+        }
+        for value in ["fast", "0", "-1", "NaN"] {
+            params.insert("Value".into(), value.into());
+            assert!(
+                super::replay_speed(&params).is_err(),
+                "Value={value} must be refused"
+            );
         }
     }
 

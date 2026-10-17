@@ -77,3 +77,4 @@ sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png"] }
 pollster = "0.4"
 serial_test = "3"
+vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs", rev = "b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3", features = ["wgpu"] }
