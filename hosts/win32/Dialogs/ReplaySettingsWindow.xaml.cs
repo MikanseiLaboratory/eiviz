@@ -481,12 +481,20 @@ public partial class ReplaySettingsWindow : Window
                 : error.Message);
             return;
         }
-        // Applying closes the window, so the confirmation has to live on the window
-        // the operator is looking at next.
-        DialogResult = true;
+        // The deck opens this window non-modally, so there is no dialog result to
+        // set: setting one throws and leaves the window open with no confirmation.
+        // Applying closes the window and the confirmation lands on the window the
+        // operator is looking at next.
         if (Owner is Window owner)
             StatusToast.Show(owner, Loc.T("replay.applied"));
+        Close();
     }
+
+    /// <summary>
+    /// Discards the edits. Nothing was published, so closing is the whole job; the
+    /// operator needs the window to actually go away.
+    /// </summary>
+    private void Cancel_Click(object sender, RoutedEventArgs e) => Close();
 
     /// <summary>
     /// Reports why the settings were not taken. The operator pressed Apply, so the

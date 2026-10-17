@@ -336,6 +336,16 @@ struct ReplayDocument {
 
     var activeAngleId: UInt32 { raw["activeAngleId"]?.uint32Value ?? 0 }
 
+    /// Angle the operator is on: the one they picked, or the first angle when the
+    /// document has never had one chosen. The mixer treats the first angle as the
+    /// default (live follows it, `jump_to_now` records it), so the deck reads the
+    /// same way instead of refusing to name the camera a clip came from.
+    var activeAngle: UInt32 {
+        let chosen = activeAngleId
+        if chosen != 0 { return chosen }
+        return angles.first?.id ?? 0
+    }
+
     /// Default transition of a playlist, or cut when it has none.
     func defaultTransition(playlistId: UInt64) -> ReplayTransitionInfo {
         guard let playlists = raw["playlists"]?.arrayValue else { return .cut }

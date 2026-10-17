@@ -974,9 +974,9 @@ public partial class ReplayWindow : Window
         var angleId = ReplayModel.ActiveAngle(_replay);
         if (angleId == 0)
         {
-            // The control layer refuses to guess which camera a clip came from,
-            // so do not invent one here either.
-            MessageBox.Show(this, Loc.T("replay.needAngle"), Title);
+            // The document has no angles at all, so there is no camera to name. The
+            // notice line says so; a modal box would block the deck.
+            Warn(Loc.T("replay.needAngle"));
             SaveDocument();
             return;
         }
@@ -1003,7 +1003,7 @@ public partial class ReplayWindow : Window
             ["speed"] = 1.0,
             ["gainDb"] = 0.0,
             ["transition"] = fallback is null
-                ? new JsonObject { ["kind"] = "Cut", ["timing"] = "Overwrap", ["durationFrames"] = 0 }
+                ? new JsonObject { ["kind"] = "Cut", ["timing"] = "Overwrap", ["durationFrames"] = 0U }
                 : new JsonObject
                 {
                     ["kind"] = fallback["kind"]?.GetValue<string>() ?? "Cut",
@@ -1105,7 +1105,7 @@ public partial class ReplayWindow : Window
             ["outFrame"] = source.OutFrame,
             ["speed"] = 1.0,
             ["gainDb"] = 0.0,
-            ["transition"] = new JsonObject { ["kind"] = "Cut", ["timing"] = "Overwrap", ["durationFrames"] = 0 }
+            ["transition"] = new JsonObject { ["kind"] = "Cut", ["timing"] = "Overwrap", ["durationFrames"] = 0U }
         });
         playlist["clips"] = clips;
         playlist["revision"] = (playlist["revision"]?.GetValue<ulong>() ?? 0) + 1;

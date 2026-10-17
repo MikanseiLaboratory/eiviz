@@ -896,7 +896,7 @@ struct ReplayView: View {
                 name: name
             )
             if current.autoAddToPlaylist {
-                let angleId = current.activeAngleId
+                let angleId = current.activeAngle
                 if angleId == 0 {
                     status = L10n.t("replay.needAngle")
                 } else if let event = current.events.first(where: { $0.id == id }) {
@@ -934,7 +934,7 @@ struct ReplayView: View {
 
     private func addEventToPlaylist(_ event: ReplayEventInfo) {
         guard var current = document else { return }
-        let angleId = current.activeAngleId
+        let angleId = current.activeAngle
         guard angleId != 0 else {
             status = L10n.t("replay.needAngle")
             return
@@ -1278,6 +1278,9 @@ struct ReplaySettingsView: View {
             Spacer()
             HStack {
                 Spacer()
+                // Cancelling discards the edits: nothing was published, so the
+                // window just goes away.
+                Button(L10n.t("dialog.cancel")) { mixer.closeReplaySettings() }
                 Button(L10n.t("replay.apply")) { apply() }
                     .keyboardShortcut(.defaultAction)
             }
@@ -1506,6 +1509,13 @@ struct ReplaySettingsView: View {
         current.setAngles(angles)
         current.setAutoAddToPlaylist(autoAdd)
         document = current
-        mixer.applyReplay(current)
+        // Applying either works or says why. A window that closes without a word
+        // leaves the operator unable to tell the two apart.
+        if mixer.applyReplay(current) {
+            AppKitDialog.toast(L10n.t("replay.applied"))
+            mixer.closeReplaySettings()
+        } else {
+            status = L10n.t("replay.publishRefused")
+        }
     }
 }

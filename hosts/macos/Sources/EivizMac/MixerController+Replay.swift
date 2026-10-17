@@ -97,6 +97,13 @@ extension MixerController {
         replayWindow = window
     }
 
+    /// Closes the recording settings. Applying and cancelling both end here, so the
+    /// operator sees the window go away either way.
+    func closeReplaySettings() {
+        replaySettingsWindow?.close()
+        replaySettingsWindow = nil
+    }
+
     func openReplaySettings() {
         guard hasReplayInput else { return }
         if let existing = replaySettingsWindow {
@@ -157,13 +164,15 @@ extension MixerController {
     }
     /// Writes the replay document back and pushes it to the core. In remote mode
     /// the core owns the document, so it goes through a mutation instead.
-    func applyReplay(_ document: ReplayDocument) {
+    /// Writes the recording settings. Returns false when the core refused the
+    /// document, so the caller can keep the window open and say why.
+    @discardableResult
+    func applyReplay(_ document: ReplayDocument) -> Bool {
         session.replay = document.value
         if isRemote {
-            _ = mutateRemote(MixerRemote.upsertReplaySettings(document.value))
-        } else {
-            publishSession()
+            return mutateRemote(MixerRemote.upsertReplaySettings(document.value))
         }
+        return replaceRuntime()
     }
 
     /// Clears the animation cues that name a Replay channel or clip. A cue whose

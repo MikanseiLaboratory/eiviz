@@ -266,8 +266,11 @@ internal static class ReplayModel
                     clip["recordingUuid"]?.GetValue<string>() ?? "",
                     clip["inFrame"]?.GetValue<ulong>() ?? 0,
                     clip["outFrame"]?.GetValue<ulong>() ?? 0,
-                    clip["speed"]?.GetValue<float>() ?? 1.0f,
-                    clip["gainDb"]?.GetValue<float>() ?? 0.0f,
+                    // Speed and gain are written as JSON numbers, which System.Text.Json
+                    // types as Double: reading them as float throws on a document this
+                    // host just wrote.
+                    (float)(clip["speed"]?.GetValue<double>() ?? 1.0),
+                    (float)(clip["gainDb"]?.GetValue<double>() ?? 0.0),
                     ReplayTransitionInfo.Read(clip["transition"]),
                     (clip["tags"] as JsonArray ?? [])
                         .Select(tag => tag?.GetValue<string>() ?? "")
@@ -332,8 +335,21 @@ internal static class ReplayModel
         return $"{whole / 3600:00}:{whole / 60 % 60:00}:{whole % 60:00}:{sub:00}";
     }
 
-    public static uint ActiveAngle(JsonObject root) =>
-        root["activeAngleId"]?.GetValue<uint>() ?? 0;
+    /// <summary>
+    /// Angle the operator is on: the one they picked, or the first angle when the
+    /// document has never had one chosen. The mixer treats the first angle as the
+    /// default (live follows it, `jump_to_now` records it), so the deck reads the
+    /// same way instead of refusing to name the camera a clip came from.
+    /// </summary>
+    public static uint ActiveAngle(JsonObject root)
+    {
+        var active = root["activeAngleId"]?.GetValue<uint>() ?? 0;
+        if (active != 0)
+            return active;
+        foreach (var angle in Angles(root))
+            return angle.Id;
+        return 0;
+    }
 
     /// <summary>
     /// Drives the recording is allowed to use. A recorder without one writes
@@ -395,7 +411,7 @@ internal static class ReplayModel
         {
             ["id"] = id,
             ["name"] = "Replay",
-            ["revision"] = 1,
+            ["revision"] = 1UL,
             ["clips"] = list
         });
         root["playlists"] = document;

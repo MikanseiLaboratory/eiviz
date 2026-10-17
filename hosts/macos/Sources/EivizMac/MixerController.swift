@@ -501,14 +501,18 @@ final class MixerController: ObservableObject {
         replaceRuntime()
     }
 
-    func replaceRuntime() {
-        if isRemote { return }
+    /// Applies the session to the mixer. Returns false when the core refused the
+    /// document, so a caller that promised the operator something can say so
+    /// instead of closing as if it worked.
+    @discardableResult
+    func replaceRuntime() -> Bool {
+        if isRemote { return true }
         session.selectedUnitId = selectedUnitId
-        guard let json = try? SessionFile.encode(session) else { return }
+        guard let json = try? SessionFile.encode(session) else { return false }
         let code = json.withUnsafeBytes { ptr in
             mixer_session_replace(ptr.bindMemory(to: UInt8.self).baseAddress, json.count, 0)
         }
-        guard code != EIVIZ_OK else { return }
+        guard code != EIVIZ_OK else { return true }
         // The core refused the document, so what is on screen is not what is
         // running. Say so instead of leaving the two silently apart.
         let detail = MixerFFI.lastErrorText()
@@ -516,6 +520,7 @@ final class MixerController: ObservableObject {
             detail.isEmpty ? L10n.error("Replace session", code) : detail,
             title: L10n.t("msg.sessionRefused")
         )
+        return false
     }
 
     func shutdown() {
