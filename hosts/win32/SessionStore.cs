@@ -257,6 +257,7 @@ internal static class SessionStore
         public List<SceneLayoutPreset> ScenePresets { get; set; } = [];
         public List<string> InputTags { get; set; } = [];
         public List<string> SceneTags { get; set; } = [];
+        public List<string> ReplayTags { get; set; } = [];
         public ulong NextInputId { get; set; }
         public ulong NextSceneId { get; set; }
         public ulong NextUnitId { get; set; }
@@ -268,6 +269,8 @@ internal static class SessionStore
         public bool HeadphoneCopyMonitor { get; set; }
         public uint HeadphoneListenKind { get; set; }
         public ulong HeadphoneListenId { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public JsonElement? Replay { get; set; }
 
         public static Document From(Session session) => new()
         {
@@ -289,6 +292,7 @@ internal static class SessionStore
             }).ToList(),
             InputTags = [.. session.InputTags],
             SceneTags = [.. session.SceneTags],
+            ReplayTags = [.. session.ReplayTags],
             NextInputId = session.NextInputId,
             NextSceneId = session.NextSceneId,
             NextUnitId = session.NextUnitId,
@@ -299,7 +303,10 @@ internal static class SessionStore
             Headphone = session.Headphone.Clone(),
             HeadphoneCopyMonitor = session.HeadphoneCopyMonitor,
             HeadphoneListenKind = session.HeadphoneListenKind,
-            HeadphoneListenId = session.HeadphoneListenId
+            HeadphoneListenId = session.HeadphoneListenId,
+            Replay = string.IsNullOrWhiteSpace(session.ReplayJson)
+                ? null
+                : JsonSerializer.Deserialize<JsonElement>(session.ReplayJson, Json)
         };
 
         public Session ToSession()
@@ -310,7 +317,10 @@ internal static class SessionStore
                 Headphone = Headphone.Clone(),
                 HeadphoneCopyMonitor = HeadphoneCopyMonitor,
                 HeadphoneListenKind = HeadphoneListenKind,
-                HeadphoneListenId = HeadphoneListenId
+                HeadphoneListenId = HeadphoneListenId,
+                ReplayJson = Replay is { ValueKind: JsonValueKind.Undefined or JsonValueKind.Null }
+                    ? ""
+                    : Replay?.GetRawText() ?? ""
             };
             session.Settings.MasterFpsNum = Settings.MasterFpsNum;
             session.Settings.MasterFpsDen = Settings.MasterFpsDen;
@@ -360,6 +370,7 @@ internal static class SessionStore
                 session.ScenePresets.Add(preset);
             session.InputTags.AddRange(TagCatalog.NormalizeList(InputTags));
             session.SceneTags.AddRange(TagCatalog.NormalizeList(SceneTags));
+            session.ReplayTags.AddRange(TagCatalog.NormalizeList(ReplayTags));
             foreach (var output in session.Outputs)
             {
                 if (output.SourceKind == OutputSourceKind.Multiview)
@@ -703,6 +714,7 @@ internal sealed class InputKindJsonConverter : JsonConverter<InputKind>
             "Mix" or "mix" => InputKind.Mix,
             "Audio" or "audio" => InputKind.Audio,
             "DeckLink" or "deckLink" or "decklink" => InputKind.DeckLink,
+            "Replay" or "replay" => InputKind.Replay,
             _ => throw new JsonException($"Unknown InputKind '{text}'.")
         };
     }
@@ -717,3 +729,5 @@ internal sealed class InputKindJsonConverter : JsonConverter<InputKind>
             _ => value.ToString()
         });
 }
+
+

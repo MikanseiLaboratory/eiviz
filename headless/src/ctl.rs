@@ -89,6 +89,8 @@ pub enum CtlCommand {
     Discover(DiscoverCmd),
     #[command(subcommand)]
     Capture(CaptureCmd),
+    #[command(subcommand)]
+    Replay(ReplayCmd),
 }
 
 #[derive(Debug, Subcommand)]
@@ -658,6 +660,7 @@ impl CtlCommand {
             Self::Audio(_) => "audio",
             Self::Discover(_) => "discover",
             Self::Capture(_) => "capture",
+            Self::Replay(_) => "replay",
         }
     }
 
@@ -795,6 +798,148 @@ async fn execute(session: &ControlSession, cmd: CtlCommand) -> Result<CmdResult,
         CtlCommand::Audio(cmd) => audio_cmd(session, cmd).await,
         CtlCommand::Discover(cmd) => discover_cmd(session, cmd).await,
         CtlCommand::Capture(cmd) => capture_cmd(session, cmd).await,
+        CtlCommand::Replay(cmd) => replay_cmd(session, cmd).await,
+    }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ReplayCmd {
+    /// Writes the recording settings (drives, angles, buffering) from a JSON file
+    /// shaped like `ReplayDto`. Replay is created by adding a Replay input.
+    Configure {
+        #[arg(long)]
+        from_json: PathBuf,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        expected_revision: Option<u64>,
+    },
+    Record {
+        #[arg(long, action = clap::ArgAction::Set)]
+        on: bool,
+    },
+    MarkIn,
+    MarkOut {
+        #[arg(long, default_value = "")]
+        name: String,
+    },
+    Cue {
+        #[arg(long, default_value_t = 0)]
+        channel: u32,
+        #[arg(long)]
+        clip: String,
+    },
+    Play {
+        #[arg(long, default_value_t = 0)]
+        channel: u32,
+    },
+    Pause {
+        #[arg(long, default_value_t = 0)]
+        channel: u32,
+    },
+    Speed {
+        #[arg(long, default_value_t = 0)]
+        channel: u32,
+        #[arg(long)]
+        milli: i32,
+    },
+    Seek {
+        #[arg(long, default_value_t = 0)]
+        channel: u32,
+        #[arg(long)]
+        frame: u64,
+    },
+    JumpToNow {
+        #[arg(long, default_value_t = 0)]
+        channel: u32,
+    },
+    State,
+    Estimate {
+        #[arg(long)]
+        path: String,
+    },
+}
+
+async fn replay_cmd(session: &ControlSession, cmd: ReplayCmd) -> Result<CmdResult, String> {
+    match cmd {
+        ReplayCmd::Configure {
+            from_json,
+            force,
+            expected_revision,
+        } => {
+            let replay = read_json::<eiviz_control::session::replay::ReplayDto>(&from_json)?;
+            mutate(
+                session,
+                SessionMutation::UpsertReplaySettings {
+                    replay: Box::new(replay),
+                },
+                expected_revision,
+                force,
+            )
+            .await
+        }
+        ReplayCmd::Record { on } => {
+            session.replay_record(on).await.map_err(map_err)?;
+            ok_live(session, json!({ "on": on })).await
+        }
+        ReplayCmd::MarkIn => {
+            session.replay_mark_in().await.map_err(map_err)?;
+            ok_live(session, json!({})).await
+        }
+        ReplayCmd::MarkOut { name } => {
+            session.replay_mark_out(&name).await.map_err(map_err)?;
+            ok_live(session, json!({ "name": name })).await
+        }
+        ReplayCmd::Cue { channel, clip } => {
+            session.replay_cue(channel, &clip).await.map_err(map_err)?;
+            ok_live(session, json!({ "channel": channel, "clip": clip })).await
+        }
+        ReplayCmd::Play { channel } => {
+            session
+                .replay_transport(channel, true, 1000, -1)
+                .await
+                .map_err(map_err)?;
+            ok_live(session, json!({ "channel": channel, "playing": true })).await
+        }
+        ReplayCmd::Pause { channel } => {
+            session
+                .replay_transport(channel, false, 0, -1)
+                .await
+                .map_err(map_err)?;
+            ok_live(session, json!({ "channel": channel, "playing": false })).await
+        }
+        ReplayCmd::Speed { channel, milli } => {
+            session
+                .replay_transport(channel, true, milli, -1)
+                .await
+                .map_err(map_err)?;
+            ok_live(session, json!({ "channel": channel, "speedMilli": milli })).await
+        }
+        ReplayCmd::Seek { channel, frame } => {
+            session
+                .replay_transport(channel, false, 0, frame as i64)
+                .await
+                .map_err(map_err)?;
+            ok_live(session, json!({ "channel": channel, "frame": frame })).await
+        }
+        ReplayCmd::JumpToNow { channel } => {
+            session.replay_jump_to_now(channel).await.map_err(map_err)?;
+            ok_live(session, json!({ "channel": channel })).await
+        }
+        ReplayCmd::State => {
+            let json = session.replay_state().await.map_err(map_err)?;
+            Ok(CmdResult {
+                revision: session.view().revision,
+                payload: serde_json::from_str(&json).unwrap_or(json!({ "raw": json })),
+            })
+        }
+        ReplayCmd::Estimate { path } => Ok(CmdResult {
+            revision: session.view().revision,
+            payload: json!({
+                "path": path,
+                "note": "estimate is a local mixer ABI; use the host Settings page or mixer_replay_estimate"
+            }),
+        }),
     }
 }
 

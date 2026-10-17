@@ -158,6 +158,53 @@ pub trait MixerPort: Send {
         ))
     }
 
+    fn replay_configure(&mut self, _json: &str) -> ControlResult<()> {
+        Ok(())
+    }
+
+    fn replay_record(&mut self, _on: bool) -> ControlResult<()> {
+        Ok(())
+    }
+
+    fn replay_mark_in(&mut self) -> ControlResult<u64> {
+        Ok(0)
+    }
+
+    fn replay_close_mark(&mut self) -> ControlResult<(String, u64, u64)> {
+        Err(crate::error::ControlError::unavailable(
+            "replay mark is not open",
+        ))
+    }
+
+    fn replay_cue(
+        &mut self,
+        _channel: u32,
+        _angle_id: u32,
+        _in_frame: u64,
+        _out_frame: u64,
+        _recording_uuid: &str,
+    ) -> ControlResult<()> {
+        Ok(())
+    }
+
+    fn replay_transport(
+        &mut self,
+        _channel: u32,
+        _playing: bool,
+        _speed_milli: i32,
+        _seek_frame: i64,
+    ) -> ControlResult<()> {
+        Ok(())
+    }
+
+    fn replay_jump_to_now(&mut self, _channel: u32) -> ControlResult<()> {
+        Ok(())
+    }
+
+    fn replay_state_json(&self) -> String {
+        "{}".into()
+    }
+
     /// Concrete impls forward to `reconcile::apply_one` so the large match is
     /// monomorphized per port type instead of taking `&mut dyn MixerPort`.
     fn apply_reconcile(
@@ -233,6 +280,17 @@ pub struct StepApply {
     pub state_id: u64,
     pub motion: Option<MotionApply>,
     pub hold_frames: u32,
+    /// Replay cue this step fires when it is reached.
+    pub replay: Option<ReplayActionApply>,
+}
+
+/// What an animation step asks Replay to do.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplayActionApply {
+    pub channel: u32,
+    /// Empty means the newest clip on the channel.
+    pub clip_uid: String,
+    pub play: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

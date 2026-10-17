@@ -1039,7 +1039,6 @@ impl UploadStore {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn push_audio(
         &mut self,
         id: u64,

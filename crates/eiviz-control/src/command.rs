@@ -105,6 +105,26 @@ pub enum Command {
     },
     Shutdown,
     SaveSession,
+    ReplayRecord {
+        on: bool,
+    },
+    ReplayMarkIn,
+    ReplayMarkOut {
+        name: String,
+    },
+    ReplayCue {
+        channel: u32,
+        clip_uid: String,
+    },
+    ReplayTransport {
+        channel: u32,
+        playing: bool,
+        speed_milli: i32,
+        seek_frame: i64,
+    },
+    ReplayJumpToNow {
+        channel: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,6 +205,12 @@ impl Command {
                 | Self::VideoSeek { .. }
                 | Self::AudioSetInput { .. }
                 | Self::AudioSetBus { .. }
+                | Self::ReplayRecord { .. }
+                | Self::ReplayMarkIn
+                | Self::ReplayMarkOut { .. }
+                | Self::ReplayCue { .. }
+                | Self::ReplayTransport { .. }
+                | Self::ReplayJumpToNow { .. }
         )
     }
 
@@ -312,6 +338,15 @@ pub enum SessionMutation {
     DeleteScenePreset {
         name: String,
     },
+    UpsertReplaySettings {
+        replay: Box<crate::session::replay::ReplayDto>,
+    },
+    /// Creates the optional replay document on demand and returns its next
+    /// available channel through the resulting session snapshot.
+    AddReplayChannel,
+    /// Removes the replay document and every Replay input it owns, returning the
+    /// session to the state before Replay was added.
+    DeleteReplay,
 }
 
 impl SessionMutation {
@@ -341,6 +376,9 @@ impl SessionMutation {
             Self::DeleteCatalogTag { .. } => "DeleteCatalogTag",
             Self::UpsertScenePreset { .. } => "UpsertScenePreset",
             Self::DeleteScenePreset { .. } => "DeleteScenePreset",
+            Self::UpsertReplaySettings { .. } => "UpsertReplaySettings",
+            Self::AddReplayChannel => "AddReplayChannel",
+            Self::DeleteReplay => "DeleteReplay",
         }
     }
 }

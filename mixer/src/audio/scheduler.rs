@@ -174,6 +174,8 @@ fn run_scheduler(
             )
         };
         publish_monitor(&monitor_pcm, &follow_primed, &mixed);
+        // The replay recorder draws its waveform from what the mixer just mixed.
+        crate::replay::engine().offer_audio(&mixed.by_unit);
         dispatch_outputs(&snap.outputs, &mixed, pts);
     }
 }

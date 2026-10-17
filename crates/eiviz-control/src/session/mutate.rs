@@ -11,16 +11,53 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             if !document.inputs.iter().any(|item| item.id == id) {
                 return Err(ControlError::not_found(format!("input {id}")));
             }
-            document.inputs.retain(|item| item.id != id);
-            for scene in &mut document.scenes {
-                scene.layers.retain(|layer| layer.input_id != id);
+            let is_replay = document
+                .inputs
+                .iter()
+                .any(|item| item.id == id && item.kind == InputKind::Replay);
+            if is_replay {
+                let only_channel = document
+                    .replay
+                    .as_ref()
+                    .is_some_and(|replay| replay.channels.len() == 1);
+                if only_channel {
+                    return Err(ControlError::invalid(
+                        "removing the last Replay input requires DeleteReplay",
+                    ));
+                }
+                // The cue goes with the channel it names; a step that cues a
+                // channel nobody owns would make the session unloadable.
+                let index = document.replay.as_ref().and_then(|replay| {
+                    replay
+                        .channels
+                        .iter()
+                        .find(|channel| channel.input_id == id)
+                        .map(|channel| channel.index)
+                });
+                crate::session::replay::remove_channel_input(document, id);
+                if let Some(index) = index {
+                    crate::session::replay::clear_cues_for_channel(document, index);
+                }
             }
+            remove_input(document, id);
             Ok(())
         }
         SessionMutation::UpsertScene { scene } => upsert_scene(document, *scene),
         SessionMutation::DeleteScene { id } => {
             if !document.scenes.iter().any(|item| item.id == id) {
                 return Err(ControlError::not_found(format!("scene {id}")));
+            }
+            // An angle records a scene's composited output, so the scene is not the
+            // operator's to delete while Replay depends on it.
+            if let Some(angle) = document
+                .replay
+                .as_ref()
+                .and_then(|replay| replay.angles.iter().find(|angle| angle.scene_id == id))
+            {
+                return Err(ControlError::invalid(format!(
+                    "scene {id} is recorded as Replay angle {}; remove the angle first",
+                    angle.id
+                )));
             }
             document.scenes.retain(|item| item.id != id);
             Ok(())
@@ -43,6 +80,19 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             }
             if !document.units.iter().any(|item| item.id == id) {
                 return Err(ControlError::not_found(format!("unit {id}")));
+            }
+            // An angle may record a unit's program mix, so the unit is not the
+            // operator's to delete while Replay listens to it.
+            if let Some(angle) = document.replay.as_ref().and_then(|replay| {
+                replay.angles.iter().find(|angle| {
+                    angle.audio == crate::session::replay::AngleAudio::Unit
+                        && angle.audio_unit_id == id
+                })
+            }) {
+                return Err(ControlError::invalid(format!(
+                    "mixing unit {id} records Replay angle {}; set the angle to another unit or silence first",
+                    angle.id
+                )));
             }
             document.units.retain(|item| item.id != id);
             if document.selected_unit_id == id {
@@ -177,6 +227,15 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             Ok(())
         }
         SessionMutation::CreateInput { input } => {
+            // A Replay input brings the Replay document with it: the channel, its
+            // reserved input id and the settings all follow from adding one. Doing it
+            // here means an automation client can add Replay the same way the host
+            // does, instead of having to invent a document first.
+            if input.kind == InputKind::Replay {
+                crate::session::replay::add_channel_input(document)
+                    .map_err(ControlError::invalid)?;
+                return Ok(());
+            }
             crate::session::edit::allocate_input(document, *input).map(|_| ())
         }
         SessionMutation::CreateScene { scene } => {
@@ -203,6 +262,38 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
         SessionMutation::UpsertScenePreset { preset } => {
             crate::session::edit::upsert_scene_preset(document, *preset)
         }
+        SessionMutation::UpsertReplaySettings { replay } => {
+            // Replay is created only by adding a Replay input. Settings may be
+            // edited afterwards, never invented.
+            if document.replay.is_none() {
+                return Err(ControlError::invalid(
+                    "add a Replay input before editing Replay settings",
+                ));
+            }
+            if replay.channels.is_empty() {
+                return Err(ControlError::invalid(
+                    "Replay settings require an explicitly added Replay input",
+                ));
+            }
+            document.replay = Some(*replay);
+            Ok(())
+        }
+        SessionMutation::AddReplayChannel => {
+            crate::session::replay::add_channel_input(document).map_err(ControlError::invalid)?;
+            Ok(())
+        }
+        SessionMutation::DeleteReplay => {
+            let Some(replay) = document.replay.take() else {
+                return Err(ControlError::not_found("replay"));
+            };
+            for channel in replay.channels {
+                remove_input(document, channel.input_id);
+            }
+            // Animation steps that cue a channel go with Replay: a cue to a channel
+            // that no longer exists would make the session unloadable.
+            crate::session::replay::clear_all_cues(document);
+            Ok(())
+        }
         SessionMutation::DeleteScenePreset { name } => {
             crate::session::edit::delete_scene_preset(document, &name)
         }
@@ -213,10 +304,31 @@ fn upsert_input(document: &mut Document, input: InputDto) -> ControlResult<()> {
     if input.id == 0 {
         return Err(ControlError::invalid("input id required"));
     }
-    if let Some(existing) = document.inputs.iter_mut().find(|item| item.id == input.id) {
+    let kind = input.kind;
+    let id = input.id;
+    let was_replay = document
+        .inputs
+        .iter()
+        .any(|item| item.id == id && item.kind == InputKind::Replay);
+    if was_replay && kind != InputKind::Replay {
+        // The channel and the replay document belong to a Replay input, so its
+        // kind is not editable: a channel whose input changed kind is a session
+        // nobody can load. Removing the input is the explicit way out.
+        return Err(ControlError::invalid(
+            "a Replay input keeps its kind; remove the input to free the channel",
+        ));
+    }
+    // A Replay input always owns a channel, because Replay exists only while one
+    // does. A client that adds the input itself gets the document here rather than
+    // an input the Replay settings would refuse to edit. The channel is claimed
+    // before the input list changes, so a refused id adds nothing.
+    if kind == InputKind::Replay {
+        crate::session::replay::adopt_channel_input(document, id).map_err(ControlError::invalid)?;
+    }
+    if let Some(existing) = document.inputs.iter_mut().find(|item| item.id == id) {
         *existing = input;
     } else {
-        document.next_input_id = document.next_input_id.max(input.id.saturating_add(1));
+        document.next_input_id = document.next_input_id.max(id.saturating_add(1));
         document.inputs.push(input);
     }
     Ok(())
@@ -283,6 +395,14 @@ fn upsert_multiview(document: &mut Document, layout: MultiviewDto) -> ControlRes
     Ok(())
 }
 
+/// Drops an input and every scene layer that referenced it.
+fn remove_input(document: &mut Document, id: u64) {
+    document.inputs.retain(|item| item.id != id);
+    for scene in &mut document.scenes {
+        scene.layers.retain(|layer| layer.input_id != id);
+    }
+}
+
 fn next_input_id(document: &Document) -> u64 {
     let max = document
         .inputs
@@ -290,7 +410,7 @@ fn next_input_id(document: &Document) -> u64 {
         .map(|item| item.id)
         .max()
         .unwrap_or(9);
-    document.next_input_id.max(max.saturating_add(1)).max(10)
+    crate::ids::skip_reserved_bands(document.next_input_id.max(max.saturating_add(1)).max(10))
 }
 
 fn default_media_name(kind: InputKind, path: &str) -> String {
@@ -584,5 +704,323 @@ mod tests {
             Some(file.to_string_lossy().as_ref())
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn bars_with_replay() -> Document {
+        let mut doc = bars();
+        crate::session::replay::add_channel_input(&mut doc).unwrap();
+        doc
+    }
+
+    #[test]
+    fn delete_replay_removes_the_document_and_every_input() {
+        let mut doc = bars_with_replay();
+        crate::session::replay::add_channel_input(&mut doc).unwrap();
+        assert_eq!(doc.inputs.len(), 3);
+        apply(&mut doc, SessionMutation::DeleteReplay).unwrap();
+        assert!(doc.replay.is_none());
+        assert!(!doc.inputs.iter().any(|item| item.kind == InputKind::Replay));
+    }
+
+    #[test]
+    fn delete_replay_without_replay_is_not_found() {
+        let mut doc = bars();
+        let err = apply(&mut doc, SessionMutation::DeleteReplay).unwrap_err();
+        assert!(matches!(err, ControlError::NotFound { .. }));
+    }
+
+    #[test]
+    fn deleting_the_last_channel_points_at_delete_replay() {
+        let mut doc = bars_with_replay();
+        let id = doc.inputs.last().unwrap().id;
+        let err = apply(&mut doc, SessionMutation::DeleteInput { id }).unwrap_err();
+        assert!(err.message().contains("DeleteReplay"), "{}", err.message());
+    }
+
+    #[test]
+    fn replay_settings_cannot_create_the_document() {
+        let mut doc = bars();
+        let err = apply(
+            &mut doc,
+            SessionMutation::UpsertReplaySettings {
+                replay: Box::new(crate::session::replay::ReplayDto::default()),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.message().contains("add a Replay input"),
+            "{}",
+            err.message()
+        );
+        assert!(doc.replay.is_none());
+    }
+
+    #[test]
+    fn allocated_input_ids_never_enter_the_replay_bands() {
+        let mut doc = bars_with_replay();
+        // Pretend a host bumped the counter into the Replay channel band.
+        doc.next_input_id = crate::ids::REPLAY_CHANNEL_BASE;
+        let id = next_input_id(&doc);
+        assert!(id >= crate::ids::REPLAY_RECORD_BASE + 0x1_0000, "{id:#x}");
+    }
+
+    /// A client that adds the input itself - which is what a remote host sends -
+    /// must end up with the channel and the document, or the Replay settings would
+    /// refuse to open on it.
+    #[test]
+    fn upserting_a_replay_input_creates_its_channel_and_document() {
+        let mut doc = bars();
+        let id = crate::session::replay::REPLAY_CHANNEL_BASE | 1;
+        let mutation: SessionMutation = serde_json::from_str(&format!(
+            r#"{{ "kind": "upsertInput", "input": {{ "id": {id}, "name": "Replay A", "kind": "Replay" }} }}"#
+        ))
+        .expect("Remote upsertInput");
+        apply(&mut doc, mutation).unwrap();
+
+        let replay = doc.replay.as_ref().expect("the document follows the input");
+        assert_eq!(replay.channels.len(), 1);
+        assert_eq!(replay.channels[0].index, 0);
+        assert_eq!(replay.channels[0].input_id, id);
+        assert!(!replay.enabled, "adding an input never starts recording");
+
+        // The settings the operator edits next are accepted now.
+        let replay = replay.clone();
+        apply(
+            &mut doc,
+            SessionMutation::UpsertReplaySettings {
+                replay: Box::new(replay),
+            },
+        )
+        .unwrap();
+    }
+
+    /// Adding a Replay input through the session API is the same operation as
+    /// adding one in the host: the channel, the reserved id and the document all
+    /// arrive together, so an automation client never has to invent a document.
+    #[test]
+    fn creating_a_replay_input_creates_its_channel_and_document() {
+        let mut doc = bars();
+        let mutation: SessionMutation = serde_json::from_str(
+            r#"{ "kind": "createInput", "input": { "id": 0, "name": "", "kind": "Replay" } }"#,
+        )
+        .expect("createInput");
+        apply(&mut doc, mutation).unwrap();
+
+        let replay = doc.replay.as_ref().expect("the document follows the input");
+        assert_eq!(replay.channels.len(), 1);
+        assert_eq!(replay.channels[0].index, 0);
+        let expected = crate::session::replay::REPLAY_CHANNEL_BASE | 1;
+        assert_eq!(replay.channels[0].input_id, expected);
+        assert!(
+            doc.inputs
+                .iter()
+                .any(|input| input.id == expected && input.kind == InputKind::Replay),
+            "the channel owns a Replay input"
+        );
+        assert!(!replay.enabled, "adding an input never starts recording");
+    }
+
+    /// Two channels are two inputs, and each keeps its own letter.
+    #[test]
+    fn a_second_replay_input_takes_the_next_channel() {
+        let mut doc = bars();
+        let first = crate::session::replay::REPLAY_CHANNEL_BASE | 1;
+        let second = crate::session::replay::REPLAY_CHANNEL_BASE | 2;
+        for (id, name) in [(first, "Replay A"), (second, "Replay B")] {
+            let mutation: SessionMutation = serde_json::from_str(&format!(
+                r#"{{ "kind": "upsertInput", "input": {{ "id": {id}, "name": "{name}", "kind": "Replay" }} }}"#
+            ))
+            .unwrap();
+            apply(&mut doc, mutation).unwrap();
+        }
+        let replay = doc.replay.as_ref().unwrap();
+        assert_eq!(replay.channels.len(), 2);
+        assert_eq!(replay.channels[0].input_id, first);
+        assert_eq!(replay.channels[1].input_id, second);
+        // Re-upserting an input that already owns its channel changes nothing.
+        let mutation: SessionMutation = serde_json::from_str(&format!(
+            r#"{{ "kind": "upsertInput", "input": {{ "id": {first}, "name": "Replay A", "kind": "Replay" }} }}"#
+        ))
+        .unwrap();
+        apply(&mut doc, mutation).unwrap();
+        assert_eq!(doc.replay.as_ref().unwrap().channels.len(), 2);
+    }
+
+    /// An input that names an id outside the reserved band is not a Replay
+    /// channel, and is refused before anything is added.
+    #[test]
+    fn a_replay_input_outside_the_band_adds_nothing() {
+        let mut doc = bars();
+        let mutation: SessionMutation = serde_json::from_str(
+            r#"{ "kind": "upsertInput", "input": { "id": 99, "name": "Replay", "kind": "Replay" } }"#,
+        )
+        .unwrap();
+        let err = apply(&mut doc, mutation).unwrap_err();
+        assert!(
+            err.message().contains("Replay channel id"),
+            "{}",
+            err.message()
+        );
+        assert!(doc.replay.is_none(), "no document was invented");
+        assert!(
+            !doc.inputs.iter().any(|item| item.id == 99),
+            "no input landed"
+        );
+    }
+
+    /// Changing a Replay input into another kind would leave its channel behind,
+    /// which no session can load. The operator removes the input instead.    #[test]
+    fn a_replay_input_cannot_change_its_kind() {
+        let mut doc = bars();
+        let id = crate::session::replay::REPLAY_CHANNEL_BASE | 1;
+        let add: SessionMutation = serde_json::from_str(&format!(
+            r#"{{ "kind": "upsertInput", "input": {{ "id": {id}, "name": "Replay A", "kind": "Replay" }} }}"#
+        ))
+        .unwrap();
+        apply(&mut doc, add).unwrap();
+
+        let change: SessionMutation = serde_json::from_str(&format!(
+            r#"{{ "kind": "upsertInput", "input": {{ "id": {id}, "name": "Camera", "kind": "Color" }} }}"#
+        ))
+        .unwrap();
+        let err = apply(&mut doc, change).unwrap_err();
+        assert!(
+            err.message().contains("keeps its kind"),
+            "{}",
+            err.message()
+        );
+        // The input and its channel are untouched.
+        assert!(
+            doc.inputs
+                .iter()
+                .any(|item| item.id == id && item.kind == InputKind::Replay)
+        );
+        assert_eq!(doc.replay.as_ref().unwrap().channels.len(), 1);
+        crate::session::validate_for_apply(&doc).unwrap();
+    }
+
+    /// A scene sequence may cue a Replay channel. Removing what it names has to
+    /// take the cue with it, or the session stops loading.
+    #[test]
+    fn deleting_replay_clears_the_animation_cues_that_named_it() {
+        let mut doc = bars_with_replay();
+        cue_channel(&mut doc, 0);
+        apply(&mut doc, SessionMutation::DeleteReplay).unwrap();
+        assert!(doc.replay.is_none());
+        assert_eq!(doc.scenes[0].sequences[0].steps[0].replay, None);
+        crate::session::validate_for_apply(&doc).unwrap();
+    }
+
+    /// Removing one channel clears only the cues that named that channel.
+    #[test]
+    fn removing_a_channel_clears_only_its_own_cues() {
+        let mut doc = bars_with_replay();
+        crate::session::replay::add_channel_input(&mut doc).unwrap();
+        cue_channel(&mut doc, 0);
+        cue_channel(&mut doc, 1);
+        let second = doc.inputs.last().unwrap().id;
+        apply(&mut doc, SessionMutation::DeleteInput { id: second }).unwrap();
+        assert_eq!(doc.replay.as_ref().unwrap().channels.len(), 1);
+        let steps = &doc.scenes[0].sequences[0].steps;
+        assert_eq!(
+            steps[0].replay.as_ref().map(|cue| cue.channel),
+            Some(0),
+            "the other channel's cue stays"
+        );
+        assert_eq!(
+            steps[1].replay, None,
+            "the removed channel's cue goes with it"
+        );
+        crate::session::validate_for_apply(&doc).unwrap();
+    }
+
+    /// An angle records a scene, so the scene is not free to delete while Replay
+    /// uses it. The refusal names the angle instead of failing validation later.
+    #[test]
+    fn a_scene_that_replay_records_cannot_be_deleted() {
+        use crate::session::replay::*;
+        let mut doc = bars_with_replay();
+        doc.replay.as_mut().unwrap().angles.push(AngleDto {
+            id: 1,
+            name: "Cam 1".into(),
+            scene_id: 1,
+            audio: AngleAudio::Silent,
+            audio_unit_id: 0,
+            record_mode: AngleRecordMode::Composite,
+        });
+        crate::session::validate_for_apply(&doc).unwrap();
+
+        let err = apply(&mut doc, SessionMutation::DeleteScene { id: 1 }).unwrap_err();
+        assert!(
+            err.message().contains("Replay angle 1"),
+            "{}",
+            err.message()
+        );
+        assert!(
+            doc.scenes.iter().any(|scene| scene.id == 1),
+            "the scene stays"
+        );
+    }
+
+    /// An angle may record a unit's program mix, so the unit is protected too.
+    #[test]
+    fn a_unit_that_replay_records_cannot_be_deleted() {
+        use crate::session::replay::*;
+        let mut doc = bars_with_replay();
+        doc.units.push(UnitDto {
+            id: 2,
+            ..doc.units[0].clone()
+        });
+        doc.replay.as_mut().unwrap().angles.push(AngleDto {
+            id: 1,
+            name: "Cam 1".into(),
+            scene_id: 1,
+            audio: AngleAudio::Unit,
+            audio_unit_id: 2,
+            record_mode: AngleRecordMode::Composite,
+        });
+        crate::session::validate_for_apply(&doc).unwrap();
+
+        let err = apply(&mut doc, SessionMutation::DeleteUnit { id: 2 }).unwrap_err();
+        assert!(
+            err.message().contains("Replay angle 1"),
+            "{}",
+            err.message()
+        );
+        assert!(doc.units.iter().any(|unit| unit.id == 2), "the unit stays");
+    }
+
+    /// One step that cues a channel, which is how the Scene editor drives Replay.
+    /// Called twice, it appends a second step.
+    fn cue_channel(doc: &mut Document, channel: u32) {
+        use crate::session::{SceneSequence, SequenceReplayAction, SequenceStep};
+        let scene = &mut doc.scenes[0];
+        if scene.states.is_empty() {
+            scene.states.push(crate::session::SceneState {
+                id: 1,
+                name: "Wide".into(),
+                layers: Vec::new(),
+                camera: None,
+                enter: crate::session::Motion::default(),
+            });
+        }
+        let step = SequenceStep {
+            state_id: 1,
+            motion: None,
+            hold_frames: 10,
+            replay: Some(SequenceReplayAction {
+                channel,
+                clip_uid: String::new(),
+                play: true,
+            }),
+        };
+        match scene.sequences.first_mut() {
+            Some(sequence) => sequence.steps.push(step),
+            None => scene.sequences.push(SceneSequence {
+                id: 1,
+                name: "Open".into(),
+                steps: vec![step],
+            }),
+        }
     }
 }

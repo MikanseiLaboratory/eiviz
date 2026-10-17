@@ -12,7 +12,7 @@ pub(crate) struct PreparedSurface {
     config: wgpu::SurfaceConfiguration,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(windows, target_os = "macos"))]
 #[derive(Clone)]
 pub(crate) struct SurfaceGpu {
     pub instance: wgpu::Instance,

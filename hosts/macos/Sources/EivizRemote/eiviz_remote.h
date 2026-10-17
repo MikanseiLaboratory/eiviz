@@ -30,6 +30,12 @@ int32_t mixer_remote_audio_set_input(int32_t handle, uint64_t input_id, const ui
 int32_t mixer_remote_audio_set_bus(int32_t handle, uint64_t bus_id, float gain, uint32_t mute);
 int32_t mixer_remote_discover(int32_t handle, const char *kind, const char *query, uint8_t *out, size_t cap);
 int32_t mixer_remote_upload(int32_t handle, const char *path, const char *kind, const char *name, uint32_t video_loop, uint64_t expected_revision);
+int32_t mixer_remote_replay_record(int32_t handle, uint32_t on);
+int32_t mixer_remote_replay_mark_in(int32_t handle);
+int32_t mixer_remote_replay_mark_out(int32_t handle, const char *name);
+int32_t mixer_remote_replay_cue(int32_t handle, uint32_t channel, const char *clip_uid);
+int32_t mixer_remote_replay_transport(int32_t handle, uint32_t channel, uint32_t playing, int32_t speed_milli, int64_t seek_frame);
+int32_t mixer_remote_replay_jump_to_now(int32_t handle, uint32_t channel);
 
 #ifdef __cplusplus
 }

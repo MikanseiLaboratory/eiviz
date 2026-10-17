@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json.Nodes;
 using System.Windows;
 using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
@@ -17,7 +18,8 @@ public enum InputKind
     UVC,
     Mix,
     Audio,
-    DeckLink
+    DeckLink,
+    Replay
 }
 
 public enum AudioCaptureMode
@@ -401,7 +403,8 @@ internal static class InputKindNames
         InputKind.UVC,
         InputKind.DeckLink,
         InputKind.Mix,
-        InputKind.Audio
+        InputKind.Audio,
+        InputKind.Replay
     ];
 
     public static string Category(InputKind kind) => kind switch
@@ -415,6 +418,7 @@ internal static class InputKindNames
         InputKind.Mix => "Mix",
         InputKind.Audio => "Audio",
         InputKind.DeckLink => "DeckLink",
+        InputKind.Replay => "Replay",
         _ => kind.ToString()
     };
 
@@ -698,6 +702,17 @@ public sealed class SequenceStep
     public ulong StateId { get; set; }
     public Motion? Motion { get; set; }
     public uint HoldFrames { get; set; }
+    /// <summary>Replay action fired when the step is reached.</summary>
+    public SequenceReplayAction? Replay { get; set; }
+}
+
+/// <summary>What an animation step does to Replay.</summary>
+public sealed class SequenceReplayAction
+{
+    public uint Channel { get; set; }
+    /// <summary>Empty means the newest clip on the channel.</summary>
+    public string ClipUid { get; set; } = "";
+    public bool Play { get; set; }
 }
 
 public sealed class SceneSequence
@@ -1290,6 +1305,8 @@ public sealed class Session
     public List<SceneLayoutPreset> ScenePresets { get; } = [];
     public List<string> InputTags { get; } = [];
     public List<string> SceneTags { get; } = [];
+    /// Tag suggestions for replay clips, the same way inputs and scenes have one.
+    public List<string> ReplayTags { get; } = [];
     public ulong NextInputId { get; set; } = 10;
     public ulong NextSceneId { get; set; } = 1;
     public ulong NextUnitId { get; set; } = 1;
@@ -1303,6 +1320,7 @@ public sealed class Session
     public bool HeadphoneCopyMonitor { get; set; }
     public uint HeadphoneListenKind { get; set; }
     public ulong HeadphoneListenId { get; set; }
+    public string ReplayJson { get; set; } = "";
 
     public void EnsureDefaultTransitions()
     {
@@ -1458,6 +1476,41 @@ public sealed class Session
             TagCatalog.Replace(scene.Tags, scene.Tags);
             TagCatalog.MergeInto(SceneTags, scene.Tags);
         }
+        var replayCatalog = TagCatalog.NormalizeList(ReplayTags);
+        ReplayTags.Clear();
+        ReplayTags.AddRange(replayCatalog);
+        NormalizeReplayTags();
+    }
+
+    /// Normalizes every clip's tags in the replay document and folds them into the
+    /// catalog, the same way input and scene tags are kept tidy.
+    private void NormalizeReplayTags()
+    {
+        var root = ReplayModel.Parse(this);
+        if (root?["playlists"] is not JsonArray playlists)
+            return;
+        var changed = false;
+        foreach (var list in playlists)
+        {
+            if (list is not JsonObject playlist || playlist["clips"] is not JsonArray clips)
+                continue;
+            foreach (var item in clips)
+            {
+                if (item is not JsonObject clip)
+                    continue;
+                var normalized = TagCatalog.NormalizeList(
+                    (clip["tags"] as JsonArray ?? []).Select(tag => tag?.GetValue<string>() ?? ""));
+                var array = new JsonArray();
+                foreach (var tag in normalized)
+                    array.Add(tag);
+                clip["tags"] = array;
+                TagCatalog.MergeInto(ReplayTags, normalized);
+                changed = true;
+            }
+        }
+        if (changed)
+            ReplayJson = ReplayModel.Serialize(root);
     }
 
 }
+

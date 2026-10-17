@@ -93,6 +93,12 @@ final class MixerController: ObservableObject {
     let switcherCloser = SwitcherCloser()
     var multiviewWindows: [UInt64: NSWindow] = [:]
     let multiviewCloser = SwitcherCloser()
+    /// Replay is one window pair per project, available only while a Replay input
+    /// exists.
+    var replayWindow: NSWindow?
+    var replaySettingsWindow: NSWindow?
+    let replayCloser = ReplayCloser()
+    let replaySettingsCloser = ReplayCloser()
     var videoRoles: [UInt64: (program: Bool, preview: Bool)] = [:]
     var remoteHandle: Int32 = 0
     var remoteConnecting = false
@@ -499,9 +505,17 @@ final class MixerController: ObservableObject {
         if isRemote { return }
         session.selectedUnitId = selectedUnitId
         guard let json = try? SessionFile.encode(session) else { return }
-        json.withUnsafeBytes { ptr in
-            _ = mixer_session_replace(ptr.bindMemory(to: UInt8.self).baseAddress, json.count, 0)
+        let code = json.withUnsafeBytes { ptr in
+            mixer_session_replace(ptr.bindMemory(to: UInt8.self).baseAddress, json.count, 0)
         }
+        guard code != EIVIZ_OK else { return }
+        // The core refused the document, so what is on screen is not what is
+        // running. Say so instead of leaving the two silently apart.
+        let detail = MixerFFI.lastErrorText()
+        presentError(
+            detail.isEmpty ? L10n.error("Replace session", code) : detail,
+            title: L10n.t("msg.sessionRefused")
+        )
     }
 
     func shutdown() {
@@ -514,6 +528,7 @@ final class MixerController: ObservableObject {
         closeAllInputPreviews()
         closeAllAudioInputs()
         closeAllSwitchers()
+        closeReplayWindows()
         if remoteHandle != 0 {
             _ = mixer_remote_close(remoteHandle)
             remoteHandle = 0

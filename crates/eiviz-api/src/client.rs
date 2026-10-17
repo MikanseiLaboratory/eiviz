@@ -359,6 +359,93 @@ impl ControlSession {
         status_ok(&response)
     }
 
+    pub async fn replay_record(&self, on: bool) -> ControlResult<()> {
+        status_ok(
+            &self
+                .roundtrip(replay_req(request::Payload::ReplayRecord(
+                    crate::proto::ReplayRecord { on },
+                )))
+                .await?,
+        )
+    }
+
+    pub async fn replay_mark_in(&self) -> ControlResult<()> {
+        status_ok(
+            &self
+                .roundtrip(replay_req(request::Payload::ReplayMarkIn(
+                    crate::proto::ReplayMarkIn {},
+                )))
+                .await?,
+        )
+    }
+
+    pub async fn replay_mark_out(&self, name: &str) -> ControlResult<()> {
+        status_ok(
+            &self
+                .roundtrip(replay_req(request::Payload::ReplayMarkOut(
+                    crate::proto::ReplayMarkOut { name: name.into() },
+                )))
+                .await?,
+        )
+    }
+
+    pub async fn replay_cue(&self, channel: u32, clip_uid: &str) -> ControlResult<()> {
+        status_ok(
+            &self
+                .roundtrip(replay_req(request::Payload::ReplayCue(
+                    crate::proto::ReplayCue {
+                        channel,
+                        clip_uid: clip_uid.into(),
+                    },
+                )))
+                .await?,
+        )
+    }
+
+    pub async fn replay_transport(
+        &self,
+        channel: u32,
+        playing: bool,
+        speed_milli: i32,
+        seek_frame: i64,
+    ) -> ControlResult<()> {
+        status_ok(
+            &self
+                .roundtrip(replay_req(request::Payload::ReplayTransport(
+                    crate::proto::ReplayTransport {
+                        channel,
+                        playing,
+                        speed_milli,
+                        seek_frame,
+                    },
+                )))
+                .await?,
+        )
+    }
+
+    pub async fn replay_jump_to_now(&self, channel: u32) -> ControlResult<()> {
+        status_ok(
+            &self
+                .roundtrip(replay_req(request::Payload::ReplayJumpToNow(
+                    crate::proto::ReplayJumpToNow { channel },
+                )))
+                .await?,
+        )
+    }
+
+    pub async fn replay_state(&self) -> ControlResult<String> {
+        let response = self
+            .roundtrip(replay_req(request::Payload::GetReplayState(
+                crate::proto::GetReplayState {},
+            )))
+            .await?;
+        status_ok(&response)?;
+        Ok(match response.payload {
+            Some(response::Payload::ReplayState(state)) => state.json,
+            _ => "{}".into(),
+        })
+    }
+
     pub async fn preview(&self, unit_id: u64, scene_id: u64) -> ControlResult<()> {
         let response = self.roundtrip(preview_req(unit_id, scene_id)).await?;
         apply_response(&self.view, &response);
@@ -979,6 +1066,14 @@ fn apply_event(
     }
     if !event.live_json.is_empty() {
         slot.live_json = event.live_json.clone();
+    }
+}
+
+fn replay_req(payload: request::Payload) -> Request {
+    Request {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        expected_revision: 0,
+        payload: Some(payload),
     }
 }
 

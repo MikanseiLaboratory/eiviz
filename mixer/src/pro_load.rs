@@ -211,6 +211,13 @@ fn api_complete(api: &ProApi) -> bool {
         && api.license_clear.is_some()
         && api.license_fingerprint.is_some()
         && api.license_email.is_some()
+        && api.replay_open.is_some()
+        && api.replay_close.is_some()
+        && api.replay_write_video.is_some()
+        && api.replay_decode.is_some()
+        && api.replay_range.is_some()
+        && api.replay_stats.is_some()
+        && api.replay_estimate.is_some()
 }
 
 fn query_snapshot(api: &ProApi, module: *mut c_void) -> Result<(Entitlements, u32), ()> {
@@ -227,6 +234,8 @@ fn query_snapshot(api: &ProApi, module: *mut c_void) -> Result<(Entitlements, u3
         recording: 0,
         srt: 0,
         hardware_encode: 0,
+        replay_angles: 0,
+        replay_channels: 0,
         features: 0,
     };
     let Some(query) = api.query_entitlements else {
@@ -399,6 +408,46 @@ impl eiviz_pro_api::ProModule for LoadedPro {
     fn license(&self) -> Option<&dyn LicenseBackend> {
         (self.refresh().features & FEATURE_LICENSE != 0).then_some(self)
     }
+
+    fn replay(&self) -> Option<&dyn eiviz_pro_api::ReplayBackend> {
+        Some(self)
+    }
+}
+
+impl eiviz_pro_api::ReplayBackend for LoadedPro {
+    fn open(
+        &self,
+        config: &eiviz_pro_api::ReplayStoreConfig,
+    ) -> eiviz_pro_api::ProResult<Box<dyn eiviz_pro_api::ReplayStore>> {
+        crate::replay::open_ffi_store(config)
+    }
+
+    fn estimate(
+        &self,
+        path: &str,
+        width: u32,
+        height: u32,
+        fps_num: u32,
+        fps_den: u32,
+        profile: u32,
+        angles: u32,
+        reserve_bytes: u64,
+    ) -> eiviz_pro_api::ProResult<eiviz_pro_api::ReplayEstimate> {
+        crate::replay::estimate_ffi(
+            path,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            profile,
+            angles,
+            reserve_bytes,
+        )
+    }
+}
+
+pub(crate) fn loaded_api() -> Option<(ProApi, *mut c_void)> {
+    LOADED.get().map(|loaded| (loaded.api, loaded.module))
 }
 
 impl LoadedPro {

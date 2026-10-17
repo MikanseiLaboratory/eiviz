@@ -500,6 +500,8 @@ public partial class App : Application
                 case InputKind.Audio when !network:
                     MixerApply.StartAudioCapture(input);
                     break;
+                case InputKind.Replay:
+                    break;
             }
         }
         catch (Exception ex)

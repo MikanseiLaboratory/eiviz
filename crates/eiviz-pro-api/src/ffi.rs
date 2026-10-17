@@ -36,6 +36,7 @@ pub const PRO_NOT_SUPPORTED: u32 = 6;
 pub const FEATURE_DECKLINK: u32 = 1 << 0;
 pub const FEATURE_RTMP: u32 = 1 << 1;
 pub const FEATURE_LICENSE: u32 = 1 << 2;
+pub const FEATURE_REPLAY: u32 = 1 << 3;
 
 pub const LAYOUT_UYVY: u32 = 0;
 pub const LAYOUT_BGRA: u32 = 1;
@@ -92,6 +93,8 @@ pub struct ProEntitlementsAbi {
     pub recording: u32,
     pub srt: u32,
     pub hardware_encode: u32,
+    pub replay_angles: u32,
+    pub replay_channels: u32,
     pub features: u32,
 }
 
@@ -285,6 +288,239 @@ pub struct ProApi {
         Option<unsafe extern "C" fn(*mut c_void, *mut u8, usize, *mut usize) -> ProStatus>,
     pub license_email:
         Option<unsafe extern "C" fn(*mut c_void, *mut u8, usize, *mut usize) -> ProStatus>,
+    pub replay_open: Option<
+        unsafe extern "C" fn(*mut c_void, *const ProReplayConfig, *mut *mut c_void) -> ProStatus,
+    >,
+    pub replay_close: Option<unsafe extern "C" fn(*mut c_void) -> ProStatus>,
+    pub replay_write_video: Option<
+        unsafe extern "C" fn(*mut c_void, u32, u64, *const ProVideoView) -> ProStatus,
+    >,
+    pub replay_decode: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            u32,
+            u64,
+            *mut u8,
+            usize,
+            *mut ProReplayDecoded,
+        ) -> ProStatus,
+    >,
+    pub replay_range: Option<
+        unsafe extern "C" fn(*mut c_void, u32, *mut u64, *mut u64) -> ProStatus,
+    >,
+    /// Added after the first layout. A module that does not export it has no
+    /// replay audio, and a caller that passes a smaller `struct_size` never set
+    /// it.
+    pub replay_write_audio: Option<
+        unsafe extern "C" fn(*mut c_void, u32, u64, *const ProReplayAudioView) -> ProStatus,
+    >,
+    pub replay_read_audio: Option<
+        unsafe extern "C" fn(*mut c_void, u32, u64, usize, *mut f32, *mut u32) -> ProStatus,
+    >,
+    pub replay_copy_peaks: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            u32,
+            u32,
+            *mut f32,
+            *mut f32,
+            u32,
+            *mut u32,
+            *mut u32,
+        ) -> ProStatus,
+    >,
+    pub replay_stats: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            *mut ProReplayStatsAbi,
+            *mut ProReplayAngleStatsAbi,
+            u32,
+            *mut u32,
+        ) -> ProStatus,
+    >,
+    pub replay_estimate: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            *const u8,
+            usize,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u64,
+            *mut ProReplayEstimateAbi,
+        ) -> ProStatus,
+    >,
+    /// Export a recording to MP4. The job runs on its own thread, so the host can
+    /// show progress and cancel.
+    pub replay_export_start: Option<
+        unsafe extern "C" fn(*mut c_void, *const ProReplayExportRequest) -> ProStatus,
+    >,
+    pub replay_export_progress: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            *mut ProReplayExportProgress,
+            *mut u8,
+            usize,
+            *mut usize,
+        ) -> ProStatus,
+    >,
+    pub replay_export_cancel: Option<unsafe extern "C" fn(*mut c_void) -> ProStatus>,
+}
+
+/// One run of the recording timeline that goes into the exported file.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProReplayExportSegment {
+    pub angle_id: u32,
+    /// Inclusive, matching how the session stores clip ranges.
+    pub from_frame: u64,
+    pub to_frame: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProReplayExportRequest {
+    pub struct_size: u32,
+    pub path: *const u8,
+    pub path_len: usize,
+    pub width: u32,
+    pub height: u32,
+    pub fps_num: u32,
+    pub fps_den: u32,
+    pub bitrate: u32,
+    pub sample_rate: u32,
+    pub channels: u32,
+    /// Non-zero to include the recorded audio.
+    pub with_audio: u32,
+    pub segments: *const ProReplayExportSegment,
+    pub segment_count: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProReplayExportProgress {
+    pub struct_size: u32,
+    /// `EXPORT_*` from the module.
+    pub state: u32,
+    pub done: u64,
+    pub total: u64,
+    pub skipped: u64,
+    pub bytes: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProReplayStorage {
+    pub path: *const u8,
+    pub path_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProReplayAngle {
+    pub angle_id: u32,
+    pub storage_index: u32,
+}
+
+/// Interleaved `f32` audio for one video frame of the recording timeline.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProReplayAudioView {
+    pub struct_size: u32,
+    pub sample_rate: u32,
+    pub channels: u32,
+    /// Frames per channel in `data`.
+    pub frames: u32,
+    pub data: *const f32,
+    pub data_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProReplayConfig {
+    pub struct_size: u32,
+    pub recording_uuid: *const u8,
+    pub recording_uuid_len: usize,
+    pub storages: *const ProReplayStorage,
+    pub storage_count: u32,
+    pub angles: *const ProReplayAngle,
+    pub angle_count: u32,
+    pub width: u32,
+    pub height: u32,
+    pub fps_num: u32,
+    pub fps_den: u32,
+    pub profile: u32,
+    pub segment_frames: u32,
+    pub encode_queue_frames: u32,
+    pub write_buffer_bytes: u64,
+    pub overflow_policy: u32,
+    pub reserve_bytes: u64,
+    pub retention: u32,
+    /// Appended after the original layout. A caller that passes a smaller
+    /// `struct_size` cannot have set it, and the module must read zero instead.
+    pub protect_from_frame: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProReplayStatsAbi {
+    pub struct_size: u32,
+    pub state: u32,
+    pub stop_reason: u32,
+    pub issues: u32,
+    pub first_frame: u64,
+    pub last_frame: u64,
+    pub free_bytes: u64,
+    pub reserve_bytes: u64,
+    pub write_rate_bps: u64,
+    pub write_rate_instant_bps: u64,
+    pub frames_written: u64,
+    pub frames_dropped: u64,
+    pub frames_dropped_recent: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProReplayAngleStatsAbi {
+    pub struct_size: u32,
+    pub angle_id: u32,
+    pub encode_ms_avg_milli: u32,
+    pub encode_ms_max_milli: u32,
+    pub encode_queue_len: u32,
+    pub encode_queue_cap: u32,
+    pub write_buffer_bytes: u64,
+    pub write_buffer_cap: u64,
+    pub write_latency_p95_ms: u32,
+    pub frames_written: u64,
+    pub dropped_encode: u64,
+    pub dropped_write: u64,
+    pub bytes_written: u64,
+    pub segments: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProReplayDecoded {
+    pub struct_size: u32,
+    pub actual_frame_index: u64,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub pts_100ns: i64,
+    pub substituted: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProReplayEstimateAbi {
+    pub struct_size: u32,
+    pub free_bytes: u64,
+    pub estimate_rate_bps: u64,
+    pub remaining_secs: u32,
+    pub path_writable: u32,
 }
 
 /// FNV-1a over the sizes of every struct that crosses the boundary.
@@ -303,6 +539,11 @@ pub fn abi_hash() -> u64 {
         std::mem::size_of::<ProLicenseStatusAbi>(),
         std::mem::size_of::<ProCaptureStatsAbi>(),
         std::mem::size_of::<ProOutputStatsAbi>(),
+        std::mem::size_of::<ProReplayConfig>(),
+        std::mem::size_of::<ProReplayStatsAbi>(),
+        std::mem::size_of::<ProReplayAngleStatsAbi>(),
+        std::mem::size_of::<ProReplayDecoded>(),
+        std::mem::size_of::<ProReplayEstimateAbi>(),
         ABI_MAJOR as usize,
     ];
     let mut hash = 0xcbf29ce484222325u64;
@@ -359,6 +600,8 @@ impl Entitlements {
             recording: u32::from(self.recording),
             srt: u32::from(self.srt),
             hardware_encode: u32::from(self.hardware_encode),
+            replay_angles: quota_count(self.replay_angles),
+            replay_channels: quota_count(self.replay_channels),
             features,
         }
     }
@@ -378,6 +621,8 @@ impl Entitlements {
             recording: raw.recording != 0,
             srt: raw.srt != 0,
             hardware_encode: raw.hardware_encode != 0,
+            replay_angles: quota_from_count(raw.replay_angles),
+            replay_channels: quota_from_count(raw.replay_channels),
         }
     }
 }
@@ -434,3 +679,5 @@ mod tests {
         assert_eq!(enterprise.features, FEATURE_DECKLINK | FEATURE_RTMP);
     }
 }
+
+

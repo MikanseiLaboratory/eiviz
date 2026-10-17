@@ -17,7 +17,9 @@ mod ffi;
 mod license;
 mod manifest;
 mod media;
+mod peaks;
 mod plan;
+mod replay;
 mod stream;
 
 pub use decklink::{
@@ -25,13 +27,32 @@ pub use decklink::{
     DeckLinkDevice, DeckLinkMode, DeckLinkPlayoutConfig, SignalStatus,
 };
 pub use error::{ProError, ProErrorKind, ProResult};
+pub use peaks::{PEAK_BUCKETS_PER_SEC, PeakAccumulator};
 pub use ffi::{
-    ABI_MAJOR, FEATURE_DECKLINK, FEATURE_LICENSE, FEATURE_RTMP, GET_API_SYMBOL, GetApiFn,
+    ABI_MAJOR, FEATURE_DECKLINK, FEATURE_LICENSE, FEATURE_REPLAY, FEATURE_RTMP, GET_API_SYMBOL,
+    GetApiFn,
     LAYOUT_BGRA, LAYOUT_UYVY, PRO_BUSY, PRO_DEVICE, PRO_INVALID, PRO_IO, PRO_NOT_SUPPORTED, PRO_OK,
     PRO_UNAVAILABLE, ProApi, ProAudioView, ProBytes, ProCaptureCallbacks, ProCaptureStatsAbi,
-    ProEntitlementsAbi, ProLicenseStatusAbi, ProOutputStatsAbi, ProPlayoutConfig, ProStatus,
-    ProStreamConfig, ProVideoView, SIGNAL_NONE, SIGNAL_PRESENT, abi_hash, copy_to_buffer,
-    module_target,
+    ProReplayAudioView,
+    ProReplayExportProgress,
+    ProReplayExportRequest,
+    ProReplayExportSegment,
+    ProEntitlementsAbi, ProLicenseStatusAbi, ProOutputStatsAbi, ProPlayoutConfig, ProReplayAngle,
+    ProReplayAngleStatsAbi, ProReplayConfig, ProReplayDecoded, ProReplayEstimateAbi,
+    ProReplayStatsAbi, ProReplayStorage, ProStatus, ProStreamConfig, ProVideoView, SIGNAL_NONE,
+    SIGNAL_PRESENT, abi_hash, copy_to_buffer, module_target,
+};
+pub use replay::{
+    DecodedFrame, ISSUE_CPU_ENCODE, ISSUE_FRAMES_DROPPED, ISSUE_GPU_READBACK, ISSUE_PRO_UNAVAILABLE,
+    ISSUE_STOPPED_BY_POLICY, ISSUE_STORAGE_FULL, ISSUE_STORAGE_LOW, ISSUE_STORAGE_WRITE,
+    OVERFLOW_DROP, OVERFLOW_STOP, PROFILE_HQ, PROFILE_LQ, PROFILE_SQ, RETENTION_OVERWRITE,
+    EXPORT_CANCELLED, EXPORT_DONE, EXPORT_FAILED, EXPORT_IDLE, EXPORT_RUNNING, RETENTION_PROTECT,
+    RETENTION_STOP, ReplayAngleStats, ReplayAngleTarget, ReplayBackend,
+    ReplayEstimate, ReplayExportProgress, ReplayExportSegment, ReplayExportSpec, ReplayStats,
+    ReplayStorageTarget, ReplayStore, ReplayStoreConfig, SEVERITY_CRITICAL,
+    SEVERITY_OK, SEVERITY_WARNING, STATE_IDLE, STATE_RECORDING, STATE_STOPPED, STOP_BUFFER_FULL,
+    STOP_FPS, STOP_IO, STOP_NONE, STOP_STORAGE_FULL, STOP_USER, WriteOutcome, estimate_bitrate_mbps,
+    estimate_rate_bps, free_bytes, free_bytes_at, profile_code, remaining_secs,
 };
 pub use license::{LicenseBackend, LicenseCondition, LicenseStatus};
 pub use manifest::ModuleManifest;
@@ -59,4 +80,12 @@ pub trait ProModule: Send + Sync {
     fn license(&self) -> Option<&dyn LicenseBackend> {
         None
     }
+
+    /// `None` when this build links no replay store.
+    fn replay(&self) -> Option<&dyn ReplayBackend> {
+        None
+    }
 }
+
+
+

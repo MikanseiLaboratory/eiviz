@@ -160,3 +160,17 @@ Opens the official docs for the language in use.
 
 - English: https://mikanseilaboratory.github.io/eiviz/en/
 - 日本語: https://mikanseilaboratory.github.io/eiviz/ja/
+
+## Replay
+
+Available on Professional and above, and only while the project has a Replay input. The recording settings live in the dedicated Replay Setup window rather than here; see [Instant Replay](/en/features/replay/) for the full picture.
+
+- **Storage**: one or more drives while replay is enabled. Angles record to the first drive unless they are assigned to another one. Remaining time uses free space minus the reserve, summed over the set.
+- **Profile**: HQ, SQ, or LQ. Quality is never reduced automatically.
+- **Encode queue**: unencoded frames kept per angle (default 6, range 2–60).
+- **Write buffer**: bytes held before a segment is written (default 512 MiB, range 64–8192).
+- **Overflow**: drop frames, or stop recording.
+- **Retention**: stop when the disk is full, overwrite the oldest segments, or overwrite everything except the clips and protected events still in use.
+- The angle set cannot change while recording; stop the recording first.
+
+The remaining-time warning thresholds (warning, alert, and critical, in seconds) belong to the session document rather than this window; they default to 600, 300, and 60, and they set the severity the main window colours its Replay status line by.

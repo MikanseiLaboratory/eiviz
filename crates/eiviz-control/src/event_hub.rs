@@ -61,7 +61,8 @@ impl EventHub {
             | Event::Lag { meta, .. }
             | Event::Failed { meta, .. }
             | Event::Discovered { meta, .. }
-            | Event::Shutdown { meta } => {
+            | Event::Shutdown { meta }
+            | Event::ReplayHealth { meta, .. } => {
                 meta.sequence = sequence;
             }
         }
