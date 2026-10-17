@@ -804,6 +804,16 @@ async fn execute(session: &ControlSession, cmd: CtlCommand) -> Result<CmdResult,
 
 #[derive(Debug, Subcommand)]
 pub enum ReplayCmd {
+    /// Writes the recording settings (drives, angles, buffering) from a JSON file
+    /// shaped like `ReplayDto`. Replay is created by adding a Replay input.
+    Configure {
+        #[arg(long)]
+        from_json: PathBuf,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        expected_revision: Option<u64>,
+    },
     Record {
         #[arg(long, action = clap::ArgAction::Set)]
         on: bool,
@@ -852,6 +862,22 @@ pub enum ReplayCmd {
 
 async fn replay_cmd(session: &ControlSession, cmd: ReplayCmd) -> Result<CmdResult, String> {
     match cmd {
+        ReplayCmd::Configure {
+            from_json,
+            force,
+            expected_revision,
+        } => {
+            let replay = read_json::<eiviz_control::session::replay::ReplayDto>(&from_json)?;
+            mutate(
+                session,
+                SessionMutation::UpsertReplaySettings {
+                    replay: Box::new(replay),
+                },
+                expected_revision,
+                force,
+            )
+            .await
+        }
         ReplayCmd::Record { on } => {
             session.replay_record(on).await.map_err(map_err)?;
             ok_live(session, json!({ "on": on })).await

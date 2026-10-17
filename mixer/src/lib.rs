@@ -139,6 +139,16 @@ impl ControlFacade for MixerFacade {
             .unwrap_or(eiviz_control::Lifecycle::Failed)
     }
 
+    /// Live Replay state for `GetReplayState`. Without this the facade answers with
+    /// the trait's empty default, and a client that asks what Replay is doing gets
+    /// nothing back.
+    fn replay_state_json(&self) -> eiviz_control::ControlResult<String> {
+        runtime::control()
+            .lock()
+            .map_err(|_| eiviz_control::ControlError::internal("control lock"))?
+            .replay_state_json()
+    }
+
     fn epoch(&self) -> String {
         runtime::control()
             .lock()
@@ -7397,6 +7407,47 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::collections::HashMap;
+
+    /// A client that asks what Replay is doing must get the document and the live
+    /// state, not the facade's empty default: automation and a remote host read the
+    /// replay state through this call.
+    #[test]
+    #[serial]
+    fn the_facade_reports_replay_state() {
+        mixer_destroy();
+        assert_eq!(mixer_create(0, 60_000, 1_001), 0, "create");
+        let json = br#"{
+  "version": 2,
+  "inputs": [
+    { "id": 10, "name": "Bars", "kind": "Bars" },
+    { "id": 524289, "name": "Replay A", "kind": "Replay" }
+  ],
+  "scenes": [
+    { "id": 1, "name": "Scene 1", "layers": [{ "inputId": 10, "width": 1, "height": 1 }] }
+  ],
+  "units": [{ "id": 1, "name": "MU1" }],
+  "replay": {
+    "enabled": false,
+    "angles": [{ "id": 1, "name": "Cam 1", "sceneId": 1, "audio": "Silent", "recordMode": "Composite" }],
+    "channels": [{ "index": 0, "inputId": 524289 }],
+    "playlists": []
+  }
+}"#;
+        assert_eq!(
+            unsafe { mixer_session_replace(json.as_ptr().cast(), json.len(), 0) },
+            0,
+            "session replace"
+        );
+        let state = eiviz_control::ControlFacade::replay_state_json(&MixerFacade)
+            .expect("replay state");
+        mixer_destroy();
+        assert!(state.contains("\"document\""), "{state}");
+        assert!(state.contains("\"live\""), "{state}");
+        assert_ne!(
+            state, "{}",
+            "the facade must not answer with the empty default"
+        );
+    }
 
     #[test]
     fn scene_layer_validation_rejects_self_reference_and_non_finite() {

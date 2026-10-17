@@ -27,6 +27,13 @@ use eiviz_mixer::{
 /// `inputId: 0` in the document.
 const CHANNEL_SOURCE: u64 = 0x0008_0001;
 
+/// What the channel says it is doing, for the playback assertions.
+fn channel_state() -> MixerReplayChannelState {
+    let mut channels = vec![MixerReplayChannelState::default(); 4];
+    let count = unsafe { mixer_replay_copy_channels(channels.as_mut_ptr(), 4) };
+    if count >= 1 { channels[0] } else { MixerReplayChannelState::default() }
+}
+
 #[test]
 fn the_replay_picture_reaches_the_program_scene() {
     load_test_module("replay-playout");
@@ -83,9 +90,10 @@ fn the_replay_picture_reaches_the_program_scene() {
     let mut in_frame = 0u64;
     expect("mark in", unsafe { mixer_replay_mark_in(&mut in_frame) });
     assert!(in_frame > 0, "Mark In should sit on a recorded frame");
-    thread::sleep(Duration::from_millis(400));
-    let mut out_frame = 0u64;
-    let mut uuid = vec![0u8; 64];
+    // A clip long enough to watch play: the rate assertions below need more than a
+    // few frames of material.
+    thread::sleep(Duration::from_millis(1500));
+    let mut out_frame = 0u64;    let mut uuid = vec![0u8; 64];
     expect("mark out", unsafe {
         mixer_replay_mark_out(
             &mut in_frame,
@@ -135,6 +143,36 @@ fn the_replay_picture_reaches_the_program_scene() {
         is_red(pixel),
         "the recorded angle must reach the program through the channel: \
          pixel {pixel:?}, mark {in_frame}..{out_frame}, position {position}"
+    );
+
+    // Playback runs in real time: the channel moves through the clip at the
+    // recording's frame rate, not one frame at a time. This is what an operator
+    // sees, so it is measured rather than assumed.
+    let start = channel_state();
+    thread::sleep(Duration::from_millis(600));
+    let moved = channel_state();
+    let advanced = moved.position_frame.saturating_sub(start.position_frame);
+    assert!(
+        (20..=50).contains(&advanced),
+        "playback advances in real time: {advanced} frames in 600ms \
+         ({start:?} -> {moved:?})"
+    );
+
+    // And it stops at the end of the clip instead of running past it.
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let mut ended = channel_state();
+    while Instant::now() < deadline {
+        ended = channel_state();
+        if ended.playing == 0 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(ended.playing, 0, "the clip ends instead of running on");
+    assert!(
+        ended.position_frame <= out_frame,
+        "the channel parks inside the clip: {} > {out_frame}",
+        ended.position_frame
     );
 
     // Recording stops, and the material it recorded stays a replay: marking is a

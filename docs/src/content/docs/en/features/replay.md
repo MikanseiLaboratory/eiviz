@@ -60,6 +60,8 @@ The vMix-compatible API can record, mark, cue, and play Replay channels, so a St
 
 A scene's animation can also cue Replay: a sequence step can name a channel and a clip (or the newest clip on the channel) and start it, so a running order plays clips by its own timecode.
 
+The native API (`eivizctl`) runs the same operations. `input add --kind Replay` creates the channel together with its Replay settings, `replay configure --from-json` writes the drives and angles, and `replay record`, `mark-in`, `mark-out`, `cue`, and `play` drive the deck. `replay state` answers with the session's settings and the mixer's measurements together (recording state, each channel's position and speed, drop counters), so monitoring and automation need one call.
+
 ## Remote
 
 A Remote can drive Replay: the recording, the marks, the cue, and the transport go to the machine that owns the recording, and the session document comes back with the events and clips they created.

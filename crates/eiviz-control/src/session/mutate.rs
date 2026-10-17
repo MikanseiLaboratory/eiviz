@@ -227,6 +227,15 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             Ok(())
         }
         SessionMutation::CreateInput { input } => {
+            // A Replay input brings the Replay document with it: the channel, its
+            // reserved input id and the settings all follow from adding one. Doing it
+            // here means an automation client can add Replay the same way the host
+            // does, instead of having to invent a document first.
+            if input.kind == InputKind::Replay {
+                crate::session::replay::add_channel_input(document)
+                    .map_err(ControlError::invalid)?;
+                return Ok(());
+            }
             crate::session::edit::allocate_input(document, *input).map(|_| ())
         }
         SessionMutation::CreateScene { scene } => {
@@ -783,6 +792,32 @@ mod tests {
             },
         )
         .unwrap();
+    }
+
+    /// Adding a Replay input through the session API is the same operation as
+    /// adding one in the host: the channel, the reserved id and the document all
+    /// arrive together, so an automation client never has to invent a document.
+    #[test]
+    fn creating_a_replay_input_creates_its_channel_and_document() {
+        let mut doc = bars();
+        let mutation: SessionMutation = serde_json::from_str(
+            r#"{ "kind": "createInput", "input": { "id": 0, "name": "", "kind": "Replay" } }"#,
+        )
+        .expect("createInput");
+        apply(&mut doc, mutation).unwrap();
+
+        let replay = doc.replay.as_ref().expect("the document follows the input");
+        assert_eq!(replay.channels.len(), 1);
+        assert_eq!(replay.channels[0].index, 0);
+        let expected = crate::session::replay::REPLAY_CHANNEL_BASE | 1;
+        assert_eq!(replay.channels[0].input_id, expected);
+        assert!(
+            doc.inputs
+                .iter()
+                .any(|input| input.id == expected && input.kind == InputKind::Replay),
+            "the channel owns a Replay input"
+        );
+        assert!(!replay.enabled, "adding an input never starts recording");
     }
 
     /// Two channels are two inputs, and each keeps its own letter.
