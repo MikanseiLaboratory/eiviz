@@ -45,7 +45,6 @@ public partial class ReplaySettingsWindow : Window
             ApplyButton.IsEnabled = false;
             return;
         }
-        PathBox.Text = "";
         _storages.Clear();
         if (_replay["storage"] is JsonArray storage)
         {
@@ -133,8 +132,9 @@ public partial class ReplaySettingsWindow : Window
     }
 
     /// <summary>
-    /// Asks for a folder the way every other path in the app is chosen. Typing a
-    /// path stays possible, but the operator should not have to.
+    /// Asks for a folder the way every other path in the app is chosen, and files it
+    /// straight away: picking a drive is the whole action, so there is no second
+    /// "add" step to forget.
     /// </summary>
     private void BrowseStorage_Click(object sender, RoutedEventArgs e)
     {
@@ -143,29 +143,25 @@ public partial class ReplaySettingsWindow : Window
             Title = Loc.T("replay.pickStorage"),
             Multiselect = false
         };
-        if (!string.IsNullOrWhiteSpace(PathBox.Text))
-            dialog.InitialDirectory = PathBox.Text.Trim();
         if (dialog.ShowDialog(this) != true)
             return;
-        PathBox.Text = dialog.FolderName;
+        AddStorage(dialog.FolderName);
     }
 
-    private void AddStorage_Click(object sender, RoutedEventArgs e)
+    /// <summary>Files a drive. The same folder twice is refused, not duplicated.</summary>
+    private void AddStorage(string path)
     {
-        var path = PathBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            StatusText.Text = Loc.T("replay.needPath");
+        var trimmed = path.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
             return;
-        }
-        if (_storages.Any(storage => storage.Path.Equals(path, StringComparison.OrdinalIgnoreCase)))
+        if (_storages.Any(storage => storage.Path.Equals(trimmed, StringComparison.OrdinalIgnoreCase)))
         {
             StatusText.Text = Loc.T("replay.duplicateStorage");
             return;
         }
-        _storages.Add(new StorageRow { Path = path });
-        PathBox.Text = "";
+        _storages.Add(new StorageRow { Path = trimmed });
         RefreshStorages();
+        StatusText.Text = Loc.Format("replay.storageAdded", trimmed);
     }
 
     private void RemoveStorage_Click(object sender, RoutedEventArgs e)
@@ -394,13 +390,7 @@ public partial class ReplaySettingsWindow : Window
             || !uint.TryParse(BufferBox.Text.Trim(), out var buffer) || buffer is < 64 or > 8192
             || !uint.TryParse(ReserveBox.Text.Trim(), out var reserve))
         {
-            StatusText.Text = Loc.T("replay.badBuffering");
-            return;
-        }
-        // A path typed but not added would be lost silently, so remind first.
-        if (!string.IsNullOrWhiteSpace(PathBox.Text))
-        {
-            StatusText.Text = Loc.T("replay.pendingPath");
+            Refuse(Loc.T("replay.badBuffering"));
             return;
         }
         // Keep each drive's angle assignments with its path: dropping blank rows
@@ -413,7 +403,7 @@ public partial class ReplaySettingsWindow : Window
         {
             // Recording with no angle writes nothing, so refuse instead of
             // storing a configuration that cannot run.
-            StatusText.Text = Loc.T("replay.needStorable");
+            Refuse(Loc.T("replay.needStorable"));
             return;
         }
         _replay["enabled"] = drives.Count > 0;
@@ -482,12 +472,31 @@ public partial class ReplaySettingsWindow : Window
                 // change, so the refusal (and its reason) comes back with it.
                 SessionStore.Publish(_session);
             }
-            DialogResult = true;
         }
         catch (Exception error)
         {
-            StatusText.Text = error.Message;
+            HostLog.WriteException(error);
+            Refuse(string.IsNullOrWhiteSpace(error.Message)
+                ? Loc.T("replay.publishRefused")
+                : error.Message);
+            return;
         }
+        // Applying closes the window, so the confirmation has to live on the window
+        // the operator is looking at next.
+        DialogResult = true;
+        if (Owner is Window owner)
+            StatusToast.Show(owner, Loc.T("replay.applied"));
+    }
+
+    /// <summary>
+    /// Reports why the settings were not taken. The operator pressed Apply, so the
+    /// answer is put in front of them instead of in a line at the bottom of a
+    /// scrolling window.
+    /// </summary>
+    private void Refuse(string message)
+    {
+        StatusText.Text = message;
+        MessageBox.Show(this, message, Title, MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 
     private sealed class AngleRow

@@ -131,13 +131,58 @@ fn the_replay_picture_reaches_the_program_scene() {
     let mut channels = vec![MixerReplayChannelState::default(); 4];
     let count = unsafe { mixer_replay_copy_channels(channels.as_mut_ptr(), 4) };
     let position = if count >= 1 { channels[0].position_frame } else { 0 };
-    expect("record off", unsafe { mixer_replay_record(0) });
-    mixer_destroy();
-
     assert!(
         is_red(pixel),
         "the recorded angle must reach the program through the channel: \
          pixel {pixel:?}, mark {in_frame}..{out_frame}, position {position}"
+    );
+
+    // Recording stops, and the material it recorded stays a replay: marking is a
+    // timeline operation, and a clip recorded a moment ago still plays back.
+    expect("record off", unsafe { mixer_replay_record(0) });
+    let mut mark_in_after_stop = 0u64;
+    expect("mark in after stop", unsafe {
+        mixer_replay_mark_in(&mut mark_in_after_stop)
+    });
+    assert!(
+        mark_in_after_stop > 0,
+        "a stopped recorder still has a timeline to mark"
+    );
+    let mut out_after_stop = 0u64;
+    let mut uuid_after = vec![0u8; 64];
+    expect("mark out after stop", unsafe {
+        mixer_replay_mark_out(
+            &mut mark_in_after_stop,
+            &mut out_after_stop,
+            uuid_after.as_mut_ptr(),
+            uuid_after.len(),
+        )
+    });
+
+    // Pause the channel so the next play starts from the cued clip again.
+    expect("pause", unsafe {
+        mixer_replay_channel_transport(0, 0, 1000, -1)
+    });
+    expect("cue again", unsafe {
+        mixer_replay_channel_cue(0, 1, in_frame, out_frame, uuid_c.as_ptr())
+    });
+    expect("play again", unsafe {
+        mixer_replay_channel_transport(0, 1, 1000, -1)
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut after_stop = [0u8, 0, 0];
+    while Instant::now() < deadline {
+        after_stop = scene_pixel(scene_id(2), 160, 90);
+        if is_red(after_stop) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    mixer_destroy();
+
+    assert!(
+        is_red(after_stop),
+        "a clip recorded before the stop must still play: {after_stop:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

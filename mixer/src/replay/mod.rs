@@ -302,6 +302,8 @@ impl ReplayEngine {
         let dto: Option<ReplayDto> = serde_json::from_str(json).map_err(|_| ERR_INVALID_ARGUMENT)?;
         let Some(dto) = dto else {
             self.stop(REPLAY_STOP_USER);
+            // Replay is gone from the project, so the recorded material goes with it.
+            self.release_store();
             let mut inner = self.lock();
             inner.config = ReplayDto::default();
             inner.channels.clear();
@@ -544,11 +546,10 @@ impl ReplayEngine {
     pub fn stop(&self, reason: u32) {
         self.stop_record.store(true, Ordering::Relaxed);
         self.inbox.wake.notify_all();
-        if let Some(store) = self.store.lock().unwrap_or_else(|e| e.into_inner()).clone() {
-            if let Ok(mut store) = store.lock() {
-                let _ = store.close();
-            }
-        }
+        // The recording stops, but what it recorded stays readable: marking and
+        // playing a clip is a timeline operation, and an operator who stops the
+        // recorder still cuts from the material that is already on disk. The store
+        // is closed when Replay itself goes away (configure null / shutdown).
         let mut inner = self.lock();
         if inner.recording || inner.stats.state == REPLAY_STATE_RECORDING {
             inner.recording = false;
@@ -561,8 +562,19 @@ impl ReplayEngine {
         }
     }
 
+    /// Releases the recorded material. Only when Replay is removed or the mixer
+    /// shuts down: a stopped recorder keeps its frames.
+    fn release_store(&self) {
+        if let Some(store) = self.store.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+            if let Ok(mut store) = store.lock() {
+                let _ = store.close();
+            }
+        }
+    }
+
     pub fn shutdown(&self) {
         self.stop(REPLAY_STOP_USER);
+        self.release_store();
         self.stop_workers.store(true, Ordering::Relaxed);
         self.inbox.wake.notify_all();
         let mut workers = self.workers.lock().unwrap_or_else(|error| error.into_inner());
@@ -769,15 +781,20 @@ impl ReplayEngine {
             .unwrap_or(0)
     }
 
+    /// Marks the in point on the recording timeline. Marking is a timeline
+    /// operation, not a recording one: an operator marks material that is already
+    /// recorded, so a stopped recorder can still be marked. Only an empty timeline
+    /// has nothing to mark.
     pub fn mark_in(&self) -> Result<u64, i32> {
         let mut inner = self.lock();
-        if !inner.recording {
+        if !inner.has_frames {
             return Err(ERR_IO);
         }
-        inner.mark_in = Some(inner.last_frame);
-        inner.stats.mark_in_frame = inner.last_frame;
+        let frame = inner.last_frame;
+        inner.mark_in = Some(frame);
+        inner.stats.mark_in_frame = frame;
         inner.stats.mark_in_valid = 1;
-        Ok(inner.last_frame)
+        Ok(frame)
     }
 
     pub fn close_mark(&self) -> Result<(String, u64, u64), i32> {

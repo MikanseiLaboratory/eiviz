@@ -637,9 +637,8 @@ struct ContentView: View {
             Button(L10n.t("chrome.overlay")) { mixer.openOverlay() }
                 .buttonStyle(MixerButtonStyle())
             if mixer.hasReplayInput {
+                // One entry: the deck opens the recording settings itself.
                 Button(L10n.t("chrome.replay")) { mixer.openReplay() }
-                    .buttonStyle(MixerButtonStyle())
-                Button(L10n.t("chrome.replaySetup")) { mixer.openReplaySettings() }
                     .buttonStyle(MixerButtonStyle())
             }
         }

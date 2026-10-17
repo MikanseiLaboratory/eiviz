@@ -871,7 +871,16 @@ public partial class ReplayWindow : Window
     {
         if (_replay is null)
             return;
+        var remote = Backend?.IsRemote == true;
         var frame = Backend?.ReplayMarkIn();
+        // Local mode returns the frame it marked. Nothing came back and the mark is
+        // ours to keep, so there is no recorded timeline yet: say so instead of
+        // opening a range that cannot be closed.
+        if (frame is null && !remote)
+        {
+            Warn(Refusal(Loc.T("replay.markInFailed")));
+            return;
+        }
         _inFrame = frame ?? MarkUnknown;
         // A new Mark In starts a new range: the old Mark Out no longer applies.
         _outFrame = 0;

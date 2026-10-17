@@ -856,7 +856,12 @@ struct ReplayView: View {
             inFrame = nil
             outFrame = nil
             markOpen = true
+            return
         }
+        // Local mode returns the frame it marked, so nothing came back and there is
+        // no recorded timeline yet: say so instead of opening a range that cannot be
+        // closed.
+        status = L10n.t("replay.markInFailed")
     }
 
     private func cancelMark() {
@@ -1143,7 +1148,6 @@ struct ReplaySettingsView: View {
 
     @State private var document: ReplayDocument?
     @State private var storages: [ReplayDocument.StorageSpec] = []
-    @State private var newPath = ""
     @State private var driveSelection = 0
     @State private var profile = "Sq"
     @State private var retention = "StopWhenFull"
@@ -1162,13 +1166,20 @@ struct ReplaySettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(planText).font(.callout)
+            if !status.isEmpty {
+                // Apply and every refusal report here, where it cannot be missed.
+                Text(status).fontWeight(.bold).foregroundStyle(EivizTheme.dim)
+            }
             GroupBox(L10n.t("replay.storage")) {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        TextField(L10n.t("settings.replayPath"), text: $newPath)
-                        Button(L10n.t("replay.browse")) { browseStorage() }
+                        // Choosing a drive is the whole action: it is filed straight
+                        // away, so there is no second step to forget.
+                        Button(L10n.t("replay.pickStorage")) { browseStorage() }
                             .help(L10n.t("replay.pickStorageHint"))
-                        Button(L10n.t("replay.addStorage")) { addStorage() }
+                        Text(L10n.t("replay.storageHelp"))
+                            .font(.caption)
+                            .foregroundStyle(EivizTheme.dim)
                     }
                     List {
                         ForEach(storages) { storage in
@@ -1331,36 +1342,30 @@ struct ReplaySettingsView: View {
         storages.firstIndex { $0.angleIds.contains(angleId) } ?? 0
     }
 
-    /// Asks for a folder the way every other path on this host is chosen. Typing a
-    /// path stays possible, but the operator should not have to.
+    /// Asks for a folder the way every other path on this host is chosen, and files
+    /// it straight away: choosing a drive is the whole action.
     private func browseStorage() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = true
-        panel.prompt = L10n.t("replay.addStorage")
+        panel.prompt = L10n.t("replay.pickStorage")
         panel.message = L10n.t("replay.pickStorageHint")
-        let typed = newPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !typed.isEmpty {
-            panel.directoryURL = URL(fileURLWithPath: typed)
-        }
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        newPath = url.path
+        addStorage(url.path)
     }
 
-    private func addStorage() {
-        let path = newPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !path.isEmpty else {
-            status = L10n.t("replay.needPath")
-            return
-        }
-        guard !storages.contains(where: { $0.path.caseInsensitiveCompare(path) == .orderedSame }) else {
+    /// Files a drive. The same folder twice is refused, not duplicated.
+    private func addStorage(_ path: String) {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard !storages.contains(where: { $0.path.caseInsensitiveCompare(trimmed) == .orderedSame }) else {
             status = L10n.t("replay.duplicateStorage")
             return
         }
-        storages.append(ReplayDocument.StorageSpec(path: path, angleIds: []))
-        newPath = ""
+        storages.append(ReplayDocument.StorageSpec(path: trimmed, angleIds: []))
+        status = L10n.format("replay.storageAdded", trimmed)
     }
 
     private func removeStorage() {

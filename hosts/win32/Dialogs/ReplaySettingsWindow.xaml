@@ -49,26 +49,27 @@
                     Content="{Binding [dialog.cancel], Source={x:Static i18n:Loc.Source}}"/>
         </StackPanel>
 
-        <TextBlock x:Name="PlanText" DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,12"/>
+        <TextBlock x:Name="PlanText" DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,8"/>
+        <!-- Apply and every refusal report here, at the top, where it cannot be
+             missed without scrolling. -->
+        <TextBlock x:Name="StatusText" DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,12"
+                   FontWeight="Bold" Foreground="{DynamicResource HudForeground}"/>
 
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel>
                 <TextBlock Style="{StaticResource SectionTitle}"
                            Text="{Binding [replay.storage], Source={x:Static i18n:Loc.Source}}"/>
-                <TextBlock Style="{StaticResource FieldLabel}"
-                           Text="{Binding [settings.replayPath], Source={x:Static i18n:Loc.Source}}"/>
-                <DockPanel>
-                    <Button DockPanel.Dock="Right" Width="110" Height="28" Margin="8,0,0,0" Click="AddStorage_Click"
-                            Content="{Binding [replay.addStorage], Source={x:Static i18n:Loc.Source}}"/>
-                    <Button DockPanel.Dock="Right" Width="110" Height="28" Margin="8,0,0,0" Click="BrowseStorage_Click"
+                <StackPanel Orientation="Horizontal">
+                    <Button Width="160" Height="30" Click="BrowseStorage_Click"
                             ToolTip="{Binding [replay.pickStorageHint], Source={x:Static i18n:Loc.Source}}"
-                            Content="{Binding [replay.browse], Source={x:Static i18n:Loc.Source}}"/>
-                    <TextBox x:Name="PathBox" Height="28"/>
-                </DockPanel>
-                <ListView x:Name="StorageList" Style="{StaticResource ReplayList}" Height="104" Margin="0,8,0,0" SelectionMode="Single">
+                            Content="{Binding [replay.pickStorage], Source={x:Static i18n:Loc.Source}}"/>
+                    <TextBlock Style="{StaticResource Hint}" Margin="10,0,0,0"
+                               Text="{Binding [replay.storageHelp], Source={x:Static i18n:Loc.Source}}"/>
+                </StackPanel>
+                <ListView x:Name="StorageList" Style="{StaticResource ReplayList}" Height="120" Margin="0,8,0,0" SelectionMode="Single">
                     <ListView.View>
                         <GridView>
-                            <GridViewColumn Header="{Binding [settings.replayPath], Source={x:Static i18n:Loc.Source}}" Width="420"
+                            <GridViewColumn Header="{Binding [settings.replayPath], Source={x:Static i18n:Loc.Source}}" Width="440"
                                             DisplayMemberBinding="{Binding Path}"/>
                             <GridViewColumn Header="{Binding [replay.angle], Source={x:Static i18n:Loc.Source}}" Width="180"
                                             DisplayMemberBinding="{Binding Angles}"/>
@@ -78,8 +79,6 @@
                 <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                     <Button Width="130" Height="28" Click="RemoveStorage_Click"
                             Content="{Binding [replay.removeStorage], Source={x:Static i18n:Loc.Source}}"/>
-                    <TextBlock Style="{StaticResource Hint}" Margin="10,0,0,0"
-                               Text="{Binding [replay.storageHelp], Source={x:Static i18n:Loc.Source}}"/>
                 </StackPanel>
                 <Grid Margin="0,12,0,0">
                     <Grid.ColumnDefinitions>
@@ -170,7 +169,6 @@
                 <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
                            Text="{Binding [replay.autoAddHelp], Source={x:Static i18n:Loc.Source}}"/>
                 <TextBlock x:Name="ActiveAngleText" Margin="0,8,0,0"/>
-                <TextBlock x:Name="StatusText" Margin="0,12,0,0" TextWrapping="Wrap"/>
             </StackPanel>
         </ScrollViewer>
     </DockPanel>

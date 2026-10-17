@@ -27,8 +27,6 @@ public partial class MainWindow
 
     private void Replay_Click(object sender, RoutedEventArgs e) => OpenReplay();
 
-    private void ReplaySetup_Click(object sender, RoutedEventArgs e) => OpenReplaySettings();
-
     /// <summary>
     /// Opens the Replay deck, or brings it forward. The deck itself opens the
     /// recording settings, so both entry points share one path.
@@ -63,12 +61,11 @@ public partial class MainWindow
     }
 
     /// Replay is available only while the project has a Replay input. Without one
-    /// the chrome hides both entry points and closes anything already open.
+    /// the chrome hides the deck's entry point and closes anything already open.
+    /// The deck itself opens the recording settings, so the main UI has one entry.
     private void RefreshReplayUi()
     {
-        var visibility = HasReplayInput ? Visibility.Visible : Visibility.Collapsed;
-        ReplayButton.Visibility = visibility;
-        ReplaySetupButton.Visibility = visibility;
+        ReplayButton.Visibility = HasReplayInput ? Visibility.Visible : Visibility.Collapsed;
         if (!HasReplayInput)
         {
             _replayWindow?.Close();
