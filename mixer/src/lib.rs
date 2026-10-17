@@ -2127,19 +2127,22 @@ fn mixer_unit_attach_native_ffi(
     };
     // Check the unit before touching the GPU. Preparing a present surface for a
     // unit that does not exist is wasted work, and it replaced the caller's
-    // "not created" error with a device error on every platform.
-    if !with_mixer(|mixer| {
+    // "not created" error with a device error on every platform. A mixer that does
+    // not exist at all is still "not created": that is the code the hosts act on.
+    match with_mixer(|mixer| {
         mixer
             .shared
             .lock_or_recover()
             .units
             .contains_key(&unit_id)
-    })
-    .unwrap_or(false)
-    {
-        return attach_invalid(format!(
-            "attach surface unit={unit_id} kind={kind}: mixing unit {unit_id:#x} is not created"
-        ));
+    }) {
+        Err(code) => return code,
+        Ok(false) => {
+            return attach_invalid(format!(
+                "attach surface unit={unit_id} kind={kind}: mixing unit {unit_id:#x} is not created"
+            ));
+        }
+        Ok(true) => {}
     }
     #[cfg(any(windows, target_os = "macos"))]
     let prepared = match prepare_surface_off_slot(surface, width, height) {
@@ -7839,6 +7842,13 @@ mod tests {
         assert_eq!(
             mixer_unit_attach_native(1, OUTPUT_PROGRAM, NATIVE_APPKIT_NSVIEW, 1, 1920, 1080),
             ERR_INVALID_ARGUMENT
+        );
+        // Without a mixer there is nothing to attach to, and that is what the
+        // callers report: the same code on every platform.
+        #[cfg(windows)]
+        assert_eq!(
+            mixer_unit_attach_native(1, OUTPUT_PROGRAM, NATIVE_WIN32_HWND, 1, 1920, 1080),
+            ERR_NOT_CREATED
         );
         #[cfg(target_os = "macos")]
         assert_eq!(
