@@ -92,6 +92,12 @@ struct ReplayChannelInfo: Identifiable, Hashable {
     }
 
     var label: String { "Replay \(letter)" }
+
+    /// Source the channel paints into: the input that owns it, or the reserved
+    /// channel id for a document written without one.
+    var sourceId: UInt64 {
+        inputId != 0 ? inputId : EIVIZ_REPLAY_CHANNEL_BASE | UInt64(index + 1)
+    }
 }
 
 /// Must match `REPLAY_CHANNEL_BASE` in `eiviz_control::session::replay`. The band

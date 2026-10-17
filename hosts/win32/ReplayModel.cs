@@ -107,6 +107,12 @@ internal sealed record ReplayChannelInfo(uint Index, ulong InputId, ulong? Playl
 {
     public string Letter => Index < 26 ? ((char)('A' + (int)Index)).ToString() : Index.ToString();
     public string Label => $"Replay {Letter}";
+
+    /// <summary>
+    /// Source the channel paints into, which is the input that owns it or, for a
+    /// document written without one, the reserved channel id.
+    /// </summary>
+    public ulong SourceId => InputId != 0 ? InputId : 0x0008_0000UL | (Index + 1);
 }
 
 internal sealed record ReplayAngleInfo(uint Id, string Name, ulong SceneId, ulong AudioUnitId)
@@ -328,6 +334,24 @@ internal static class ReplayModel
 
     public static uint ActiveAngle(JsonObject root) =>
         root["activeAngleId"]?.GetValue<uint>() ?? 0;
+
+    /// <summary>
+    /// Drives the recording is allowed to use. A recorder without one writes
+    /// nothing, which is what the deck checks before it starts.
+    /// </summary>
+    public static IReadOnlyList<string> Storages(JsonObject root)
+    {
+        var result = new List<string>();
+        foreach (var item in Array(root, "storage"))
+        {
+            if (item is not JsonObject storage)
+                continue;
+            var path = storage["path"]?.GetValue<string>() ?? "";
+            if (!string.IsNullOrWhiteSpace(path))
+                result.Add(path);
+        }
+        return result;
+    }
 
     public static bool AutoAddToPlaylist(JsonObject root) =>
         root["autoAddToPlaylist"]?.GetValue<bool>() ?? false;

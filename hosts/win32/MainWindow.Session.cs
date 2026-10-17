@@ -25,7 +25,15 @@ public partial class MainWindow
 
     private bool HasReplayInput => _session.Inputs.Any(input => input.Kind == InputKind.Replay);
 
-    private void Replay_Click(object sender, RoutedEventArgs e)
+    private void Replay_Click(object sender, RoutedEventArgs e) => OpenReplay();
+
+    private void ReplaySetup_Click(object sender, RoutedEventArgs e) => OpenReplaySettings();
+
+    /// <summary>
+    /// Opens the Replay deck, or brings it forward. The deck itself opens the
+    /// recording settings, so both entry points share one path.
+    /// </summary>
+    internal void OpenReplay()
     {
         if (!HasReplayInput)
             return;
@@ -39,7 +47,8 @@ public partial class MainWindow
         _replayWindow.Show();
     }
 
-    private void ReplaySetup_Click(object sender, RoutedEventArgs e)
+    /// <summary>Opens the recording settings, or brings them forward.</summary>
+    internal void OpenReplaySettings()
     {
         if (!HasReplayInput)
             return;

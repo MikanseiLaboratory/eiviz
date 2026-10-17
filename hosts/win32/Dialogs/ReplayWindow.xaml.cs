@@ -25,6 +25,15 @@ public partial class ReplayWindow : Window
     private readonly Session _session;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(200) };
     private readonly List<SwapchainHost> _angleHosts = [];
+    /// <summary>
+    /// Monitor ids of the two deck monitors: what the channel is sending out and
+    /// the angle being recorded. They are retargeted only when the source changes,
+    /// because a retarget every poll would tear the picture.
+    /// </summary>
+    private ulong _outputMonitorId;
+    private ulong _liveMonitorId;
+    private ulong _outputSource;
+    private ulong _liveSource;
     private JsonObject? _replay;
     private string _lastJson = "";
     private ulong _playlistId;
@@ -37,6 +46,11 @@ public partial class ReplayWindow : Window
     /// </summary>
     private bool _markOpen;
     private bool _playing;
+    /// <summary>
+    /// True while the mixer is recording. A Remote cannot read it, so it stays null
+    /// there and the deck keeps both buttons available.
+    /// </summary>
+    private bool? _recording;
     private int _speedMilli = 1000;
     private bool _loadingTransition;
     private TagCheckPanel? _clipTags;
@@ -81,6 +95,12 @@ public partial class ReplayWindow : Window
         }
         _lastJson = _session.ReplayJson;
         _playlistId = ReplayModel.EnsurePlaylist(_replay);
+        // The deck monitors: the channel's own picture (what goes out) and the angle
+        // being recorded (what comes in).
+        _outputMonitorId = _session.NextMonitorId++;
+        _liveMonitorId = _session.NextMonitorId++;
+        OutputMonitor.Loaded += (_, _) => RetargetMonitors();
+        LiveMonitor.Loaded += (_, _) => RetargetMonitors();
         BuildChannels();
         BuildAngles();
         RefreshEvents();
@@ -95,6 +115,55 @@ public partial class ReplayWindow : Window
         foreach (var host in _angleHosts)
             host.ReleaseNative();
         _angleHosts.Clear();
+        OutputMonitor.ReleaseNative();
+        LiveMonitor.ReleaseNative();
+    }
+
+    /// <summary>
+    /// Points the deck monitors at the channel's output and the selected angle's
+    /// live picture. Called on load and whenever either source changes.
+    /// </summary>
+    private void RetargetMonitors()
+    {
+        if (_replay is null)
+            return;
+        var channel = ReplayModel.Channels(_replay).FirstOrDefault(item => item.Index == _channel);
+        var source = channel?.SourceId ?? 0;
+        if (source != _outputSource)
+        {
+            _outputSource = source;
+            if (source != 0)
+                OutputMonitor.RetargetMonitor(_outputMonitorId, source);
+        }
+        OutputLabel.Text = channel is null
+            ? Loc.T("replay.noChannels")
+            : Loc.Format("replay.outputLabel", channel.Label, _playing ? Loc.T("replay.playing") : Loc.T("replay.stopped"));
+
+        var angle = ActiveAngle();
+        var live = angle?.SceneGpuId ?? 0;
+        if (live != _liveSource)
+        {
+            _liveSource = live;
+            if (live != 0)
+                LiveMonitor.RetargetMonitor(_liveMonitorId, live);
+        }
+        LiveLabel.Text = angle is null
+            ? Loc.T("replay.noActiveAngle")
+            : Loc.Format("replay.inputLabel", angle.Label);
+    }
+
+    /// <summary>Angle the operator is watching, or null when Replay has none.</summary>
+    private ReplayAngleInfo? ActiveAngle()
+    {
+        if (_replay is null)
+            return null;
+        var active = ReplayModel.ActiveAngle(_replay);
+        foreach (var angle in ReplayModel.Angles(_replay))
+        {
+            if (angle.Id == active)
+                return angle;
+        }
+        return ReplayModel.Angles(_replay).FirstOrDefault();
     }
 
     private void Tick()
@@ -116,6 +185,7 @@ public partial class ReplayWindow : Window
             }
         }
         RefreshStatus();
+        RetargetMonitors();
         RefreshExport();
     }
 
@@ -367,6 +437,7 @@ public partial class ReplayWindow : Window
         }
         else if (MixerNative.ReplayCopyStats(&stats, (nint)angleBuffer, 8) == 0 && stats.State != 0)
         {
+            _recording = stats.State == 1;
             StateText.Text = stats.State switch
             {
                 1 => RecordingText(stats),
@@ -389,10 +460,23 @@ public partial class ReplayWindow : Window
         }
         else
         {
+            _recording = false;
             StateText.Text = Loc.T("replay.stateIdle");
             HealthText.Text = "";
         }
         MarkOutButton.IsEnabled = _markOpen;
+        // The deck shows which of the two it is doing. A Remote cannot read the
+        // state, so both stay available there.
+        if (!remote)
+        {
+            RecordButton.IsEnabled = _recording != true;
+            StopButton.IsEnabled = _recording == true;
+        }
+        else
+        {
+            RecordButton.IsEnabled = true;
+            StopButton.IsEnabled = true;
+        }
 
         // Waveform of the angle the operator is watching, with the marks on it. The
         // peaks come from the recording machine, so a Remote has none to draw.
@@ -715,6 +799,18 @@ public partial class ReplayWindow : Window
     private void MarkOut_Click(object sender, RoutedEventArgs e) => MarkOut();
 
     /// <summary>
+    /// Opens the recording settings. The deck is where an operator notices that
+    /// storage or angles are missing, so the way in belongs here as well.
+    /// </summary>
+    private void ReplaySetup_Click(object sender, RoutedEventArgs e)
+    {
+        if (Owner is MainWindow main)
+            main.OpenReplaySettings();
+        else
+            Warn(Loc.T("replay.openSetupUnavailable"));
+    }
+
+    /// <summary>
     /// A replay deck is driven from the keyboard, so marking, transport and the
     /// return to live all work anywhere in the window except where the operator is
     /// typing.
@@ -914,7 +1010,10 @@ public partial class ReplayWindow : Window
     private void EventProtect_Click(object sender, RoutedEventArgs e)
     {
         if (_replay is null || EventList.SelectedItem is not EventRow row)
+        {
+            Warn(Loc.T("replay.needEvent"));
             return;
+        }
         foreach (var item in _replay["events"] as JsonArray ?? new JsonArray())
         {
             if (item is JsonObject entry && (entry["id"]?.GetValue<ulong>() ?? 0) == row.Id)
@@ -927,7 +1026,10 @@ public partial class ReplayWindow : Window
     private void EventDelete_Click(object sender, RoutedEventArgs e)
     {
         if (_replay is null || EventList.SelectedItem is not EventRow row)
+        {
+            Warn(Loc.T("replay.needEvent"));
             return;
+        }
         var events = _replay["events"] as JsonArray ?? new JsonArray();
         for (var index = events.Count - 1; index >= 0; index--)
         {
@@ -1218,7 +1320,15 @@ public partial class ReplayWindow : Window
         RefreshPlaylist();
     }
 
-    private void AddTag_Click(object sender, RoutedEventArgs e) => _clipTags?.PromptAdd();
+    private void AddTag_Click(object sender, RoutedEventArgs e)
+    {
+        if (_clipTags is null)
+        {
+            Warn(Loc.T("replay.needClip"));
+            return;
+        }
+        _clipTags.PromptAdd();
+    }
 
     private ReplayTransitionInfo? FindClip(string uid)
     {
@@ -1288,15 +1398,22 @@ public partial class ReplayWindow : Window
     private void CueSelectedClip()
     {
         if (PlaylistList.SelectedItem is not ClipRow row)
+        {
+            // A silent no-op reads as a broken button, so say what is missing.
+            Warn(Loc.T("replay.needClip"));
             return;
+        }
         if (Backend?.ReplayCue(_channel, row.Uid) != true)
-            Warn(Loc.T("replay.commandRefused"));
+            Warn(Refusal(Loc.T("replay.cueRefused")));
     }
 
     private void ClipRemove_Click(object sender, RoutedEventArgs e)
     {
         if (_replay is null || PlaylistList.SelectedItem is not ClipRow row)
+        {
+            Warn(Loc.T("replay.needClip"));
             return;
+        }
         var playlist = ReplayModel.Playlist(_replay, _playlistId);
         if (playlist?["clips"] is not JsonArray clips)
             return;
@@ -1316,16 +1433,27 @@ public partial class ReplayWindow : Window
     {
         if (_replay is null)
             return;
+        // A recorder without storage or angles writes nothing, so the reason is
+        // named here instead of leaving the mixer's bare refusal on screen.
+        if (ReplayModel.Storages(_replay).Count == 0 || ReplayModel.Angles(_replay).Count == 0)
+        {
+            Warn(Loc.T("replay.needSetup"));
+            return;
+        }
         if (!App.IsRemote)
             MixerNative.ThrowIfFailed(MixerNative.ReplayConfigure(ReplayModel.Serialize(_replay)), "Replay configure");
         if (Backend?.ReplayRecord(true) != true)
-            Warn(Loc.T("replay.commandRefused"));
+            Warn(Refusal(Loc.T("replay.recordRefused")));
     }
 
     private void Stop_Click(object sender, RoutedEventArgs e)
     {
+        // Stopping a recorder that is not running is not an error, so it stays
+        // quiet instead of reporting a refusal the operator cannot act on.
+        if (_recording != true)
+            return;
         if (Backend?.ReplayRecord(false) != true)
-            Warn(Loc.T("replay.commandRefused"));
+            Warn(Refusal(Loc.T("replay.commandRefused")));
     }
 
     private void Live_Click(object sender, RoutedEventArgs e) => Live();
@@ -1334,7 +1462,7 @@ public partial class ReplayWindow : Window
     private void Live()
     {
         if (Backend?.ReplayJumpToNow(_channel) != true)
-            Warn(Loc.T("replay.commandRefused"));
+            Warn(Refusal(Loc.T("replay.commandRefused")));
         _playing = false;
         UpdatePlayButton();
     }
@@ -1346,11 +1474,25 @@ public partial class ReplayWindow : Window
     {
         var playing = !_playing;
         if (Backend?.ReplayTransport(_channel, playing, _speedMilli, -1) == true)
+        {
             _playing = playing;
+        }
         else
+        {
             // The channel never started, so the button must not say "Pause".
-            Warn(Loc.T("replay.commandRefused"));
+            Warn(Refusal(Loc.T("replay.playRefused")));
+        }
         UpdatePlayButton();
+    }
+
+    /// <summary>
+    /// The mixer's own reason for a refusal when it has one, so the operator reads
+    /// what happened instead of a generic sentence.
+    /// </summary>
+    private static string Refusal(string fallback)
+    {
+        var detail = App.IsRemote ? "" : MixerNative.LastErrorText();
+        return string.IsNullOrWhiteSpace(detail) ? fallback : $"{fallback}  {detail}";
     }
 
     private void StepBack_Click(object sender, RoutedEventArgs e) => Step(-1);

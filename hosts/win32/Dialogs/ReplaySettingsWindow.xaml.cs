@@ -132,6 +132,24 @@ public partial class ReplaySettingsWindow : Window
         return _storages.Count == 0 ? 0 : 1;
     }
 
+    /// <summary>
+    /// Asks for a folder the way every other path in the app is chosen. Typing a
+    /// path stays possible, but the operator should not have to.
+    /// </summary>
+    private void BrowseStorage_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = Loc.T("replay.pickStorage"),
+            Multiselect = false
+        };
+        if (!string.IsNullOrWhiteSpace(PathBox.Text))
+            dialog.InitialDirectory = PathBox.Text.Trim();
+        if (dialog.ShowDialog(this) != true)
+            return;
+        PathBox.Text = dialog.FolderName;
+    }
+
     private void AddStorage_Click(object sender, RoutedEventArgs e)
     {
         var path = PathBox.Text.Trim();
@@ -153,7 +171,10 @@ public partial class ReplaySettingsWindow : Window
     private void RemoveStorage_Click(object sender, RoutedEventArgs e)
     {
         if (StorageList.SelectedItem is not StorageRow row)
+        {
+            StatusText.Text = Loc.T("replay.selectStorage");
             return;
+        }
         if (_storages.Count <= 1)
         {
             StatusText.Text = Loc.T("replay.needStorable");

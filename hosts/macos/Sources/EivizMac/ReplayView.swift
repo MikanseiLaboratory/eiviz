@@ -48,6 +48,9 @@ struct ReplayView: View {
     /// Recorded waveform of the angle being watched.
     /// Monitor per angle, so each angle scene has somewhere to present.
     @State private var angleMonitors: [UInt32: UInt64] = [:]
+    /// Monitor ids of the deck's output and live-input pictures.
+    @State private var outputMonitor: UInt64 = 0
+    @State private var liveMonitor: UInt64 = 0
     @State private var peakMins: [Float] = []
     @State private var peakMaxes: [Float] = []
     /// Buckets the mixer evicted, so the first bucket on screen is this many into
@@ -60,6 +63,7 @@ struct ReplayView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
+            deckMonitors
             HStack(alignment: .top, spacing: 10) {
                 angleStrip
                 VStack(spacing: 8) {
@@ -70,7 +74,7 @@ struct ReplayView: View {
             transport
         }
         .padding(12)
-        .frame(minWidth: 900, minHeight: 560)
+        .frame(minWidth: 1100, minHeight: 720)
         .onAppear { load() }
         .onReceive(tick) { _ in refresh() }
     }
@@ -100,10 +104,73 @@ struct ReplayView: View {
             Text(L10n.t("replay.recordTc")).font(.caption)
             Text(mixer.isRemote ? "--:--:--:--" : ReplayTime.timecode(stats?.recording_frame ?? 0, fps))
                 .font(.system(.title3, design: .monospaced))
+            // The deck is where an operator notices that storage or angles are
+            // missing, so the way into the recording settings belongs here too.
+            Button(L10n.t("replay.openSetup")) { mixer.openReplaySettings() }
+                .help(L10n.t("replay.openSetupHint"))
             if !status.isEmpty {
                 Text(status).font(.caption).foregroundStyle(EivizTheme.dim)
             }
         }
+    }
+
+    /// What the channel is sending out and the angle being recorded. A deck that
+    /// only shows the recording is half a deck: the operator cuts from the live
+    /// picture and watches what went out.
+    private var deckMonitors: some View {
+        HStack(alignment: .top, spacing: 8) {
+            monitor(title: L10n.t("replay.output"),
+                    caption: outputCaption,
+                    monitorId: outputMonitor,
+                    sourceId: channelSource)
+            monitor(title: L10n.t("replay.liveInput"),
+                    caption: liveCaption,
+                    monitorId: liveMonitor,
+                    sourceId: activeAngle?.sceneGpuId ?? 0)
+        }
+    }
+
+    private func monitor(title: String, caption: String, monitorId: UInt64, sourceId: UInt64) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).fontWeight(.bold)
+            if monitorId != 0 && sourceId != 0 {
+                MetalPreviewRepresentable(role: .monitor(monitorId: monitorId, sourceId: sourceId))
+                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.black)
+            } else {
+                Color.black.aspectRatio(16.0 / 9.0, contentMode: .fit)
+            }
+            Text(caption).font(.caption).foregroundStyle(EivizTheme.dim)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var outputCaption: String {
+        guard let item = channels.first(where: { $0.index == channel }) else {
+            return L10n.t("replay.noChannels")
+        }
+        return L10n.format(
+            "replay.outputLabel",
+            item.label,
+            L10n.t(playing ? "replay.playing" : "replay.stopped")
+        )
+    }
+
+    private var liveCaption: String {
+        guard let angle = activeAngle else { return L10n.t("replay.noActiveAngle") }
+        return L10n.format("replay.inputLabel", angle.label)
+    }
+
+    /// Source the selected channel paints into, which is what "output" means.
+    private var channelSource: UInt64 {
+        guard let item = channels.first(where: { $0.index == channel }) else { return 0 }
+        return item.sourceId
+    }
+
+    private var activeAngle: ReplayAngleInfo? {
+        let active = document?.activeAngleId ?? 0
+        return angles.first { $0.id == active } ?? angles.first
     }
 
     private var stateText: String {
@@ -576,8 +643,10 @@ struct ReplayView: View {
                     .keyboardShortcut(.space, modifiers: [])
                 Button("◀◀") { step(-1) }
                     .keyboardShortcut(.leftArrow, modifiers: [])
+                    .help(L10n.t("replay.stepBackHint"))
                 Button("▶▶") { step(1) }
                     .keyboardShortcut(.rightArrow, modifiers: [])
+                    .help(L10n.t("replay.stepForwardHint"))
                 Button("25%") { setSpeed(250) }
                 Button("50%") { setSpeed(500) }
                 Button("100%") { setSpeed(1000) }
@@ -599,6 +668,12 @@ struct ReplayView: View {
         loadedJson = document?.json ?? ""
         if let first = channels.first {
             channel = first.index
+        }
+        if outputMonitor == 0 {
+            outputMonitor = mixer.allocateMonitorId()
+        }
+        if liveMonitor == 0 {
+            liveMonitor = mixer.allocateMonitorId()
         }
     }
 
@@ -831,13 +906,19 @@ struct ReplayView: View {
         guard var current = document,
               let id = selectedEvent,
               let event = current.events.first(where: { $0.id == id })
-        else { return }
+        else {
+            status = L10n.t("replay.needEvent")
+            return
+        }
         current.setEventProtected(id, !event.protected)
         save(current)
     }
 
     private func deleteEvent() {
-        guard var current = document, let id = selectedEvent else { return }
+        guard var current = document, let id = selectedEvent else {
+            status = L10n.t("replay.needEvent")
+            return
+        }
         current.removeEvent(id)
         // A clip keeps its own recording, range and angle, so it survives the event
         // it came from; only the reference to an event that is gone goes away.
@@ -858,13 +939,17 @@ struct ReplayView: View {
     }
 
     private func cueSelectedClip() {
-        guard let uid = selectedClip, let clip = clips.first(where: { $0.uid == uid }) else { return }
+        guard let uid = selectedClip, let clip = clips.first(where: { $0.uid == uid }) else {
+            // A silent no-op reads as a broken button, so say what is missing.
+            status = L10n.t("replay.needClip")
+            return
+        }
         cue(clip)
     }
 
     private func cue(_ clip: ReplayClipInfo) {
         if !mixer.replayCue(channel: channel, clip: clip) {
-            status = L10n.t("replay.commandRefused")
+            status = L10n.t("replay.cueRefused")
         }
     }
 
@@ -986,8 +1071,15 @@ struct ReplayView: View {
     }
 
     private func record(_ on: Bool) {
+        // A recorder without storage or angles writes nothing, so the reason is
+        // named here instead of leaving the mixer's bare refusal on screen.
+        if on, let current = document,
+           current.storages.isEmpty || current.angles.isEmpty {
+            status = L10n.t("replay.needSetup")
+            return
+        }
         if !mixer.replayEnableRecording(on) {
-            status = L10n.t("replay.commandRefused")
+            status = L10n.t(on ? "replay.recordRefused" : "replay.commandRefused")
         }
     }
 
@@ -1004,7 +1096,7 @@ struct ReplayView: View {
             playing = next
         } else {
             // The channel never started, so the button must not say "Pause".
-            status = L10n.t("replay.commandRefused")
+            status = L10n.t("replay.playRefused")
         }
     }
 
@@ -1074,6 +1166,8 @@ struct ReplaySettingsView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         TextField(L10n.t("settings.replayPath"), text: $newPath)
+                        Button(L10n.t("replay.browse")) { browseStorage() }
+                            .help(L10n.t("replay.pickStorageHint"))
                         Button(L10n.t("replay.addStorage")) { addStorage() }
                     }
                     List {
@@ -1235,6 +1329,24 @@ struct ReplaySettingsView: View {
     /// Drive an angle records to. Angles that name no drive use the first one.
     private func driveOf(_ angleId: UInt32) -> Int {
         storages.firstIndex { $0.angleIds.contains(angleId) } ?? 0
+    }
+
+    /// Asks for a folder the way every other path on this host is chosen. Typing a
+    /// path stays possible, but the operator should not have to.
+    private func browseStorage() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = L10n.t("replay.addStorage")
+        panel.message = L10n.t("replay.pickStorageHint")
+        let typed = newPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !typed.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: typed)
+        }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        newPath = url.path
     }
 
     private func addStorage() {
