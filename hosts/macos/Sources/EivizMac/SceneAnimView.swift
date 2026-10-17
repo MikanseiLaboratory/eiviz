@@ -392,7 +392,7 @@ struct SceneAnimView: View {
         let action = step.replay
         let channelIndex = action?.channel ?? channels.first?.index ?? 0
         let channelClips = clips(on: channels, channel: channelIndex)
-        HStack(spacing: 6) {
+        return HStack(spacing: 6) {
             Toggle(L10n.t("anim.replayAction"), isOn: Binding(
                 get: { action != nil },
                 set: { on in

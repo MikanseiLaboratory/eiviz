@@ -1,4 +1,5 @@
 import AppKit
+import EivizMixer
 import Foundation
 import SwiftUI
 

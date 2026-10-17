@@ -1,3 +1,4 @@
+import EivizMixer
 import Foundation
 
 extension JSONValue {
@@ -306,8 +307,8 @@ struct ReplayDocument {
                 sceneId: object["sceneId"]?.uint64Value ?? 0,
                 // Silence is the only other source, so an explicit unit id is what
                 // matters.
-                (object["audio"]?.stringValue ?? "Silent").caseInsensitiveCompare("Unit") == .orderedSame
-                    ? object["audioUnitId"]?.uint64Value ?? 0
+                audioUnitId: (object["audio"]?.stringValue ?? "Silent").caseInsensitiveCompare("Unit") == .orderedSame
+                    ? (object["audioUnitId"]?.uint64Value ?? 0)
                     : 0
             )
         }

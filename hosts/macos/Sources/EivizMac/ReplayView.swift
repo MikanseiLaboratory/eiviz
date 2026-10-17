@@ -1,4 +1,5 @@
 import AppKit
+import EivizMixer
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -1061,6 +1062,9 @@ struct ReplaySettingsView: View {
     @State private var autoAdd = false
     @State private var angles: [ReplayAngleInfo] = []
     @State private var sceneSelection: UInt64 = 0
+    /// Audio source the assign button applies: zero is silence, otherwise the
+    /// mixing unit whose program mix the angle records.
+    @State private var audioSelection: UInt64 = 0
     @State private var status = ""
 
     var body: some View {
@@ -1133,6 +1137,7 @@ struct ReplaySettingsView: View {
                         }
                         .labelsHidden()
                         .frame(width: 200)
+                        .onChange(of: sceneSelection) { _, _ in syncAudioSelection() }
                         Button(L10n.t("replay.addAngle")) { addAngle() }
                         Button(L10n.t("replay.removeAngle")) { removeLastAngle() }
                         Picker("", selection: $driveSelection) {
@@ -1208,6 +1213,19 @@ struct ReplaySettingsView: View {
         angles = current.angles
         sceneSelection = mixer.session.scenes.first?.id ?? 0
         driveSelection = 0
+        syncAudioSelection()
+    }
+
+    /// Shows the audio source the selected scene's angle already records, so the
+    /// picker never claims a setting the angle does not have.
+    private func syncAudioSelection() {
+        guard let scene = mixer.session.scenes.first(where: { $0.id == sceneSelection }),
+              let angle = angles.first(where: { $0.sceneId == scene.id })
+        else {
+            audioSelection = 0
+            return
+        }
+        audioSelection = angle.audioUnitId
     }
 
     private func driveIndex(_ storage: ReplayDocument.StorageSpec) -> Int {
