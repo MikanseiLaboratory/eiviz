@@ -101,10 +101,19 @@ fn an_angle_that_is_not_on_air_still_records() {
         stats.frames_pushed
     );
     // Nothing is invented: every frame the recorder reports was handed to the
-    // readback, and what it could not take is counted as a readback loss.
+    // readback, and what it could not take is counted as a readback loss. The
+    // readback keeps a small ring of copies in flight, so a few frames may still be
+    // on their way; what must not happen is a frame that disappears without a reason.
     assert!(
         stats.frames_offered + u64::from(angles[0].dropped_readback) <= stats.frames_pushed,
         "offered {} + readback lost {} must not exceed pushed {}",
+        stats.frames_offered,
+        angles[0].dropped_readback,
+        stats.frames_pushed
+    );
+    assert!(
+        stats.frames_offered + u64::from(angles[0].dropped_readback) + 8 >= stats.frames_pushed,
+        "every handed-over frame is recorded or counted: offered {}, lost {}, pushed {}",
         stats.frames_offered,
         angles[0].dropped_readback,
         stats.frames_pushed
