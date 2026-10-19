@@ -634,6 +634,15 @@ public partial class ReplayWindow : Window
             StateText.Text = Loc.T("replay.stateIdle");
             HealthText.Text = "";
         }
+        // The master frame rate, from the mixer's own frame counter. When a preview looks
+        // slow this is the first thing to read: it says whether the mixer is behind or
+        // only the window is.
+        var runtime = default(MixerRuntimeStats);
+        unsafe
+        {
+            if (MixerNative.CopyRuntimeStats(&runtime) == 0)
+                UpdateFps(runtime.FramesRendered);
+        }
         MarkOutButton.IsEnabled = _markOpen;
         // The deck shows which of the two it is doing. A Remote cannot read the
         // state, so both stay available there.
@@ -1978,6 +1987,31 @@ public partial class ReplayWindow : Window
     /// hands back. The remote core keeps it and ignores a seek it cannot place.
     /// </summary>
     private bool HasLocalInFrame => _inFrame is { } value && value != MarkUnknown;
+
+    private ulong _fpsFrames;
+    private long _fpsTicks;
+
+    /// <summary>
+    /// Master frame rate from the mixer's composed-frame counter. The rate is measured
+    /// over the tick, so it reads what the mixer is doing rather than what was asked for.
+    /// </summary>
+    private void UpdateFps(ulong frames)
+    {
+        var now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (_fpsTicks == 0 || _fpsFrames == 0)
+        {
+            _fpsFrames = frames;
+            _fpsTicks = now;
+            return;
+        }
+        var seconds = (now - _fpsTicks) / (double)System.Diagnostics.Stopwatch.Frequency;
+        if (seconds < 1.0)
+            return;
+        var delta = frames >= _fpsFrames ? frames - _fpsFrames : 0;
+        FpsText.Text = Loc.Format("replay.masterFps", delta / seconds);
+        _fpsFrames = frames;
+        _fpsTicks = now;
+    }
 
     /// <summary>
     /// Lights a control that is in a state, the way a controller's buttons light: the

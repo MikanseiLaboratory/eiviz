@@ -789,7 +789,7 @@ mod tests {
 
     #[test]
     fn runtime_stats_are_fixed_width() {
-        assert_eq!(size_of::<MixerRuntimeStats>(), 72);
+        assert_eq!(size_of::<MixerRuntimeStats>(), 80);
         assert_eq!(align_of::<MixerRuntimeStats>(), 8);
         assert_eq!(size_of::<InputRuntimeStats>(), 24);
         assert_eq!(size_of::<OutputRuntimeStats>(), 32);
@@ -830,6 +830,8 @@ mod tests {
 pub struct MixerRuntimeStats {
     pub uptime_ms: u64,
     pub render_skipped: u64,
+    /// Frames composed since start. Its growth rate is the master frame rate.
+    pub frames_rendered: u64,
     pub input_queue_dropped: u64,
     pub output_omt: u32,
     pub output_ndi: u32,

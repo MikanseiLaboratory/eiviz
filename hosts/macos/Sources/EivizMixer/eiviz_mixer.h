@@ -357,6 +357,8 @@ typedef struct EivizMixerStats {
 typedef struct EivizMixerRuntimeStats {
     uint64_t uptime_ms;
     uint64_t render_skipped;
+    /// Frames composed since start. Its growth rate is the master frame rate.
+    uint64_t frames_rendered;
     uint64_t input_queue_dropped;
     uint32_t output_omt;
     uint32_t output_ndi;

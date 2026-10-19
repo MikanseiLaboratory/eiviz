@@ -212,6 +212,7 @@ pub(crate) fn render_loop(
             continue;
         };
         crate::diag::add_render_skipped(skipped);
+        crate::diag::note_frame_rendered();
         frame_i = master_cursor.idx.saturating_sub(1);
         {
             let mut guard = shared.lock_or_recover();

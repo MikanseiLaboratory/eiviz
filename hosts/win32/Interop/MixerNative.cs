@@ -1320,6 +1320,8 @@ internal struct MixerRuntimeStats
 {
     public ulong UptimeMs;
     public ulong RenderSkipped;
+    /// <summary>Frames composed since start. Its growth rate is the master frame rate.</summary>
+    public ulong FramesRendered;
     public ulong InputQueueDropped;
     public uint OutputOmt;
     public uint OutputNdi;

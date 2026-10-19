@@ -7050,6 +7050,7 @@ unsafe fn mixer_copy_runtime_stats_ffi(out: *mut MixerRuntimeStats) -> i32 {
             *out = MixerRuntimeStats {
                 uptime_ms: elapsed_ms(shared.clock.epoch()),
                 render_skipped: crate::diag::render_skipped(),
+            frames_rendered: crate::diag::frames_rendered(),
                 input_queue_dropped,
                 output_omt,
                 output_ndi,
