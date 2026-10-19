@@ -275,4 +275,3 @@ fn recording_refuses_an_angle_with_no_storage_assigned() {
     mixer_destroy();
     let _ = std::fs::remove_dir_all(&dir);
 }
-

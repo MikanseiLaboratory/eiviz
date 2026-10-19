@@ -18,16 +18,15 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use common::{
-    expect, full_layer, load_test_module, mark_in_when_ready, mark_out_after,
-    scene_id, scene_pixel,
+    expect, full_layer, load_test_module, mark_in_when_ready, mark_out_after, scene_id, scene_pixel,
 };
 use eiviz_mixer::{
     EASING_LINEAR, EivizMotion, EivizSceneCamera, EivizSceneSequenceDesc, EivizSceneStateDesc,
     EivizSequenceStepDesc, GEN_SOLID, MixerReplayChannelState, OverlayDesc, SCENE_SEQ_PLAY,
     SRC_COLOR, UnitState, mixer_create, mixer_create_unit, mixer_define_generator,
     mixer_define_scene, mixer_destroy, mixer_replay_configure, mixer_replay_copy_channels,
-    mixer_replay_record, mixer_scene_sequence,
-    mixer_scene_sequences_define, mixer_scene_states_define, mixer_unit_set_state,
+    mixer_replay_record, mixer_scene_sequence, mixer_scene_sequences_define,
+    mixer_scene_states_define, mixer_unit_set_state,
 };
 
 /// The channel's own source id: `REPLAY_CHANNEL_BASE` for channel A.

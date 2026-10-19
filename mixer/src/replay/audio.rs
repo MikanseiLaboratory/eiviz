@@ -37,7 +37,11 @@ impl PlaybackAudio {
 
     /// Points the cursor at a source frame. Used on cue, seek and clip changes.
     pub fn reset(&mut self, frame: f64) {
-        self.cursor = if frame.is_finite() { frame.max(0.0) } else { 0.0 };
+        self.cursor = if frame.is_finite() {
+            frame.max(0.0)
+        } else {
+            0.0
+        };
     }
 
     /// Where the cursor sits in the source. The transport owns the position, so
@@ -291,8 +295,7 @@ mod tests {
                 if frame >= frames {
                     break;
                 }
-                let value =
-                    (std::f64::consts::TAU * 440.0 * frame as f64 / 48_000.0).sin() as f32;
+                let value = (std::f64::consts::TAU * 440.0 * frame as f64 / 48_000.0).sin() as f32;
                 out[index * 2] = value;
                 out[index * 2 + 1] = value;
                 written += 1;
@@ -359,6 +362,3 @@ mod tests {
         assert!(out[4 * 2..].iter().all(|sample| *sample == 0.0));
     }
 }
-
-
-

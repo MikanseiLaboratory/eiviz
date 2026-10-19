@@ -84,7 +84,10 @@ pub fn encode_frame(
         );
     }
     let encoder = encoders.get_mut(&angle_id)?;
-    if let Err(error) = encoder.codec.encode_from_texture_opaque(device, queue, texture) {
+    if let Err(error) = encoder
+        .codec
+        .encode_from_texture_opaque(device, queue, texture)
+    {
         // Say why instead of losing the frame quietly: a texture the encoder cannot
         // sample is a configuration mistake, not a frame that happened to be late.
         crate::diag::error(&format!(
@@ -100,7 +103,9 @@ pub fn encode_frame(
     let size = loop {
         match encoder.codec.save_to(&mut encoder.packet) {
             Ok(size) => break size,
-            Err(_) => encoder.packet.resize(encoder.packet.len().saturating_mul(2).max(1024), 0),
+            Err(_) => encoder
+                .packet
+                .resize(encoder.packet.len().saturating_mul(2).max(1024), 0),
         }
     };
     Some(encoder.packet[..size].to_vec())

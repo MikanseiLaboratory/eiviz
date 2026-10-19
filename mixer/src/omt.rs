@@ -140,7 +140,8 @@ impl OmtReceiver {
                                 want_full_thread.load(Ordering::Relaxed),
                                 &mut drop_full_at,
                             );
-                            let passthrough = crate::replay::engine().passthrough_angle_for(source_id);
+                            let passthrough =
+                                crate::replay::engine().passthrough_angle_for(source_id);
                             session.set_encoded_capture(passthrough.is_some());
                             if let Some(angle_id) = passthrough {
                                 while let Some(frame) = session.try_recv_vmx1() {
@@ -157,8 +158,7 @@ impl OmtReceiver {
                                         fps_den: frame.fps_den,
                                         dropped_before,
                                     };
-                                    crate::replay::engine()
-                                        .write_encoded_frame(angle_id, &encoded);
+                                    crate::replay::engine().write_encoded_frame(angle_id, &encoded);
                                 }
                             }
                             apply_omt_save(

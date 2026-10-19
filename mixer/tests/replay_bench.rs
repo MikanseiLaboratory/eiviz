@@ -7,8 +7,8 @@
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Instant;
 
@@ -24,9 +24,7 @@ fn report(name: &str, frames: u32, bytes: u64, elapsed: std::time::Duration) {
     } else {
         0.0
     };
-    println!(
-        "{name:<36} frames={frames:<4} {ms:.2} ms/frame  {mbps:.1} Mbps  bytes={bytes}"
-    );
+    println!("{name:<36} frames={frames:<4} {ms:.2} ms/frame  {mbps:.1} Mbps  bytes={bytes}");
 }
 
 fn uyvy_frame() -> Vec<u8> {
@@ -37,7 +35,11 @@ fn uyvy_frame() -> Vec<u8> {
     pixels
 }
 
-fn encode_frames(profile: Profile, threads: Option<usize>, frames: u32) -> (u64, std::time::Duration) {
+fn encode_frames(
+    profile: Profile,
+    threads: Option<usize>,
+    frames: u32,
+) -> (u64, std::time::Duration) {
     let mut codec = Codec::new(Config {
         width: WIDTH as i32,
         height: HEIGHT as i32,
@@ -132,11 +134,25 @@ fn write_segment(path: &std::path::Path, bytes: usize, fsync: bool) -> std::time
 #[ignore]
 fn replay_stage0() {
     let frames = 8u32;
-    for (name, profile) in [("HQ", Profile::Hq), ("SQ", Profile::Sq), ("LQ", Profile::Lq)] {
+    for (name, profile) in [
+        ("HQ", Profile::Hq),
+        ("SQ", Profile::Sq),
+        ("LQ", Profile::Lq),
+    ] {
         let (bytes, elapsed) = encode_frames(profile, Some(1), frames);
-        report(&format!("encode {name} 1080p threads=1"), frames, bytes, elapsed);
+        report(
+            &format!("encode {name} 1080p threads=1"),
+            frames,
+            bytes,
+            elapsed,
+        );
         let (bytes, elapsed) = encode_frames(profile, None, frames);
-        report(&format!("encode {name} 1080p threads=auto"), frames, bytes, elapsed);
+        report(
+            &format!("encode {name} 1080p threads=auto"),
+            frames,
+            bytes,
+            elapsed,
+        );
         let elapsed = decode_frames(profile, frames);
         report(&format!("decode {name} 1080p"), frames, 0, elapsed);
     }
@@ -170,7 +186,12 @@ fn replay_stage0() {
                 }
             }
         }
-        report("gpu encode SQ 1080p opaque", gpu_frames, bytes, started.elapsed());
+        report(
+            "gpu encode SQ 1080p opaque",
+            gpu_frames,
+            bytes,
+            started.elapsed(),
+        );
     } else {
         println!("gpu encode skipped: no headless device");
     }
@@ -225,5 +246,7 @@ fn replay_stage0() {
     );
     let _ = sink;
 
-    println!("stage0 defaults: segment_frames=120 profile=SQ encode_queue_frames=6 write_buffer_mb=512");
+    println!(
+        "stage0 defaults: segment_frames=120 profile=SQ encode_queue_frames=6 write_buffer_mb=512"
+    );
 }

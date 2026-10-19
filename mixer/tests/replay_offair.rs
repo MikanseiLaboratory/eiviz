@@ -123,5 +123,3 @@ fn an_angle_that_is_not_on_air_still_records() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
-
-
