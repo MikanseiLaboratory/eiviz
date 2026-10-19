@@ -1342,16 +1342,24 @@ impl ReplayEngine {
         let mut angle_stats = [MixerReplayAngleStats::default(); 32];
         let angle_count = self.copy_stats(&mut stats, &mut angle_stats) as usize;
         let mut channel_states = [MixerReplayChannelState::default(); 26];
+        let running_order: Vec<usize> = self
+            .lock()
+            .channels
+            .iter()
+            .map(|slot| slot.transport.list_len())
+            .collect();
         let channel_count = self.copy_channels(&mut channel_states) as usize;
         let channels: Vec<serde_json::Value> = channel_states[..channel_count]
             .iter()
-            .map(|channel| {
+            .enumerate()
+            .map(|(index, channel)| {
                 serde_json::json!({
                     "index": channel.channel_index,
                     "sourceId": channel.source_id,
                     "playing": channel.playing != 0,
                     "speedMilli": channel.speed_milli,
                     "positionFrame": channel.position_frame,
+                    "playlistLength": running_order.get(index).copied().unwrap_or(0),
                     "inFrame": channel.in_frame,
                     "outFrame": channel.out_frame,
                     "angleId": channel.angle_id,
@@ -1816,32 +1824,47 @@ fn channel_loop(stop: Arc<AtomicBool>) {
         };
         for (index, source_id, mut transport, audio, revision) in slots {
             transport.note_recorded_frame(last_frame);
-            let Some(plan) = transport.step(1.0) else {
-                // Holding the last picture is the correct answer for pause, jog
-                // and a repeated frame. Only clear when there is nothing at all.
-                if transport.clip().is_none() && !transport.is_live() {
-                    paint_black(source_id);
+            // `step` advances the transport even when it decides to hold the picture, so
+            // its result is not the only thing to keep: the advanced copy goes back
+            // below on every path. Dropping it on an early `continue` is what pinned the
+            // channel to one frame and stopped a playlist from reaching its next clip.
+            match transport.step(1.0) {
+                Some(plan) => {
+                    if let Some(store) = store.as_ref() {
+                        let started = Instant::now();
+                        let decoded = render_plan(store, &plan, width, height);
+                        let elapsed = started.elapsed().as_micros() as u64;
+                        if let Some((
+                            pixels,
+                            frame_width,
+                            frame_height,
+                            stride,
+                            pts,
+                            substituted,
+                        )) = decoded
+                        {
+                            paint(source_id, &pixels, frame_width, frame_height, stride, pts);
+                            transport.substituted =
+                                transport.substituted.saturating_add(u64::from(substituted));
+                        } else {
+                            // A missing or corrupt frame must not pin the channel: keep
+                            // the previous picture, advance, and surface the miss.
+                            transport.substituted = transport.substituted.saturating_add(1);
+                        }
+                        transport.decode_samples = transport.decode_samples.saturating_add(1);
+                        transport.decode_us_sum = transport.decode_us_sum.saturating_add(elapsed);
+                        // Sound follows picture: one frame of audio per frame of video.
+                        push_channel_audio(source_id, &transport, store, &audio, fps);
+                    }
                 }
-                continue;
-            };
-            let Some(store) = store.as_ref() else {
-                continue;
-            };
-            let started = Instant::now();
-            let decoded = render_plan(store, &plan, width, height);
-            let elapsed = started.elapsed().as_micros() as u64;
-            if let Some((pixels, frame_width, frame_height, stride, pts, substituted)) = decoded {
-                paint(source_id, &pixels, frame_width, frame_height, stride, pts);
-                transport.substituted = transport.substituted.saturating_add(u64::from(substituted));
-            } else {
-                // A missing or corrupt frame must not pin the channel: keep the
-                // previous picture, advance, and surface the miss.
-                transport.substituted = transport.substituted.saturating_add(1);
+                None => {
+                    // Holding the last picture is the correct answer for pause, jog
+                    // and a repeated frame. Only clear when there is nothing at all.
+                    if transport.clip().is_none() && !transport.is_live() {
+                        paint_black(source_id);
+                    }
+                }
             }
-            transport.decode_samples = transport.decode_samples.saturating_add(1);
-            transport.decode_us_sum = transport.decode_us_sum.saturating_add(elapsed);
-            // Sound follows picture: one frame of audio per frame of video.
-            push_channel_audio(source_id, &transport, store, &audio, fps);
             let mut inner = engine.lock();
             // A configure that landed while this frame was in flight wins; the
             // stale snapshot must not overwrite its playlist.

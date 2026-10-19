@@ -218,23 +218,35 @@ impl Transport {
 
     /// Plays one clip that is not part of a playlist. The Replay API still needs
     /// this path.
+    ///
+    /// A cue of a clip that *is* in the playlist keeps the running order: cueing is how
+    /// an operator starts anywhere in the list, and the transport has to know what comes
+    /// after. Emptying the list here is what made a cue play one clip and stop.
     pub fn cue(&mut self, cue: Cue) {
-        self.set_clip(
-            Clip {
-                uid: format!("cue-{}", cue.angle_id),
-                recording_uuid: cue.recording_uuid,
-                angle_id: cue.angle_id,
-                in_frame: cue.in_frame,
-                out_frame: cue.out_frame,
-                speed: 1.0,
-                preserve_pitch: false,
-                audio: ClipAudioSource::Follow,
-                gain: 1.0,
-                transition: ClipTransition::CUT,
-            },
-            0,
-        );
-        self.list = Vec::new();
+        let clip = Clip {
+            uid: format!("cue-{}", cue.angle_id),
+            recording_uuid: cue.recording_uuid,
+            angle_id: cue.angle_id,
+            in_frame: cue.in_frame,
+            out_frame: cue.out_frame,
+            speed: 1.0,
+            preserve_pitch: false,
+            audio: ClipAudioSource::Follow,
+            gain: 1.0,
+            transition: ClipTransition::CUT,
+        };
+        if let Some(index) = self.list.iter().position(|item| {
+            item.recording_uuid == clip.recording_uuid
+                && item.angle_id == clip.angle_id
+                && item.in_frame == clip.in_frame
+                && item.out_frame == clip.out_frame
+        }) {
+            let item = self.list[index].clone();
+            self.set_clip(item, index);
+            return;
+        }
+        let index = self.index;
+        self.set_clip(clip, index);
     }
 
     /// Clips on the channel, newest last. Used to resolve a cue by name.
@@ -277,6 +289,12 @@ impl Transport {
 
     pub fn set_playing(&mut self, playing: bool) {
         self.playing = playing;
+    }
+
+    /// How many clips the running order holds. A channel with none plays a single clip
+    /// and stops, which is what a cue without a list looks like.
+    pub fn list_len(&self) -> usize {
+        self.list.len()
     }
 
     pub fn set_looping(&mut self, looping: bool) {
@@ -637,6 +655,56 @@ mod tests {
         transport.set_playing(true);
         assert!(transport.step(1.0).is_none());
         assert_eq!(transport.step(1.0).unwrap().primary, Some((1, 42)));
+    }
+
+    /// Cueing a clip that is in the playlist is how "play the playlist" starts. The
+    /// running order has to survive the cue, or playback stops after one clip.
+    #[test]
+    fn cueing_a_playlist_clip_keeps_the_running_order() {
+        let mut transport = Transport::new();
+        let a = clip("a", 0, 2, ClipTransition::CUT);
+        let b = clip("b", 10, 12, ClipTransition::CUT);
+        transport.set_playlist(vec![a.clone(), b.clone()]);
+        transport.cue(Cue {
+            recording_uuid: a.recording_uuid.clone(),
+            angle_id: a.angle_id,
+            in_frame: a.in_frame,
+            out_frame: a.out_frame,
+        });
+        assert_eq!(transport.list_len(), 2, "the cue must not empty the playlist");
+        transport.set_playing(true);
+        assert_eq!(transport.step(1.0).unwrap().primary, Some((a.angle_id, 0)));
+        assert_eq!(transport.step(1.0).unwrap().primary, Some((a.angle_id, 1)));
+        assert_eq!(transport.step(1.0).unwrap().primary, Some((a.angle_id, 2)));
+        assert_eq!(
+            transport.step(1.0).unwrap().primary,
+            Some((b.angle_id, 10)),
+            "playback carries on to the next clip after a cue"
+        );
+    }
+
+    #[test]
+    fn a_looping_playlist_starts_over_at_its_end() {
+        let mut transport = Transport::new();
+        let a = clip("a", 0, 1, ClipTransition::CUT);
+        transport.set_playlist(vec![a.clone()]);
+        transport.cue(Cue {
+            recording_uuid: a.recording_uuid.clone(),
+            angle_id: a.angle_id,
+            in_frame: a.in_frame,
+            out_frame: a.out_frame,
+        });
+        transport.set_looping(true);
+        transport.set_playing(true);
+        assert_eq!(transport.step(1.0).unwrap().primary, Some((a.angle_id, 0)));
+        assert_eq!(transport.step(1.0).unwrap().primary, Some((a.angle_id, 1)));
+        // The end of the list is not the end of the show: it goes round again.
+        assert_eq!(
+            transport.step(1.0).unwrap().primary,
+            Some((a.angle_id, 0)),
+            "a looping playlist returns to its first clip"
+        );
+        assert!(transport.is_playing());
     }
 
     #[test]

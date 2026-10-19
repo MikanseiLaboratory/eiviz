@@ -109,15 +109,29 @@
                     <RowDefinition Height="*" MinHeight="180"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" FontWeight="Bold"
-                           Text="{Binding [replay.liveInput], Source={x:Static i18n:Loc.Source}}"/>
-                <!-- The same container the main window uses: the picture keeps its shape
-                     and follows the window, instead of being stretched into the box. -->
-                <preview:AspectBox Grid.Row="1">
-                    <Border Style="{StaticResource MonitorBox}">
-                        <preview:SwapchainHost x:Name="LiveMonitor"/>
-                    </Border>
-                </preview:AspectBox>
+                <DockPanel Grid.Row="0">
+                    <TextBlock DockPanel.Dock="Left" FontWeight="Bold" VerticalAlignment="Center"
+                               Text="{Binding [replay.liveInput], Source={x:Static i18n:Loc.Source}}"/>
+                    <!-- The same shape of view the main window calls a multiview: every
+                         angle at once, so an operator sees what each camera has. -->
+                    <Button x:Name="MultiviewButton" DockPanel.Dock="Right" Height="26" MinWidth="120"
+                            HorizontalAlignment="Right" Margin="8,0,0,0" Click="Multiview_Click"
+                            ToolTip="{Binding [replay.multiviewHint], Source={x:Static i18n:Loc.Source}}"
+                            Content="{Binding [replay.multiview], Source={x:Static i18n:Loc.Source}}"/>
+                </DockPanel>
+                <Grid Grid.Row="1">
+                    <!-- The same container the main window uses: the picture keeps its
+                         shape and follows the window, instead of being stretched. -->
+                    <preview:AspectBox x:Name="LiveBox">
+                        <Border Style="{StaticResource MonitorBox}">
+                            <preview:SwapchainHost x:Name="LiveMonitor"/>
+                        </Border>
+                    </preview:AspectBox>
+                    <ScrollViewer x:Name="AngleGridScroller" Visibility="Collapsed"
+                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <WrapPanel x:Name="AngleGridPanel"/>
+                    </ScrollViewer>
+                </Grid>
                 <TextBlock Grid.Row="2" x:Name="LiveLabel" Style="{StaticResource Caption}"/>
             </Grid>
             <Grid Grid.Column="2">
@@ -149,9 +163,6 @@
                 <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                     <TextBlock FontWeight="Bold" VerticalAlignment="Center"
                                Text="{Binding [replay.events], Source={x:Static i18n:Loc.Source}}"/>
-                    <TextBlock DockPanel.Dock="Right" HorizontalAlignment="Right" VerticalAlignment="Center"
-                               Foreground="#B0B0B8"
-                               Text="{Binding [replay.eventsRowHelp], Source={x:Static i18n:Loc.Source}}"/>
                 </DockPanel>
                 <ListView x:Name="EventList" Style="{StaticResource DeckList}" SelectionMode="Single"
                           ScrollViewer.HorizontalScrollBarVisibility="Auto">
@@ -392,9 +403,6 @@
             <DockPanel Margin="0,0,0,8">
                 <TextBlock DockPanel.Dock="Left" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0"
                            Text="{Binding [replay.angles], Source={x:Static i18n:Loc.Source}}"/>
-                <TextBlock DockPanel.Dock="Right" HorizontalAlignment="Right" VerticalAlignment="Center"
-                           Foreground="#B0B0B8"
-                           Text="{Binding [replay.anglesHelpShort], Source={x:Static i18n:Loc.Source}}"/>
                 <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                     <WrapPanel x:Name="AnglePanel" Orientation="Horizontal"/>
                 </ScrollViewer>
@@ -436,8 +444,6 @@
                         ToolTip="{Binding [replay.recordHint], Source={x:Static i18n:Loc.Source}}">
                     <Ellipse Width="18" Height="18" Fill="#E05252"/>
                 </Button>
-                <Button x:Name="StopButton" Style="{StaticResource IconButton}" Content="&#xE71A;" Click="Stop_Click"
-                        ToolTip="{Binding [replay.stopHint], Source={x:Static i18n:Loc.Source}}"/>
                 <Button x:Name="LiveButton" Style="{StaticResource IconButton}" Content="&#xE8B0;" Click="Live_Click"
                         ToolTip="{Binding [replay.liveHint], Source={x:Static i18n:Loc.Source}}"/>
                 <Button x:Name="PlayButton" Style="{StaticResource IconButton}" Content="&#xE768;" Click="Play_Click"

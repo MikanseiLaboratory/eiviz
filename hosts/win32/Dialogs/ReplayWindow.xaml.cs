@@ -48,6 +48,8 @@ public partial class ReplayWindow : Window
     private bool _live;
     /// <summary>True while the playlist goes round again at its end.</summary>
     private bool _looping;
+    /// <summary>True while the input picture is a grid of every angle.</summary>
+    private bool _multiview;
     private ulong _outFrame;
     /// <summary>
     /// True between Mark In and Mark Out. The mark itself stays on screen after it
@@ -637,13 +639,7 @@ public partial class ReplayWindow : Window
         // state, so both stay available there.
         if (!remote)
         {
-            RecordButton.IsEnabled = _recording != true;
-            StopButton.IsEnabled = _recording == true;
-        }
-        else
-        {
             RecordButton.IsEnabled = true;
-            StopButton.IsEnabled = true;
         }
         // A state an operator cannot see is a state they will doubt. The record button
         // burns while it records, and the mark buttons light while a mark is open.
@@ -1763,6 +1759,75 @@ public partial class ReplayWindow : Window
         _playing = true;
         UpdatePlayButton();
         RefreshStatus();
+    }
+
+    /// <summary>
+    /// Switches the input picture between the selected angle and a multiview of every
+    /// angle, the way the main window shows its sources at once.
+    /// </summary>
+    private void Multiview_Click(object sender, RoutedEventArgs e)
+    {
+        _multiview = !_multiview;
+        AngleGridScroller.Visibility = _multiview ? Visibility.Visible : Visibility.Collapsed;
+        LiveBox.Visibility = _multiview ? Visibility.Collapsed : Visibility.Visible;
+        SetLit(MultiviewButton, _multiview, Color.FromRgb(0x7F, 0xD1, 0x4B));
+        RefreshAngleGrid();
+    }
+
+    /// <summary>
+    /// One live tile per angle. Each tile is its own monitor on the angle's scene, which
+    /// is the picture the recorder is taking; a click makes that angle the active one.
+    /// </summary>
+    private void RefreshAngleGrid()
+    {
+        if (!_multiview || _replay is null)
+            return;
+        AngleGridPanel.Children.Clear();
+        foreach (var host in _angleHosts)
+            host.ReleaseNative();
+        _angleHosts.Clear();
+        if (Backend?.IsRemote == true)
+        {
+            AngleGridPanel.Children.Add(new TextBlock
+            {
+                Text = Loc.T("replay.remoteAngles"),
+                Margin = new Thickness(8),
+                TextWrapping = TextWrapping.Wrap
+            });
+            return;
+        }
+        var active = ReplayModel.ActiveAngle(_replay);
+        foreach (var angle in ReplayModel.Angles(_replay))
+        {
+            var selected = angle.Id == active;
+            var surface = new SwapchainHost { Width = 220, Height = 124, Margin = new Thickness(4) };
+            var monitorId = _session.NextMonitorId++;
+            surface.Loaded += (_, _) => surface.RetargetMonitor(monitorId, angle.LiveSourceId);
+            var label = new TextBlock
+            {
+                Text = angle.Label,
+                Margin = new Thickness(6, 0, 6, 4),
+                FontWeight = selected ? FontWeights.Bold : FontWeights.Normal
+            };
+            var tile = new Border
+            {
+                BorderThickness = new Thickness(selected ? 3 : 1),
+                BorderBrush = selected ? Brushes.LimeGreen : (Brush)FindResource("ButtonBorder"),
+                Margin = new Thickness(2),
+                Cursor = Cursors.Hand,
+                Tag = angle.Id,
+                Child = new StackPanel { Children = { surface, label } }
+            };
+            tile.MouseLeftButtonUp += (clickSender, _) =>
+            {
+                if (clickSender is Border { Tag: uint id })
+                    SelectAngle(id);
+            };
+            AutomationProperties.SetAutomationId(tile, $"AngleTile{angle.Id}");
+            AutomationProperties.SetName(tile, angle.Label);
+            AngleGridPanel.Children.Add(tile);
+            _angleHosts.Add(surface);
+        }
     }
 
     /// <summary>
