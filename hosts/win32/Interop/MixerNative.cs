@@ -421,6 +421,14 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_channel_jump_to_now")]
     internal static partial int ReplayJumpToNow(uint channel);
 
+    /// <summary>
+    /// Asks the mixer how much space a drive has and how long the current settings
+    /// would record there. Replay Setup shows it per drive, because an operator
+    /// choosing a drive needs to know what fits.
+    /// </summary>
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_estimate", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int ReplayEstimate(ref MixerReplayEstimateIn input, ref MixerReplayEstimateOut output);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_channel_cue", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int ReplayCue(uint channel, uint angleId, ulong inFrame, ulong outFrame, string recordingUuid);
 
@@ -1249,6 +1257,30 @@ internal struct MixerReplayStats
     public ulong EncodedFrames;
     /// <summary>Encoded frames the store refused.</summary>
     public ulong EncodedDropped;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixerReplayEstimateIn
+{
+    public uint Width;
+    public uint Height;
+    public uint FpsNum;
+    public uint FpsDen;
+    /// <summary>0 = HQ, 1 = SQ, 2 = LQ, matching the Pro API.</summary>
+    public uint Profile;
+    public uint AngleCount;
+    public IntPtr Path;
+    public nuint PathLen;
+    public ulong ReserveBytes;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixerReplayEstimateOut
+{
+    public ulong FreeBytes;
+    public ulong EstimateRateBps;
+    public uint RemainingSecs;
+    public uint PathWritable;
 }
 
 [StructLayout(LayoutKind.Sequential)]

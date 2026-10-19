@@ -1,4 +1,4 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Threading;
 using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
@@ -30,7 +30,12 @@ public partial class App : Application
         try
         {
             if (MixerNative.Ping() != 0x4549_5649)
-                throw new InvalidOperationException("The Rust mixer ABI does not match this host.");
+            {
+                // The mixer is either missing or from another build. Both happen in
+                // development (a release `dotnet build` overwrites the debug cdylibs),
+                // so the message names the file and what to do.
+                throw new InvalidOperationException(Loc.T("msg.mixerMismatch"));
+            }
             LoadRequiredProModule(e.Args);
             Session = Session.Default();
             if (HostRole.IsRemote)
@@ -50,7 +55,16 @@ public partial class App : Application
         catch (Exception ex)
         {
             HostLog.WriteCrash(ex);
-            throw;
+            // A startup failure must never look like a crash. The operator gets the
+            // reason, what to do about it, and where the log is, and the process exits
+            // with a code that says it failed.
+            MessageBox.Show(
+                $"{ex.Message}\n\n{Loc.T("msg.startupFailedHint")}\n{HostLog.DirectoryPath}",
+                Loc.T("msg.startupFailed"),
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            Shutdown(1);
+            return;
         }
     }
 
@@ -150,8 +164,15 @@ public partial class App : Application
             if (args[i] == "--pro-module")
                 path = args[i + 1];
         }
-        if (MixerNative.ProPrepare(path) != 0)
-            throw new InvalidOperationException(MixerNative.QueryProError());
+        if (MixerNative.ProPrepare(path) == 0)
+            return;
+        var reason = MixerNative.QueryProError();
+        // The reason on its own ("no Pro module public key") does not tell an operator
+        // what to do, so the path and the two real causes travel with it.
+        throw new InvalidOperationException(
+            string.IsNullOrWhiteSpace(path)
+                ? Loc.Format("msg.proModuleMissing", reason)
+                : Loc.Format("msg.proModuleRejected", path, reason));
     }
 
     private void BootMixer()
