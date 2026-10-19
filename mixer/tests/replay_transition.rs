@@ -54,10 +54,12 @@ fn is_green(pixel: [u8; 3]) -> bool {
     pixel[1] > 200 && pixel[0] < 60 && pixel[2] < 60
 }
 
-/// Both clips on screen at once, which is what a dissolve is. Red and green mixed
-/// in any real proportion leaves both channels above the noise floor.
+/// Both clips on screen at once, which is what a dissolve is. The two clips are pure
+/// red and pure green, so a pixel carrying a real amount of both came from the blend.
+/// The floor sits above the codec's noise on a solid frame rather than at zero: a blend
+/// that is four fifths of the way to green still holds a fifth of the red clip.
 fn is_dissolve_mix(pixel: [u8; 3]) -> bool {
-    pixel[0] > 60 && pixel[1] > 60 && pixel[2] < 140
+    pixel[0] > 20 && pixel[1] > 20 && pixel[0] < 235 && pixel[1] < 235 && pixel[2] < 140
 }
 
 fn is_red(pixel: [u8; 3]) -> bool {
