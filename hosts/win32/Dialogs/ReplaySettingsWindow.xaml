@@ -129,39 +129,89 @@
                         <ComboBoxItem Content="{Binding [replay.overflowStop], Source={x:Static i18n:Loc.Source}}" Tag="StopRecording"/>
                     </ComboBox>
                 </StackPanel>
+                <Grid Margin="0,12,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                        <TextBlock Style="{StaticResource FieldLabel}"
+                                   Text="{Binding [replay.formatFromUnit], Source={x:Static i18n:Loc.Source}}"/>
+                        <TextBlock x:Name="FormatText" Height="28" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                        <TextBlock Style="{StaticResource FieldLabel}"
+                                   Text="{Binding [replay.segmentFrames], Source={x:Static i18n:Loc.Source}}"/>
+                        <TextBox x:Name="SegmentFramesBox" Height="28" Text="120"
+                                 ToolTip="{Binding [replay.segmentFramesRange], Source={x:Static i18n:Loc.Source}}"/>
+                    </StackPanel>
+                </Grid>
 
                 <TextBlock Style="{StaticResource SectionTitle}" Margin="0,20,0,6"
                            Text="{Binding [replay.angles], Source={x:Static i18n:Loc.Source}}"/>
                 <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,6"
                            Text="{Binding [replay.anglesHelp], Source={x:Static i18n:Loc.Source}}"/>
-                <ListView x:Name="AngleList" Style="{StaticResource ReplayList}" Height="190" SelectionMode="Single" SelectionChanged="AngleList_SelectionChanged">
+                <ListView x:Name="AngleList" Style="{StaticResource ReplayList}" Height="170" SelectionMode="Single" SelectionChanged="AngleList_SelectionChanged">
                     <ListView.View>
                         <GridView>
-                            <GridViewColumn Header="{Binding [replay.name], Source={x:Static i18n:Loc.Source}}" Width="170"
+                            <GridViewColumn Header="{Binding [replay.name], Source={x:Static i18n:Loc.Source}}" Width="150"
                                             DisplayMemberBinding="{Binding Name}"/>
-                            <GridViewColumn Header="{Binding [replay.scene], Source={x:Static i18n:Loc.Source}}" Width="220"
-                                            DisplayMemberBinding="{Binding SceneName}"/>
-                            <GridViewColumn Header="{Binding [replay.audio], Source={x:Static i18n:Loc.Source}}" Width="100"
+                            <GridViewColumn Header="{Binding [replay.sourceKind], Source={x:Static i18n:Loc.Source}}" Width="70"
+                                            DisplayMemberBinding="{Binding SourceLabel}"/>
+                            <GridViewColumn Header="{Binding [replay.source], Source={x:Static i18n:Loc.Source}}" Width="180"
+                                            DisplayMemberBinding="{Binding SourceName}"/>
+                            <GridViewColumn Header="{Binding [replay.recordMode], Source={x:Static i18n:Loc.Source}}" Width="110"
+                                            DisplayMemberBinding="{Binding ModeLabel}"/>
+                            <GridViewColumn Header="{Binding [replay.audio], Source={x:Static i18n:Loc.Source}}" Width="90"
                                             DisplayMemberBinding="{Binding Audio}"/>
-                            <GridViewColumn Header="{Binding [replay.drive], Source={x:Static i18n:Loc.Source}}" Width="80"
+                            <GridViewColumn Header="{Binding [replay.drive], Source={x:Static i18n:Loc.Source}}" Width="60"
                                             DisplayMemberBinding="{Binding Drive}"/>
                         </GridView>
                     </ListView.View>
                 </ListView>
-                <WrapPanel Orientation="Horizontal" Margin="0,8,0,0">
-                    <ComboBox x:Name="SceneBox" Width="240" Height="28" DisplayMemberPath="Name"/>
-                    <Button Width="120" Height="28" Margin="8,0,0,0" Click="AddAngle_Click"
-                            Content="{Binding [replay.addAngle], Source={x:Static i18n:Loc.Source}}"/>
-                    <Button Width="120" Height="28" Margin="8,0,0,0" Click="RemoveAngle_Click"
-                            Content="{Binding [replay.removeAngle], Source={x:Static i18n:Loc.Source}}"/>
-                    <ComboBox x:Name="AngleStorageBox" Width="150" Height="28" Margin="16,0,0,0"
-                              ToolTip="{Binding [replay.storageHelp], Source={x:Static i18n:Loc.Source}}"/>
-                    <Button Width="130" Height="28" Margin="8,0,0,0" Click="AssignStorage_Click"
-                            Content="{Binding [replay.assignStorage], Source={x:Static i18n:Loc.Source}}"/>
-                    <ComboBox x:Name="AngleAudioBox" Width="150" Height="28" Margin="16,0,0,0"
+
+                <!-- The selected angle is edited in place: no "assign" step to forget. -->
+                <TextBlock Style="{StaticResource FieldLabel}" Margin="0,10,0,4"
+                           Text="{Binding [replay.selectedAngle], Source={x:Static i18n:Loc.Source}}"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="2*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="AngleNameBox" Grid.Column="0" Height="28" Margin="0,0,6,0"
+                             LostFocus="AngleName_Changed" ToolTip="{Binding [replay.name], Source={x:Static i18n:Loc.Source}}"/>
+                    <ComboBox x:Name="AngleModeBox" Grid.Column="1" Height="28" Margin="0,0,6,0"
+                              SelectionChanged="AngleMode_Changed"
+                              ToolTip="{Binding [replay.passthroughHelp], Source={x:Static i18n:Loc.Source}}"/>
+                    <ComboBox x:Name="AngleAudioBox" Grid.Column="2" Height="28" Margin="0,0,6,0"
+                              SelectionChanged="AngleAudio_Changed"
                               ToolTip="{Binding [replay.audioHelp], Source={x:Static i18n:Loc.Source}}"/>
-                    <Button Width="130" Height="28" Margin="8,0,0,0" Click="AssignAudio_Click"
-                            Content="{Binding [replay.assignAudio], Source={x:Static i18n:Loc.Source}}"/>
+                    <ComboBox x:Name="AngleStorageBox" Grid.Column="3" Height="28" Margin="0,0,6,0"
+                              SelectionChanged="AngleStorage_Changed"
+                              ToolTip="{Binding [replay.storageHelp], Source={x:Static i18n:Loc.Source}}"/>
+                    <Button x:Name="RemoveAngleButton" Grid.Column="4" Width="110" Height="28" Click="RemoveAngle_Click"
+                            Content="{Binding [replay.removeAngle], Source={x:Static i18n:Loc.Source}}"/>
+                </Grid>
+
+                <!-- Adding one: pick what to record, how, and where. -->
+                <TextBlock Style="{StaticResource FieldLabel}" Margin="0,12,0,4"
+                           Text="{Binding [replay.addAngle], Source={x:Static i18n:Loc.Source}}"/>
+                <WrapPanel Orientation="Horizontal">
+                    <ComboBox x:Name="SourceKindBox" Width="110" Height="28" Margin="0,0,6,6"
+                              SelectionChanged="SourceKind_Changed"/>
+                    <ComboBox x:Name="SourceBox" Width="220" Height="28" Margin="0,0,6,6"
+                              SelectionChanged="Source_Changed"/>
+                    <ComboBox x:Name="AddModeBox" Width="150" Height="28" Margin="0,0,6,6"
+                              ToolTip="{Binding [replay.passthroughHelp], Source={x:Static i18n:Loc.Source}}"/>
+                    <ComboBox x:Name="AddAudioBox" Width="140" Height="28" Margin="0,0,6,6"
+                              ToolTip="{Binding [replay.audioHelp], Source={x:Static i18n:Loc.Source}}"/>
+                    <ComboBox x:Name="AddDriveBox" Width="150" Height="28" Margin="0,0,6,6"
+                              ToolTip="{Binding [replay.storageHelp], Source={x:Static i18n:Loc.Source}}"/>
+                    <Button x:Name="AddAngleButton" Width="130" Height="28" Margin="0,0,0,6" Click="AddAngle_Click"
+                            Content="{Binding [replay.addAngle], Source={x:Static i18n:Loc.Source}}"/>
                 </WrapPanel>
 
                 <CheckBox x:Name="AutoAddBox" Margin="0,20,0,0" Click="AutoAdd_Click"

@@ -26,9 +26,12 @@ public partial class ReplaySettingsWindow : Window
     {
         InitializeComponent();
         _session = session;
-        SceneBox.ItemsSource = session.Scenes;
-        if (session.Scenes.Count > 0)
-            SceneBox.SelectedIndex = 0;
+        // The add row's kind starts on scenes. Input angles are in the data model and
+        // are validated, but the recorder cannot capture an input directly yet, so
+        // the choice is not offered until that path exists: an option that records
+        // nothing is worse than one that is not there.
+        SourceKindBox.Items.Add(new ComboBoxItem { Content = Loc.T("replay.sourceScene"), Tag = "Scene" });
+        SourceKindBox.SelectedIndex = 0;
         RetentionBox.Items.Add(new ComboBoxItem { Content = Loc.T("replay.retentionStop"), Tag = "StopWhenFull" });
         RetentionBox.Items.Add(new ComboBoxItem { Content = Loc.T("replay.retentionOverwrite"), Tag = "Overwrite" });
         RetentionBox.Items.Add(new ComboBoxItem { Content = Loc.T("replay.retentionProtect"), Tag = "OverwriteUnprotected" });
@@ -83,16 +86,21 @@ public partial class ReplaySettingsWindow : Window
                 Source = angle.Source,
                 SceneId = angle.SceneId,
                 InputId = angle.InputId,
-                SceneName = angle.Source == "Input"
+                SourceName = angle.Source == "Input"
                     ? InputName(angle.InputId)
                     : SceneName(angle.SceneId),
                 AudioUnitId = angle.AudioUnitId,
                 RecordMode = angle.RecordMode
             });
         }
+        // The add row starts on scenes, which is what most projects record.
+        SelectTag(SourceKindBox, "Scene");
+        RefreshAngleSourceBox();
         RefreshAngles();
         RefreshStorages();
         RefreshAngleAudioBox();
+        RefreshFormatText();
+        SegmentFramesBox.Text = (_replay["format"]?["segmentFrames"]?.GetValue<uint>() ?? 120).ToString();
         RefreshPlan();
     }
 
@@ -107,34 +115,49 @@ public partial class ReplaySettingsWindow : Window
         if (StorageList.SelectedIndex < 0 && _storages.Count > 0)
             StorageList.SelectedIndex = 0;
         RefreshAngleStorageBox();
+        RefreshAddDriveBox();
+        RefreshAngles();
+    }
+
+    /// <summary>
+    /// Drive list of the add row and the edit row. Both name the drives the same
+    /// way, and neither invents one: a recording needs a drive the operator chose.
+    /// </summary>
+    private void RefreshAddDriveBox()
+    {
+        var selected = AddDriveBox.SelectedIndex;
+        var labels = _storages.Select((storage, index) => $"{index + 1}: {storage.Path}").ToList();
+        AddDriveBox.ItemsSource = labels;
+        if (selected >= 0 && selected < labels.Count)
+            AddDriveBox.SelectedIndex = selected;
+        else if (labels.Count > 0)
+            AddDriveBox.SelectedIndex = 0;
     }
 
     private void RefreshAngleStorageBox()
     {
         var selected = AngleStorageBox.SelectedIndex;
-        AngleStorageBox.ItemsSource = _storages
-            .Select((storage, index) => $"{index + 1}: {storage.Path}")
-            .ToList();
-        if (selected >= 0 && selected < _storages.Count)
+        var labels = _storages.Select((storage, index) => $"{index + 1}: {storage.Path}").ToList();
+        AngleStorageBox.ItemsSource = labels;
+        if (selected >= 0 && selected < labels.Count)
             AngleStorageBox.SelectedIndex = selected;
-        else if (_storages.Count > 0)
+        else if (labels.Count > 0)
             AngleStorageBox.SelectedIndex = 0;
-        // The angle list shows the drive each angle records to.
-        foreach (var angle in _angles)
-            angle.Drive = DriveOf(angle.Id);
-        AngleList.ItemsSource = null;
-        AngleList.ItemsSource = _angles.ToList();
     }
 
-    private int DriveOf(uint angleId)
+    /// <summary>Index of the drive an angle records to, or -1 when none claims it.</summary>
+    private int DriveIndexOf(uint angleId)
     {
         for (var index = 0; index < _storages.Count; index++)
         {
             if (_storages[index].AngleIds.Contains(angleId))
-                return index + 1;
+                return index;
         }
-        return _storages.Count == 0 ? 0 : 1;
+        return -1;
     }
+
+    /// <summary>1-based drive for the list column; 0 when the angle has none.</summary>
+    private int DriveOf(uint angleId) => DriveIndexOf(angleId) + 1;
 
     /// <summary>
     /// Asks for a folder the way every other path in the app is chosen, and files it
@@ -194,25 +217,186 @@ public partial class ReplaySettingsWindow : Window
         RefreshStorages();
     }
 
-    private void AssignStorage_Click(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// The angle list with the drive each angle records to, and the edit row filled
+    /// from the selection. Nothing is guessed here: an angle without a drive shows 0
+    /// and Apply refuses it.
+    /// </summary>
+    private void RefreshAngles()
     {
-        if (AngleList.SelectedItem is not AngleRow angle)
+        foreach (var angle in _angles)
         {
-            StatusText.Text = Loc.T("replay.selectAngle");
+            angle.SourceName = angle.Source == "Input" ? InputName(angle.InputId) : SceneName(angle.SceneId);
+            angle.Audio = AudioLabel(angle.AudioUnitId);
+            angle.Drive = DriveOf(angle.Id);
+        }
+        var selected = (AngleList.SelectedItem as AngleRow)?.Id;
+        AngleList.ItemsSource = null;
+        AngleList.ItemsSource = _angles.ToList();
+        if (selected is { } id)
+        {
+            var row = _angles.FirstOrDefault(angle => angle.Id == id);
+            if (row is not null)
+                AngleList.SelectedItem = row;
+        }
+        RefreshAngleEditors();
+    }
+
+    /// <summary>
+    /// Fills the edit row from the selected angle, and disables it when nothing is
+    /// selected so an edit cannot land on the wrong row.
+    /// </summary>
+    private void RefreshAngleEditors()
+    {
+        var angle = AngleList.SelectedItem as AngleRow;
+        var enabled = angle is not null;
+        AngleNameBox.IsEnabled = enabled;
+        AngleModeBox.IsEnabled = enabled;
+        AngleAudioBox.IsEnabled = enabled;
+        AngleStorageBox.IsEnabled = enabled;
+        if (angle is null)
+        {
+            AngleNameBox.Text = "";
             return;
         }
-        if (AngleStorageBox.SelectedIndex < 0 || AngleStorageBox.SelectedIndex >= _storages.Count)
-            return;
-        foreach (var storage in _storages)
-            storage.AngleIds.Remove(angle.Id);
-        // Drive 1 is the default, so naming it explicitly is not required.
-        if (AngleStorageBox.SelectedIndex > 0)
-            _storages[AngleStorageBox.SelectedIndex].AngleIds.Add(angle.Id);
-        RefreshStorages();
+        AngleNameBox.Text = angle.Name;
+        RefreshAngleModeBox();
+        SelectAudio(AngleAudioBox, angle.AudioUnitId);
+        var index = DriveIndexOf(angle.Id);
+        AngleStorageBox.SelectedIndex = index >= 0 && index < AngleStorageBox.Items.Count ? index : -1;
+    }
+
+    /// <summary>
+    /// Record modes the selected angle may use. Passthrough means "store the frames
+    /// as they arrive", so it exists only for an OMT input; a scene is composited.
+    /// </summary>
+    private void RefreshAngleModeBox()
+    {
+        var angle = AngleList.SelectedItem as AngleRow;
+        var omt = angle is not null
+            && angle.Source == "Input"
+            && _session.Inputs.FirstOrDefault(input => input.Id == angle.InputId)?.Kind == InputKind.OMT;
+        var previous = angle?.RecordMode ?? "Composite";
+        AngleModeBox.Items.Clear();
+        AngleModeBox.Items.Add(new ComboBoxItem
+        {
+            Content = Loc.T("replay.recordComposite"),
+            Tag = "Composite"
+        });
+        if (omt)
+        {
+            AngleModeBox.Items.Add(new ComboBoxItem
+            {
+                Content = Loc.T("replay.recordPassthrough"),
+                Tag = "Passthrough"
+            });
+        }
+        SelectTag(AngleModeBox, omt && previous == "Passthrough" ? "Passthrough" : "Composite");
+    }
+
+    /// <summary>Record modes the add row may use, for the source it is pointing at.</summary>
+    private void RefreshAddModeBox()
+    {
+        var kind = ComboTag(SourceKindBox, "Scene");
+        var omt = kind == "Input"
+            && SourceBox.SelectedItem is InputEntry input
+            && input.Kind == InputKind.OMT;
+        var previous = ComboTag(AddModeBox, "Composite");
+        AddModeBox.Items.Clear();
+        AddModeBox.Items.Add(new ComboBoxItem
+        {
+            Content = Loc.T("replay.recordComposite"),
+            Tag = "Composite"
+        });
+        if (omt)
+        {
+            AddModeBox.Items.Add(new ComboBoxItem
+            {
+                Content = Loc.T("replay.recordPassthrough"),
+                Tag = "Passthrough"
+            });
+        }
+        SelectTag(AddModeBox, omt && previous == "Passthrough" ? "Passthrough" : "Composite");
+    }
+
+    /// <summary>
+    /// Sources the add row can pick: scenes, or the inputs that have a picture. A
+    /// Replay channel is not a camera, and an audio input has nothing to record.
+    /// </summary>
+    private void RefreshAngleSourceBox()
+    {
+        var kind = ComboTag(SourceKindBox, "Scene");
+        if (kind == "Input")
+        {
+            SourceBox.ItemsSource = _session.Inputs
+                .Where(input => input.Kind != InputKind.Replay && input.Kind != InputKind.Audio)
+                .ToList();
+        }
+        else
+        {
+            SourceBox.ItemsSource = _session.Scenes.ToList();
+        }
+        SourceBox.DisplayMemberPath = "Name";
+        if (SourceBox.Items.Count > 0)
+            SourceBox.SelectedIndex = 0;
+        RefreshAddModeBox();
+    }
+
+    private void SourceKind_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (SourceKindBox is not null)
+            RefreshAngleSourceBox();
+    }
+
+    private void Source_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (AddModeBox is not null)
+            RefreshAddModeBox();
     }
 
     private void AngleList_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
-        RefreshAngleStorageBox();
+        RefreshAngleEditors();
+
+    private void AngleName_Changed(object sender, RoutedEventArgs e)
+    {
+        if (AngleList.SelectedItem is not AngleRow angle)
+            return;
+        var name = AngleNameBox.Text.Trim();
+        if (name.Length == 0)
+            name = angle.Source == "Input" ? InputName(angle.InputId) : SceneName(angle.SceneId);
+        angle.Name = name;
+        RefreshAngles();
+    }
+
+    private void AngleMode_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (AngleList.SelectedItem is not AngleRow angle)
+            return;
+        angle.RecordMode = ComboTag(AngleModeBox, "Composite");
+        RefreshAngles();
+    }
+
+    private void AngleAudio_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (AngleList.SelectedItem is not AngleRow angle)
+            return;
+        angle.AudioUnitId = (AngleAudioBox.SelectedItem as ComboBoxItem)?.Tag as ulong? ?? 0;
+        RefreshAngles();
+    }
+
+    /// <summary>Moves the selected angle to the drive the operator picked.</summary>
+    private void AngleStorage_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (AngleList.SelectedItem is not AngleRow angle)
+            return;
+        var index = AngleStorageBox.SelectedIndex;
+        if (index < 0 || index >= _storages.Count)
+            return;
+        foreach (var storage in _storages)
+            storage.AngleIds.Remove(angle.Id);
+        _storages[index].AngleIds.Add(angle.Id);
+        RefreshStorages();
+    }
 
     /// <summary>
     /// Angle audio sources: silence, or a mixing unit's program mix. The waveform
@@ -220,19 +404,39 @@ public partial class ReplaySettingsWindow : Window
     /// </summary>
     private void RefreshAngleAudioBox()
     {
-        var selected = (AngleAudioBox.SelectedItem as ComboBoxItem)?.Tag as ulong?;
-        AngleAudioBox.Items.Clear();
-        AngleAudioBox.Items.Add(new ComboBoxItem { Content = Loc.T("replay.audioSilent"), Tag = 0UL });
-        foreach (var unit in _session.Units)
-            AngleAudioBox.Items.Add(new ComboBoxItem { Content = unit.Name, Tag = unit.Id });
-        var match = selected is { } id
-            ? AngleAudioBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => (ulong?)item.Tag == id)
-            : null;
-        AngleAudioBox.SelectedItem = match ?? AngleAudioBox.Items[0];
+        foreach (var box in new[] { AngleAudioBox, AddAudioBox })
+        {
+            if (box is null)
+                continue;
+            var selected = (box.SelectedItem as ComboBoxItem)?.Tag as ulong?;
+            box.Items.Clear();
+            box.Items.Add(new ComboBoxItem { Content = Loc.T("replay.audioSilent"), Tag = 0UL });
+            foreach (var unit in _session.Units)
+                box.Items.Add(new ComboBoxItem { Content = unit.Name, Tag = unit.Id });
+            var match = selected is { } id
+                ? box.Items.OfType<ComboBoxItem>().FirstOrDefault(item => (ulong?)item.Tag == id)
+                : null;
+            box.SelectedItem = match ?? box.Items[0];
+        }
         foreach (var angle in _angles)
             angle.Audio = AudioLabel(angle.AudioUnitId);
         AngleList.ItemsSource = null;
         AngleList.ItemsSource = _angles.ToList();
+    }
+
+    /// <summary>Selects the audio entry for a unit id in one combo box.</summary>
+    private static void SelectAudio(ComboBox box, ulong unitId)
+    {
+        foreach (ComboBoxItem item in box.Items)
+        {
+            if ((ulong?)item.Tag == unitId)
+            {
+                box.SelectedItem = item;
+                return;
+            }
+        }
+        if (box.Items.Count > 0)
+            box.SelectedIndex = 0;
     }
 
     private string AudioLabel(ulong unitId)
@@ -243,17 +447,6 @@ public partial class ReplaySettingsWindow : Window
         return unit?.Name ?? Loc.Format("replay.audioUnit", unitId);
     }
 
-    private void AssignAudio_Click(object sender, RoutedEventArgs e)
-    {
-        if (AngleList.SelectedItem is not AngleRow angle)
-        {
-            StatusText.Text = Loc.T("replay.selectAngle");
-            return;
-        }
-        angle.AudioUnitId = (AngleAudioBox.SelectedItem as ComboBoxItem)?.Tag as ulong? ?? 0;
-        RefreshAngleAudioBox();
-    }
-
     private string SceneName(ulong sceneId) =>
         _session.Scenes.FirstOrDefault(scene => scene.Id == sceneId)?.Name
         ?? Loc.Format("replay.sceneMissing", sceneId);
@@ -261,6 +454,18 @@ public partial class ReplaySettingsWindow : Window
     private string InputName(ulong inputId) =>
         _session.Inputs.FirstOrDefault(input => input.Id == inputId)?.Name
         ?? Loc.Format("replay.inputMissing", inputId);
+
+    /// <summary>
+    /// The format Replay records in: the first Mixing Unit's picture and rate. It is
+    /// shown rather than edited, because every angle shares one format.
+    /// </summary>
+    private void RefreshFormatText()
+    {
+        var unit = _session.Units.FirstOrDefault();
+        FormatText.Text = unit is null
+            ? Loc.T("replay.needMixingUnit")
+            : $"{unit.Width} x {unit.Height}   {unit.FpsNum}/{unit.FpsDen}";
+    }
 
     private void RefreshPlan()
     {
@@ -299,6 +504,9 @@ public partial class ReplaySettingsWindow : Window
 
     private void AutoAdd_Click(object sender, RoutedEventArgs e) => RefreshPlan();
 
+    private static string ComboTag(ComboBox box, string fallback) =>
+        (box.SelectedItem as ComboBoxItem)?.Tag as string ?? fallback;
+
     private static void SelectTag(ComboBox box, string tag)
     {
         foreach (ComboBoxItem item in box.Items)
@@ -316,30 +524,79 @@ public partial class ReplaySettingsWindow : Window
     private static string ComboTag(ComboBox box) =>
         (box.SelectedItem as ComboBoxItem)?.Tag as string ?? "";
 
+    /// <summary>
+    /// Adds an angle from the add row: what to record (a scene or an input), how
+    /// (composite, or passthrough for an OMT input), its audio, and the drive it
+    /// records to. Every refusal names what is missing instead of doing nothing.
+    /// </summary>
     private void AddAngle_Click(object sender, RoutedEventArgs e)
     {
-        if (SceneBox.SelectedItem is not SceneEntry scene)
-            return;
-        if (_angles.Any(angle => angle.SceneId == scene.Id))
+        if (_storages.Count == 0)
         {
-            StatusText.Text = Loc.T("replay.angleDuplicate");
+            StatusText.Text = Loc.T("replay.needDriveForAngle");
             return;
         }
-        var id = _angles.Count == 0 ? 1u : _angles.Max(angle => angle.Id) + 1;
         if (_hasLimits && _angleLimit != uint.MaxValue && _angles.Count >= _angleLimit)
         {
             StatusText.Text = Loc.Format("replay.planLimits", _angleLimit, _channelLimit);
             return;
         }
-        _angles.Add(new AngleRow
+        var kind = ComboTag(SourceKindBox, "Scene");
+        var mode = ComboTag(AddModeBox, "Composite");
+        var id = _angles.Count == 0 ? 1u : _angles.Max(angle => angle.Id) + 1;
+        var audioUnitId = (AddAudioBox.SelectedItem as ComboBoxItem)?.Tag as ulong? ?? 0;
+        AngleRow row;
+        if (kind == "Input")
         {
-            Id = id,
-            Name = scene.Name,
-            SceneId = scene.Id,
-            SceneName = scene.Name,
-            Audio = Loc.T("replay.audioSilent")
-        });
-        RefreshAngles();
+            if (SourceBox.SelectedItem is not InputEntry input)
+            {
+                StatusText.Text = Loc.T("replay.selectSource");
+                return;
+            }
+            if (_angles.Any(angle => angle.Source == "Input" && angle.InputId == input.Id))
+            {
+                StatusText.Text = Loc.T("replay.angleDuplicateInput");
+                return;
+            }
+            row = new AngleRow
+            {
+                Id = id,
+                Name = input.Name,
+                Source = "Input",
+                InputId = input.Id,
+                SourceName = input.Name,
+                RecordMode = mode,
+                AudioUnitId = audioUnitId
+            };
+        }
+        else
+        {
+            if (SourceBox.SelectedItem is not SceneEntry scene)
+            {
+                StatusText.Text = Loc.T("replay.selectSource");
+                return;
+            }
+            if (_angles.Any(angle => angle.Source == "Scene" && angle.SceneId == scene.Id))
+            {
+                StatusText.Text = Loc.T("replay.angleDuplicate");
+                return;
+            }
+            row = new AngleRow
+            {
+                Id = id,
+                Name = scene.Name,
+                Source = "Scene",
+                SceneId = scene.Id,
+                SourceName = scene.Name,
+                RecordMode = mode,
+                AudioUnitId = audioUnitId
+            };
+        }
+        _angles.Add(row);
+        var drive = AddDriveBox.SelectedIndex >= 0 ? AddDriveBox.SelectedIndex : 0;
+        _storages[drive].AngleIds.Add(id);
+        RefreshStorages();
+        StatusText.Text = Loc.Format("replay.angleAdded", row.Name);
     }
 
     private void RemoveAngle_Click(object sender, RoutedEventArgs e)
@@ -358,7 +615,7 @@ public partial class ReplaySettingsWindow : Window
         // A drive that still listed it would fail validation on Apply.
         foreach (var storage in _storages)
             storage.AngleIds.Remove(row.Id);
-        RefreshAngles();
+        RefreshStorages();
     }
 
     /// <summary>How many clips play this angle, or take their sound from it.</summary>
@@ -385,12 +642,6 @@ public partial class ReplaySettingsWindow : Window
         return count;
     }
 
-    private void RefreshAngles()
-    {
-        AngleList.ItemsSource = null;
-        AngleList.ItemsSource = _angles.ToList();
-    }
-
     private void Apply_Click(object sender, RoutedEventArgs e)
     {
         if (_replay is null)
@@ -400,6 +651,22 @@ public partial class ReplaySettingsWindow : Window
             || !uint.TryParse(ReserveBox.Text.Trim(), out var reserve))
         {
             Refuse(Loc.T("replay.badBuffering"));
+            return;
+        }
+        // The segment length is the operator's setting: the recorder no longer
+        // substitutes one when it is missing or out of range.
+        if (!uint.TryParse(SegmentFramesBox.Text.Trim(), out var segmentFrames)
+            || segmentFrames is < 30 or > 1800)
+        {
+            Refuse(Loc.T("replay.segmentFramesRange"));
+            return;
+        }
+        var unit = _session.Units.FirstOrDefault();
+        if (unit is null)
+        {
+            // Every angle records one format, and the format comes from the Mixing
+            // Unit. Without one there is nothing to record in.
+            Refuse(Loc.T("replay.needMixingUnit"));
             return;
         }
         // Keep each drive's angle assignments with its path: dropping blank rows
@@ -449,7 +716,15 @@ public partial class ReplaySettingsWindow : Window
         }
         _replay["storage"] = storages;
         var format = _replay["format"] as JsonObject ?? new JsonObject();
+        // The whole format travels: a document that keeps a zero resolution or a
+        // zero segment length can never record, and the mixer would only be able to
+        // say so much later.
+        format["width"] = unit.Width;
+        format["height"] = unit.Height;
+        format["fpsNum"] = unit.FpsNum;
+        format["fpsDen"] = unit.FpsDen;
         format["profile"] = ComboTag(ProfileBox);
+        format["segmentFrames"] = segmentFrames;
         _replay["format"] = format;
         _replay["buffering"] = new JsonObject
         {
@@ -539,19 +814,26 @@ public partial class ReplaySettingsWindow : Window
     private sealed class AngleRow
     {
         public uint Id { get; init; }
-        public string Name { get; init; } = "";
+        public string Name { get; set; } = "";
         /// `Scene` or `Input`: what this angle records from.
         public string Source { get; init; } = "Scene";
         public ulong SceneId { get; init; }
         /// Input this angle records when `Source` is `Input`.
         public ulong InputId { get; init; }
-        public string SceneName { get; init; } = "";
+        /// Name of the scene or input it records, for the list column.
+        public string SourceName { get; set; } = "";
+        /// `Composite` or `Passthrough` (OMT inputs only).
+        public string RecordMode { get; set; } = "Composite";
+        public string SourceLabel => Source == "Input"
+            ? Loc.T("replay.sourceInput")
+            : Loc.T("replay.sourceScene");
+        public string ModeLabel => RecordMode == "Passthrough"
+            ? Loc.T("replay.recordPassthrough")
+            : Loc.T("replay.recordComposite");
         public string Audio { get; set; } = "";
         /// Mixing unit whose program mix feeds this angle. Zero means silent.
         public ulong AudioUnitId { get; set; }
-        /// `Composite` or `Passthrough` (OMT inputs only).
-        public string RecordMode { get; init; } = "Composite";
-        /// 1-based drive the angle records to, for the list column.
+        /// 1-based drive the angle records to, for the list column. 0 means none.
         public int Drive { get; set; }
     }
 
