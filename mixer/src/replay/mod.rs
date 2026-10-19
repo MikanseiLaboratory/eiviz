@@ -2,7 +2,7 @@
 //! readback handoff, health, and channel playout.
 
 mod audio;
-mod channel;
+pub mod channel;
 pub mod gpu_encode;
 mod health;
 mod stretch;
@@ -1974,12 +1974,36 @@ fn channel_loop(stop: Arc<AtomicBool>) {
                         let started = Instant::now();
                         let decoded = render_plan(store, &plan, width, height);
                         let elapsed = started.elapsed().as_micros() as u64;
-                        if let Some((pixels, frame_width, frame_height, stride, pts, substituted)) =
-                            decoded
-                        {
-                            paint(source_id, &pixels, frame_width, frame_height, stride, pts);
-                            transport.substituted =
-                                transport.substituted.saturating_add(u64::from(substituted));
+                        if let Some(decoded) = decoded {
+                            // A transition travels as two pictures and is blended on the
+                            // device that samples it; a single frame is uploaded as before.
+                            match (decoded.secondary, decoded.transition) {
+                                (Some(incoming), Some((kind, direction, mix))) => {
+                                    paint_transition(
+                                        source_id,
+                                        decoded.pixels,
+                                        incoming,
+                                        decoded.width,
+                                        decoded.height,
+                                        decoded.stride,
+                                        kind,
+                                        direction,
+                                        mix,
+                                        decoded.pts,
+                                    );
+                                }
+                                _ => paint(
+                                    source_id,
+                                    &decoded.pixels,
+                                    decoded.width,
+                                    decoded.height,
+                                    decoded.stride,
+                                    decoded.pts,
+                                ),
+                            }
+                            transport.substituted = transport
+                                .substituted
+                                .saturating_add(u64::from(decoded.substituted));
                         } else {
                             // A missing or corrupt frame must not pin the channel: keep
                             // the previous picture, advance, and surface the miss.
@@ -2198,14 +2222,30 @@ fn channel_audio_block(
     planar
 }
 
-/// Decodes the frames a plan asks for and blends them when a transition is in
-/// progress. Returns the UYVY pixels plus the layout to paint.
+/// One channel picture, ready to paint.
+struct Decoded {
+    pixels: Vec<u8>,
+    /// The incoming frame while a transition is in progress. Two pictures travel to the
+    /// device, which blends them; nothing is blended here.
+    secondary: Option<Vec<u8>>,
+    /// `(kind, direction, mix)` while a transition is in progress.
+    transition: Option<(u8, u8, f32)>,
+    width: u32,
+    height: u32,
+    stride: usize,
+    pts: i64,
+    substituted: bool,
+}
+
+/// Decodes the frames a plan asks for. A transition in progress keeps both frames
+/// separate: the GPU composites them, so blending here would be work done twice — once
+/// on the CPU and again on the device that samples the result.
 fn render_plan(
     store: &Mutex<Box<dyn ReplayStore>>,
     plan: &channel::FramePlan,
     width: u32,
     height: u32,
-) -> Option<(Vec<u8>, u32, u32, usize, i64, bool)> {
+) -> Option<Decoded> {
     let (angle, frame) = plan.primary?;
     if width == 0 || height == 0 {
         return None;
@@ -2224,6 +2264,8 @@ fn render_plan(
     primary.truncate(len);
     let mut substituted = first.substituted;
     let mut pts = first.pts_100ns;
+    let mut incoming = None;
+    let mut transition = None;
     if let Some((angle, frame)) = plan.secondary {
         if plan.mix > 0.0 && plan.mix < 1.0 {
             if let Ok(second) = guard.decode(angle, frame, &mut secondary) {
@@ -2231,27 +2273,52 @@ fn render_plan(
                 let second_len = (second.stride as usize)
                     .saturating_mul(second.height as usize)
                     .min(secondary.len());
-                let common = len.min(second_len);
-                combine(
-                    plan.kind,
-                    plan.direction,
-                    plan.mix,
-                    first.width as usize,
-                    first.height as usize,
-                    stride,
-                    &mut primary[..common],
-                    &secondary[..common],
-                );
-                // A combined frame is a picture of its own, so it carries its own
-                // timestamp. Without this the compositor would see the same
-                // timestamp for every frame of an inserted transition and never
-                // upload the dissolve: the picture would hold and then cut.
+                secondary.truncate(second_len);
+                // A transition is a picture of its own, so it carries its own
+                // timestamp. Without this the compositor would see the same timestamp
+                // for every frame of an inserted transition and never upload the
+                // dissolve: the picture would hold and then cut.
                 pts = blend_pts(first.pts_100ns, second.pts_100ns, plan.mix);
+                transition = Some((
+                    transition_kind_code(plan.kind),
+                    transition_direction_code(plan.direction),
+                    plan.mix as f32,
+                ));
+                incoming = Some(secondary);
             }
         }
     }
     drop(guard);
-    Some((primary, first.width, first.height, stride, pts, substituted))
+    Some(Decoded {
+        pixels: primary,
+        secondary: incoming,
+        transition,
+        width: first.width,
+        height: first.height,
+        stride,
+        pts,
+        substituted,
+    })
+}
+
+fn transition_kind_code(kind: channel::TransitionKind) -> u8 {
+    match kind {
+        channel::TransitionKind::Cut => 0,
+        channel::TransitionKind::Dissolve => 1,
+        channel::TransitionKind::Dip => 2,
+        channel::TransitionKind::Wipe => 3,
+        channel::TransitionKind::Slide => 4,
+        channel::TransitionKind::Push => 5,
+    }
+}
+
+fn transition_direction_code(direction: channel::TransitionDirection) -> u8 {
+    match direction {
+        channel::TransitionDirection::Left => 0,
+        channel::TransitionDirection::Right => 1,
+        channel::TransitionDirection::Up => 2,
+        channel::TransitionDirection::Down => 3,
+    }
 }
 
 /// Timestamp of a frame blended from two recordings: between the outgoing and the
@@ -2564,6 +2631,27 @@ fn playlist_clips(config: &ReplayDto, playlist_id: Option<u64>) -> Vec<channel::
             }
         })
         .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_transition(
+    id: u64,
+    pixels: Vec<u8>,
+    incoming: Vec<u8>,
+    width: u32,
+    height: u32,
+    stride: usize,
+    kind: u8,
+    direction: u8,
+    mix: f32,
+    pts: i64,
+) {
+    if width == 0 || height == 0 || stride < width as usize * 2 {
+        return;
+    }
+    let _ = crate::with_uploads(|uploads| {
+        uploads.finish_playout_transition(id, pixels, incoming, pts, kind, direction, mix);
+    });
 }
 
 fn paint(id: u64, pixels: &[u8], width: u32, height: u32, stride: usize, pts: i64) {
