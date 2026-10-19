@@ -449,6 +449,103 @@ struct ReplayDocument {
         array("playlists").compactMap { $0.objectValue?["id"]?.uint64Value }
     }
 
+    /// Every playlist with its name and how many clips are filed in it.
+    var playlists: [PlaylistInfo] {
+        array("playlists").compactMap { item -> PlaylistInfo? in
+            guard let playlist = item.objectValue else { return nil }
+            let id = playlist["id"]?.uint64Value ?? 0
+            guard id != 0 else { return nil }
+            let name = playlist["name"]?.stringValue ?? ""
+            return PlaylistInfo(
+                id: id,
+                name: name.isEmpty ? "Playlist \(id)" : name,
+                clips: playlist["clips"]?.arrayValue?.count ?? 0
+            )
+        }
+    }
+
+    /// The playlist a channel plays. A project can hold several, and the channel is what
+    /// points at one, so the deck shows the channel's rather than whichever is first.
+    func channelPlaylist(channelIndex: UInt32) -> UInt64 {
+        for item in array("channels") {
+            guard let entry = item.objectValue,
+                  (entry["index"]?.uint32Value ?? 0) == channelIndex
+            else { continue }
+            let id = entry["playlistId"]?.uint64Value ?? 0
+            if id != 0 {
+                return id
+            }
+            break
+        }
+        return firstPlaylistId
+    }
+
+    /// Points a channel at a playlist, adding the channel entry when it has none.
+    mutating func setChannelPlaylist(channelIndex: UInt32, playlistId: UInt64) {
+        var channels = array("channels")
+        for index in channels.indices {
+            guard var entry = channels[index].objectValue,
+                  (entry["index"]?.uint32Value ?? 0) == channelIndex
+            else { continue }
+            entry["playlistId"] = .number(Double(playlistId))
+            channels[index] = .object(entry)
+            raw["channels"] = .array(channels)
+            return
+        }
+        channels.append(.object([
+            "index": .number(Double(channelIndex)),
+            "playlistId": .number(Double(playlistId)),
+            "inputId": .number(0),
+        ]))
+        raw["channels"] = .array(channels)
+    }
+
+    /// Adds an empty playlist and returns its id.
+    mutating func addPlaylist(name: String) -> UInt64 {
+        let id = reservePlaylistId()
+        var playlists = array("playlists")
+        playlists.append(.object([
+            "id": .number(Double(id)),
+            "name": .string(name.isEmpty ? "Playlist \(id)" : name),
+            "revision": .number(1),
+            "clips": .array([]),
+        ]))
+        raw["playlists"] = .array(playlists)
+        return id
+    }
+
+    /// Renames a playlist. An empty name is refused rather than saved.
+    mutating func renamePlaylist(_ playlistId: UInt64, name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        var playlists = array("playlists")
+        for index in playlists.indices {
+            guard var playlist = playlists[index].objectValue,
+                  (playlist["id"]?.uint64Value ?? 0) == playlistId
+            else { continue }
+            playlist["name"] = .string(trimmed)
+            playlists[index] = .object(playlist)
+            raw["playlists"] = .array(playlists)
+            return true
+        }
+        return false
+    }
+
+    /// How many channels play this playlist, so it is not deleted under one.
+    func channelsUsingPlaylist(_ playlistId: UInt64) -> Int {
+        array("channels").filter { ($0.objectValue?["playlistId"]?.uint64Value ?? 0) == playlistId }.count
+    }
+
+    /// Removes a playlist and its clips.
+    mutating func removePlaylist(_ playlistId: UInt64) -> Bool {
+        var playlists = array("playlists")
+        guard let index = playlists.firstIndex(where: { ($0.objectValue?["id"]?.uint64Value ?? 0) == playlistId })
+        else { return false }
+        playlists.remove(at: index)
+        raw["playlists"] = .array(playlists)
+        return true
+    }
+
     func clips(playlistId: UInt64) -> [ReplayClipInfo] {
         for item in array("playlists") {
             guard let playlist = item.objectValue,

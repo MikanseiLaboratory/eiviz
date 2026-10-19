@@ -1148,7 +1148,6 @@ struct ReplaySettingsView: View {
 
     @State private var document: ReplayDocument?
     @State private var storages: [ReplayDocument.StorageSpec] = []
-    @State private var driveSelection = 0
     @State private var profile = "Sq"
     /// Segment length in frames, as text so the operator can type it.
     @State private var segmentFrames = "120"
@@ -1159,17 +1158,6 @@ struct ReplaySettingsView: View {
     @State private var overflow = "DropFrames"
     @State private var autoAdd = false
     @State private var angles: [ReplayAngleInfo] = []
-    /// What the add row records: a scene's composited output, or an input's picture.
-    @State private var sourceKind = "Scene"
-    /// Scene or input the add row points at.
-    @State private var sourceSelection: UInt64 = 0
-    /// Record mode for the add row: composite, or passthrough for an OMT input.
-    @State private var addMode = "Composite"
-    /// The angle the edit row is editing. Nothing selected means no edit row.
-    @State private var selectedAngleId: UInt32?
-    /// Audio source the add row gives a new angle: zero is silence, otherwise the
-    /// mixing unit whose program mix the angle records.
-    @State private var audioSelection: UInt64 = 0
     @State private var status = ""
 
     var body: some View {
@@ -1367,30 +1355,6 @@ struct ReplaySettingsView: View {
         overflow = buffering.overflow
         autoAdd = current.autoAddToPlaylist
         angles = current.angles
-        selectedAngleId = angles.first?.id
-        // The add row starts on scenes, which is what most projects record.
-        sourceKind = "Scene"
-        syncSourceSelection()
-        driveSelection = 0
-        audioSelection = 0
-    }
-
-    /// The angle the edit row is editing.
-    private func selectedAngle() -> ReplayAngleInfo? {
-        guard let id = selectedAngleId else { return nil }
-        return angles.first { $0.id == id }
-    }
-
-    /// Whether the selected angle records an OMT input, which is the only source
-    /// whose frames can be stored as they arrive.
-    private func selectedAngleIsOmt() -> Bool {
-        guard let angle = selectedAngle(), angle.source == "Input" else { return false }
-        return inputKind(angle.inputId) == .omt
-    }
-
-    /// Whether the add row points at an OMT input.
-    private func addSourceIsOmt() -> Bool {
-        sourceKind == "Input" && inputKind(sourceSelection) == .omt
     }
 
     private func inputKind(_ inputId: UInt64) -> InputKind? {
@@ -1484,64 +1448,6 @@ struct ReplaySettingsView: View {
         }
     }
 
-    /// Points the add row at the first source of the chosen kind.
-    private func syncSourceSelection() {
-        sourceSelection = addSources().first?.id ?? 0
-        syncAddMode()
-    }
-
-    /// Keeps the mode honest: passthrough exists only for an OMT input.
-    private func syncAddMode() {
-        if addMode == "Passthrough" && !addSourceIsOmt() {
-            addMode = "Composite"
-        }
-    }
-
-    private func sourceKindLabel(_ angle: ReplayAngleInfo) -> String {
-        angle.source == "Input" ? L10n.t("replay.sourceInput") : L10n.t("replay.sourceScene")
-    }
-
-    private func sourceName(_ angle: ReplayAngleInfo) -> String {
-        angle.source == "Input" ? inputName(angle.inputId) : sceneName(angle.sceneId)
-    }
-
-    private func modeLabel(_ angle: ReplayAngleInfo) -> String {
-        angle.recordMode == "Passthrough"
-            ? L10n.t("replay.recordPassthrough")
-            : L10n.t("replay.recordComposite")
-    }
-
-    /// Rebuilds one angle, keeping the fields the edit row does not touch.
-    private func updateSelected(_ body: (inout ReplayAngleInfo) -> Void) {
-        guard let id = selectedAngleId, let index = angles.firstIndex(where: { $0.id == id }) else { return }
-        var angle = angles[index]
-        body(&angle)
-        angles[index] = angle
-    }
-
-    private func renameSelected(_ name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        updateSelected { $0.name = trimmed }
-    }
-
-    private func setSelectedMode(_ mode: String) {
-        updateSelected { $0.recordMode = mode }
-    }
-
-    private func setSelectedAudio(_ unitId: UInt64) {
-        updateSelected { $0.audioUnitId = unitId }
-    }
-
-    /// Moves the selected angle to the drive the operator picked.
-    private func assignSelectedDrive(_ index: Int) {
-        guard let id = selectedAngleId, index >= 0, index < storages.count else { return }
-        for slot in storages.indices {
-            storages[slot].angleIds.removeAll { $0 == id }
-        }
-        storages[index].angleIds.append(id)
-    }
-
     private func driveIndex(_ storage: ReplayDocument.StorageSpec) -> Int {
         storages.firstIndex(of: storage) ?? 0
     }
@@ -1592,10 +1498,6 @@ struct ReplaySettingsView: View {
         for angle in removed.angleIds {
             assignDrive(angle, 0)
         }
-    }
-
-    private func driveIndex(_ storage: ReplayDocument.StorageSpec) -> Int {
-        storages.firstIndex(of: storage) ?? 0
     }
 
     /// Audio source label for the angle list.
