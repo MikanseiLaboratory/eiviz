@@ -532,13 +532,13 @@ impl MixerPort for ProcessMixer {
     fn replay_mark_in(&mut self) -> ControlResult<u64> {
         crate::replay::engine()
             .mark_in()
-            .map_err(crate::replay::control_error)
+            .map_err(crate::replay::ReplayFailure::into_control)
     }
 
     fn replay_close_mark(&mut self) -> ControlResult<(String, u64, u64)> {
         crate::replay::engine()
             .close_mark()
-            .map_err(crate::replay::control_error)
+            .map_err(crate::replay::ReplayFailure::into_control)
     }
 
     fn replay_cue(

@@ -4888,7 +4888,10 @@ pub unsafe extern "C" fn mixer_replay_mark_in(out_frame: *mut u64) -> i32 {
                 }
                 OK
             }
-            Err(code) => code,
+            Err(failure) => {
+                report_session_error(&failure.message);
+                failure.code
+            }
         }
     })
 }
@@ -4917,7 +4920,10 @@ pub unsafe extern "C" fn mixer_replay_mark_out(
                 }
                 OK
             }
-            Err(code) => code,
+            Err(failure) => {
+                report_session_error(&failure.message);
+                failure.code
+            }
         }
     })
 }

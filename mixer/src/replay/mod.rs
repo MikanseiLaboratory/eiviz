@@ -906,10 +906,12 @@ impl ReplayEngine {
     /// operation, not a recording one: an operator marks material that is already
     /// recorded, so a stopped recorder can still be marked. Only an empty timeline
     /// has nothing to mark.
-    pub fn mark_in(&self) -> Result<u64, i32> {
+    pub fn mark_in(&self) -> Result<u64, ReplayFailure> {
         let mut inner = self.lock();
         if !inner.has_frames {
-            return Err(ERR_IO);
+            return Err(ReplayFailure::io(
+                "there is nothing to mark yet: the recording has no frames",
+            ));
         }
         let frame = inner.last_frame;
         inner.mark_in = Some(frame);
@@ -918,11 +920,23 @@ impl ReplayEngine {
         Ok(frame)
     }
 
-    pub fn close_mark(&self) -> Result<(String, u64, u64), i32> {
+    /// Closes the mark. A range with no frames in it is refused: it would become a
+    /// clip that can never show anything, which is worse than being told to record
+    /// something first. The mark stays open so the operator can close it once the
+    /// recording has run again.
+    pub fn close_mark(&self) -> Result<(String, u64, u64), ReplayFailure> {
         let mut inner = self.lock();
-        let in_frame = inner.mark_in.take().ok_or(ERR_INVALID_ARGUMENT)?;
-        inner.stats.mark_in_valid = 0;
+        let in_frame = inner
+            .mark_in
+            .ok_or_else(|| ReplayFailure::invalid("no Mark In is open"))?;
         let out_frame = inner.last_frame.max(in_frame);
+        if out_frame <= in_frame {
+            return Err(ReplayFailure::invalid(
+                "the mark is empty: nothing was recorded after Mark In",
+            ));
+        }
+        inner.mark_in = None;
+        inner.stats.mark_in_valid = 0;
         Ok((inner.uuid.clone(), in_frame, out_frame))
     }
 

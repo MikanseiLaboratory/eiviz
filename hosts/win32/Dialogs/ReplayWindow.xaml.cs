@@ -899,8 +899,11 @@ public partial class ReplayWindow : Window
         var name = Loc.Format("replay.eventName", ReplayModel.Events(_replay).Count + 1);
         if (Backend?.ReplayMarkOut(name, out var created) != true)
         {
-            // The mark was refused, so the range is left open for another try.
-            Warn(Loc.T("replay.markOutFailed"));
+            // The mark was refused, so the range is left open for another try. The
+            // mixer's own reason is what the operator acts on ("the mark is empty:
+            // nothing was recorded after Mark In" is a different problem from a
+            // refused write).
+            Warn(Refusal(Loc.T("replay.markOutFailed")));
             return;
         }
         if (created is not { } mark)

@@ -18,14 +18,24 @@ use std::time::{Duration, Instant};
 use common::{cstring, expect, full_layer, is_black, is_red, load_test_module, scene_id, scene_pixel};
 use eiviz_mixer::{
     GEN_SOLID, MixerReplayChannelState, SRC_COLOR, UnitState, mixer_create, mixer_create_unit,
-    mixer_define_generator, mixer_define_scene, mixer_destroy, mixer_replay_channel_cue,
-    mixer_replay_channel_transport, mixer_replay_configure, mixer_replay_copy_channels,
-    mixer_replay_mark_in, mixer_replay_mark_out, mixer_replay_record, mixer_unit_set_state,
+    mixer_define_generator, mixer_define_scene, mixer_destroy, mixer_last_error,
+    mixer_replay_channel_cue, mixer_replay_channel_transport, mixer_replay_configure,
+    mixer_replay_copy_channels, mixer_replay_mark_in, mixer_replay_mark_out, mixer_replay_record,
+    mixer_unit_set_state,
 };
 
 /// The channel's own source id: `REPLAY_CHANNEL_BASE` with the channel selected by
 /// `inputId: 0` in the document.
 const CHANNEL_SOURCE: u64 = 0x0008_0001;
+
+/// The reason the mixer gave for the last refusal.
+fn last_error() -> String {
+    let mut buffer = vec![0u8; 512];
+    unsafe { mixer_last_error(buffer.as_mut_ptr(), buffer.len()) };
+    String::from_utf8_lossy(&buffer)
+        .trim_end_matches('\0')
+        .to_string()
+}
 
 /// What the channel says it is doing, for the playback assertions.
 fn channel_state() -> MixerReplayChannelState {
@@ -186,16 +196,24 @@ fn the_replay_picture_reaches_the_program_scene() {
         mark_in_after_stop > 0,
         "a stopped recorder still has a timeline to mark"
     );
+    // Nothing is recorded after that mark, so closing it would make a clip that can
+    // never show anything. The refusal says so, and the mark stays open.
     let mut out_after_stop = 0u64;
     let mut uuid_after = vec![0u8; 64];
-    expect("mark out after stop", unsafe {
+    let code = unsafe {
         mixer_replay_mark_out(
             &mut mark_in_after_stop,
             &mut out_after_stop,
             uuid_after.as_mut_ptr(),
             uuid_after.len(),
         )
-    });
+    };
+    assert_ne!(code, 0, "an empty mark must not become a clip");
+    let message = last_error();
+    assert!(
+        message.contains("empty"),
+        "the refusal explains the empty mark: {message}"
+    );
 
     // Pause the channel so the next play starts from the cued clip again.
     expect("pause", unsafe {
