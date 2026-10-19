@@ -18,7 +18,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use common::{
-    expect, full_layer, load_test_module, mark_in_when_ready, mark_out_after, mark_out_when_ready,
+    expect, full_layer, load_test_module, mark_in_when_ready, mark_out_after,
     scene_id, scene_pixel,
 };
 use eiviz_mixer::{
@@ -26,7 +26,7 @@ use eiviz_mixer::{
     EivizSequenceStepDesc, GEN_SOLID, MixerReplayChannelState, OverlayDesc, SCENE_SEQ_PLAY,
     SRC_COLOR, UnitState, mixer_create, mixer_create_unit, mixer_define_generator,
     mixer_define_scene, mixer_destroy, mixer_replay_configure, mixer_replay_copy_channels,
-    mixer_replay_mark_in, mixer_replay_mark_out, mixer_replay_record, mixer_scene_sequence,
+    mixer_replay_record, mixer_scene_sequence,
     mixer_scene_sequences_define, mixer_scene_states_define, mixer_unit_set_state,
 };
 
@@ -226,66 +226,86 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
     // moving the transition. Where the channel is decides what the picture must be.
     let mut held: Vec<usize> = Vec::new();
     for timing in ["Overwrap", "Additive"] {
-        expect("configure playlist", unsafe {
-            mixer_replay_configure(playlist(timing).as_ptr())
-        });
-        expect("play sequence", unsafe {
-            mixer_scene_sequence(scene_id(2), 1, SCENE_SEQ_PLAY)
-        });
-
-        // A's last frame and the frames the transition covers. Overwrap runs the
-        // transition over the tail of A; Additive holds A's last frame for it.
-        let window_first = out_a - u64::from(DISSOLVE_FRAMES) + 1;
+        // A transition lasts a fixed number of frames, while the composed picture is
+        // sampled by rendering a scene and reading it back — much slower than the
+        // renderer runs. On a software adapter a whole transition can pass between two
+        // samples, so the run is repeated when the blend was missed entirely. The
+        // picture the operator sees is what is measured either way.
         let mut red = 0;
         let mut mixed = 0;
         let mut held_here = 0;
         let mut last = [0, 0, 0];
         let mut inside = 0;
-        // The previous run leaves the channel on its last clip until the step cues
-        // the first one again, so the run has not started until the channel reports
-        // a frame of clip A.
-        let mut started = false;
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while Instant::now() < deadline {
-            let pixel = scene_pixel(scene_id(2), 160, 90);
-            let mut channels = vec![MixerReplayChannelState::default(); 2];
-            let count = unsafe { mixer_replay_copy_channels(channels.as_mut_ptr(), 2) };
-            let position = if count >= 1 {
-                channels[0].position_frame
-            } else {
-                0
-            };
-            if !started {
-                if position < in_a || position > out_a {
-                    continue;
+        let attempts = 4;
+        // A's last frame and the frames the transition covers. Overwrap runs the
+        // transition over the tail of A; Additive holds A's last frame for it.
+        let window_first = out_a - u64::from(DISSOLVE_FRAMES) + 1;
+        for attempt in 0..attempts {
+            expect("configure playlist", unsafe {
+                mixer_replay_configure(playlist(timing).as_ptr())
+            });
+            expect("play sequence", unsafe {
+                mixer_scene_sequence(scene_id(2), 1, SCENE_SEQ_PLAY)
+            });
+
+            red = 0;
+            mixed = 0;
+            held_here = 0;
+            inside = 0;
+            // The previous run leaves the channel on its last clip until the step cues
+            // the first one again, so the run has not started until the channel reports
+            // a frame of clip A.
+            let mut started = false;
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while Instant::now() < deadline {
+                let pixel = scene_pixel(scene_id(2), 160, 90);
+                let mut channels = vec![MixerReplayChannelState::default(); 2];
+                let count = unsafe { mixer_replay_copy_channels(channels.as_mut_ptr(), 2) };
+                let position = if count >= 1 {
+                    channels[0].position_frame
+                } else {
+                    0
+                };
+                if !started {
+                    if position < in_a || position > out_a {
+                        continue;
+                    }
+                    started = true;
                 }
-                started = true;
+                last = pixel;
+                if position == out_a {
+                    held_here += 1;
+                }
+                if position < window_first {
+                    // Clip A plays on its own before the transition.
+                    if is_red(pixel) {
+                        red += 1;
+                    }
+                } else {
+                    // The transition window is `window_first..=out_a`.
+                    if position <= out_a {
+                        inside += 1;
+                    }
+                    // The blend is looked for from the window onwards, not only inside
+                    // it: Overwrap dissolves over the tail of A, while Additive inserts
+                    // the transition after A's last frame, so the blended picture
+                    // appears on either side of `out_a` depending on the timing.
+                    if is_dissolve_mix(pixel) {
+                        mixed += 1;
+                    } else if is_green(pixel) {
+                        // B is on screen: the playlist ran to its end.
+                        break;
+                    }
+                }
             }
-            last = pixel;
-            if position == out_a {
-                held_here += 1;
+            if mixed > 0 {
+                break;
             }
-            if position < window_first {
-                // Clip A plays on its own before the transition.
-                if is_red(pixel) {
-                    red += 1;
-                }
-            } else {
-                // The transition window is `window_first..=out_a`.
-                if position <= out_a {
-                    inside += 1;
-                }
-                // The blend is looked for from the window onwards, not only inside it:
-                // Overwrap dissolves over the tail of A, while Additive inserts the
-                // transition after A's last frame, so the blended picture appears on
-                // either side of `out_a` depending on the timing.
-                if is_dissolve_mix(pixel) {
-                    mixed += 1;
-                } else if is_green(pixel) {
-                    // B is on screen: the playlist ran to its end.
-                    break;
-                }
-            }
+            assert!(
+                attempt + 1 < attempts,
+                "{timing}: the dissolve never put both clips on screen in {attempts} runs: \
+                 {inside} samples in {window_first}..={out_a}, last {last:?}"
+            );
         }
 
         // Additive holds the outgoing clip's last frame while it inserts the
