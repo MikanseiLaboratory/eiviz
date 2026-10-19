@@ -180,7 +180,7 @@ fn the_recorded_sound_reaches_the_channel_meter() {
     expect("record on", unsafe { mixer_replay_record(1) });
     thread::sleep(Duration::from_millis(1500));
     let in_frame = mark_in_when_ready("replay_audio");
-    let (uuid, in_frame, out_frame) = mark_out_after("replay_audio", 60);
+    let (uuid, in_frame, out_frame) = mark_out_after("replay_audio", 30);
     assert!(out_frame > in_frame, "the mark must span recorded frames");
 
     let uuid_c = cstring(&uuid);

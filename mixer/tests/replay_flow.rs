@@ -67,7 +67,7 @@ fn an_operator_records_marks_and_plays_back() {
     // any fixed sleep to produce one.
     let in_frame = mark_in_when_ready("replay_flow");
     assert!(in_frame > 0, "Mark In should sit on a recorded frame");
-    let (uuid, in_frame, out_frame) = mark_out_after("replay_flow", 60);
+    let (uuid, in_frame, out_frame) = mark_out_after("replay_flow", 40);
     assert!(
         out_frame > in_frame,
         "Mark Out {out_frame} must sit after Mark In {in_frame}"

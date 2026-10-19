@@ -109,7 +109,7 @@ fn the_replay_picture_reaches_the_program_scene() {
     assert!(in_frame > 0, "Mark In should sit on a recorded frame");
     // A clip long enough to watch play: the rate assertions below need more than a
     // few frames of material, so the close waits for the recording to move on.
-    let (uuid, in_frame, out_frame) = mark_out_after("replay_playout", 90);
+    let (uuid, in_frame, out_frame) = mark_out_after("replay_playout", 60);
     assert!(out_frame > in_frame, "the mark must span recorded frames");
     assert!(!uuid.is_empty());
 

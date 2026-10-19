@@ -96,7 +96,10 @@ pub fn offered_frames() -> u64 {
 /// and a transition test needs the length: a clip shorter than the transition cannot
 /// be measured.
 pub fn mark_out_after(label: &str, min_frames: u64) -> (String, u64, u64) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    // A software adapter renders a debug build very slowly: 60 frames can take
+    // half a minute. The wait is generous on purpose; what the test needs is the
+    // clip length, not a rate.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
     let start = offered_frames();
     while offered_frames().saturating_sub(start) < min_frames {
         if std::time::Instant::now() >= deadline {

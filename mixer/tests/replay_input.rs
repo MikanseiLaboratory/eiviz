@@ -80,7 +80,7 @@ fn an_input_angle_records_without_a_scene() {
     thread::sleep(Duration::from_millis(1200));
 
     let in_frame = mark_in_when_ready("replay_input");
-    let (uuid, in_frame, out_frame) = mark_out_after("replay_input", 30);
+    let (uuid, in_frame, out_frame) = mark_out_after("replay_input", 20);
     assert!(out_frame > in_frame, "the mark must span recorded frames");
 
     // Before the channel carries the clip the program shows black.

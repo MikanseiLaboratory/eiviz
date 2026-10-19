@@ -139,7 +139,7 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
     );
     thread::sleep(Duration::from_millis(400));
     let in_b = mark_in_when_ready("replay_transition B");
-    let (_dropped, in_b, out_b) = mark_out_after("replay_transition B", 30);
+    let (_dropped, in_b, out_b) = mark_out_after("replay_transition B", 20);
     assert!(out_b > in_b, "clip B must span recorded frames");
 
     // The playlist: A dissolves into B. The angle set is unchanged, so the
