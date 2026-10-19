@@ -440,6 +440,7 @@ fn settings_to_pb(settings: &SessionSettings) -> pb::SessionSettings {
         default_multiview_unit_id: settings.default_multiview_unit_id,
         frame_buffer_frames: settings.frame_buffer_frames,
         default_present_interval: settings.default_present_interval,
+        replay_present_interval: settings.replay_present_interval,
         flip_swapchain_limit: settings.flip_swapchain_limit,
         internal_color_format: color_format_to_pb(settings.internal_color_format).into(),
         rebar_optimization: settings.rebar_optimization,
@@ -486,6 +487,9 @@ fn settings_from_pb(settings: pb::SessionSettings) -> Result<SessionSettings, St
     }
     if settings.default_present_interval != 0 {
         out.default_present_interval = settings.default_present_interval;
+    }
+    if settings.replay_present_interval != 0 {
+        out.replay_present_interval = settings.replay_present_interval;
     }
     out.flip_swapchain_limit = settings.flip_swapchain_limit;
     out.internal_color_format = color_format_from_pb(settings.internal_color_format)?;

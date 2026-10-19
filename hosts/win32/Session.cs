@@ -1234,6 +1234,11 @@ public sealed class SessionSettings
     public ulong DefaultMultiviewUnitId { get; set; } = 1;
     public uint FrameBufferFrames { get; set; } = 3;
     public uint DefaultPresentInterval { get; set; } = 3;
+    /// <summary>
+    /// Presentation interval for the replay deck's monitors. Zero follows
+    /// <see cref="DefaultPresentInterval"/>.
+    /// </summary>
+    public uint ReplayPresentInterval { get; set; }
     public uint FlipSwapchainLimit { get; set; }
     public InternalColorFormat InternalColorFormat { get; set; } = InternalColorFormat.Uyvy;
     public bool? RebarOptimization { get; set; } = true;
@@ -1273,6 +1278,16 @@ public sealed class SessionSettings
 
     public uint ResolvedPresentInterval() =>
         MultiviewLayout.ClampPresentInterval(DefaultPresentInterval == 0 ? 3 : DefaultPresentInterval);
+
+    /// <summary>
+    /// How often the replay deck's monitors are presented. Zero follows the project's
+    /// own interval. The deck is a second window onto the same surfaces as the main
+    /// window, so an operator who wants the deck smooth and the switcher thrifty (or the
+    /// other way round) sets them apart here.
+    /// </summary>
+    public uint ResolvedReplayPresentInterval() =>
+        MultiviewLayout.ClampPresentInterval(
+            ReplayPresentInterval == 0 ? ResolvedPresentInterval() : ReplayPresentInterval);
 }
 
 public sealed class RgbColor

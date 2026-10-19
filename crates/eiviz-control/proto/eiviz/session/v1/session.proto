@@ -67,6 +67,8 @@ message SessionSettings {
   uint32 frame_buffer_frames = 7;
   uint32 default_present_interval = 8;
   uint32 flip_swapchain_limit = 9;
+  // Presentation interval for the replay deck's monitors. Zero follows the default.
+  uint32 replay_present_interval = 27;
   InternalColorFormat internal_color_format = 10;
   bool rebar_optimization = 11;
   bool rebar_direct_sample = 12;

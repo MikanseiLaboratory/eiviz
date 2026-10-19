@@ -42,6 +42,11 @@ public partial class ReplaySettingsWindow : Window
         RetentionBox.Items.Add(new ComboBoxItem { Content = Loc.T("replay.retentionOverwrite"), Tag = "Overwrite" });
         RetentionBox.Items.Add(new ComboBoxItem { Content = Loc.T("replay.retentionProtect"), Tag = "OverwriteUnprotected" });
         RetentionBox.SelectedIndex = 0;
+        // The deck's own refresh interval: zero follows the project's setting.
+        DeckPresentBox.Items.Add(new ComboBoxItem { Content = Loc.T("replay.deckRefreshFollow"), Tag = "0" });
+        foreach (var frames in new[] { 1u, 2u, 3u, 4u, 6u, 8u })
+            DeckPresentBox.Items.Add(new ComboBoxItem { Content = Loc.Format("replay.deckRefreshEvery", frames), Tag = frames.ToString() });
+        DeckPresentBox.SelectedIndex = 0;
         // Any edit marks the window dirty; the numbers are checked on Apply, where the
         // operator can see the whole row that is wrong.
         QueueBox.TextChanged += MarkDirty;
@@ -86,6 +91,7 @@ public partial class ReplaySettingsWindow : Window
         ReserveBox.Text = (buffering?["reserveMb"]?.GetValue<uint>() ?? 2048).ToString();
         SelectTag(OverflowBox, buffering?["overflowPolicy"]?.GetValue<string>() ?? "DropFrames");
         SelectTag(RetentionBox, _replay["retention"]?.GetValue<string>() ?? "StopWhenFull");
+        SelectTag(DeckPresentBox, _session.Settings.ReplayPresentInterval.ToString());
         AutoAddBox.IsChecked = ReplayModel.AutoAddToPlaylist(_replay);
         SegmentFramesBox.Text = (_replay["format"]?["segmentFrames"]?.GetValue<uint>() ?? 120).ToString();
 
@@ -637,6 +643,8 @@ public partial class ReplaySettingsWindow : Window
             ["reserveMb"] = reserve,
         };
         _replay["retention"] = ComboTag(RetentionBox, "StopWhenFull");
+        if (uint.TryParse(ComboTag(DeckPresentBox, "0"), out var deckInterval))
+            _session.Settings.ReplayPresentInterval = MultiviewLayout.ClampPresentInterval(deckInterval);
         _replay["autoAddToPlaylist"] = AutoAddBox.IsChecked == true;
 
         var angles = new JsonArray();

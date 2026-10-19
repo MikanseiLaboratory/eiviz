@@ -112,6 +112,10 @@ pub struct SessionSettings {
     pub frame_buffer_frames: u32,
     #[serde(default = "three")]
     pub default_present_interval: u32,
+    /// Presentation interval for the replay deck's monitors. Zero follows
+    /// `default_present_interval`.
+    #[serde(default)]
+    pub replay_present_interval: u32,
     #[serde(default)]
     pub flip_swapchain_limit: u32,
     #[serde(default)]
@@ -165,6 +169,7 @@ impl Default for SessionSettings {
             default_multiview_unit_id: 1,
             frame_buffer_frames: 3,
             default_present_interval: 3,
+            replay_present_interval: 0,
             flip_swapchain_limit: 0,
             internal_color_format: InternalColorFormat::Uyvy,
             renderer: Renderer::Auto,

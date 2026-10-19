@@ -167,6 +167,7 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0" Margin="0,0,8,0">
                         <TextBlock Style="{StaticResource FieldLabel}"
@@ -178,6 +179,14 @@
                                    Text="{Binding [replay.segmentFrames], Source={x:Static i18n:Loc.Source}}"/>
                         <TextBox x:Name="SegmentFramesBox" Height="28" Text="120"
                                  ToolTip="{Binding [replay.segmentFramesRange], Source={x:Static i18n:Loc.Source}}"/>
+                    </StackPanel>
+                    <!-- The deck is a second window onto the same surfaces as the main
+                         window, so how often it repaints is its own setting. -->
+                    <StackPanel Grid.Column="2" Margin="8,0,0,0">
+                        <TextBlock Style="{StaticResource FieldLabel}"
+                                   Text="{Binding [replay.deckRefresh], Source={x:Static i18n:Loc.Source}}"/>
+                        <ComboBox x:Name="DeckPresentBox" Height="28"
+                                  ToolTip="{Binding [replay.deckRefreshHelp], Source={x:Static i18n:Loc.Source}}"/>
                     </StackPanel>
                 </Grid>
 

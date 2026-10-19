@@ -110,7 +110,7 @@ public partial class ReplayWindow : Window
         // presented every N master frames, N coming from the session. Presenting every
         // frame costs GPU time for a picture an eye cannot tell apart, and the deck is
         // one of several consumers of the same texture.
-        var interval = _session.Settings.ResolvedPresentInterval();
+        var interval = _session.Settings.ResolvedReplayPresentInterval();
         OutputMonitor.PresentInterval = interval;
         LiveMonitor.PresentInterval = interval;
         OutputMonitor.ApplyPresentInterval();
