@@ -151,6 +151,9 @@ pub const REPLAY_ISSUE_STORAGE_FULL: u32 = 1 << 4;
 pub const REPLAY_ISSUE_FRAMES_DROPPED: u32 = 1 << 5;
 pub const REPLAY_ISSUE_STOPPED_BY_POLICY: u32 = 1 << 6;
 pub const REPLAY_ISSUE_PRO_UNAVAILABLE: u32 = 1 << 7;
+/// A GPU angle could not encode: the codec could not be built or the texture could not
+/// be sampled. Distinct from a slow disk, which is the other reason frames go missing.
+pub const REPLAY_ISSUE_ENCODER_UNAVAILABLE: u32 = 1 << 8;
 pub const REPLAY_SEVERITY_OK: u32 = 0;
 pub const REPLAY_SEVERITY_WARNING: u32 = 1;
 pub const REPLAY_SEVERITY_CRITICAL: u32 = 2;

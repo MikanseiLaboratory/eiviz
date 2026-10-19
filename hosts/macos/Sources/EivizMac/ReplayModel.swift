@@ -59,6 +59,8 @@ enum ReplayIssues {
     static let framesDropped: UInt32 = 1 << 5
     static let stoppedByPolicy: UInt32 = 1 << 6
     static let proUnavailable: UInt32 = 1 << 7
+    /// A GPU angle could not encode: the codec or the texture was refused.
+    static let encoderUnavailable: UInt32 = 1 << 8
 
     /// Most urgent first, because the list is read from the front.
     private static let named: [(bit: UInt32, key: String)] = [
@@ -69,6 +71,7 @@ enum ReplayIssues {
         (readback, "replay.issueReadback"),
         (framesDropped, "replay.issueDropped"),
         (stoppedByPolicy, "replay.issueStopped"),
+        (encoderUnavailable, "replay.issueEncoder"),
         (proUnavailable, "replay.issuePro"),
     ]
 
@@ -140,6 +143,8 @@ struct ReplayAngleInfo: Identifiable, Hashable {
     var recordMode: String = "Composite"
     /// Mixing unit whose program mix feeds this angle. Zero means silent.
     var audioUnitId: UInt64
+    /// `Gpu` encodes from the scene texture; `Cpu` reads it back first.
+    var encoder: String = "Gpu"
 
     var sceneGpuId: UInt64 { EIVIZ_SCENE_BASE | sceneId }
 
@@ -379,7 +384,8 @@ struct ReplayDocument {
                 // matters.
                 audioUnitId: (object["audio"]?.stringValue ?? "Silent").caseInsensitiveCompare("Unit") == .orderedSame
                     ? (object["audioUnitId"]?.uint64Value ?? 0)
-                    : 0
+                    : 0,
+                encoder: object["encoder"]?.stringValue ?? "Gpu"
             )
         }
     }
@@ -947,6 +953,7 @@ struct ReplayDocument {
                 "audio": .string(angle.audioUnitId == 0 ? "Silent" : "Unit"),
                 "audioUnitId": .number(Double(angle.audioUnitId)),
                 "recordMode": .string(angle.recordMode),
+                "encoder": .string(angle.encoder),
             ])
         })
         if !angles.contains(where: { $0.id == activeAngleId }) {

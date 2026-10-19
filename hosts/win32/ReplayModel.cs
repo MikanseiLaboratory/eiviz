@@ -20,6 +20,8 @@ internal static class ReplayIssues
     public const uint FramesDropped = 1 << 5;
     public const uint StoppedByPolicy = 1 << 6;
     public const uint ProUnavailable = 1 << 7;
+    /// <summary>A GPU angle could not encode: the codec or the texture was refused.</summary>
+    public const uint EncoderUnavailable = 1 << 8;
 
     /// <summary>
     /// Most urgent first, because the list is read from the front.
@@ -33,6 +35,7 @@ internal static class ReplayIssues
         (Readback, "replay.issueReadback"),
         (FramesDropped, "replay.issueDropped"),
         (StoppedByPolicy, "replay.issueStopped"),
+        (EncoderUnavailable, "replay.issueEncoder"),
         (ProUnavailable, "replay.issuePro"),
     ];
 

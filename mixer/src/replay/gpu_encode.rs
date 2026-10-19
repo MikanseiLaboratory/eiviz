@@ -68,6 +68,7 @@ pub fn encode_frame(
                 crate::diag::error(&format!(
                     "replay GPU encoder could not be built angle={angle_id} {width}x{height} profile={wanted:?}: {error}"
                 ));
+                crate::replay::engine().note_encoder_unavailable();
                 return None;
             }
         };
@@ -93,6 +94,7 @@ pub fn encode_frame(
             texture.format(),
             texture.usage()
         ));
+        crate::replay::engine().note_encoder_unavailable();
         return None;
     }
     let size = loop {

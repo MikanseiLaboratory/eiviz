@@ -1013,6 +1013,13 @@ impl ReplayEngine {
         }
     }
 
+    /// Records that a GPU angle could not encode, so the health line can say why a
+    /// recording is short instead of leaving it to look like a slow disk.
+    pub fn note_encoder_unavailable(&self) {
+        let mut inner = self.lock();
+        inner.stats.issues |= crate::abi::REPLAY_ISSUE_ENCODER_UNAVAILABLE;
+    }
+
     /// Counts a frame handed to the readback. `frames_offered` should match it.
     pub fn note_pushed(&self) {
         let mut inner = self.lock();

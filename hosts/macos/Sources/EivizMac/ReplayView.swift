@@ -1552,6 +1552,15 @@ struct ReplaySettingsView: View {
                                 .labelsHidden()
                                 .frame(width: 120)
                                 .help(L10n.t("replay.passthroughHelp"))
+                                // Where this angle is encoded: GPU keeps the picture on
+                                // the GPU from the scene to the stored packet.
+                                Picker("", selection: $angle.encoder) {
+                                    Text(L10n.t("replay.encoderGpu")).tag("Gpu")
+                                    Text(L10n.t("replay.encoderCpu")).tag("Cpu")
+                                }
+                                .labelsHidden()
+                                .frame(width: 90)
+                                .help(L10n.t("replay.encoderHelp"))
                                 Picker("", selection: $angle.audioUnitId) {
                                     Text(L10n.t("replay.audioSilent")).tag(UInt64(0))
                                     ForEach(mixer.session.units) { unit in
