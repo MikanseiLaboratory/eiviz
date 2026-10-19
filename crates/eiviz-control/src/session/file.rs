@@ -1765,7 +1765,9 @@ fn clip_audio_from_pb(audio: i32) -> crate::session::replay::ClipAudio {
 fn clip_transition_to_pb(
     transition: crate::session::replay::ClipTransitionDto,
 ) -> pb::ClipTransition {
-    use crate::session::replay::{ReplayTransitionDirection, ReplayTransitionKind, ReplayTransitionTiming};
+    use crate::session::replay::{
+        ReplayTransitionDirection, ReplayTransitionKind, ReplayTransitionTiming,
+    };
     pb::ClipTransition {
         kind: match transition.kind {
             ReplayTransitionKind::Cut => pb::ReplayTransitionKind::Cut as i32,
@@ -1792,7 +1794,9 @@ fn clip_transition_to_pb(
 fn clip_transition_from_pb(
     transition: pb::ClipTransition,
 ) -> crate::session::replay::ClipTransitionDto {
-    use crate::session::replay::{ReplayTransitionDirection, ReplayTransitionKind, ReplayTransitionTiming};
+    use crate::session::replay::{
+        ReplayTransitionDirection, ReplayTransitionKind, ReplayTransitionTiming,
+    };
     crate::session::replay::ClipTransitionDto {
         kind: match pb::ReplayTransitionKind::try_from(transition.kind) {
             Ok(pb::ReplayTransitionKind::Dissolve) => ReplayTransitionKind::Dissolve,

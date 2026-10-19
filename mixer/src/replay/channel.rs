@@ -557,7 +557,8 @@ mod tests {
 
     fn dissolve(timing: TransitionTiming, frames: u32) -> ClipTransition {
         ClipTransition {
-            dissolve: true,
+            kind: TransitionKind::Dissolve,
+            direction: TransitionDirection::Left,
             timing,
             frames,
         }
