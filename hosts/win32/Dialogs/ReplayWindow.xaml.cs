@@ -694,6 +694,11 @@ public partial class ReplayWindow : Window
             _channel = choice.Index;
     }
 
+    /// <summary>
+    /// One numbered button per camera, the way a replay controller labels its cameras:
+    /// the picture of the selected one is the monitor above, so the strip stays a row of
+    /// numbers instead of a row of expensive surfaces.
+    /// </summary>
     private void BuildAngles()
     {
         if (_replay is null)
@@ -715,99 +720,33 @@ public partial class ReplayWindow : Window
             return;
         }
         var active = ReplayModel.ActiveAngle(_replay);
-        // Angle previews are the recording machine's scenes. A Remote has no local
-        // render of them, so it says where they are instead of showing dead tiles.
-        if (Backend?.IsRemote == true)
-        {
-            AnglePanel.Children.Add(new TextBlock
-            {
-                Text = Loc.T("replay.remoteAngles"),
-                Margin = new Thickness(8),
-                TextWrapping = TextWrapping.Wrap
-            });
-            return;
-        }
-        // Many angles cost many present surfaces. Past the threshold the core
-        // composes them into one shot instead, and a click picks the angle.
-        if (angles.Count > ReplayMultiview.CompactThreshold
-            && ReplayMultiview.Define(angles, 640, 360))
-        {
-            BuildCompactAngles(angles, active);
-            return;
-        }
+        var index = 0;
         foreach (var angle in angles)
         {
+            index++;
             var selected = angle.Id == active;
-            var label = new TextBlock
+            var button = new Button
             {
-                Text = angle.Label,
-                Margin = new Thickness(6, 2, 6, 4),
-                FontWeight = selected ? FontWeights.Bold : FontWeights.Normal
-            };
-            var surface = new SwapchainHost
-            {
-                Width = 256,
-                Height = 144,
-                Margin = new Thickness(6, 0, 6, 0)
-            };
-            var monitorId = _session.NextMonitorId++;
-            surface.Loaded += (_, _) => surface.RetargetMonitor(monitorId, angle.LiveSourceId);
-            var tile = new Border
-            {
+                Style = (Style)FindResource("AngleButton"),
+                Tag = angle.Id,
+                // The number is what an operator calls the camera; the name is the tooltip.
+                Content = $"{index}",
+                FontWeight = selected ? FontWeights.Bold : FontWeights.Normal,
                 BorderThickness = new Thickness(selected ? 3 : 1),
                 BorderBrush = selected ? Brushes.LimeGreen : (Brush)FindResource("ButtonBorder"),
-                Margin = new Thickness(4),
-                Cursor = Cursors.Hand,
-                Tag = angle.Id,
-                Child = new StackPanel { Children = { surface, label } }
+                ToolTip = $"{index}: {angle.Label}",
             };
-            tile.MouseLeftButtonUp += (sender, _) =>
+            button.Click += (sender, _) =>
             {
-                if (sender is Border { Tag: uint id })
+                if (sender is Button { Tag: uint id })
                     SelectAngle(id);
             };
-            // Automation and tests address a tile by its angle, and the label alone
-            // is ambiguous (the event list shows angle names too).
-            AutomationProperties.SetAutomationId(tile, $"AngleTile{angle.Id}");
-            AutomationProperties.SetName(tile, angle.Label);
-            AnglePanel.Children.Add(tile);
-            _angleHosts.Add(surface);
+            // Automation and tests address a camera by its angle, and a bare number is
+            // ambiguous.
+            AutomationProperties.SetAutomationId(button, $"AngleTile{angle.Id}");
+            AutomationProperties.SetName(button, $"{index}: {angle.Label}");
+            AnglePanel.Children.Add(button);
         }
-    }
-
-    /// <summary>
-    /// One composed surface for every angle. Clicking a slot makes that angle the
-    /// active one, which is what events and auto-add use.
-    /// </summary>
-    private void BuildCompactAngles(IReadOnlyList<ReplayAngleInfo> angles, uint active)
-    {
-        var surface = new SwapchainHost
-        {
-            Width = 640,
-            Height = 360,
-            Margin = new Thickness(6, 0, 6, 0)
-        };
-        var monitorId = _session.NextMonitorId++;
-        surface.Loaded += (_, _) => surface.RetargetMonitor(monitorId, ReplayMultiview.SceneId);
-        surface.SurfaceClickedAt += (_, point) =>
-        {
-            if (ReplayMultiview.SlotAt(point.X, point.Y, angles.Count) is { } index)
-                SelectAngle(angles[(int)index].Id);
-        };
-        var caption = new TextBlock
-        {
-            Text = Loc.Format("replay.compactAngles", angles.Count),
-            Margin = new Thickness(6, 2, 6, 4)
-        };
-        var tile = new Border
-        {
-            BorderThickness = new Thickness(1),
-            BorderBrush = (Brush)FindResource("ButtonBorder"),
-            Margin = new Thickness(4),
-            Child = new StackPanel { Children = { surface, caption } }
-        };
-        AnglePanel.Children.Add(tile);
-        _angleHosts.Add(surface);
     }
 
     /// <summary>
@@ -838,8 +777,9 @@ public partial class ReplayWindow : Window
             var previous = existing.FirstOrDefault(row => row.Id == entry.Id);
             var row = previous ?? new EventRow { Id = entry.Id };
             row.IsLoading = true;
-            row.RangeText = $"{ReplayModel.Timecode(entry.InFrame, fps)} → {ReplayModel.Timecode(entry.OutFrame, fps)}" +
-                $"   ({ReplayModel.Duration(entry.InFrame, entry.OutFrame, fps)})";
+            row.InText = ReplayModel.Timecode(entry.InFrame, fps);
+            row.OutText = ReplayModel.Timecode(entry.OutFrame, fps);
+            row.DurationText = ReplayModel.Duration(entry.InFrame, entry.OutFrame, fps);
             row.Name = entry.Name;
             row.Protected = entry.Protected;
             row.IsLoading = false;
@@ -928,8 +868,9 @@ public partial class ReplayWindow : Window
         {
             var row = existing.FirstOrDefault(candidate => candidate.Uid == clip.Uid) ?? new ClipRow { Uid = clip.Uid };
             row.IsLoading = true;
-            row.RangeText = $"{ReplayModel.Timecode(clip.InFrame, fps)} → {ReplayModel.Timecode(clip.OutFrame, fps)}" +
-                $"   ({ReplayModel.Duration(clip.InFrame, clip.OutFrame, fps)})";
+            row.InText = ReplayModel.Timecode(clip.InFrame, fps);
+            row.OutText = ReplayModel.Timecode(clip.OutFrame, fps);
+            row.DurationText = ReplayModel.Duration(clip.InFrame, clip.OutFrame, fps);
             row.AngleOptions = [.. angles.Select(angle => new Option<uint>(angle.Id, angle.Label))];
             row.AngleOption = row.AngleOptions.FirstOrDefault(option => option.Value == clip.AngleId);
             row.SpeedOptions =
@@ -1762,6 +1703,29 @@ public partial class ReplayWindow : Window
         _speedMilli = milli;
         if (Backend?.ReplayTransport(_channel, _playing, _speedMilli, -1) != true)
             Warn(Loc.T("replay.commandRefused"));
+        RefreshSpeedButtons();
+    }
+
+    /// <summary>
+    /// Marks the speed the deck is playing at, the way a replay controller lights the
+    /// button it is on. The state comes from the channel, so a speed set from another
+    /// host shows up here too.
+    /// </summary>
+    private void RefreshSpeedButtons()
+    {
+        foreach (var (button, milli) in new[]
+                 {
+                     (Speed25Button, 250),
+                     (Speed50Button, 500),
+                     (Speed75Button, 750),
+                     (Speed100Button, 1000),
+                 })
+        {
+            var active = milli == _speedMilli;
+            button.FontWeight = active ? FontWeights.Bold : FontWeights.Normal;
+            button.BorderThickness = new Thickness(active ? 2 : 1);
+            button.BorderBrush = active ? Brushes.LimeGreen : (Brush)FindResource("ButtonBorder");
+        }
     }
 
     private void JogSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -1783,8 +1747,13 @@ public partial class ReplayWindow : Window
     /// </summary>
     private bool HasLocalInFrame => _inFrame is { } value && value != MarkUnknown;
 
-    private void UpdatePlayButton() =>
-        PlayButton.Content = Loc.T(_playing ? "replay.pause" : "replay.play");
+    private void UpdatePlayButton()
+    {
+        // The transport is icons: swap the glyph, and let the tooltip carry the word.
+        PlayButton.Content = _playing ? "\uE769" : "\uE768";
+        PlayButton.ToolTip = Loc.T(_playing ? "replay.pauseHint" : "replay.playHint");
+        RefreshSpeedButtons();
+    }
 
     private sealed record ChannelChoice(uint Index, string Label);
 
@@ -1801,7 +1770,13 @@ public partial class ReplayWindow : Window
         public ulong Id { get; init; }
 
         /// <summary>In, out and length, read-only: they come from the mark.</summary>
-        public string RangeText { get; set; } = "";
+        public string InText { get; set; } = "";
+
+        public string OutText { get; set; } = "";
+
+        public string DurationText { get; set; } = "";
+
+        /// <summary>In, out and length, read-only: they come from the mark.</summary>
 
         public string Name
         {
@@ -1853,7 +1828,13 @@ public partial class ReplayWindow : Window
         public string Uid { get; init; } = "";
 
         /// <summary>In, out and length, read-only: they come from the mark.</summary>
-        public string RangeText { get; set; } = "";
+        public string InText { get; set; } = "";
+
+        public string OutText { get; set; } = "";
+
+        public string DurationText { get; set; } = "";
+
+        /// <summary>In, out and length, read-only: they come from the mark.</summary>
 
         public IReadOnlyList<Option<uint>> AngleOptions { get; set; } = [];
 
