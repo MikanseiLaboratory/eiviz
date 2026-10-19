@@ -1615,6 +1615,7 @@ mod tests {
                 audio: AngleAudio::Silent,
                 audio_unit_id: 0,
                 record_mode: AngleRecordMode::Composite,
+                encoder: crate::session::replay::AngleEncoder::Gpu,
             };
             svc.replace_session(replay_doc(), None, "1").unwrap();
 

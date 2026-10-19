@@ -1016,6 +1016,7 @@ mod tests {
             audio: AngleAudio::Silent,
             audio_unit_id: 0,
             record_mode: AngleRecordMode::Composite,
+            encoder: crate::session::replay::AngleEncoder::Gpu,
         });
         crate::session::validate_for_apply(&doc).unwrap();
 
@@ -1049,6 +1050,7 @@ mod tests {
             audio: AngleAudio::Unit,
             audio_unit_id: 2,
             record_mode: AngleRecordMode::Composite,
+            encoder: crate::session::replay::AngleEncoder::Gpu,
         });
         crate::session::validate_for_apply(&doc).unwrap();
 

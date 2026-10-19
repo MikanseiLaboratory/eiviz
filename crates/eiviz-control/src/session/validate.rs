@@ -1029,6 +1029,7 @@ mod tests {
                 audio: crate::session::replay::AngleAudio::Silent,
                 audio_unit_id: 0,
                 record_mode: crate::session::replay::AngleRecordMode::Composite,
+                encoder: crate::session::replay::AngleEncoder::Gpu,
             });
         validate(&doc).unwrap();
         let bytes = crate::session::file::encode_file(&doc).unwrap();
@@ -1083,6 +1084,7 @@ mod tests {
             audio: AngleAudio::Silent,
             audio_unit_id: 0,
             record_mode: AngleRecordMode::Composite,
+            encoder: crate::session::replay::AngleEncoder::Gpu,
         });
         replay.active_angle_id = Some(1);
         doc
@@ -1182,6 +1184,7 @@ mod tests {
                 audio: AngleAudio::Silent,
                 audio_unit_id: 0,
                 record_mode: AngleRecordMode::Composite,
+                encoder: crate::session::replay::AngleEncoder::Gpu,
             };
         }
         let err = validate(&doc).unwrap_err();
@@ -1240,6 +1243,7 @@ mod tests {
                 audio: AngleAudio::Silent,
                 audio_unit_id: 0,
                 record_mode: AngleRecordMode::Composite,
+                encoder: crate::session::replay::AngleEncoder::Gpu,
             });
             replay.storage[0].angle_ids = vec![1, 2];
         }
@@ -1386,6 +1390,7 @@ mod tests {
                 audio: AngleAudio::Silent,
                 audio_unit_id: 0,
                 record_mode: AngleRecordMode::Composite,
+                encoder: crate::session::replay::AngleEncoder::Gpu,
             });
             replay.enabled = true;
             replay.storage = vec![

@@ -1122,6 +1122,7 @@ mod tests {
             audio: AngleAudio::Silent,
             audio_unit_id: 0,
             record_mode: AngleRecordMode::Composite,
+            encoder: crate::session::replay::AngleEncoder::Gpu,
         });
         let default = ClipTransitionDto {
             direction: ReplayTransitionDirection::Left,
@@ -1184,6 +1185,7 @@ mod tests {
             audio: AngleAudio::Silent,
             audio_unit_id: 0,
             record_mode: AngleRecordMode::Composite,
+            encoder: crate::session::replay::AngleEncoder::Gpu,
         });
 
         let error = replay.note_mark_out("rec", 0, 30, "Replay 1").unwrap_err();
@@ -1219,6 +1221,7 @@ mod tests {
             audio: AngleAudio::Silent,
             audio_unit_id: 0,
             record_mode: AngleRecordMode::Composite,
+            encoder: crate::session::replay::AngleEncoder::Gpu,
         });
 
         replay.note_mark_out("rec", 5, 35, "Replay 1").unwrap();
