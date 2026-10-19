@@ -115,9 +115,22 @@ internal sealed record ReplayChannelInfo(uint Index, ulong InputId, ulong? Playl
     public ulong SourceId => InputId != 0 ? InputId : 0x0008_0000UL | (Index + 1);
 }
 
-internal sealed record ReplayAngleInfo(uint Id, string Name, ulong SceneId, ulong AudioUnitId)
+internal sealed record ReplayAngleInfo(
+    uint Id,
+    string Name,
+    ulong SceneId,
+    ulong AudioUnitId,
+    string Source = "Scene",
+    ulong InputId = 0,
+    string RecordMode = "Composite")
 {
     public ulong SceneGpuId => MixerNative.SceneGpuId(SceneId);
+    /// <summary>
+    /// What the angle shows live: the scene it records, or the input it records
+    /// directly. The deck's monitors follow this, so an input angle previews the
+    /// input rather than a scene it does not use.
+    /// </summary>
+    public ulong LiveSourceId => Source == "Input" ? InputId : SceneGpuId;
     public string Label => string.IsNullOrWhiteSpace(Name) ? $"Angle {Id}" : Name;
 }
 
@@ -189,6 +202,26 @@ internal static class ReplayModel
 
     public static string Serialize(JsonObject root) => root.ToJsonString();
 
+    /// <summary>
+    /// The settings part of a Replay document, for the `updateReplaySettings`
+    /// mutation. A remote core owns the events and playlists, so Replay Setup must
+    /// not send them back from a copy that may already be stale.
+    /// </summary>
+    public static string SerializeSettings(JsonObject root)
+    {
+        var settings = new JsonObject();
+        foreach (var name in new[]
+                 {
+                     "enabled", "storage", "format", "buffering", "retention",
+                     "angles", "autoAddToPlaylist"
+                 })
+        {
+            if (root[name] is { } value)
+                settings[name] = value.DeepClone();
+        }
+        return settings.ToJsonString();
+    }
+
     private static JsonArray Array(JsonObject root, string name) =>
         root[name] as JsonArray ?? [];
 
@@ -224,7 +257,11 @@ internal static class ReplayModel
                 // matters.
                 string.Equals(angle["audio"]?.GetValue<string>(), "Unit", StringComparison.OrdinalIgnoreCase)
                     ? angle["audioUnitId"]?.GetValue<ulong>() ?? 0
-                    : 0));
+                    : 0,
+                // A document written before the source existed is a scene angle.
+                angle["source"]?.GetValue<string>() ?? "Scene",
+                angle["inputId"]?.GetValue<ulong>() ?? 0,
+                angle["recordMode"]?.GetValue<string>() ?? "Composite"));
         }
         return result;
     }
@@ -371,6 +408,13 @@ internal static class ReplayModel
 
     public static bool AutoAddToPlaylist(JsonObject root) =>
         root["autoAddToPlaylist"]?.GetValue<bool>() ?? false;
+
+    /// <summary>
+    /// Whether the document is a recording setup. The control layer requires a drive
+    /// and an angle, so the deck reads the same flag it wrote.
+    /// </summary>
+    public static bool Enabled(JsonObject root) =>
+        root["enabled"]?.GetValue<bool>() ?? false;
 
     /// <summary>
     /// Allocates an event id that no existing event uses. The win32 window builds

@@ -1442,9 +1442,21 @@ public partial class ReplayWindow : Window
     {
         if (_replay is null)
             return;
+        // The deck may hold a document from before the last Apply, and the control
+        // layer refuses a recording whose settings are missing. Read the current one
+        // so the reason names what is actually missing.
+        var current = ReplayModel.Parse(_session);
+        if (current is null)
+        {
+            Warn(Loc.T("replay.missing"));
+            return;
+        }
+        _replay = current;
         // A recorder without storage or angles writes nothing, so the reason is
         // named here instead of leaving the mixer's bare refusal on screen.
-        if (ReplayModel.Storages(_replay).Count == 0 || ReplayModel.Angles(_replay).Count == 0)
+        if (!ReplayModel.Enabled(_replay)
+            || ReplayModel.Storages(_replay).Count == 0
+            || ReplayModel.Angles(_replay).Count == 0)
         {
             Warn(Loc.T("replay.needSetup"));
             return;

@@ -80,9 +80,14 @@ public partial class ReplaySettingsWindow : Window
             {
                 Id = angle.Id,
                 Name = angle.Label,
+                Source = angle.Source,
                 SceneId = angle.SceneId,
-                SceneName = SceneName(angle.SceneId),
-                AudioUnitId = angle.AudioUnitId
+                InputId = angle.InputId,
+                SceneName = angle.Source == "Input"
+                    ? InputName(angle.InputId)
+                    : SceneName(angle.SceneId),
+                AudioUnitId = angle.AudioUnitId,
+                RecordMode = angle.RecordMode
             });
         }
         RefreshAngles();
@@ -253,6 +258,10 @@ public partial class ReplaySettingsWindow : Window
         _session.Scenes.FirstOrDefault(scene => scene.Id == sceneId)?.Name
         ?? Loc.Format("replay.sceneMissing", sceneId);
 
+    private string InputName(ulong inputId) =>
+        _session.Inputs.FirstOrDefault(input => input.Id == inputId)?.Name
+        ?? Loc.Format("replay.inputMissing", inputId);
+
     private void RefreshPlan()
     {
         _hasLimits = PlanGate.TryReplayLimits(out _angleLimit, out _channelLimit);
@@ -406,7 +415,20 @@ public partial class ReplaySettingsWindow : Window
             Refuse(Loc.T("replay.needStorable"));
             return;
         }
-        _replay["enabled"] = drives.Count > 0;
+        // One drive takes every angle: the operator added the drive for this
+        // recording, and a recording never guesses which disk to write to.
+        if (drives.Count == 1)
+        {
+            foreach (var angle in _angles)
+            {
+                if (!drives[0].AngleIds.Contains(angle.Id))
+                    drives[0].AngleIds.Add(angle.Id);
+            }
+        }
+        // A drive and an angle are a recording setup, so the document says so. The
+        // control layer refuses the other combinations, and a host that wrote them
+        // would leave a project that can never record.
+        _replay["enabled"] = drives.Count > 0 && _angles.Count > 0;
         var storages = new JsonArray();
         // Only angles that still exist are assigned, so a removed one cannot be
         // left behind on a drive.
@@ -446,10 +468,12 @@ public partial class ReplaySettingsWindow : Window
             {
                 ["id"] = angle.Id,
                 ["name"] = angle.Name,
+                ["source"] = angle.Source,
                 ["sceneId"] = angle.SceneId,
+                ["inputId"] = angle.InputId,
                 ["audio"] = angle.AudioUnitId == 0 ? "Silent" : "Unit",
                 ["audioUnitId"] = angle.AudioUnitId,
-                ["recordMode"] = "Composite"
+                ["recordMode"] = angle.RecordMode
             });
         }
         _replay["angles"] = angles;
@@ -463,8 +487,13 @@ public partial class ReplaySettingsWindow : Window
         {
             if (App.IsRemote)
             {
+                // A remote core owns the events and playlists too, so sending the
+                // whole document from this window would overwrite whatever another
+                // operator marked in the meantime. Only the settings travel.
                 if (Owner is MainWindow main)
-                    main.RemoteMutate("{\"kind\":\"upsertReplaySettings\",\"replay\":" + json + "}", Title);
+                    main.RemoteMutate(
+                        "{\"kind\":\"updateReplaySettings\",\"settings\":" + ReplayModel.SerializeSettings(_replay) + "}",
+                        Title);
             }
             else
             {
@@ -511,11 +540,17 @@ public partial class ReplaySettingsWindow : Window
     {
         public uint Id { get; init; }
         public string Name { get; init; } = "";
+        /// `Scene` or `Input`: what this angle records from.
+        public string Source { get; init; } = "Scene";
         public ulong SceneId { get; init; }
+        /// Input this angle records when `Source` is `Input`.
+        public ulong InputId { get; init; }
         public string SceneName { get; init; } = "";
         public string Audio { get; set; } = "";
         /// Mixing unit whose program mix feeds this angle. Zero means silent.
         public ulong AudioUnitId { get; set; }
+        /// `Composite` or `Passthrough` (OMT inputs only).
+        public string RecordMode { get; init; } = "Composite";
         /// 1-based drive the angle records to, for the list column.
         public int Drive { get; set; }
     }

@@ -104,14 +104,35 @@ struct ReplayChannelInfo: Identifiable, Hashable {
 /// is reserved so a Replay channel can never collide with a normal input.
 let EIVIZ_REPLAY_CHANNEL_BASE: UInt64 = 0x0008_0000
 
+/// Must match `DEFAULT_SEGMENT_FRAMES`: two seconds at 60 fps.
+let EIVIZ_REPLAY_DEFAULT_SEGMENT_FRAMES: UInt32 = 120
+
+/// The recording format a new Replay document starts with.
+struct ReplayFormatValues {
+    var width: UInt32
+    var height: UInt32
+    var fpsNum: UInt32
+    var fpsDen: UInt32
+}
+
 struct ReplayAngleInfo: Identifiable, Hashable {
     let id: UInt32
     let name: String
+    /// `Scene` or `Input`: what this angle records from.
+    var source: String = "Scene"
     let sceneId: UInt64
+    /// Input this angle records when `source` is `Input`.
+    var inputId: UInt64 = 0
+    /// `Composite` or `Passthrough` (OMT inputs only).
+    var recordMode: String = "Composite"
     /// Mixing unit whose program mix feeds this angle. Zero means silent.
     let audioUnitId: UInt64
 
     var sceneGpuId: UInt64 { EIVIZ_SCENE_BASE | sceneId }
+
+    /// What the angle shows live: the scene it records, or the input it records
+    /// directly. The deck's monitors follow this.
+    var liveSourceId: UInt64 { source == "Input" ? inputId : sceneGpuId }
 
     var label: String { name.isEmpty ? "Angle \(id)" : name }
 }
@@ -249,11 +270,20 @@ struct ReplayDocument {
     }
 
     /// The document a project gets when its first Replay input is added. Replay
-    /// never appears in a session without this.
-    static func empty() -> ReplayDocument {
+    /// never appears in a session without this, and it carries a recording format
+    /// so the project can record without the operator opening Replay Setup first.
+    static func empty(format: ReplayFormatValues) -> ReplayDocument {
         ReplayDocument(raw: [
             "enabled": .bool(false),
             "storage": .array([]),
+            "format": .object([
+                "width": .number(Double(format.width)),
+                "height": .number(Double(format.height)),
+                "fpsNum": .number(Double(format.fpsNum)),
+                "fpsDen": .number(Double(format.fpsDen)),
+                "profile": .string("Sq"),
+                "segmentFrames": .number(Double(EIVIZ_REPLAY_DEFAULT_SEGMENT_FRAMES)),
+            ]),
             "angles": .array([]),
             "events": .array([]),
             "playlists": .array([]),
@@ -283,6 +313,19 @@ struct ReplayDocument {
 
     var value: JSONValue { .object(raw) }
 
+    /// The settings part of the document, for the `updateReplaySettings` mutation.
+    /// Events and playlists stay with the core that owns them.
+    var settingsJSON: String {
+        var settings: [String: JSONValue] = [:]
+        for name in ["enabled", "storage", "format", "buffering", "retention", "angles", "autoAddToPlaylist"] {
+            if let value = raw[name] {
+                settings[name] = value
+            }
+        }
+        guard let data = try? JSONEncoder().encode(JSONValue.object(settings)) else { return "{}" }
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
     /// The document as the mixer and the session file want it.
     var json: String {
         guard let data = try? JSONEncoder().encode(value) else { return "{}" }
@@ -310,7 +353,11 @@ struct ReplayDocument {
             return ReplayAngleInfo(
                 id: object["id"]?.uint32Value ?? 0,
                 name: object["name"]?.stringValue ?? "",
+                // A document written before the source existed is a scene angle.
+                source: object["source"]?.stringValue ?? "Scene",
                 sceneId: object["sceneId"]?.uint64Value ?? 0,
+                inputId: object["inputId"]?.uint64Value ?? 0,
+                recordMode: object["recordMode"]?.stringValue ?? "Composite",
                 // Silence is the only other source, so an explicit unit id is what
                 // matters.
                 audioUnitId: (object["audio"]?.stringValue ?? "Silent").caseInsensitiveCompare("Unit") == .orderedSame
@@ -727,7 +774,10 @@ struct ReplayDocument {
 
     mutating func setStorages(_ specs: [StorageSpec]) {
         let clean = specs.filter { !$0.path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        raw["enabled"] = .bool(!clean.isEmpty)
+        // A drive and an angle are a recording setup, so the flag says so. The
+        // control layer refuses the other combinations, and a host that wrote them
+        // would leave a project that can never record.
+        raw["enabled"] = .bool(!clean.isEmpty && !angles.isEmpty)
         raw["storage"] = .array(clean.map { spec in
             .object([
                 "path": .string(spec.path.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -741,10 +791,12 @@ struct ReplayDocument {
             .object([
                 "id": .number(Double(angle.id)),
                 "name": .string(angle.name),
+                "source": .string(angle.source),
                 "sceneId": .number(Double(angle.sceneId)),
+                "inputId": .number(Double(angle.inputId)),
                 "audio": .string(angle.audioUnitId == 0 ? "Silent" : "Unit"),
                 "audioUnitId": .number(Double(angle.audioUnitId)),
-                "recordMode": .string("Composite"),
+                "recordMode": .string(angle.recordMode),
             ])
         })
         if !angles.contains(where: { $0.id == activeAngleId }) {

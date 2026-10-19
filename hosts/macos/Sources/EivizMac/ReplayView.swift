@@ -1495,6 +1495,11 @@ struct ReplaySettingsView: View {
         for index in storages.indices {
             storages[index].angleIds.removeAll { !known.contains($0) }
         }
+        // One drive takes every angle: the operator added the drive for this
+        // recording, and a recording never guesses which disk to write to.
+        if storages.count == 1 {
+            storages[0].angleIds = angles.map(\.id).sorted()
+        }
         current.setStorages(storages)
         var format = current.raw["format"]?.objectValue ?? [:]
         format["profile"] = .string(profile)

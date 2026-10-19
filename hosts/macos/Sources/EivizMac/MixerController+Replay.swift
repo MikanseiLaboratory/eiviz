@@ -24,10 +24,25 @@ extension MixerController {
         guard index < 26 else { return false }
         input.id = EIVIZ_REPLAY_CHANNEL_BASE | UInt64(index + 1)
         input.name = ReplayChannelInfo(index: index, inputId: input.id).label
-        var document = replayDocument ?? ReplayDocument.empty()
+        var document = replayDocument ?? ReplayDocument.empty(format: replayFormat())
         document.addChannel(index: index, inputId: input.id)
         session.replay = document.value
         return true
+    }
+
+    /// The recording format a new Replay document starts with: the first Mixing
+    /// Unit's picture and rate, because Replay records one format for every angle
+    /// and the operator is already working in that one. A document without a format
+    /// can never record, and the mixer would only be able to say "the format is
+    /// missing" much later.
+    func replayFormat() -> ReplayFormatValues {
+        let unit = session.units.first
+        return ReplayFormatValues(
+            width: unit?.width ?? session.settings.defaultWidth,
+            height: unit?.height ?? session.settings.defaultHeight,
+            fpsNum: unit?.fpsNum ?? session.settings.masterFpsNum,
+            fpsDen: unit?.fpsDen ?? session.settings.masterFpsDen
+        )
     }
 
     /// Drops the channel an input owns and removes the document when it was the
@@ -170,7 +185,11 @@ extension MixerController {
     func applyReplay(_ document: ReplayDocument) -> Bool {
         session.replay = document.value
         if isRemote {
-            return mutateRemote(MixerRemote.upsertReplaySettings(document.value))
+            // A remote core owns the events and playlists too, so Replay Setup must
+            // not send them back from a copy that may already be stale.
+            return mutateRemote(
+                "{\"kind\":\"updateReplaySettings\",\"settings\":\(document.settingsJSON)}"
+            )
         }
         return replaceRuntime()
     }
