@@ -2268,6 +2268,13 @@ fn render_plan(
     let mut transition = None;
     if let Some((angle, frame)) = plan.secondary {
         if plan.mix > 0.0 && plan.mix < 1.0 {
+            crate::diag::warn_throttled(
+                "replay-transition-plan",
+                &format!(
+                    "replay transition plan kind={:?} mix={:.2} incoming={angle}/{frame}",
+                    plan.kind, plan.mix
+                ),
+            );
             if let Ok(second) = guard.decode(angle, frame, &mut secondary) {
                 substituted |= second.substituted;
                 let second_len = (second.stride as usize)

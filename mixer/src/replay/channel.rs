@@ -637,6 +637,35 @@ mod tests {
         );
     }
     #[test]
+    fn cueing_a_clip_that_is_in_the_playlist_keeps_its_transition() {
+        // The deck cues a clip by its frame range, not by constructing it: the transport
+        // has to find it in the playlist and keep the transition the operator set. A
+        // synthetic clip here silently turns every dissolve into a cut.
+        let mut transport = Transport::new();
+        transport.set_playlist(vec![
+            clip("a", 0, 60, dissolve(TransitionTiming::Overwrap, 30)),
+            clip("b", 100, 160, ClipTransition::CUT),
+        ]);
+        transport.cue(Cue {
+            recording_uuid: "rec".into(),
+            angle_id: 1,
+            in_frame: 0,
+            out_frame: 60,
+        });
+        assert_eq!(
+            transport.clip().map(|clip| clip.transition.kind),
+            Some(TransitionKind::Dissolve),
+            "the cue must resolve to the playlist clip, not a synthetic cut"
+        );
+        transport.set_playing(true);
+        let plans = play_out(&mut transport);
+        assert!(
+            plans.iter().any(|plan| plan.secondary.is_some()),
+            "the boundary must still blend after a cue, got {} plans",
+            plans.len()
+        );
+    }
+    #[test]
     fn forward_shows_every_frame_and_stops_at_the_end() {
         let mut transport = Transport::new();
         transport.cue(Cue {
