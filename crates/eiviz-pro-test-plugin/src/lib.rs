@@ -26,6 +26,8 @@ static CALLBACK_ENTERED: AtomicBool = AtomicBool::new(false);
 static HOLD_DESTROY: AtomicBool = AtomicBool::new(false);
 static CAPTURE: Mutex<Option<CaptureState>> = Mutex::new(None);
 static LICENSE_OK: AtomicBool = AtomicBool::new(false);
+/// Frames stored through the passthrough path, so a test can see them arrive.
+static ENCODED_FRAMES: AtomicUsize = AtomicUsize::new(0);
 
 struct CaptureState {
     callbacks: ProCaptureCallbacks,
@@ -492,6 +494,7 @@ fn base_api() -> ProApi {
         replay_stats: Some(replay_stats),
         replay_estimate: Some(replay_estimate),
         replay_write_audio: Some(replay_write_audio),
+    replay_write_encoded: Some(replay_write_encoded),
         replay_read_audio: Some(replay_read_audio),
         replay_copy_peaks: Some(replay_copy_peaks),
         replay_export_start: Some(replay_export_start),
@@ -720,6 +723,28 @@ unsafe extern "C" fn replay_write_video(
     })
 }
 
+/// Stores a frame the sender already encoded. The test module keeps no bitstream
+/// (the real store does), but it counts what arrived so a test can prove the
+/// passthrough path is wired, and it refuses an empty payload like a real store.
+unsafe extern "C" fn replay_write_encoded(
+    handle: *mut c_void,
+    _angle_id: u32,
+    _frame_index: u64,
+    view: *const eiviz_pro_api::ProReplayEncodedView,
+) -> ProStatus {
+    guard(|| {
+        if handle != 9 as *mut c_void || view.is_null() {
+            return error("bad encoded replay write");
+        }
+        let view = unsafe { &*view };
+        if view.data_len == 0 || view.data.is_null() || view.width == 0 || view.height == 0 {
+            return error("an encoded frame needs a bitstream and a size");
+        }
+        ENCODED_FRAMES.fetch_add(1, Ordering::Relaxed);
+        ProStatus::ok()
+    })
+}
+
 unsafe extern "C" fn replay_decode(
     handle: *mut c_void,
     angle_id: u32,
@@ -832,6 +857,7 @@ unsafe extern "C" fn replay_stats(
             *stats = ProReplayStatsAbi {
                 struct_size: std::mem::size_of::<ProReplayStatsAbi>() as u32,
                 state: 1,
+                encoded_frames: ENCODED_FRAMES.load(Ordering::Relaxed) as u64,
                 ..ProReplayStatsAbi::default()
             };
             *written = 0;

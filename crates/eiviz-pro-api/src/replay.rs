@@ -178,7 +178,32 @@ pub struct ReplayStats {
     pub frames_written: u64,
     pub frames_dropped: u64,
     pub frames_dropped_recent: u32,
+    /// Frames stored as the sender encoded them, without a second encoder.
+    pub encoded_frames: u64,
     pub angles: Vec<ReplayAngleStats>,
+}
+
+/// One frame as it arrived from the sender, still encoded.
+///
+/// Replay passthrough stores this instead of a picture the mixer composited, so the
+/// recording holds what the camera sent rather than a re-encode of it.
+#[derive(Clone, Debug, Default)]
+pub struct EncodedFrame {
+    /// The bitstream, exactly as it arrived.
+    pub payload: Vec<u8>,
+    /// Picture width the sender declared.
+    pub width: u32,
+    /// Picture height the sender declared.
+    pub height: u32,
+    /// Timestamp the sender stamped, in 100 ns units.
+    pub pts_100ns: i64,
+    /// Frame rate numerator the sender declared.
+    pub fps_num: u32,
+    /// Frame rate denominator the sender declared.
+    pub fps_den: u32,
+    /// Frames the receiver's capture replaced before this one. A gap in the record
+    /// the operator should be able to see rather than guess.
+    pub dropped_before: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -268,6 +293,22 @@ pub trait ReplayStore: Send {
     fn range(&self, angle_id: u32) -> ProResult<Option<(u64, u64)>>;
     fn stats(&self) -> ReplayStats;
     fn close(&mut self) -> ProResult<()>;
+
+    /// Stores a frame the sender already encoded, without decoding or re-encoding it.
+    ///
+    /// Passthrough angles record this way: the clip plays back the bitstream the
+    /// camera sent, so the picture never passes through a second encoder. A store
+    /// that cannot keep a bitstream says so instead of quietly re-encoding.
+    fn write_encoded(
+        &mut self,
+        _angle_id: u32,
+        _frame_index: u64,
+        _frame: &EncodedFrame,
+    ) -> ProResult<WriteOutcome> {
+        Err(ProError::unavailable(
+            "this store cannot record an already-encoded frame",
+        ))
+    }
 
     /// Appends interleaved PCM for the video frame it belongs to. The samples
     /// also feed the waveform buckets, so the Event List never reads PCM back.

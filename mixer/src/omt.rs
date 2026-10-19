@@ -129,12 +129,38 @@ impl OmtReceiver {
                     let live_since = Instant::now();
                     let mut missing_video_logged = false;
                     let mut jitter = JitterRing::default();
+                    // Passthrough angles store the bitstream the sender sent, so the
+                    // receiver is asked for it only while one is recording. Frames the
+                    // capture replaced are counted and passed on, so the recording shows
+                    // a gap instead of pretending the pictures were continuous.
+                    let mut encoded_dropped_seen = 0u64;
                     let run = panic::catch_unwind(AssertUnwindSafe(|| {
                         while !stop_thread.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
                             let full = debounce_want_full(
                                 want_full_thread.load(Ordering::Relaxed),
                                 &mut drop_full_at,
                             );
+                            let passthrough = crate::replay::engine().passthrough_angle_for(source_id);
+                            session.set_encoded_capture(passthrough.is_some());
+                            if let Some(angle_id) = passthrough {
+                                while let Some(frame) = session.try_recv_vmx1() {
+                                    let dropped_now = session.encoded_dropped();
+                                    let dropped_before =
+                                        dropped_now.saturating_sub(encoded_dropped_seen);
+                                    encoded_dropped_seen = dropped_now;
+                                    let encoded = eiviz_pro_api::EncodedFrame {
+                                        payload: frame.payload,
+                                        width: frame.width,
+                                        height: frame.height,
+                                        pts_100ns: frame.pts_100ns,
+                                        fps_num: frame.fps_num,
+                                        fps_den: frame.fps_den,
+                                        dropped_before,
+                                    };
+                                    crate::replay::engine()
+                                        .write_encoded_frame(angle_id, &encoded);
+                                }
+                            }
                             apply_omt_save(
                                 &session,
                                 full,

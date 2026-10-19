@@ -314,6 +314,10 @@ pub struct ProApi {
     pub replay_write_audio: Option<
         unsafe extern "C" fn(*mut c_void, u32, u64, *const ProReplayAudioView) -> ProStatus,
     >,
+    /// Stores a frame the sender already encoded (Replay passthrough).
+    pub replay_write_encoded: Option<
+        unsafe extern "C" fn(*mut c_void, u32, u64, *const ProReplayEncodedView) -> ProStatus,
+    >,
     pub replay_read_audio: Option<
         unsafe extern "C" fn(*mut c_void, u32, u64, usize, *mut f32, *mut u32) -> ProStatus,
     >,
@@ -480,6 +484,29 @@ pub struct ProReplayStatsAbi {
     pub frames_written: u64,
     pub frames_dropped: u64,
     pub frames_dropped_recent: u32,
+    /// Frames stored as the sender encoded them, without a second encoder.
+    pub encoded_frames: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProReplayEncodedView {
+    pub struct_size: u32,
+    /// Picture width the sender declared.
+    pub width: u32,
+    /// Picture height the sender declared.
+    pub height: u32,
+    /// Timestamp the sender stamped, in 100 ns units.
+    pub pts_100ns: i64,
+    /// Frame rate numerator the sender declared.
+    pub fps_num: u32,
+    /// Frame rate denominator the sender declared.
+    pub fps_den: u32,
+    /// Frames the receiver's capture replaced before this one.
+    pub dropped_before: u64,
+    /// The bitstream, exactly as it arrived.
+    pub data: *const u8,
+    pub data_len: usize,
 }
 
 #[repr(C)]

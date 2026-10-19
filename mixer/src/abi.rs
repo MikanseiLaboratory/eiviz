@@ -217,6 +217,12 @@ pub struct MixerReplayStats {
     /// Frames handed to the readback. `frames_offered` should match it: the
     /// difference is picture the readback could not carry.
     pub frames_pushed: u64,
+    /// Frames stored as the sender encoded them (passthrough angles). These never
+    /// pass through the readback or an encoder.
+    pub encoded_frames: u64,
+    /// Encoded frames the store refused. Counted so a module that cannot keep a
+    /// bitstream shows up as losses instead of as a recording that holds nothing.
+    pub encoded_dropped: u64,
 }
 
 #[repr(C)]

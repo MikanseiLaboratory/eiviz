@@ -18,10 +18,10 @@ use eiviz_control::session::replay::{
     retention_code,
 };
 use eiviz_pro_api::{
-    Entitlements, LAYOUT_BGRA, PRO_BUSY, PRO_IO, PixelLayout, ProReplayAngle, ProReplayConfig,
-    ProReplayDecoded, ProReplayEstimateAbi, ProReplayStatsAbi, ProReplayStorage, ProVideoView,
-    ReplayAngleStats, ReplayStats, ReplayStore, ReplayStoreConfig, STATE_RECORDING, STATE_STOPPED,
-    VideoFrame, WriteOutcome, estimate_rate_bps, free_bytes, remaining_secs,
+    EncodedFrame, Entitlements, LAYOUT_BGRA, PRO_BUSY, PRO_IO, PixelLayout, ProReplayAngle,
+    ProReplayConfig, ProReplayDecoded, ProReplayEstimateAbi, ProReplayStatsAbi, ProReplayStorage,
+    ProVideoView, ReplayAngleStats, ReplayStats, ReplayStore, ReplayStoreConfig, STATE_RECORDING,
+    STATE_STOPPED, VideoFrame, WriteOutcome, estimate_rate_bps, free_bytes, remaining_secs,
 };
 
 use crate::abi::{
@@ -597,12 +597,19 @@ impl ReplayEngine {
             .iter()
             .any(|angle| angle.record_mode == AngleRecordMode::Passthrough)
         {
-            // Passthrough stores the frames an OMT input already sends. That path
-            // arrives with the compressed-frame capture, so until it exists the
-            // recorder says so instead of writing nothing for the angle.
-            return Err(ReplayFailure::invalid(
-                "passthrough recording is not available yet; use composite for this angle",
-            ));
+            // A passthrough angle stores the frames its OMT input already sends, so
+            // it needs one. The session refuses the other combinations; saying it here
+            // too keeps the mixer from recording an angle that can never fill.
+            let missing = angles.iter().find(|angle| {
+                angle.record_mode == AngleRecordMode::Passthrough
+                    && (angle.source != AngleSourceKind::Input || angle.input_id == 0)
+            });
+            if let Some(angle) = missing {
+                return Err(ReplayFailure::invalid(format!(
+                    "replay angle {} passes frames through, so it must record an input",
+                    angle.id
+                )));
+            }
         }
         // Free space has to be known before a recording starts: an unreadable
         // drive is not a full drive, and treating it as zero hid the real reason.
@@ -827,6 +834,83 @@ impl ReplayEngine {
         ids.sort_unstable();
         ids.dedup();
         ids
+    }
+
+    /// The passthrough angle recording this input while a recording is running, if
+    /// any. A receiver asks for the bitstream only while one is.
+    pub fn passthrough_angle_for(&self, input_id: u64) -> Option<u32> {
+        let inner = self.lock();
+        if !inner.recording {
+            return None;
+        }
+        inner
+            .config
+            .angles
+            .iter()
+            .find(|angle| {
+                angle.source == AngleSourceKind::Input
+                    && angle.record_mode == AngleRecordMode::Passthrough
+                    && angle.input_id == input_id
+            })
+            .map(|angle| angle.id)
+    }
+
+    /// Stores a frame a passthrough angle received, exactly as the sender encoded
+    /// it. The store keeps the bitstream, so the clip plays back what the camera
+    /// sent rather than a re-encode of it.
+    ///
+    /// Returns whether the store took it. A refusal is counted against the angle, so
+    /// a module that cannot keep a bitstream shows up as losses instead of as a
+    /// recording that quietly holds nothing.
+    pub fn write_encoded_frame(&self, angle_id: u32, frame: &EncodedFrame) -> bool {
+        let store = self
+            .store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let Some(store) = store else {
+            return false;
+        };
+        let frame_index = {
+            let mut inner = self.lock();
+            if !inner.recording {
+                return false;
+            }
+            // The passthrough angle keeps the timeline moving even though the frames
+            // arrive from the sender: marks and clips are cut on that timeline.
+            let index = inner.last_frame.saturating_add(1);
+            if !inner.has_frames {
+                inner.first_frame = index;
+                inner.has_frames = true;
+            }
+            inner.last_frame = index;
+            inner.stats.recording_frame = index;
+            inner.stats.last_frame = index;
+            index
+        };
+        let outcome = store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .write_encoded(angle_id, frame_index, frame);
+        match outcome {
+            Ok(WriteOutcome::Accepted) => {
+                let mut inner = self.lock();
+                inner.stats.encoded_frames = inner.stats.encoded_frames.saturating_add(1);
+                true
+            }
+            Ok(WriteOutcome::Dropped) => {
+                let mut inner = self.lock();
+                inner.stats.encoded_dropped = inner.stats.encoded_dropped.saturating_add(1);
+                false
+            }
+            Err(error) => {
+                let mut inner = self.lock();
+                inner.stats.encoded_dropped = inner.stats.encoded_dropped.saturating_add(1);
+                inner.stats.issues |= eiviz_pro_api::ISSUE_STORAGE_WRITE;
+                crate::diag::error(&format!("replay passthrough write failed: {error}"));
+                false
+            }
+        }
     }
 
     pub fn offer_frame(&self, angle_id: u32, frame_index: u64, pts: i64, data: Vec<u8>, stride: usize) {
@@ -1294,6 +1378,10 @@ impl ReplayEngine {
             "remainingIsEstimate": stats.remaining_is_estimate != 0,
             "framesWritten": stats.frames_written,
             "framesDropped": stats.frames_dropped,
+            // Passthrough angles: stored as the sender encoded them, never read back
+            // or encoded again. `encodedDropped` is a module that could not keep them.
+            "encodedFrames": stats.encoded_frames,
+            "encodedDropped": stats.encoded_dropped,
             "markInFrame": stats.mark_in_frame,
             "markInValid": stats.mark_in_valid != 0,
             "recordingUuid": self.recording_uuid(),
@@ -2279,6 +2367,43 @@ impl ReplayStore for FfiReplayStore {
         }
     }
 
+    /// Stores a frame the sender already encoded. A module that cannot keep a
+    /// bitstream says so, and the recorder reports it rather than quietly
+    /// re-encoding the picture.
+    fn write_encoded(
+        &mut self,
+        angle_id: u32,
+        frame_index: u64,
+        frame: &EncodedFrame,
+    ) -> eiviz_pro_api::ProResult<WriteOutcome> {
+        let Some(write) = self.api.replay_write_encoded else {
+            return Err(eiviz_pro_api::ProError::unavailable(
+                "this Pro module cannot record an already-encoded frame",
+            ));
+        };
+        let view = eiviz_pro_api::ProReplayEncodedView {
+            struct_size: std::mem::size_of::<eiviz_pro_api::ProReplayEncodedView>() as u32,
+            width: frame.width,
+            height: frame.height,
+            pts_100ns: frame.pts_100ns,
+            fps_num: frame.fps_num,
+            fps_den: frame.fps_den,
+            dropped_before: frame.dropped_before,
+            data: frame.payload.as_ptr(),
+            data_len: frame.payload.len(),
+        };
+        let status = unsafe { write(self.handle, angle_id, frame_index, &view) };
+        if status.code == 0 {
+            Ok(WriteOutcome::Accepted)
+        } else if status.code == PRO_BUSY || status.code == eiviz_pro_api::PRO_INVALID {
+            Ok(WriteOutcome::Dropped)
+        } else {
+            Err(eiviz_pro_api::ProError::io(
+                "recording an already-encoded frame failed",
+            ))
+        }
+    }
+
     fn read_audio(
         &mut self,
         angle_id: u32,
@@ -2485,6 +2610,7 @@ impl ReplayStore for FfiReplayStore {
             frames_written: stats.frames_written,
             frames_dropped: stats.frames_dropped,
             frames_dropped_recent: stats.frames_dropped_recent,
+            encoded_frames: stats.encoded_frames,
             angles: angles
                 .iter()
                 .take(written as usize)
