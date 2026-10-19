@@ -389,6 +389,12 @@ impl ControlService {
                 self.after_live("SceneSequence", request_id, None, false)
             }
             Command::ReplayRecord { on } => {
+                // The document says whether a recording can run at all. Refusing
+                // here names the missing piece; the mixer would only see a
+                // document that was never applied.
+                if on {
+                    self.check_replay_can_record()?;
+                }
                 self.port.replay_record(on)?;
                 self.after_live("ReplayRecord", request_id, None, false)
             }
@@ -789,6 +795,45 @@ impl ControlService {
         if replay_is_recording(&self.port.replay_state_json()) {
             return Err(ControlError::invalid(
                 "stop Replay recording before changing the Replay angles",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Whether the Replay document can start a recording at all.
+    ///
+    /// The mixer checks its own configuration too, but a document that was never
+    /// applied (or that a client wrote without a format) reaches the mixer as a
+    /// half-built engine. Naming the missing piece here is what the operator can
+    /// act on.
+    fn check_replay_can_record(&self) -> ControlResult<()> {
+        let Some(document) = self.store.document_cloned() else {
+            return Err(ControlError::invalid(
+                "the session has no Replay settings yet",
+            ));
+        };
+        let Some(replay) = document.replay.as_ref() else {
+            return Err(ControlError::invalid("add a Replay input before recording"));
+        };
+        if !replay.enabled {
+            return Err(ControlError::invalid(
+                "replay is not enabled; apply Replay Setup with at least one drive and one angle",
+            ));
+        }
+        if replay.storage.is_empty() {
+            return Err(ControlError::invalid(
+                "replay has no storage drive; add one in Replay Setup",
+            ));
+        }
+        if replay.angles.is_empty() {
+            return Err(ControlError::invalid(
+                "replay has no angles; add one in Replay Setup",
+            ));
+        }
+        let format = &replay.format;
+        if format.width == 0 || format.height == 0 || format.fps_num == 0 || format.fps_den == 0 {
+            return Err(ControlError::invalid(
+                "replay format needs a resolution and a frame rate; apply Replay Setup",
             ));
         }
         Ok(())

@@ -35,6 +35,63 @@ use crate::upload::CpuFormat;
 
 pub use health::{HealthMemory, HealthSample, step as health_step};
 
+/// Segment length bounds, in frames. The store used to substitute 120 frames when
+/// the setting was zero; a recording that quietly chooses its own segment length is
+/// not the recording the operator asked for, so the range is enforced instead.
+pub const SEGMENT_FRAMES_MIN: u32 = 30;
+pub const SEGMENT_FRAMES_MAX: u32 = 1800;
+/// Encode queue bounds. The store clamped these silently; the refusal belongs here.
+pub const ENCODE_QUEUE_MIN: u32 = 2;
+pub const ENCODE_QUEUE_MAX: u32 = 60;
+pub const WRITE_BUFFER_MIN_MB: u32 = 64;
+pub const WRITE_BUFFER_MAX_MB: u32 = 8192;
+
+/// Why a Replay command was refused.
+///
+/// The code keeps the C ABI stable; the message is what the operator reads. A
+/// refusal that collapses into "replay command was rejected" leaves the operator
+/// with nothing to act on, so every failure carries the reason it was refused.
+#[derive(Debug, Clone)]
+pub struct ReplayFailure {
+    pub code: i32,
+    pub message: String,
+}
+
+impl ReplayFailure {
+    pub fn new(code: i32, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub fn invalid(message: impl Into<String>) -> Self {
+        Self::new(ERR_INVALID_ARGUMENT, message)
+    }
+
+    pub fn io(message: impl Into<String>) -> Self {
+        Self::new(ERR_IO, message)
+    }
+
+    pub fn plan(message: impl Into<String>) -> Self {
+        Self::new(ERR_NOT_SUPPORTED_PLAN, message)
+    }
+
+    /// The control-layer error for this refusal, carrying the same reason.
+    pub fn into_control(self) -> ControlError {
+        control_error_with(self.code, &self.message)
+    }
+}
+
+/// A plan quota as the operator should read it.
+fn quota_text(quota: eiviz_pro_api::Quota<u32>) -> String {
+    match quota.abi_count() {
+        u32::MAX => "unlimited".to_string(),
+        0 => "none".to_string(),
+        count => count.to_string(),
+    }
+}
+
 /// The audio graph runs at this rate, in this many channels. The waveform
 /// buckets are sized from it.
 const AUDIO_SAMPLE_RATE: u32 = crate::upload::AUDIO_RATE as u32;
@@ -298,8 +355,10 @@ impl ReplayEngine {
         let _ = (inbox, stop);
     }
 
-    pub fn configure(&self, json: &str) -> Result<(), i32> {
-        let dto: Option<ReplayDto> = serde_json::from_str(json).map_err(|_| ERR_INVALID_ARGUMENT)?;
+    pub fn configure(&self, json: &str) -> Result<(), ReplayFailure> {
+        let dto: Option<ReplayDto> = serde_json::from_str(json).map_err(|error| {
+            ReplayFailure::invalid(format!("replay settings are not valid JSON: {error}"))
+        })?;
         let Some(dto) = dto else {
             self.stop(REPLAY_STOP_USER);
             // Replay is gone from the project, so the recorded material goes with it.
@@ -325,7 +384,9 @@ impl ReplayEngine {
                 let next: std::collections::BTreeSet<u32> =
                     dto.angles.iter().map(|angle| angle.id).collect();
                 if current != next {
-                    return Err(ERR_INVALID_ARGUMENT);
+                    return Err(ReplayFailure::invalid(
+                        "replay angles cannot change while recording; stop the recording first",
+                    ));
                 }
             }
         }
@@ -377,7 +438,7 @@ impl ReplayEngine {
         Ok(())
     }
 
-    fn gate(&self, dto: &ReplayDto) -> Result<(), i32> {
+    fn gate(&self, dto: &ReplayDto) -> Result<(), ReplayFailure> {
         let ent = crate::pro::entitlements();
         // Counts are checked even while recording is stopped. A document that
         // exceeds the plan can never run, and accepting it hides the problem
@@ -385,26 +446,37 @@ impl ReplayEngine {
         if !dto.channels.is_empty()
             && !Entitlements::admits_count(ent.replay_channels, dto.channels.len() - 1, false)
         {
-            return Err(ERR_NOT_SUPPORTED_PLAN);
+            return Err(ReplayFailure::plan(format!(
+                "this plan allows {} Replay channels, the project has {}",
+                quota_text(ent.replay_channels),
+                dto.channels.len()
+            )));
         }
         if !dto.angles.is_empty()
             && !Entitlements::admits_count(ent.replay_angles, dto.angles.len() - 1, false)
         {
-            return Err(ERR_NOT_SUPPORTED_PLAN);
+            return Err(ReplayFailure::plan(format!(
+                "this plan allows {} Replay angles, the project has {}",
+                quota_text(ent.replay_angles),
+                dto.angles.len()
+            )));
         }
         if !dto.enabled {
             return Ok(());
         }
         if !Entitlements::admits_count(ent.replay_angles, 0, true) {
-            return Err(ERR_NOT_SUPPORTED_PLAN);
+            return Err(ReplayFailure::plan(format!(
+                "this plan allows {} Replay angles",
+                quota_text(ent.replay_angles)
+            )));
         }
         if crate::pro::module().replay().is_none() {
-            return Err(ERR_IO);
+            return Err(ReplayFailure::io("replay requires the Pro module"));
         }
         Ok(())
     }
 
-    pub fn record(&self, on: bool) -> Result<(), i32> {
+    pub fn record(&self, on: bool) -> Result<(), ReplayFailure> {
         if !on {
             self.stop(REPLAY_STOP_USER);
             return Ok(());
@@ -412,15 +484,21 @@ impl ReplayEngine {
         let (paths, width, height, fps_num, fps_den, profile, angles, reserve, queue, write_mb, overflow, retention, segment_frames, protect_from) = {
             let inner = self.lock();
             if !inner.config.enabled {
-                return Err(ERR_INVALID_ARGUMENT);
+                return Err(ReplayFailure::invalid(
+                    "replay is not enabled; apply Replay Setup with at least one drive and one angle",
+                ));
             }
             if inner.config.storage.is_empty() {
-                return Err(ERR_IO);
+                return Err(ReplayFailure::invalid(
+                    "replay has no storage drive; add one in Replay Setup",
+                ));
             }
             let mut paths = Vec::with_capacity(inner.config.storage.len());
-            for storage in &inner.config.storage {
+            for (index, storage) in inner.config.storage.iter().enumerate() {
                 if storage.path.trim().is_empty() {
-                    return Err(ERR_IO);
+                    return Err(ReplayFailure::invalid(format!(
+                        "replay storage {index} has an empty path"
+                    )));
                 }
                 paths.push(storage.path.clone());
             }
@@ -446,8 +524,8 @@ impl ReplayEngine {
                 profile_code(inner.config.format.profile),
                 inner.config.angles.clone(),
                 u64::from(inner.config.buffering.reserve_mb) * 1024 * 1024,
-                inner.config.buffering.encode_queue_frames.max(2),
-                inner.config.buffering.write_buffer_mb.max(64),
+                inner.config.buffering.encode_queue_frames,
+                inner.config.buffering.write_buffer_mb,
                 overflow_code(inner.config.buffering.overflow_policy),
                 retention_code(inner.config.retention),
                 // The segment length is the operator's setting; the module must
@@ -456,46 +534,90 @@ impl ReplayEngine {
                 if guard == u64::MAX { 0 } else { guard },
             )
         };
-        let (_, scene_ids, _) = crate::replay_record_context().map_err(|_| ERR_IO)?;
+        let (_, scene_ids, _) = crate::replay_record_context()
+            .map_err(|_| ReplayFailure::io("the mixer has no recording context yet"))?;
         let angles = angles;
         if angles.is_empty() {
-            return Err(ERR_INVALID_ARGUMENT);
+            return Err(ReplayFailure::invalid(
+                "replay has no angles; add one in Replay Setup",
+            ));
+        }
+        if width == 0 || height == 0 || fps_num == 0 || fps_den == 0 {
+            return Err(ReplayFailure::invalid(
+                "replay format needs a resolution and a frame rate; apply Replay Setup",
+            ));
+        }
+        if !(SEGMENT_FRAMES_MIN..=SEGMENT_FRAMES_MAX).contains(&segment_frames) {
+            return Err(ReplayFailure::invalid(format!(
+                "replay segment frames must be between {SEGMENT_FRAMES_MIN} and {SEGMENT_FRAMES_MAX}, got {segment_frames}"
+            )));
+        }
+        if !(ENCODE_QUEUE_MIN..=ENCODE_QUEUE_MAX).contains(&queue) {
+            return Err(ReplayFailure::invalid(format!(
+                "replay encode queue must be between {ENCODE_QUEUE_MIN} and {ENCODE_QUEUE_MAX} frames, got {queue}"
+            )));
+        }
+        if !(WRITE_BUFFER_MIN_MB..=WRITE_BUFFER_MAX_MB).contains(&write_mb) {
+            return Err(ReplayFailure::invalid(format!(
+                "replay write buffer must be between {WRITE_BUFFER_MIN_MB} and {WRITE_BUFFER_MAX_MB} MiB, got {write_mb}"
+            )));
         }
         for angle in &angles {
             let gpu = eiviz_control::ids::scene_gpu_id(angle.scene_id);
             if !scene_ids.contains(&gpu) && !scene_ids.contains(&angle.scene_id) {
-                return Err(ERR_IO);
+                return Err(ReplayFailure::io(format!(
+                    "replay angle {} scene {} is not defined in the mixer",
+                    angle.id, angle.scene_id
+                )));
             }
         }
-        if width == 0 || height == 0 || fps_num == 0 || fps_den == 0 {
-            return Err(ERR_INVALID_ARGUMENT);
+        // Free space has to be known before a recording starts: an unreadable
+        // drive is not a full drive, and treating it as zero hid the real reason.
+        let mut free: u64 = 0;
+        for path in &paths {
+            match free_bytes(path) {
+                Some(bytes) => free = free.saturating_add(bytes),
+                None => {
+                    return Err(ReplayFailure::io(format!(
+                        "cannot query free space at {path}"
+                    )));
+                }
+            }
         }
-        let free: u64 = paths.iter().map(|path| free_bytes(path).unwrap_or(0)).sum();
         if free <= reserve {
-            return Err(ERR_IO);
+            return Err(ReplayFailure::io(format!(
+                "not enough free space: {free} bytes free, {reserve} bytes reserved"
+            )));
         }
         let uuid = format!("rec-{}", uuid_stamp());
         let remembered = angles.clone();
-        let backend = crate::pro::module().replay().ok_or(ERR_IO)?;
-        // An angle records to the storage that names it, otherwise to the first
-        // one. The mapping is explicit in the session, never guessed here.
+        let backend = crate::pro::module()
+            .replay()
+            .ok_or_else(|| ReplayFailure::io("replay requires the Pro module"))?;
+        // An angle records to the storage that names it. The mapping is explicit in
+        // the session; guessing a drive would record to a disk the operator did not
+        // choose, so an unassigned angle is a configuration error.
         let angle_targets = {
             let inner = self.lock();
-            angles
-                .iter()
-                .map(|angle| {
-                    let index = inner
-                        .config
-                        .storage
-                        .iter()
-                        .position(|storage| storage.angle_ids.contains(&angle.id))
-                        .unwrap_or(0);
-                    eiviz_pro_api::ReplayAngleTarget {
-                        angle_id: angle.id,
-                        storage_index: index as u32,
-                    }
-                })
-                .collect::<Vec<_>>()
+            let mut targets = Vec::with_capacity(angles.len());
+            for angle in &angles {
+                let index = inner
+                    .config
+                    .storage
+                    .iter()
+                    .position(|storage| storage.angle_ids.contains(&angle.id))
+                    .ok_or_else(|| {
+                        ReplayFailure::invalid(format!(
+                            "replay angle {} has no storage assigned",
+                            angle.id
+                        ))
+                    })?;
+                targets.push(eiviz_pro_api::ReplayAngleTarget {
+                    angle_id: angle.id,
+                    storage_index: index as u32,
+                });
+            }
+            targets
         };
         let config = ReplayStoreConfig {
             recording_uuid: uuid.clone(),
@@ -517,7 +639,9 @@ impl ReplayEngine {
             retention,
             protect_from_frame: protect_from,
         };
-        let store = backend.open(&config).map_err(|_| ERR_IO)?;
+        let store = backend.open(&config).map_err(|error| {
+            ReplayFailure::io(format!("the Pro module refused the recording: {error}"))
+        })?;
         self.stop_record.store(false, Ordering::Relaxed);
         *self.store.lock().unwrap_or_else(|error| error.into_inner()) = Some(Arc::new(Mutex::new(store)));
         self.ensure_workers();
@@ -1908,6 +2032,18 @@ fn uuid_stamp() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Control-layer error for a Replay refusal. The message is the reason the mixer
+/// gave; a client that reads it can tell "no storage" from "no Pro module".
+pub fn control_error_with(code: i32, message: &str) -> ControlError {
+    if code == ERR_NOT_SUPPORTED_PLAN {
+        ControlError::not_supported_plan(message)
+    } else if code == ERR_IO {
+        ControlError::io(message)
+    } else {
+        ControlError::invalid(message)
+    }
 }
 
 pub fn control_error(code: i32) -> ControlError {

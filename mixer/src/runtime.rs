@@ -520,13 +520,13 @@ impl MixerPort for ProcessMixer {
     fn replay_configure(&mut self, json: &str) -> ControlResult<()> {
         crate::replay::engine()
             .configure(json)
-            .map_err(crate::replay::control_error)
+            .map_err(crate::replay::ReplayFailure::into_control)
     }
 
     fn replay_record(&mut self, on: bool) -> ControlResult<()> {
         crate::replay::engine()
             .record(on)
-            .map_err(crate::replay::control_error)
+            .map_err(crate::replay::ReplayFailure::into_control)
     }
 
     fn replay_mark_in(&mut self) -> ControlResult<u64> {

@@ -103,7 +103,7 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
     // The channel starts with no playlist: the clips only exist once they are
     // marked, so the playlist is written after the marks are taken.
     let open = CString::new(format!(
-        r#"{{"enabled":true,"storage":[{{"path":"{path}"}}],
+        r#"{{"enabled":true,"storage":[{{"path":"{path}","angleIds":[1]}}],
 "angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent","recordMode":"Composite"}}],
 "activeAngleId":1,
 "channels":[{{"index":0,"playlistId":null,"inputId":0}}],
@@ -157,7 +157,7 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
     // played twice, once per timing, so both are proven with one pass of frames.
     let playlist = |timing: &str| {
         CString::new(format!(
-            r#"{{"enabled":true,"storage":[{{"path":"{path}"}}],
+            r#"{{"enabled":true,"storage":[{{"path":"{path}","angleIds":[1]}}],
 "angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent","recordMode":"Composite"}}],
 "activeAngleId":1,
 "channels":[{{"index":0,"playlistId":7,"inputId":0}}],

@@ -4792,11 +4792,17 @@ unsafe fn mixer_capabilities_ffi(out: *mut MixerCapabilities) -> i32 {
 pub unsafe extern "C" fn mixer_replay_configure(json: *const c_char) -> i32 {
     ffi_guard("mixer_replay_configure", ERR_IO, || unsafe {
         let Some(json) = crate::pro::cstr(json) else {
+            report_session_error("replay settings pointer is null");
             return ERR_INVALID_ARGUMENT;
         };
         match crate::replay::engine().configure(json) {
             Ok(()) => OK,
-            Err(code) => code,
+            Err(failure) => {
+                // The reason is what the operator acts on, so it travels with the
+                // code instead of being replaced by a generic sentence.
+                report_session_error(&failure.message);
+                failure.code
+            }
         }
     })
 }
@@ -4921,7 +4927,13 @@ pub unsafe extern "C" fn mixer_replay_record(on: u32) -> i32 {
     ffi_guard("mixer_replay_record", ERR_IO, || {
         match crate::replay::engine().record(on != 0) {
             Ok(()) => OK,
-            Err(code) => code,
+            Err(failure) => {
+                // A recorder that refuses to start has to say why: "no storage",
+                // "no angles", "no Pro module" and "bad format" are different
+                // problems with different fixes.
+                report_session_error(&failure.message);
+                failure.code
+            }
         }
     })
 }
