@@ -568,11 +568,38 @@ impl Default for ClipDto {
 }
 
 session_string_enum! {
+    /// How one clip gives way to the next. The names are the mixing unit's names, so an
+    /// operator picks the same word in both places.
+    ///
+    /// Only the ones the replay path can draw are listed. A clip transition is composed
+    /// from the two decoded frames, and the mixing unit's transitions are GPU shaders
+    /// that warp the picture; a warp here would cost a frame's worth of work per pixel
+    /// on the CPU and would not keep up with playout.
     #[derive(Default)]
     pub enum ReplayTransitionKind {
         #[default]
         Cut,
         Dissolve,
+        /// Fade out through black, then in.
+        Dip,
+        /// A hard edge sweeps across the picture.
+        Wipe,
+        /// The incoming clip slides in over the outgoing one.
+        Slide,
+        /// The outgoing clip slides out as the incoming one slides in.
+        Push,
+    }
+}
+
+session_string_enum! {
+    /// Which way a directional transition travels.
+    #[derive(Default)]
+    pub enum ReplayTransitionDirection {
+        #[default]
+        Left,
+        Right,
+        Up,
+        Down,
     }
 }
 
@@ -593,6 +620,9 @@ session_string_enum! {
 pub struct ClipTransitionDto {
     #[serde(default)]
     pub kind: ReplayTransitionKind,
+    /// Which way a `Wipe`, `Slide` or `Push` travels. Ignored by the others.
+    #[serde(default)]
+    pub direction: ReplayTransitionDirection,
     #[serde(default)]
     pub timing: ReplayTransitionTiming,
     #[serde(default)]
@@ -612,6 +642,8 @@ impl<'de> Deserialize<'de> for ClipTransitionDto {
                 #[serde(default)]
                 kind: ReplayTransitionKind,
                 #[serde(default)]
+                direction: ReplayTransitionDirection,
+                #[serde(default)]
                 timing: ReplayTransitionTiming,
                 #[serde(default)]
                 duration_frames: u32,
@@ -624,10 +656,12 @@ impl<'de> Deserialize<'de> for ClipTransitionDto {
             },
             Raw::Full {
                 kind,
+                direction,
                 timing,
                 duration_frames,
             } => Self {
                 kind,
+                direction,
                 timing,
                 duration_frames,
             },
@@ -639,6 +673,7 @@ impl Default for ClipTransitionDto {
     fn default() -> Self {
         Self {
             kind: ReplayTransitionKind::Cut,
+            direction: ReplayTransitionDirection::Left,
             timing: ReplayTransitionTiming::Overwrap,
             duration_frames: 0,
         }

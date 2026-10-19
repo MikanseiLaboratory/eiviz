@@ -1765,28 +1765,48 @@ fn clip_audio_from_pb(audio: i32) -> crate::session::replay::ClipAudio {
 fn clip_transition_to_pb(
     transition: crate::session::replay::ClipTransitionDto,
 ) -> pb::ClipTransition {
-    use crate::session::replay::{ReplayTransitionKind, ReplayTransitionTiming};
+    use crate::session::replay::{ReplayTransitionDirection, ReplayTransitionKind, ReplayTransitionTiming};
     pb::ClipTransition {
         kind: match transition.kind {
             ReplayTransitionKind::Cut => pb::ReplayTransitionKind::Cut as i32,
             ReplayTransitionKind::Dissolve => pb::ReplayTransitionKind::Dissolve as i32,
+            ReplayTransitionKind::Dip => pb::ReplayTransitionKind::Dip as i32,
+            ReplayTransitionKind::Wipe => pb::ReplayTransitionKind::Wipe as i32,
+            ReplayTransitionKind::Slide => pb::ReplayTransitionKind::Slide as i32,
+            ReplayTransitionKind::Push => pb::ReplayTransitionKind::Push as i32,
         },
         timing: match transition.timing {
             ReplayTransitionTiming::Overwrap => pb::ReplayTransitionTiming::Overwrap as i32,
             ReplayTransitionTiming::Additive => pb::ReplayTransitionTiming::Additive as i32,
         },
         duration_frames: transition.duration_frames,
+        direction: match transition.direction {
+            ReplayTransitionDirection::Left => pb::ReplayTransitionDirection::Left as i32,
+            ReplayTransitionDirection::Right => pb::ReplayTransitionDirection::Right as i32,
+            ReplayTransitionDirection::Up => pb::ReplayTransitionDirection::Up as i32,
+            ReplayTransitionDirection::Down => pb::ReplayTransitionDirection::Down as i32,
+        },
     }
 }
 
 fn clip_transition_from_pb(
     transition: pb::ClipTransition,
 ) -> crate::session::replay::ClipTransitionDto {
-    use crate::session::replay::{ReplayTransitionKind, ReplayTransitionTiming};
+    use crate::session::replay::{ReplayTransitionDirection, ReplayTransitionKind, ReplayTransitionTiming};
     crate::session::replay::ClipTransitionDto {
         kind: match pb::ReplayTransitionKind::try_from(transition.kind) {
             Ok(pb::ReplayTransitionKind::Dissolve) => ReplayTransitionKind::Dissolve,
+            Ok(pb::ReplayTransitionKind::Dip) => ReplayTransitionKind::Dip,
+            Ok(pb::ReplayTransitionKind::Wipe) => ReplayTransitionKind::Wipe,
+            Ok(pb::ReplayTransitionKind::Slide) => ReplayTransitionKind::Slide,
+            Ok(pb::ReplayTransitionKind::Push) => ReplayTransitionKind::Push,
             _ => ReplayTransitionKind::Cut,
+        },
+        direction: match pb::ReplayTransitionDirection::try_from(transition.direction) {
+            Ok(pb::ReplayTransitionDirection::Right) => ReplayTransitionDirection::Right,
+            Ok(pb::ReplayTransitionDirection::Up) => ReplayTransitionDirection::Up,
+            Ok(pb::ReplayTransitionDirection::Down) => ReplayTransitionDirection::Down,
+            _ => ReplayTransitionDirection::Left,
         },
         timing: match pb::ReplayTransitionTiming::try_from(transition.timing) {
             Ok(pb::ReplayTransitionTiming::Additive) => ReplayTransitionTiming::Additive,

@@ -42,6 +42,8 @@ public partial class ReplayWindow : Window
     private IReadOnlyList<ReplayPlaylistInfo> _playlistChoices = [];
     private uint _channel;
     private ulong? _inFrame;
+    /// <summary>True while the channel follows the recording edge instead of a clip.</summary>
+    private bool _live;
     private ulong _outFrame;
     /// <summary>
     /// True between Mark In and Mark Out. The mark itself stays on screen after it
@@ -629,6 +631,12 @@ public partial class ReplayWindow : Window
             RecordButton.IsEnabled = true;
             StopButton.IsEnabled = true;
         }
+        // A state an operator cannot see is a state they will doubt. The record button
+        // burns while it records, and the mark buttons light while a mark is open.
+        SetLit(RecordButton, _recording == true, Color.FromRgb(0xE0, 0x52, 0x52));
+        SetLit(MarkInButton, _markOpen, Color.FromRgb(0x7F, 0xD1, 0x4B));
+        SetLit(CancelMarkButton, _markOpen, Color.FromRgb(0xE0, 0x52, 0x52));
+        SetLit(LiveButton, _live, Color.FromRgb(0x7F, 0xD1, 0x4B));
 
         // Waveform of the angle the operator is watching, with the marks on it. The
         // peaks come from the recording machine, so a Remote has none to draw.
@@ -1237,6 +1245,9 @@ public partial class ReplayWindow : Window
             return;
         }
         _inFrame = frame ?? MarkUnknown;
+        _markOpen = true;
+        SetLit(MarkInButton, true, Color.FromRgb(0x7F, 0xD1, 0x4B));
+        SetLit(CancelMarkButton, true, Color.FromRgb(0xE0, 0x52, 0x52));
         // A new Mark In starts a new range: the old Mark Out no longer applies.
         _outFrame = 0;
         _markOpen = true;
@@ -1794,6 +1805,18 @@ public partial class ReplayWindow : Window
     /// hands back. The remote core keeps it and ignores a seek it cannot place.
     /// </summary>
     private bool HasLocalInFrame => _inFrame is { } value && value != MarkUnknown;
+
+    /// <summary>
+    /// Lights a control that is in a state, the way a controller's buttons light: the
+    /// record button while it records, the mark button while a mark is open. A deck that
+    /// only changes a word elsewhere leaves the operator guessing.
+    /// </summary>
+    private static void SetLit(Control control, bool lit, Color on)
+    {
+        control.BorderThickness = new Thickness(lit ? 2 : 1);
+        control.BorderBrush = lit ? new SolidColorBrush(on) : (Brush)control.FindResource("ButtonBorder");
+        control.FontWeight = lit ? FontWeights.Bold : FontWeights.Normal;
+    }
 
     private void UpdatePlayButton()
     {

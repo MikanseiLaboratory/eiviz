@@ -15,26 +15,55 @@ pub enum TransitionTiming {
     Additive,
 }
 
+/// How one clip gives way to the next. The names are the mixing unit's names, so an
+/// operator picks the same word in both places.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TransitionKind {
+    #[default]
+    Cut,
+    Dissolve,
+    /// Fade out through black, then in.
+    Dip,
+    /// A hard edge sweeps across the picture.
+    Wipe,
+    /// The incoming clip slides in over the outgoing one.
+    Slide,
+    /// The outgoing clip slides out as the incoming one slides in.
+    Push,
+}
+
+/// Which way a directional transition travels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TransitionDirection {
+    #[default]
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClipTransition {
-    pub dissolve: bool,
+    pub kind: TransitionKind,
+    pub direction: TransitionDirection,
     pub timing: TransitionTiming,
     pub frames: u32,
 }
 
 impl ClipTransition {
     pub const CUT: Self = Self {
-        dissolve: false,
+        kind: TransitionKind::Cut,
+        direction: TransitionDirection::Left,
         timing: TransitionTiming::Overwrap,
         frames: 0,
     };
 
     /// Frames the transition occupies on the timeline.
     pub fn span(self) -> u32 {
-        if self.dissolve {
-            self.frames
-        } else {
+        if self.kind == TransitionKind::Cut {
             0
+        } else {
+            self.frames
         }
     }
 }
@@ -113,6 +142,10 @@ pub struct FramePlan {
     pub secondary: Option<(u32, u64)>,
     /// 0 shows only `primary`, 1 shows only `secondary`.
     pub mix: f64,
+    /// How the two are combined while `mix` runs from 0 to 1.
+    pub kind: TransitionKind,
+    /// Which way a directional kind travels.
+    pub direction: TransitionDirection,
 }
 
 #[derive(Clone, Debug)]
@@ -324,6 +357,8 @@ impl Transport {
         let current = self.current.as_ref()?;
         let length = current.length();
         let frames = current.transition.span() as f64;
+        let kind = current.transition.kind;
+        let direction = current.transition.direction;
         let next = self.peek();
         if frames > 0.0 && frames < length && next.is_some() {
             match current.transition.timing {
@@ -336,6 +371,8 @@ impl Transport {
                             primary: Some((current.angle_id, current.source(self.position))),
                             secondary: Some((next.angle_id, next.source(self.position - start))),
                             mix,
+                            kind,
+                            direction,
                         });
                     }
                 }
@@ -347,6 +384,8 @@ impl Transport {
                             primary: Some((current.angle_id, current.source(length))),
                             secondary: Some((next.angle_id, next.source(0.0))),
                             mix,
+                            kind,
+                            direction,
                         });
                     }
                 }
@@ -356,6 +395,8 @@ impl Transport {
             primary: Some((current.angle_id, current.source(self.position))),
             secondary: None,
             mix: 0.0,
+            kind,
+            direction,
         })
     }
 
@@ -405,6 +446,9 @@ impl Transport {
                 primary: (self.live_angle != 0).then_some((self.live_angle, frame)),
                 secondary: None,
                 mix: 0.0,
+                // A live view has nothing to transition from.
+                kind: TransitionKind::Cut,
+                direction: TransitionDirection::Left,
             };
             if plan.primary.is_none() || self.shown.as_ref() == Some(&plan) {
                 return None;

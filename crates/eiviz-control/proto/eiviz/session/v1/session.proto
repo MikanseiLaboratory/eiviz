@@ -581,6 +581,18 @@ enum ClipAudio {
 enum ReplayTransitionKind {
   REPLAY_TRANSITION_KIND_CUT = 0;
   REPLAY_TRANSITION_KIND_DISSOLVE = 1;
+  REPLAY_TRANSITION_KIND_DIP = 2;
+  REPLAY_TRANSITION_KIND_WIPE = 3;
+  REPLAY_TRANSITION_KIND_SLIDE = 4;
+  REPLAY_TRANSITION_KIND_PUSH = 5;
+}
+
+// Which way a Wipe, Slide or Push travels.
+enum ReplayTransitionDirection {
+  REPLAY_TRANSITION_DIRECTION_LEFT = 0;
+  REPLAY_TRANSITION_DIRECTION_RIGHT = 1;
+  REPLAY_TRANSITION_DIRECTION_UP = 2;
+  REPLAY_TRANSITION_DIRECTION_DOWN = 3;
 }
 
 enum ReplayTransitionTiming {
@@ -592,6 +604,7 @@ message ClipTransition {
   ReplayTransitionKind kind = 1;
   ReplayTransitionTiming timing = 2;
   uint32 duration_frames = 3;
+  ReplayTransitionDirection direction = 4;
 }
 
 message Playlist {

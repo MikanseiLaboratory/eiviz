@@ -109,9 +109,13 @@
                 </Grid.RowDefinitions>
                 <TextBlock Grid.Row="0" FontWeight="Bold"
                            Text="{Binding [replay.output], Source={x:Static i18n:Loc.Source}}"/>
-                <Border Grid.Row="1" Style="{StaticResource MonitorBox}">
-                    <preview:SwapchainHost x:Name="OutputMonitor"/>
-                </Border>
+                <!-- The same container the main window uses: the picture keeps its shape
+                     and follows the window, instead of being stretched into the box. -->
+                <preview:AspectBox Grid.Row="1">
+                    <Border Style="{StaticResource MonitorBox}">
+                        <preview:SwapchainHost x:Name="OutputMonitor"/>
+                    </Border>
+                </preview:AspectBox>
                 <TextBlock Grid.Row="2" x:Name="OutputLabel" Style="{StaticResource Caption}"/>
             </Grid>
             <Grid Grid.Column="2">
@@ -122,9 +126,11 @@
                 </Grid.RowDefinitions>
                 <TextBlock Grid.Row="0" FontWeight="Bold"
                            Text="{Binding [replay.liveInput], Source={x:Static i18n:Loc.Source}}"/>
-                <Border Grid.Row="1" Style="{StaticResource MonitorBox}">
-                    <preview:SwapchainHost x:Name="LiveMonitor"/>
-                </Border>
+                <preview:AspectBox Grid.Row="1">
+                    <Border Style="{StaticResource MonitorBox}">
+                        <preview:SwapchainHost x:Name="LiveMonitor"/>
+                    </Border>
+                </preview:AspectBox>
                 <TextBlock Grid.Row="2" x:Name="LiveLabel" Style="{StaticResource Caption}"/>
             </Grid>
         </Grid>
