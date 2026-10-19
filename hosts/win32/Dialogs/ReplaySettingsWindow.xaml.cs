@@ -120,6 +120,7 @@ public partial class ReplaySettingsWindow : Window
                 SourceKind = angle.Source,
                 SourceId = angle.Source == "Input" ? angle.InputId : angle.SceneId,
                 RecordMode = angle.RecordMode,
+                Encoder = angle.Encoder,
                 AudioUnitId = angle.AudioUnitId,
                 DriveIndex = driveOf.TryGetValue(angle.Id, out var index) ? index : -1,
             };
@@ -152,6 +153,12 @@ public partial class ReplaySettingsWindow : Window
         row.DriveOptions = DriveOptions();
         row.SourceOptions = SourceOptions(row.SourceKind);
         row.ModeOptions = ModeOptions(row.SourceKind, row.SourceId);
+        row.EncoderOptions =
+        [
+            new("Gpu", Loc.T("replay.encoderGpu")),
+            new("Cpu", Loc.T("replay.encoderCpu")),
+        ];
+        row.EncoderOption = row.EncoderOptions.FirstOrDefault(option => option.Value == row.Encoder) ?? row.EncoderOptions[0];
     }
 
     /// <summary>
@@ -663,6 +670,7 @@ public partial class ReplaySettingsWindow : Window
                 ["audio"] = angle.AudioUnitId == 0 ? "Silent" : "Unit",
                 ["audioUnitId"] = angle.AudioUnitId,
                 ["recordMode"] = angle.RecordMode,
+                ["encoder"] = angle.Encoder,
             });
         }
         _replay["angles"] = angles;

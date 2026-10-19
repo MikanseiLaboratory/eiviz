@@ -236,6 +236,18 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
+                            <!-- Where this angle is encoded: GPU keeps the picture on
+                                 the GPU from the scene to the stored packet. -->
+                            <GridViewColumn Header="{Binding [replay.encoder], Source={x:Static i18n:Loc.Source}}" Width="110">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <ComboBox ItemsSource="{Binding EncoderOptions}" DisplayMemberPath="Label"
+                                                  SelectedItem="{Binding EncoderOption}"
+                                                  Height="24" Margin="2,1"
+                                                  ToolTip="{Binding [replay.encoderHelp], Source={x:Static i18n:Loc.Source}}"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
                             <GridViewColumn Header="{Binding [replay.audio], Source={x:Static i18n:Loc.Source}}" Width="160">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>

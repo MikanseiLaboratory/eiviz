@@ -715,6 +715,46 @@ pub(crate) fn render_loop(
                     crate::replay::engine().note_replaced(target.angle_id, 1);
                     continue;
                 };
+                // One replay format: a source that is not already that size is scaled.
+                // Both encoder paths need the same picture, so the scale happens here
+                // rather than inside the readback one.
+                let picture = if src.size().width == target.width && src.size().height == target.height
+                {
+                    src
+                } else {
+                    match composer
+                        .scale_rgba(&device, &mut encoder, target.readback_key, &src, target.width, target.height, false)
+                        .cloned()
+                    {
+                        Some(scaled) => scaled,
+                        None => {
+                            crate::replay::engine().note_replaced(target.angle_id, 1);
+                            continue;
+                        }
+                    }
+                };
+                // A GPU angle is encoded from the texture it was just composed into:
+                // nothing is copied back, which is what used to cap the recorder at a
+                // handful of frames a second.
+                if target.gpu_encode {
+                    let encoded = crate::replay::gpu_encode::encode_frame(
+                        target.angle_id,
+                        target.width,
+                        target.height,
+                        target.profile,
+                        &device.device,
+                        &device.queue,
+                        &picture,
+                    );
+                    match encoded {
+                        Some(payload) => {
+                            crate::replay::engine()
+                                .write_gpu_encoded(target.angle_id, frame_i, pts, &payload);
+                        }
+                        None => crate::replay::engine().note_replaced(target.angle_id, 1),
+                    }
+                    continue;
+                }
                 push_replay_packed(
                     &mut composer,
                     &device,
@@ -724,7 +764,7 @@ pub(crate) fn render_loop(
                     target.angle_id,
                     target.width,
                     target.height,
-                    &src,
+                    &picture,
                     pts,
                     frame_i,
                 );

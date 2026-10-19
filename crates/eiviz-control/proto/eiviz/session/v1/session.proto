@@ -541,6 +541,8 @@ message Angle {
   /// `input_id` when it is INPUT.
   AngleSourceKind source = 7;
   uint64 input_id = 8;
+  // Where this angle is encoded. GPU keeps the picture on the GPU from scene to packet.
+  AngleEncoder encoder = 9;
 }
 
 message ReplayEvent {
@@ -580,6 +582,12 @@ enum ClipAudio {
   CLIP_AUDIO_ANGLE = 2;
 }
 
+// Where a replay angle is encoded.
+enum AngleEncoder {
+  ANGLE_ENCODER_CPU = 0;
+  ANGLE_ENCODER_GPU = 1;
+}
+
 enum ReplayTransitionKind {
   REPLAY_TRANSITION_KIND_CUT = 0;
   REPLAY_TRANSITION_KIND_DISSOLVE = 1;
@@ -608,6 +616,7 @@ message ClipTransition {
   uint32 duration_frames = 3;
   ReplayTransitionDirection direction = 4;
 }
+
 
 message Playlist {
   uint64 id = 1;

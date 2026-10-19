@@ -122,8 +122,14 @@ internal sealed record ReplayAngleInfo(
     ulong AudioUnitId,
     string Source = "Scene",
     ulong InputId = 0,
-    string RecordMode = "Composite")
+    string RecordMode = "Composite",
+    string Encoder = "Gpu",
+    JsonObject? Json = null)
 {
+    /// <summary>`Gpu` encodes from the scene texture; `Cpu` reads it back first.</summary>
+    public static string EncoderOf(JsonObject? angle) =>
+        angle?["encoder"]?.GetValue<string>() ?? "Gpu";
+
     public ulong SceneGpuId => MixerNative.SceneGpuId(SceneId);
     /// <summary>
     /// What the angle shows live: the scene it records, or the input it records
@@ -271,7 +277,8 @@ internal static class ReplayModel
                 // A document written before the source existed is a scene angle.
                 angle["source"]?.GetValue<string>() ?? "Scene",
                 angle["inputId"]?.GetValue<ulong>() ?? 0,
-                angle["recordMode"]?.GetValue<string>() ?? "Composite"));
+                angle["recordMode"]?.GetValue<string>() ?? "Composite",
+                ReplayAngleInfo.EncoderOf(angle)));
         }
         return result;
     }

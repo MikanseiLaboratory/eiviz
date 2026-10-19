@@ -1522,6 +1522,10 @@ fn replay_to_pb(replay: &crate::session::replay::ReplayDto) -> pb::Replay {
                     AngleRecordMode::Composite => pb::AngleRecordMode::Composite as i32,
                     AngleRecordMode::Passthrough => pb::AngleRecordMode::Passthrough as i32,
                 },
+                encoder: match angle.encoder {
+                    crate::session::replay::AngleEncoder::Cpu => pb::AngleEncoder::Cpu as i32,
+                    crate::session::replay::AngleEncoder::Gpu => pb::AngleEncoder::Gpu as i32,
+                },
                 audio_unit_id: angle.audio_unit_id,
                 source: match angle.source {
                     crate::session::replay::AngleSourceKind::Scene => {
@@ -1675,6 +1679,10 @@ fn replay_from_pb(replay: pb::Replay) -> Result<crate::session::replay::ReplayDt
                 record_mode: match pb::AngleRecordMode::try_from(angle.record_mode) {
                     Ok(pb::AngleRecordMode::Passthrough) => AngleRecordMode::Passthrough,
                     _ => AngleRecordMode::Composite,
+                },
+                encoder: match pb::AngleEncoder::try_from(angle.encoder) {
+                    Ok(pb::AngleEncoder::Gpu) => AngleEncoder::Gpu,
+                    _ => AngleEncoder::Cpu,
                 },
             })
             .collect(),

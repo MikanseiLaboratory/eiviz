@@ -3,6 +3,7 @@
 
 mod audio;
 mod channel;
+pub mod gpu_encode;
 mod health;
 mod stretch;
 
@@ -303,6 +304,10 @@ pub struct RecordTarget {
     pub width: u32,
     pub height: u32,
     pub angle_id: u32,
+    /// Encode from the scene texture instead of reading it back first.
+    pub gpu_encode: bool,
+    /// Replay format profile code, for the codec preset.
+    pub profile: u32,
 }
 
 pub fn engine() -> &'static ReplayEngine {
@@ -782,6 +787,8 @@ impl ReplayEngine {
                 width: inner.width,
                 height: inner.height,
                 angle_id: angle.id,
+                gpu_encode: angle.encoder == eiviz_control::session::replay::AngleEncoder::Gpu,
+                profile: profile_code(inner.config.format.profile) as u32,
             })
             .collect()
     }
@@ -908,6 +915,72 @@ impl ReplayEngine {
                 inner.stats.encoded_dropped = inner.stats.encoded_dropped.saturating_add(1);
                 inner.stats.issues |= eiviz_pro_api::ISSUE_STORAGE_WRITE;
                 crate::diag::error(&format!("replay passthrough write failed: {error}"));
+                false
+            }
+        }
+    }
+
+    /// Stores a frame this mixer encoded on the GPU from the angle's own texture.
+    ///
+    /// The frame index is the render frame the picture came from, so marks and clips
+    /// land on the same timeline the recording uses.
+    pub fn write_gpu_encoded(&self, angle_id: u32, frame_index: u64, pts: i64, payload: &[u8]) -> bool {
+        let (width, height, fps_num, fps_den) = {
+            let inner = self.lock();
+            if !inner.recording {
+                return false;
+            }
+            (
+                inner.width,
+                inner.height,
+                inner.fps_num,
+                inner.fps_den,
+            )
+        };
+        let frame = EncodedFrame {
+            payload: payload.to_vec(),
+            width,
+            height,
+            pts_100ns: pts,
+            fps_num,
+            fps_den,
+            dropped_before: 0,
+        };
+        let store = self
+            .store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let Some(store) = store else {
+            return false;
+        };
+        let outcome = store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .write_encoded(angle_id, frame_index, &frame);
+        match outcome {
+            Ok(WriteOutcome::Accepted) => {
+                let mut inner = self.lock();
+                inner.stats.encoded_frames = inner.stats.encoded_frames.saturating_add(1);
+                if !inner.has_frames {
+                    inner.first_frame = frame_index;
+                    inner.has_frames = true;
+                }
+                inner.last_frame = inner.last_frame.max(frame_index);
+                inner.stats.recording_frame = inner.last_frame;
+                inner.stats.last_frame = inner.last_frame;
+                true
+            }
+            Ok(WriteOutcome::Dropped) => {
+                let mut inner = self.lock();
+                inner.stats.encoded_dropped = inner.stats.encoded_dropped.saturating_add(1);
+                false
+            }
+            Err(error) => {
+                let mut inner = self.lock();
+                inner.stats.encoded_dropped = inner.stats.encoded_dropped.saturating_add(1);
+                inner.stats.issues |= crate::abi::REPLAY_ISSUE_STORAGE_WRITE;
+                crate::diag::error(&format!("replay GPU encode write failed: {error}"));
                 false
             }
         }

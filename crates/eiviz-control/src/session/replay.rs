@@ -462,6 +462,24 @@ pub struct AngleDto {
     pub audio_unit_id: u64,
     #[serde(default)]
     pub record_mode: AngleRecordMode,
+    /// Where this angle is encoded. `Gpu` keeps the picture on the GPU from scene to
+    /// stored packet; `Cpu` reads it back and encodes on the CPU. The choice is per
+    /// angle because the CPU cost is per angle: two angles at 1080p60 already exceed
+    /// what one CPU encoder can do.
+    #[serde(default)]
+    pub encoder: AngleEncoder,
+}
+
+session_string_enum! {
+    /// Where a replay angle is encoded.
+    #[derive(Default)]
+    pub enum AngleEncoder {
+        /// Read the picture back and encode on the CPU. Works everywhere.
+        #[default]
+        Cpu,
+        /// Encode from the scene texture on the GPU, so the frame is never copied back.
+        Gpu,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
