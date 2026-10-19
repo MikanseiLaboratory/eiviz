@@ -121,7 +121,8 @@ struct ReplayAngleInfo: Identifiable, Hashable {
     var name: String
     /// `Scene` or `Input`: what this angle records from.
     var source: String = "Scene"
-    let sceneId: UInt64
+    /// Scene this angle records when `source` is `Scene`.
+    var sceneId: UInt64
     /// Input this angle records when `source` is `Input`.
     var inputId: UInt64 = 0
     /// `Composite` or `Passthrough` (OMT inputs only).
