@@ -86,8 +86,11 @@ struct ReplayView: View {
 
     private var channels: [ReplayChannelInfo] { document?.channels ?? [] }
     private var angles: [ReplayAngleInfo] { document?.angles ?? [] }
-    private var playlistId: UInt64 { document?.firstPlaylistId ?? 0 }
+    /// The playlist the selected channel plays. A project can hold several, and the
+    /// channel is what points at one.
+    private var playlistId: UInt64 { document?.channelPlaylist(channelIndex: channel) ?? 0 }
     private var clips: [ReplayClipInfo] { document?.clips(playlistId: playlistId) ?? [] }
+    private var playlists: [PlaylistInfo] { document?.playlists ?? [] }
 
     private var header: some View {
         HStack {
@@ -207,183 +210,286 @@ struct ReplayView: View {
         return L10n.format("replay.stateRecording", ReplayTime.clock(snapshot.remaining_secs))
     }
 
+    /// One numbered button per camera, the way a replay controller labels its cameras.
+    /// The picture of the selected one is the monitor above, so the strip stays a row of
+    /// numbers instead of a row of expensive previews.
     private var angleStrip: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(L10n.t("replay.angles")).fontWeight(.bold)
-            if angles.isEmpty {
-                Text(L10n.t("replay.noAngles"))
-                    .foregroundStyle(EivizTheme.dim)
-                    .frame(width: 280, alignment: .leading)
-            } else if mixer.isRemote {
-                // Angle previews are the recording machine's scenes, and a Remote
-                // has no local render of them. Saying where they are beats dead tiles.
-                Text(L10n.t("replay.remoteAngles"))
-                    .foregroundStyle(EivizTheme.dim)
-                    .frame(width: 280, alignment: .leading)
-            } else {
-                ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 8)], spacing: 8) {
-                        ForEach(angles) { angle in
-                            Button {
-                                selectAngle(angle.id)
-                            } label: {
-                                VStack(spacing: 2) {
-                                    // Each angle is its own scene, shown through a
-                                    // monitor. The id is prepared outside the body
-                                    // because the body must not mutate state.
-                                    if let monitor = angleMonitors[angle.id], monitor != 0 {
-                                        MetalPreviewRepresentable(
-                                            role: .monitor(monitorId: monitor, sourceId: angle.liveSourceId)
-                                        )
-                                        .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                                        .frame(maxWidth: .infinity)
-                                        .background(Color.black)
-                                    } else {
-                                        Color.black
-                                            .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                                    }
-                                    Text(angle.label)
-                                        .font(.caption)
-                                        .fontWeight(document?.activeAngleId == angle.id ? .bold : .regular)
-                                }
-                                .padding(4)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .stroke(
-                                            document?.activeAngleId == angle.id ? Color.green : Color.gray.opacity(0.4),
-                                            lineWidth: document?.activeAngleId == angle.id ? 3 : 1
-                                        )
-                                )
-                            }
-                            .buttonStyle(.plain)
+            HStack(spacing: 8) {
+                Text(L10n.t("replay.angles")).fontWeight(.bold)
+                if angles.isEmpty {
+                    Text(L10n.t("replay.noAngles")).foregroundStyle(EivizTheme.dim)
+                } else if mixer.isRemote {
+                    // Angle previews are the recording machine's scenes, and a Remote has
+                    // no local render of them. Saying where they are beats dead tiles.
+                    Text(L10n.t("replay.remoteAngles")).foregroundStyle(EivizTheme.dim)
+                } else {
+                    ForEach(Array(angles.enumerated()), id: \.element.id) { index, angle in
+                        let selected = (document?.activeAngleId ?? 0) == angle.id
+                        Button {
+                            selectAngle(angle.id)
+                        } label: {
+                            Text("\(index + 1)")
+                                .font(.title3)
+                                .fontWeight(selected ? .bold : .regular)
+                                .frame(width: 44, height: 36)
                         }
+                        .buttonStyle(.plain)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(selected ? Color.green : Color.gray.opacity(0.4),
+                                        lineWidth: selected ? 3 : 1)
+                        )
+                        .help("\(index + 1): \(angle.label)")
                     }
                 }
-                .frame(minWidth: 300)
+                Spacer()
             }
-            Spacer()
+            Text(L10n.t("replay.anglesHelpShort")).font(.caption).foregroundStyle(EivizTheme.dim)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Every event on one line, edited in that line: its name and its protection are
+    /// cells, so nothing is "select one, then use the buttons above".
     private var eventList: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(L10n.t("replay.events")).fontWeight(.bold)
                 Spacer()
-                Button(L10n.t("replay.protect")) { toggleProtect() }
-                Button(L10n.t("replay.delete")) { deleteEvent() }
+                Text(L10n.t("replay.eventsRowHelp")).font(.caption).foregroundStyle(EivizTheme.dim)
             }
-            List(selection: $selectedEvent) {
+            List {
                 ForEach(document?.events ?? []) { event in
-                    HStack {
-                        Text(ReplayTime.timecode(event.inFrame, fps)).font(.system(.caption, design: .monospaced))
-                        Text(ReplayTime.timecode(event.outFrame, fps)).font(.system(.caption, design: .monospaced))
+                    HStack(spacing: 6) {
+                        Text(ReplayTime.timecode(event.inFrame, fps))
+                            .font(.system(.caption, design: .monospaced))
+                        Text(ReplayTime.timecode(event.outFrame, fps))
+                            .font(.system(.caption, design: .monospaced))
                         Text(ReplayTime.duration(event.inFrame, event.outFrame, fps))
                             .font(.system(.caption, design: .monospaced))
-                        Text(event.protected ? "🔒 \(event.name)" : event.name)
-                        Spacer()
+                        TextField("", text: Binding(
+                            get: { event.name },
+                            set: { renameEvent(event.id, $0) }
+                        ))
+                        .frame(minWidth: 120)
+                        Toggle(L10n.t("replay.protect"), isOn: Binding(
+                            get: { event.protected },
+                            set: { setEventProtected(event.id, $0) }
+                        ))
+                        .toggleStyle(.checkbox)
+                        .help(L10n.t("replay.protectHint"))
+                        Button {
+                            addEventToPlaylist(event)
+                        } label: {
+                            Image(systemName: "play.fill")
+                        }
+                        .help(L10n.t("replay.cueHint"))
+                        Button {
+                            deleteEvent(event.id)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .help(L10n.t("replay.delete"))
                     }
-                    .tag(event.id)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { addEventToPlaylist(event) }
                 }
             }
             .frame(minHeight: 120)
+            if (document?.events ?? []).isEmpty {
+                Text(L10n.t("replay.noEvents")).font(.caption).foregroundStyle(EivizTheme.dim)
+            }
         }
     }
 
+    /// The playlist this channel plays, with every clip on one line and its settings
+    /// edited in that line: angle, speed, transition, length, gain, pitch and audio are
+    /// cells, so nothing is "select a clip, then use the controls below".
     private var playlist: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
+            HStack(spacing: 6) {
                 Text(L10n.t("replay.playlist")).fontWeight(.bold)
-                Spacer()
-                Button(L10n.t("replay.cue")) { cueSelectedClip() }
-                Button(L10n.t("replay.remove")) { removeSelectedClip() }
-            }
-            List(selection: $selectedClip) {
-                ForEach(clips) { clip in
-                    HStack {
-                        Text(ReplayTime.timecode(clip.inFrame, fps)).font(.system(.caption, design: .monospaced))
-                        Text(ReplayTime.timecode(clip.outFrame, fps)).font(.system(.caption, design: .monospaced))
-                        Text(document?.angleLabel(clip.angleId) ?? "-")
-                        Text("\(Int(clip.speed * 100))%")
-                        Text(clip.transition.label)
-                        Spacer()
+                Picker("", selection: Binding(
+                    get: { playlistId },
+                    set: { selectPlaylist($0) }
+                )) {
+                    ForEach(playlists) { item in
+                        Text(item.label).tag(item.id)
                     }
-                    .tag(clip.uid)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { cue(clip) }
-                }
-            }
-            .frame(minHeight: 120)
-            HStack {
-                Text(L10n.t("replay.transition"))
-                Picker("", selection: $kind) {
-                    Text(L10n.t("replay.transitionCut")).tag("Cut")
-                    Text(L10n.t("replay.transitionDissolve")).tag("Dissolve")
                 }
                 .labelsHidden()
-                .frame(width: 120)
-                .onChange(of: kind) { _, _ in applyTransition() }
-                Picker("", selection: $timing) {
-                    Text(L10n.t("replay.timingOverwrap")).tag("Overwrap")
-                    Text(L10n.t("replay.timingAdditive")).tag("Additive")
-                }
-                .labelsHidden()
+                .frame(width: 190)
+                .help(L10n.t("replay.playlistPickHelp"))
+                TextField("", text: Binding(
+                    get: { playlists.first { $0.id == playlistId }?.name ?? "" },
+                    set: { renamePlaylist(playlistId, $0) }
+                ))
                 .frame(width: 160)
-                .help(L10n.t("replay.timingHelp"))
-                .onChange(of: timing) { _, _ in applyTransition() }
-                TextField("", text: $frames)
-                    .frame(width: 60)
-                    .onSubmit { applyTransition() }
-                Text(L10n.t("replay.transitionFrames"))
-                Text(L10n.t("replay.tags")).padding(.leading, 12)
-                TextField("", text: $clipTags)
-                    .frame(width: 200)
-                    .onSubmit { applyTags() }
-                Text(L10n.t("replay.gain")).padding(.leading, 12)
-                TextField("", text: $clipGain)
-                    .frame(width: 50)
-                    .onSubmit { applyClipGain() }
-                Toggle(L10n.t("replay.preservePitch"), isOn: $preservePitch)
-                    .padding(.leading, 12)
-                    .onChange(of: preservePitch) { _, value in applyPreservePitch(value) }
-                Picker("", selection: $clipAudio) {
-                    Text(L10n.t("replay.audioFollow")).tag("FollowAngle")
-                    Text(L10n.t("replay.audioSilent")).tag("Silent")
-                    ForEach(document?.angles ?? []) { angle in
-                        Text(angle.label).tag("Angle:\(angle.id)")
-                    }
+                .help(L10n.t("replay.playlistNameHelp"))
+                Button {
+                    addPlaylist()
+                } label: {
+                    Image(systemName: "plus")
                 }
-                .labelsHidden()
-                .frame(width: 170)
-                .onChange(of: clipAudio) { _, value in applyClipAudio(value) }
-            }
-            .onChange(of: selectedClip) { _, _ in loadTransition() }
-            // Playlist default: what clips added from now on start with.
-            HStack {
+                .help(L10n.t("replay.playlistAddHint"))
+                Button {
+                    deletePlaylist()
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .disabled(playlists.count <= 1)
+                .help(L10n.t("replay.playlistRemove"))
+                Spacer()
+                // Playlist default: what clips added from now on start with.
                 Text(L10n.t("replay.defaultTransition")).font(.caption)
                 Picker("", selection: $defaultKind) {
                     Text(L10n.t("replay.transitionCut")).tag("Cut")
                     Text(L10n.t("replay.transitionDissolve")).tag("Dissolve")
                 }
                 .labelsHidden()
-                .frame(width: 100)
+                .frame(width: 96)
                 .onChange(of: defaultKind) { _, _ in applyDefaultTransition() }
                 Picker("", selection: $defaultTiming) {
                     Text(L10n.t("replay.timingOverwrap")).tag("Overwrap")
                     Text(L10n.t("replay.timingAdditive")).tag("Additive")
                 }
                 .labelsHidden()
-                .frame(width: 100)
+                .frame(width: 120)
                 .help(L10n.t("replay.timingHelp"))
                 .onChange(of: defaultTiming) { _, _ in applyDefaultTransition() }
                 TextField("", text: $defaultFrames)
                     .frame(width: 50)
                     .onSubmit { applyDefaultTransition() }
-                Text(L10n.t("replay.transitionFrames"))
-                Text(L10n.t("replay.defaultTransitionHelp")).font(.caption)
+            }
+            Table(clips) {
+                TableColumn(L10n.t("replay.in")) { clip in
+                    Text(ReplayTime.timecode(clip.inFrame, fps))
+                        .font(.system(.caption, design: .monospaced))
+                }
+                .width(88)
+                TableColumn(L10n.t("replay.out")) { clip in
+                    Text(ReplayTime.timecode(clip.outFrame, fps))
+                        .font(.system(.caption, design: .monospaced))
+                }
+                .width(88)
+                TableColumn(L10n.t("replay.angle")) { clip in
+                    Picker("", selection: Binding(
+                        get: { clip.angleId },
+                        set: { setClipAngle(clip.uid, $0) }
+                    )) {
+                        ForEach(angles) { angle in
+                            Text(angle.label).tag(angle.id)
+                        }
+                    }
+                    .labelsHidden()
+                }
+                .width(130)
+                TableColumn(L10n.t("replay.speed")) { clip in
+                    Picker("", selection: Binding(
+                        get: { Int32((clip.speed * 1000).rounded()) },
+                        set: { setClipSpeed(clip.uid, $0) }
+                    )) {
+                        Text("25%").tag(Int32(250))
+                        Text("50%").tag(Int32(500))
+                        Text("75%").tag(Int32(750))
+                        Text("100%").tag(Int32(1000))
+                        Text("150%").tag(Int32(1500))
+                        Text("200%").tag(Int32(2000))
+                    }
+                    .labelsHidden()
+                }
+                .width(84)
+                TableColumn(L10n.t("replay.transition")) { clip in
+                    Picker("", selection: Binding(
+                        get: { clip.transition.kind },
+                        set: { setClipTransition(clip.uid, kind: $0, timing: nil, frames: nil) }
+                    )) {
+                        Text(L10n.t("replay.transitionCut")).tag("Cut")
+                        Text(L10n.t("replay.transitionDissolve")).tag("Dissolve")
+                    }
+                    .labelsHidden()
+                }
+                .width(104)
+                TableColumn(L10n.t("replay.timing")) { clip in
+                    Picker("", selection: Binding(
+                        get: { clip.transition.timing },
+                        set: { setClipTransition(clip.uid, kind: nil, timing: $0, frames: nil) }
+                    )) {
+                        Text(L10n.t("replay.timingOverwrap")).tag("Overwrap")
+                        Text(L10n.t("replay.timingAdditive")).tag("Additive")
+                    }
+                    .labelsHidden()
+                    .help(L10n.t("replay.timingHelp"))
+                }
+                .width(130)
+                TableColumn(L10n.t("replay.transitionFrames")) { clip in
+                    TextField("", value: Binding(
+                        get: { clip.transition.durationFrames },
+                        set: { setClipTransition(clip.uid, kind: nil, timing: nil, frames: $0) }
+                    ), format: .number)
+                    .frame(width: 52)
+                }
+                .width(64)
+                TableColumn(L10n.t("replay.gain")) { clip in
+                    TextField("", value: Binding(
+                        get: { clip.gainDb },
+                        set: { setClipGain(clip.uid, $0) }
+                    ), format: .number.precision(.fractionLength(1)))
+                    .frame(width: 52)
+                }
+                .width(60)
+                TableColumn(L10n.t("replay.preservePitch")) { clip in
+                    Toggle("", isOn: Binding(
+                        get: { clip.preservePitch },
+                        set: { setClipPitch(clip.uid, $0) }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.checkbox)
+                }
+                .width(56)
+                TableColumn(L10n.t("replay.audio")) { clip in
+                    Picker("", selection: Binding(
+                        get: { clip.audioKind == "Angle" ? "Angle:\(clip.audioAngleId)" : clip.audioKind },
+                        set: { setClipAudioChoice(clip.uid, $0) }
+                    )) {
+                        Text(L10n.t("replay.audioFollow")).tag("FollowAngle")
+                        Text(L10n.t("replay.audioSilent")).tag("Silent")
+                        ForEach(angles) { angle in
+                            Text(angle.label).tag("Angle:\(angle.id)")
+                        }
+                    }
+                    .labelsHidden()
+                    .help(L10n.t("replay.clipAudioHelp"))
+                }
+                .width(150)
+                TableColumn(L10n.t("replay.tags")) { clip in
+                    TextField("", text: Binding(
+                        get: { clip.tags.joined(separator: ", ") },
+                        set: { setClipTagsText(clip.uid, $0) }
+                    ))
+                    .frame(width: 120)
+                }
+                .width(130)
+                TableColumn("") { clip in
+                    HStack(spacing: 4) {
+                        Button {
+                            cue(clip)
+                        } label: {
+                            Image(systemName: "play.fill")
+                        }
+                        .help(L10n.t("replay.cueHint"))
+                        Button {
+                            removeClip(clip.uid)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .help(L10n.t("replay.remove"))
+                    }
+                }
+                .width(70)
+            }
+            .frame(minHeight: 140)
+            if clips.isEmpty {
+                Text(L10n.t("replay.noClips")).font(.caption).foregroundStyle(EivizTheme.dim)
             }
         }
     }
@@ -905,6 +1011,162 @@ struct ReplayView: View {
             }
             save(current)
         }
+    }
+
+    // MARK: - Row edits
+    //
+    // Each list edits the row it belongs to, so these take the id of the item rather
+    // than reading a selection. Nothing here is "select first, then change".
+
+    private func renameEvent(_ id: UInt64, _ name: String) {
+        guard var current = document else { return }
+        current.renameEvent(id, name: name)
+        save(current)
+    }
+
+    private func setEventProtected(_ id: UInt64, _ value: Bool) {
+        guard var current = document else { return }
+        current.setEventProtected(id, value)
+        save(current)
+    }
+
+    private func deleteEvent(_ id: UInt64) {
+        guard var current = document else { return }
+        current.removeEvent(id)
+        // A clip keeps its own recording, range and angle, so it survives the event it
+        // came from; only the reference to an event that is gone goes away.
+        save(current)
+    }
+
+    private func removeClip(_ uid: String) {
+        guard var current = document else { return }
+        current.removeClip(playlistId: playlistId, uid: uid)
+        // An animation step that cued this clip has nothing left to fire.
+        mixer.clearReplayCues(clipUid: uid)
+        save(current)
+    }
+
+    private func setClipAngle(_ uid: String, _ angleId: UInt32) {
+        guard var current = document else { return }
+        current.setClipAngle(playlistId: playlistId, uid: uid, angleId: angleId)
+        save(current)
+    }
+
+    private func setClipSpeed(_ uid: String, _ milli: Int32) {
+        guard var current = document else { return }
+        current.setClipSpeed(playlistId: playlistId, uid: uid, milli: milli)
+        save(current)
+    }
+
+    /// Writes one part of a clip's transition, keeping the parts the caller left out.
+    /// A cut has no length, so choosing it clears the frames instead of leaving a stale
+    /// duration behind.
+    private func setClipTransition(_ uid: String, kind: String?, timing: String?, frames: UInt32?) {
+        guard var current = document,
+              let clip = clips.first(where: { $0.uid == uid })
+        else { return }
+        let nextKind = kind ?? clip.transition.kind
+        let nextTiming = timing ?? clip.transition.timing
+        var nextFrames = frames ?? clip.transition.durationFrames
+        if nextKind == "Cut" {
+            nextFrames = 0
+        }
+        nextFrames = min(nextFrames, 600)
+        current.setClipTransition(
+            playlistId: playlistId,
+            uid: uid,
+            transition: ReplayTransitionInfo(kind: nextKind, timing: nextTiming, durationFrames: nextFrames)
+        )
+        save(current)
+    }
+
+    private func setClipGain(_ uid: String, _ db: Double) {
+        guard var current = document else { return }
+        guard db.isFinite, db >= -60.0, db <= 12.0 else {
+            status = L10n.t("replay.gainRange")
+            return
+        }
+        current.setClipGain(playlistId: playlistId, uid: uid, db: db)
+        save(current)
+    }
+
+    private func setClipPitch(_ uid: String, _ value: Bool) {
+        guard var current = document else { return }
+        current.setClipPreservePitch(playlistId: playlistId, uid: uid, value: value)
+        save(current)
+    }
+
+    private func setClipAudioChoice(_ uid: String, _ value: String) {
+        guard var current = document else { return }
+        if value.hasPrefix("Angle:") {
+            let id = UInt32(value.dropFirst("Angle:".count)) ?? 0
+            current.setClipAudio(playlistId: playlistId, uid: uid, kind: "Angle", angleId: id)
+        } else {
+            current.setClipAudio(playlistId: playlistId, uid: uid, kind: value, angleId: 0)
+        }
+        save(current)
+    }
+
+    /// Writes a clip's tags from the comma separated text in its row.
+    private func setClipTagsText(_ uid: String, _ text: String) {
+        guard var current = document else { return }
+        var tags: [String] = []
+        for raw in text.split(separator: ",") {
+            let tag = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if tag.isEmpty || tags.contains(tag) {
+                continue
+            }
+            tags.append(tag)
+        }
+        current.setClipTags(playlistId: playlistId, uid: uid, tags: tags)
+        save(current)
+    }
+
+    // MARK: - Playlist edits
+
+    /// Points the channel at another playlist: that is what "which playlist" means.
+    private func selectPlaylist(_ id: UInt64) {
+        guard var current = document, id != 0 else { return }
+        current.setChannelPlaylist(channelIndex: channel, playlistId: id)
+        save(current)
+    }
+
+    private func renamePlaylist(_ id: UInt64, _ name: String) {
+        guard var current = document else { return }
+        guard current.renamePlaylist(id, name: name) else {
+            return
+        }
+        save(current)
+    }
+
+    /// Adds a playlist and points this channel at it: creating one and then having to
+    /// select it would be two steps for one intention.
+    private func addPlaylist() {
+        guard var current = document else { return }
+        let id = current.addPlaylist(name: L10n.format("replay.playlistDefaultName", "\(playlists.count + 1)"))
+        current.setChannelPlaylist(channelIndex: channel, playlistId: id)
+        save(current)
+    }
+
+    private func deletePlaylist() {
+        guard var current = document, playlists.count > 1 else {
+            status = L10n.t("replay.playlistLast")
+            return
+        }
+        let users = current.channelsUsingPlaylist(playlistId)
+        if users > 1 {
+            status = L10n.format("replay.playlistInUse", "\(users)")
+            return
+        }
+        let clips = current.clips(playlistId: playlistId).count
+        if clips > 0 {
+            status = L10n.format("replay.playlistDeleteClips", "\(clips)")
+        }
+        _ = current.removePlaylist(playlistId)
+        if let next = current.playlists.first {
+            current.setChannelPlaylist(channelIndex: channel, playlistId: next.id)
+        }
+        save(current)
     }
 
     private func toggleProtect() {

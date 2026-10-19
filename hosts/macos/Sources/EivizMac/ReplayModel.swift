@@ -838,6 +838,35 @@ struct ReplayDocument {
         }
     }
 
+    /// Writes which camera a clip plays. The row it sits in is where it is chosen.
+    mutating func setClipAngle(playlistId: UInt64, uid: String, angleId: UInt32) {
+        updateClip(playlistId: playlistId, uid: uid) { clip in
+            clip["angleId"] = .number(Double(angleId))
+        }
+    }
+
+    /// Writes a clip's play speed in thousandths, so 1000 is real time.
+    mutating func setClipSpeed(playlistId: UInt64, uid: String, milli: Int32) {
+        updateClip(playlistId: playlistId, uid: uid) { clip in
+            clip["speedMilli"] = .number(Double(milli))
+        }
+    }
+
+    /// Renames one event. An empty name is kept as the recording's own label.
+    mutating func renameEvent(_ id: UInt64, name: String) {
+        var events = array("events")
+        for index in events.indices {
+            guard var event = events[index].objectValue,
+                  (event["id"]?.uint64Value ?? 0) == id
+            else { continue }
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            event["name"] = .string(trimmed)
+            events[index] = .object(event)
+            raw["events"] = .array(events)
+            return
+        }
+    }
+
     mutating func setClipTransition(playlistId: UInt64, uid: String, transition: ReplayTransitionInfo) {
         guard var playlists = raw["playlists"]?.arrayValue else { return }
         for index in playlists.indices {
