@@ -218,8 +218,8 @@
                         <ListView.ItemTemplate>
                             <DataTemplate>
                                 <StackPanel Margin="2,4">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock VerticalAlignment="Center" Margin="0,0,10,0" FontFamily="Consolas"
+                                    <WrapPanel Orientation="Horizontal">
+                                        <TextBlock VerticalAlignment="Center" Margin="0,0,10,4" FontFamily="Consolas"
                                                    Text="{Binding RangeText}"/>
                                         <ComboBox Width="150" Height="24" DisplayMemberPath="Label"
                                                   ItemsSource="{Binding AngleOptions}" SelectedItem="{Binding AngleOption}"
@@ -234,8 +234,8 @@
                                                 Content="{Binding [replay.remove], Source={x:Static i18n:Loc.Source}}"/>
                                         <Button Width="90" Height="24" Margin="6,0,0,0" Click="ClipTagRow_Click" Tag="{Binding}"
                                                 Content="{Binding [tag.add], Source={x:Static i18n:Loc.Source}}"/>
-                                    </StackPanel>
-                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                    </WrapPanel>
+                                    <WrapPanel Orientation="Horizontal" Margin="0,4,0,0">
                                         <ComboBox Width="104" Height="24" DisplayMemberPath="Label"
                                                   ItemsSource="{Binding TransitionOptions}" SelectedItem="{Binding TransitionOption}"
                                                   ToolTip="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}"/>
@@ -257,7 +257,7 @@
                                                   ToolTip="{Binding [replay.clipAudioHelp], Source={x:Static i18n:Loc.Source}}"/>
                                         <TextBlock VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#B0B0B8"
                                                    Text="{Binding TagsText}"/>
-                                    </StackPanel>
+                                    </WrapPanel>
                                 </StackPanel>
                             </DataTemplate>
                         </ListView.ItemTemplate>
