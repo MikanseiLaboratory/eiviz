@@ -114,30 +114,42 @@
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                         <TextBlock FontWeight="Bold" VerticalAlignment="Center"
                                    Text="{Binding [replay.events], Source={x:Static i18n:Loc.Source}}"/>
-                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button x:Name="EventProtectButton" Width="100" Height="28" Click="EventProtect_Click"
-                                    ToolTip="{Binding [replay.protectHint], Source={x:Static i18n:Loc.Source}}"
-                                    Content="{Binding [replay.protect], Source={x:Static i18n:Loc.Source}}"/>
-                            <Button x:Name="EventDeleteButton" Width="100" Height="28" Margin="8,0,0,0" Click="EventDelete_Click"
-                                    Content="{Binding [replay.delete], Source={x:Static i18n:Loc.Source}}"/>
-                        </StackPanel>
+                        <TextBlock DockPanel.Dock="Right" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   Foreground="#B0B0B8"
+                                   Text="{Binding [replay.eventsRowHelp], Source={x:Static i18n:Loc.Source}}"/>
                     </DockPanel>
+                    <!-- Every event is edited in its own row: its name and its protection are
+                         cells, so nothing is "select one, then use the buttons above". -->
                     <ListView x:Name="EventList" Style="{StaticResource DeckList}" SelectionMode="Single"
-                              MouseDoubleClick="EventList_DoubleClick">
-                        <ListView.View>
-                            <GridView>
-                                <GridViewColumn Header="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" Width="110"
-                                                DisplayMemberBinding="{Binding InText}"/>
-                                <GridViewColumn Header="{Binding [replay.out], Source={x:Static i18n:Loc.Source}}" Width="110"
-                                                DisplayMemberBinding="{Binding OutText}"/>
-                                <GridViewColumn Header="{Binding [replay.duration], Source={x:Static i18n:Loc.Source}}" Width="90"
-                                                DisplayMemberBinding="{Binding DurationText}"/>
-                                <GridViewColumn Header="{Binding [replay.angle], Source={x:Static i18n:Loc.Source}}" Width="70"
-                                                DisplayMemberBinding="{Binding AngleText}"/>
-                                <GridViewColumn Header="{Binding [replay.name], Source={x:Static i18n:Loc.Source}}" Width="160"
-                                                DisplayMemberBinding="{Binding Name}"/>
-                            </GridView>
-                        </ListView.View>
+                                  HorizontalContentAlignment="Stretch"
+                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="2,3">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0"
+                                               FontFamily="Consolas"
+                                               Text="{Binding RangeText}"/>
+                                    <TextBox Grid.Column="1" Height="24" VerticalContentAlignment="Center"
+                                             Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <CheckBox Grid.Column="2" Margin="8,0,8,0" VerticalAlignment="Center"
+                                              IsChecked="{Binding Protected}"
+                                              Content="{Binding [replay.protect], Source={x:Static i18n:Loc.Source}}"/>
+                                    <StackPanel Grid.Column="3" Orientation="Horizontal">
+                                        <Button Height="24" Width="70" Click="EventCue_Click" Tag="{Binding}"
+                                                ToolTip="{Binding [replay.cueHint], Source={x:Static i18n:Loc.Source}}"
+                                                Content="{Binding [replay.cue], Source={x:Static i18n:Loc.Source}}"/>
+                                        <Button Height="24" Width="70" Margin="6,0,0,0" Click="EventDeleteRow_Click" Tag="{Binding}"
+                                                Content="{Binding [replay.delete], Source={x:Static i18n:Loc.Source}}"/>
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
                     </ListView>
                 </DockPanel>
 
@@ -194,48 +206,61 @@
                         <TextBox x:Name="DefaultFramesBox" Width="60" Margin="0,0,6,0" Text="0" LostFocus="DefaultTransition_Changed"/>
                         <TextBlock Text="{Binding [replay.transitionFrames], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center"/>
                     </WrapPanel>
-                    <WrapPanel DockPanel.Dock="Bottom" Margin="0,6,0,0">
-                        <TextBlock Text="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}"
-                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
-                        <ComboBox x:Name="TransitionKindBox" Width="104" Margin="0,0,6,0" SelectionChanged="Transition_Changed">
-                            <ComboBoxItem Content="{Binding [replay.transitionCut], Source={x:Static i18n:Loc.Source}}" Tag="Cut" IsSelected="True"/>
-                            <ComboBoxItem Content="{Binding [replay.transitionDissolve], Source={x:Static i18n:Loc.Source}}" Tag="Dissolve"/>
-                        </ComboBox>
-                        <ComboBox x:Name="TransitionTimingBox" Width="150" Margin="0,0,6,0" SelectionChanged="Transition_Changed"
-                                  ToolTip="{Binding [replay.timingHelp], Source={x:Static i18n:Loc.Source}}">
-                            <ComboBoxItem Content="{Binding [replay.timingOverwrap], Source={x:Static i18n:Loc.Source}}" Tag="Overwrap" IsSelected="True"/>
-                            <ComboBoxItem Content="{Binding [replay.timingAdditive], Source={x:Static i18n:Loc.Source}}" Tag="Additive"/>
-                        </ComboBox>
-                        <TextBox x:Name="TransitionFramesBox" Width="60" Margin="0,0,6,0" Text="0" LostFocus="Transition_Changed"/>
-                        <TextBlock Text="{Binding [replay.transitionFrames], Source={x:Static i18n:Loc.Source}}"
-                                   VerticalAlignment="Center" Margin="0,0,10,0"/>
-                        <TextBlock Text="{Binding [replay.gain], Source={x:Static i18n:Loc.Source}}"
-                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
-                        <TextBox x:Name="ClipGainBox" Width="50" Margin="0,0,10,0" LostFocus="ClipGain_Changed"/>
-                        <CheckBox x:Name="PreservePitchBox" Margin="0,0,10,0" VerticalAlignment="Center"
-                                  Checked="PreservePitch_Changed" Unchecked="PreservePitch_Changed"
-                                  Content="{Binding [replay.preservePitch], Source={x:Static i18n:Loc.Source}}"/>
-                        <ComboBox x:Name="ClipAudioBox" Width="150" Margin="0,0,6,0" SelectionChanged="ClipAudio_Changed"/>
-                        <Button x:Name="AddTagButton" Width="100" Height="28" Margin="0,0,0,0" Click="AddTag_Click"
-                                Content="{Binding [tag.add], Source={x:Static i18n:Loc.Source}}"/>
-                    </WrapPanel>
+                    <!-- Tags for the clip whose + button was pressed. The rows show them; this
+                         strip is where they are ticked. -->
                     <WrapPanel x:Name="ClipTagPanel" DockPanel.Dock="Bottom" Margin="0,6,0,0"/>
+                    <!-- Each clip is edited in its own row: angle, speed, transition, length,
+                         gain, pitch and audio are cells, so nothing is "select a clip, then
+                         use the controls below". -->
                     <ListView x:Name="PlaylistList" Style="{StaticResource DeckList}" SelectionMode="Single"
-                              MouseDoubleClick="PlaylistList_DoubleClick" SelectionChanged="PlaylistList_SelectionChanged">
-                        <ListView.View>
-                            <GridView>
-                                <GridViewColumn Header="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" Width="110"
-                                                DisplayMemberBinding="{Binding InText}"/>
-                                <GridViewColumn Header="{Binding [replay.out], Source={x:Static i18n:Loc.Source}}" Width="110"
-                                                DisplayMemberBinding="{Binding OutText}"/>
-                                <GridViewColumn Header="{Binding [replay.angle], Source={x:Static i18n:Loc.Source}}" Width="70"
-                                                DisplayMemberBinding="{Binding AngleText}"/>
-                                <GridViewColumn Header="{Binding [replay.speed], Source={x:Static i18n:Loc.Source}}" Width="70"
-                                                DisplayMemberBinding="{Binding SpeedText}"/>
-                                <GridViewColumn Header="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}" Width="140"
-                                                DisplayMemberBinding="{Binding TransitionText}"/>
-                            </GridView>
-                        </ListView.View>
+                              HorizontalContentAlignment="Stretch"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Margin="2,4">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock VerticalAlignment="Center" Margin="0,0,10,0" FontFamily="Consolas"
+                                                   Text="{Binding RangeText}"/>
+                                        <ComboBox Width="150" Height="24" DisplayMemberPath="Label"
+                                                  ItemsSource="{Binding AngleOptions}" SelectedItem="{Binding AngleOption}"
+                                                  ToolTip="{Binding [replay.angle], Source={x:Static i18n:Loc.Source}}"/>
+                                        <ComboBox Width="90" Height="24" Margin="6,0,0,0" DisplayMemberPath="Label"
+                                                  ItemsSource="{Binding SpeedOptions}" SelectedItem="{Binding SpeedOption}"
+                                                  ToolTip="{Binding [replay.speed], Source={x:Static i18n:Loc.Source}}"/>
+                                        <Button Width="80" Height="24" Margin="10,0,0,0" Click="ClipCueRow_Click" Tag="{Binding}"
+                                                ToolTip="{Binding [replay.cueHint], Source={x:Static i18n:Loc.Source}}"
+                                                Content="{Binding [replay.cue], Source={x:Static i18n:Loc.Source}}"/>
+                                        <Button Width="80" Height="24" Margin="6,0,0,0" Click="ClipDeleteRow_Click" Tag="{Binding}"
+                                                Content="{Binding [replay.remove], Source={x:Static i18n:Loc.Source}}"/>
+                                        <Button Width="90" Height="24" Margin="6,0,0,0" Click="ClipTagRow_Click" Tag="{Binding}"
+                                                Content="{Binding [tag.add], Source={x:Static i18n:Loc.Source}}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                        <ComboBox Width="104" Height="24" DisplayMemberPath="Label"
+                                                  ItemsSource="{Binding TransitionOptions}" SelectedItem="{Binding TransitionOption}"
+                                                  ToolTip="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}"/>
+                                        <ComboBox Width="140" Height="24" Margin="6,0,0,0" DisplayMemberPath="Label"
+                                                  ItemsSource="{Binding TimingOptions}" SelectedItem="{Binding TimingOption}"
+                                                  ToolTip="{Binding [replay.timingHelp], Source={x:Static i18n:Loc.Source}}"/>
+                                        <TextBox Width="56" Height="24" Margin="6,0,0,0" VerticalContentAlignment="Center"
+                                                 Text="{Binding TransitionFrames, UpdateSourceTrigger=LostFocus}"
+                                                 ToolTip="{Binding [replay.transitionFrames], Source={x:Static i18n:Loc.Source}}"/>
+                                        <TextBlock Text="{Binding [replay.gain], Source={x:Static i18n:Loc.Source}}"
+                                                   VerticalAlignment="Center" Margin="10,0,4,0"/>
+                                        <TextBox Width="52" Height="24" VerticalContentAlignment="Center"
+                                                 Text="{Binding GainDb, UpdateSourceTrigger=LostFocus}"/>
+                                        <CheckBox Margin="10,0,0,0" VerticalAlignment="Center"
+                                                  IsChecked="{Binding PreservePitch}"
+                                                  Content="{Binding [replay.preservePitch], Source={x:Static i18n:Loc.Source}}"/>
+                                        <ComboBox Width="150" Height="24" Margin="10,0,0,0" DisplayMemberPath="Label"
+                                                  ItemsSource="{Binding AudioOptions}" SelectedItem="{Binding AudioOption}"
+                                                  ToolTip="{Binding [replay.clipAudioHelp], Source={x:Static i18n:Loc.Source}}"/>
+                                        <TextBlock VerticalAlignment="Center" Margin="10,0,0,0" Foreground="#B0B0B8"
+                                                   Text="{Binding TagsText}"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
                     </ListView>
                 </DockPanel>
             </Grid>

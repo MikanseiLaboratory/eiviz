@@ -828,21 +828,90 @@ public partial class ReplayWindow : Window
         if (_replay is null)
             return;
         var fps = ReplayModel.Fps(_replay, _session);
+        // The rows are rebuilt only when the document changed under us, and an edit made
+        // here writes straight back, so the list is not replaced while it is being typed
+        // into.
+        var existing = EventList.ItemsSource as List<EventRow> ?? [];
         var rows = new List<EventRow>();
         foreach (var entry in ReplayModel.Events(_replay))
         {
-            rows.Add(new EventRow
-            {
-                Id = entry.Id,
-                InText = ReplayModel.Timecode(entry.InFrame, fps),
-                OutText = ReplayModel.Timecode(entry.OutFrame, fps),
-                DurationText = ReplayModel.Duration(entry.InFrame, entry.OutFrame, fps),
-                AngleText = AngleLabel(ReplayModel.ActiveAngle(_replay)),
-                Name = entry.Protected ? "🔒 " + entry.Name : entry.Name,
-                Protected = entry.Protected
-            });
+            var previous = existing.FirstOrDefault(row => row.Id == entry.Id);
+            var row = previous ?? new EventRow { Id = entry.Id };
+            row.IsLoading = true;
+            row.RangeText = $"{ReplayModel.Timecode(entry.InFrame, fps)} → {ReplayModel.Timecode(entry.OutFrame, fps)}" +
+                $"   ({ReplayModel.Duration(entry.InFrame, entry.OutFrame, fps)})";
+            row.Name = entry.Name;
+            row.Protected = entry.Protected;
+            row.IsLoading = false;
+            if (previous is null)
+                row.PropertyChanged += EventRow_Changed;
+            rows.Add(row);
         }
         EventList.ItemsSource = rows;
+    }
+
+    /// <summary>Writes an event's name or protection back to the document.</summary>
+    private void EventRow_Changed(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (sender is not EventRow row || row.IsLoading || _replay is null)
+            return;
+        if (_replay["events"] is not JsonArray events)
+            return;
+        foreach (var item in events)
+        {
+            if (item is not JsonObject entry || entry["id"]?.GetValue<ulong>() != row.Id)
+                continue;
+            if (e.PropertyName == nameof(EventRow.Name))
+                entry["name"] = row.Name.Trim();
+            if (e.PropertyName == nameof(EventRow.Protected))
+                entry["protected"] = row.Protected;
+            SaveDocument();
+            return;
+        }
+    }
+
+    /// <summary>Deletes the event the row belongs to.</summary>
+    private void EventDeleteRow_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: EventRow row } || _replay is null)
+            return;
+        if (row.Protected)
+        {
+            Warn(Loc.T("replay.eventProtected"));
+            return;
+        }
+        if (_replay["events"] is not JsonArray events)
+            return;
+        for (var index = 0; index < events.Count; index++)
+        {
+            if (events[index] is JsonObject entry && entry["id"]?.GetValue<ulong>() == row.Id)
+            {
+                events.RemoveAt(index);
+                SaveDocument();
+                RefreshEvents();
+                return;
+            }
+        }
+    }
+
+    /// <summary>Cues the clip this event stands for: the newest clip of that recording.</summary>
+    private void EventCue_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: EventRow row } || _replay is null)
+            return;
+        var clip = ReplayModel.Clips(_replay, _playlistId)
+            .FirstOrDefault(candidate => ReplayModel.EventIdOf(candidate.Uid) == row.Id);
+        if (clip is null)
+        {
+            Warn(Loc.T("replay.eventNotInPlaylist"));
+            return;
+        }
+        if (Backend?.ReplayCue(_channel, clip.Uid) != true)
+        {
+            Warn(Refusal(Loc.T("replay.cueRefused")));
+            return;
+        }
+        RefreshStatus();
     }
 
     private void RefreshPlaylist()
@@ -850,20 +919,204 @@ public partial class ReplayWindow : Window
         if (_replay is null)
             return;
         var fps = ReplayModel.Fps(_replay, _session);
+        var angles = ReplayModel.Angles(_replay);
+        // The rows are rebuilt only when the document changed under us; an edit made here
+        // writes straight back, so the list is not replaced while it is being typed into.
+        var existing = PlaylistList.ItemsSource as List<ClipRow> ?? [];
         var rows = new List<ClipRow>();
         foreach (var clip in ReplayModel.Clips(_replay, _playlistId))
         {
-            rows.Add(new ClipRow
-            {
-                Uid = clip.Uid,
-                InText = ReplayModel.Timecode(clip.InFrame, fps),
-                OutText = ReplayModel.Timecode(clip.OutFrame, fps),
-                AngleText = AngleLabel(clip.AngleId),
-                SpeedText = $"{clip.Speed * 100:0}%",
-                TransitionText = clip.Transition.Label
-            });
+            var row = existing.FirstOrDefault(candidate => candidate.Uid == clip.Uid) ?? new ClipRow { Uid = clip.Uid };
+            row.IsLoading = true;
+            row.RangeText = $"{ReplayModel.Timecode(clip.InFrame, fps)} → {ReplayModel.Timecode(clip.OutFrame, fps)}" +
+                $"   ({ReplayModel.Duration(clip.InFrame, clip.OutFrame, fps)})";
+            row.AngleOptions = [.. angles.Select(angle => new Option<uint>(angle.Id, angle.Label))];
+            row.AngleOption = row.AngleOptions.FirstOrDefault(option => option.Value == clip.AngleId);
+            row.SpeedOptions =
+            [
+                new(250u, "25%"),
+                new(500u, "50%"),
+                new(750u, "75%"),
+                new(1000u, "100%"),
+                new(1500u, "150%"),
+                new(2000u, "200%"),
+            ];
+            row.SpeedOption = row.SpeedOptions.FirstOrDefault(option => option.Value == (uint)Math.Round(clip.Speed * 1000))
+                ?? row.SpeedOptions[3];
+            row.TransitionOptions =
+            [
+                new("Cut", Loc.T("replay.transitionCut")),
+                new("Dissolve", Loc.T("replay.transitionDissolve")),
+            ];
+            row.TransitionOption = row.TransitionOptions.FirstOrDefault(option => option.Value == clip.Transition.Kind)
+                ?? row.TransitionOptions[0];
+            row.TimingOptions =
+            [
+                new("Overwrap", Loc.T("replay.timingOverwrap")),
+                new("Additive", Loc.T("replay.timingAdditive")),
+            ];
+            row.TimingOption = row.TimingOptions.FirstOrDefault(option => option.Value == clip.Transition.Timing)
+                ?? row.TimingOptions[0];
+            row.TransitionFrames = clip.Transition.DurationFrames.ToString();
+            row.GainDb = clip.GainDb.ToString("0.#");
+            row.PreservePitch = clip.PreservePitch;
+            row.AudioOptions = ClipAudioOptions();
+            row.AudioOption = row.AudioOptions.FirstOrDefault(choice =>
+                choice.Kind == clip.AudioKind
+                && (choice.Kind != "Angle" || choice.AngleId == clip.AudioAngleId)) ?? row.AudioOptions[0];
+            row.TagsText = clip.Tags.Count == 0 ? "" : "🏷 " + string.Join(", ", clip.Tags);
+            row.IsLoading = false;
+            if (existing.All(candidate => candidate.Uid != clip.Uid))
+                row.PropertyChanged += ClipRow_Changed;
+            rows.Add(row);
         }
         PlaylistList.ItemsSource = rows;
+    }
+
+    /// <summary>
+    /// Audio sources a clip can take: follow the picture's angle, silence, or another
+    /// angle's recording.
+    /// </summary>
+    private List<ClipAudioChoice> ClipAudioOptions()
+    {
+        var choices = new List<ClipAudioChoice>
+        {
+            new("FollowAngle", 0, Loc.T("replay.audioFollow")),
+            new("Silent", 0, Loc.T("replay.audioSilent")),
+        };
+        if (_replay is not null)
+        {
+            foreach (var angle in ReplayModel.Angles(_replay))
+                choices.Add(new ClipAudioChoice("Angle", angle.Id, angle.Label));
+        }
+        return choices;
+    }
+
+    /// <summary>Writes a clip edit back to the document, one field at a time.</summary>
+    private void ClipRow_Changed(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (sender is not ClipRow row || row.IsLoading)
+            return;
+        var clip = FindClipJson(row.Uid);
+        if (clip is null)
+            return;
+        switch (e.PropertyName)
+        {
+            case nameof(ClipRow.AngleOption) when row.AngleOption is { } angle:
+                clip["angleId"] = angle.Value;
+                break;
+            case nameof(ClipRow.SpeedOption) when row.SpeedOption is { } speed:
+                clip["speedMilli"] = speed.Value;
+                break;
+            case nameof(ClipRow.TransitionOption) when row.TransitionOption is { } transition:
+                SetClipTransition(clip, transition.Value, null, null);
+                break;
+            case nameof(ClipRow.TimingOption) when row.TimingOption is { } timing:
+                SetClipTransition(clip, null, timing.Value, null);
+                break;
+            case nameof(ClipRow.TransitionFrames):
+                SetClipTransition(clip, null, null, ParseFrames(row.TransitionFrames));
+                break;
+            case nameof(ClipRow.GainDb):
+                clip["gainDb"] = ParseGain(row.GainDb);
+                break;
+            case nameof(ClipRow.PreservePitch):
+                clip["preservePitch"] = row.PreservePitch;
+                break;
+            case nameof(ClipRow.AudioOption) when row.AudioOption is { } audio:
+                clip["audioKind"] = audio.Kind;
+                clip["audioAngleId"] = audio.AngleId;
+                break;
+            default:
+                return;
+        }
+        SaveDocument();
+    }
+
+    /// <summary>The clip object in the document, so a cell can write to it.</summary>
+    private JsonObject? FindClipJson(string uid)
+    {
+        var playlist = _replay is null ? null : ReplayModel.Playlist(_replay, _playlistId);
+        if (playlist?["clips"] is not JsonArray clips)
+            return null;
+        foreach (var item in clips)
+        {
+            if (item is JsonObject clip && clip["uid"]?.GetValue<string>() == uid)
+                return clip;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Writes the transition, keeping the parts the caller did not change. A cut has no
+    /// length, so choosing it clears the frames instead of leaving a stale duration.
+    /// </summary>
+    private static void SetClipTransition(JsonObject clip, string? kind, string? timing, uint? frames)
+    {
+        var current = ReplayTransitionInfo.Read(clip["transition"]);
+        var nextKind = kind ?? current.Kind;
+        var nextTiming = timing ?? current.Timing;
+        var nextFrames = frames ?? current.DurationFrames;
+        if (nextKind == "Cut")
+            nextFrames = 0;
+        clip["transition"] = new JsonObject
+        {
+            ["kind"] = nextKind,
+            ["timing"] = nextTiming,
+            ["durationFrames"] = nextFrames,
+        };
+    }
+
+    private static uint ParseFrames(string text) =>
+        uint.TryParse(text.Trim(), out var frames) ? Math.Min(frames, 600u) : 0u;
+
+    private static double ParseGain(string text) =>
+        double.TryParse(text.Trim(), out var gain) ? Math.Clamp(gain, -60, 12) : 0;
+
+    private void ClipCueRow_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: ClipRow row })
+            return;
+        if (Backend?.ReplayCue(_channel, row.Uid) != true)
+        {
+            Warn(Refusal(Loc.T("replay.cueRefused")));
+            return;
+        }
+        RefreshStatus();
+    }
+
+    private void ClipDeleteRow_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: ClipRow row })
+            return;
+        RemoveClip(row.Uid);
+        RefreshPlaylist();
+    }
+
+    private void ClipTagRow_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: ClipRow row })
+            return;
+        AddTagToClip(row.Uid);
+    }
+
+    /// <summary>
+    /// Opens the tag editor for one clip. The row's button is what names the clip, so the
+    /// operator does not have to select it first.
+    /// </summary>
+    private void AddTagToClip(string uid)
+    {
+        if (_replay is null)
+            return;
+        var clip = ReplayModel.Clips(_replay, _playlistId).FirstOrDefault(candidate => candidate.Uid == uid);
+        if (clip is null)
+            return;
+        var tags = new List<string>(clip.Tags);
+        _clipTags = new TagCheckPanel(ClipTagPanel, _session.ReplayTags, tags, this, () =>
+        {
+            WriteClipTags(uid, _clipTags?.Selected ?? []);
+        });
+        _clipTags.PromptAdd();
     }
 
     private string AngleLabel(uint angleId)
@@ -1232,107 +1485,6 @@ public partial class ReplayWindow : Window
     private void ClipCue_Click(object sender, RoutedEventArgs e) => CueSelectedClip();
 
     /// <summary>
-    /// Loads the selected clip's transition into the editors. A cut carries no
-    /// duration, so the frame box disables itself.
-    /// </summary>
-    private void PlaylistList_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_replay is null || PlaylistList.SelectedItem is not ClipRow row)
-            return;
-        var transition = FindClip(row.Uid);
-        if (transition is null)
-            return;
-        _loadingTransition = true;
-        SelectTag(TransitionKindBox, transition.Kind);
-        SelectTag(TransitionTimingBox, transition.Timing);
-        TransitionFramesBox.Text = transition.DurationFrames.ToString();
-        TransitionFramesBox.IsEnabled = transition.Kind != "Cut";
-        PreservePitchBox.IsChecked = Clips().FirstOrDefault(clip => clip.Uid == row.Uid)?.PreservePitch ?? false;
-        if (Clips().FirstOrDefault(clip => clip.Uid == row.Uid) is { } selected)
-        {
-            RefreshClipAudioBox(selected);
-            ClipGainBox.Text = selected.GainDb.ToString("0.#");
-        }
-        _loadingTransition = false;
-        RefreshClipTags(row.Uid);
-    }
-
-    /// <summary>
-    /// Fills the clip audio choices: follow the picture's angle, silence, or
-    /// another angle's recording.
-    /// </summary>
-    private void RefreshClipAudioBox(ReplayClipInfo clip)
-    {
-        _clipAudio.Clear();
-        _clipAudio.Add(new ClipAudioChoice("FollowAngle", 0, Loc.T("replay.audioFollow")));
-        _clipAudio.Add(new ClipAudioChoice("Silent", 0, Loc.T("replay.audioSilent")));
-        foreach (var angle in ReplayModel.Angles(_replay!))
-            _clipAudio.Add(new ClipAudioChoice("Angle", angle.Id, angle.Label));
-        ClipAudioBox.ItemsSource = null;
-        ClipAudioBox.ItemsSource = _clipAudio;
-        ClipAudioBox.DisplayMemberPath = nameof(ClipAudioChoice.Label);
-        var match = _clipAudio.FirstOrDefault(choice =>
-            choice.Kind == clip.AudioKind
-            && (choice.Kind != "Angle" || choice.AngleId == clip.AudioAngleId));
-        ClipAudioBox.SelectedItem = match ?? _clipAudio[0];
-    }
-
-    /// <summary>
-    /// Writes the clip's audio source. A clip may deliberately be silent, or take
-    /// another angle's sound.
-    /// </summary>
-    private void ClipAudio_Changed(object sender, SelectionChangedEventArgs e)
-    {
-        if (_loadingTransition || _replay is null || PlaylistList.SelectedItem is not ClipRow row)
-            return;
-        if (ClipAudioBox.SelectedItem is not ClipAudioChoice choice)
-            return;
-        var playlist = ReplayModel.Playlist(_replay, _playlistId);
-        if (playlist?["clips"] is not JsonArray clips)
-            return;
-        foreach (var item in clips)
-        {
-            if (item is not JsonObject clip || (clip["uid"]?.GetValue<string>() ?? "") != row.Uid)
-                continue;
-            clip["audio"] = choice.Kind;
-            clip["audioAngleId"] = choice.AngleId;
-        }
-        SaveDocument();
-        RefreshPlaylist();
-    }
-
-    /// <summary>
-    /// Writes the clip's gain. The value is in dB so it reads like a fader, and it
-    /// is refused rather than clamped when it is nonsense.
-    /// </summary>
-    private void ClipGain_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_loadingTransition || _replay is null || PlaylistList.SelectedItem is not ClipRow row)
-            return;
-        if (!float.TryParse(ClipGainBox.Text, out var gain) || !float.IsFinite(gain)
-            || gain < -60.0f || gain > 12.0f)
-        {
-            ExportStatusText.Text = Loc.T("replay.gainRange");
-            // Put the stored value back so the box never shows a number that is not
-            // in the document.
-            var current = Clips().FirstOrDefault(item => item.Uid == row.Uid);
-            ClipGainBox.Text = (current?.GainDb ?? 0.0).ToString("0.#");
-            return;
-        }
-        var playlist = ReplayModel.Playlist(_replay, _playlistId);
-        if (playlist?["clips"] is not JsonArray clips)
-            return;
-        foreach (var item in clips)
-        {
-            if (item is not JsonObject clip || (clip["uid"]?.GetValue<string>() ?? "") != row.Uid)
-                continue;
-            clip["gainDb"] = gain;
-        }
-        SaveDocument();
-        RefreshPlaylist();
-    }
-
-    /// <summary>
     /// Default transition for clips added later. The value is stored on the
     /// playlist, and a new clip starts on it so the operator does not edit every
     /// clip by hand.
@@ -1377,27 +1529,6 @@ public partial class ReplayWindow : Window
 
     private IReadOnlyList<ReplayClipInfo> Clips() =>
         _replay is null ? [] : ReplayModel.Clips(_replay, _playlistId);
-
-    /// <summary>
-    /// Writes the pitch flag of the selected clip. Slow motion otherwise drops the
-    /// pitch along with the speed.
-    /// </summary>
-    private void PreservePitch_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_loadingTransition || _replay is null || PlaylistList.SelectedItem is not ClipRow row)
-            return;
-        var playlist = ReplayModel.Playlist(_replay, _playlistId);
-        if (playlist?["clips"] is not JsonArray clips)
-            return;
-        foreach (var item in clips)
-        {
-            if (item is not JsonObject clip || (clip["uid"]?.GetValue<string>() ?? "") != row.Uid)
-                continue;
-            clip["preservePitch"] = PreservePitchBox.IsChecked == true;
-        }
-        SaveDocument();
-        RefreshPlaylist();
-    }
 
     /// <summary>
     /// Tag check boxes for the selected clip, with the session's replay catalog as
@@ -1445,16 +1576,6 @@ public partial class ReplayWindow : Window
         RefreshPlaylist();
     }
 
-    private void AddTag_Click(object sender, RoutedEventArgs e)
-    {
-        if (_clipTags is null)
-        {
-            Warn(Loc.T("replay.needClip"));
-            return;
-        }
-        _clipTags.PromptAdd();
-    }
-
     private ReplayTransitionInfo? FindClip(string uid)
     {
         if (_replay is null)
@@ -1465,40 +1586,6 @@ public partial class ReplayWindow : Window
                 return clip.Transition;
         }
         return null;
-    }
-
-    /// <summary>
-    /// Writes the editors back to the selected clip. Overwrap overlaps the two
-    /// clips; Additive inserts the duration between them.
-    /// </summary>
-    private void Transition_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_loadingTransition || _replay is null || PlaylistList.SelectedItem is not ClipRow row)
-            return;
-        var playlist = ReplayModel.Playlist(_replay, _playlistId);
-        if (playlist?["clips"] is not JsonArray clips)
-            return;
-        var kind = ComboTag(TransitionKindBox, "Cut");
-        if (!uint.TryParse(TransitionFramesBox.Text.Trim(), out var frames))
-            frames = 0;
-        frames = Math.Min(frames, 600);
-        if (kind == "Cut")
-            frames = 0;
-        foreach (var item in clips)
-        {
-            if (item is not JsonObject clip || (clip["uid"]?.GetValue<string>() ?? "") != row.Uid)
-                continue;
-            clip["transition"] = new JsonObject
-            {
-                ["kind"] = kind,
-                ["timing"] = ComboTag(TransitionTimingBox, "Overwrap"),
-                ["durationFrames"] = frames
-            };
-        }
-        playlist["revision"] = (playlist["revision"]?.GetValue<ulong>() ?? 0) + 1;
-        TransitionFramesBox.IsEnabled = kind != "Cut";
-        SaveDocument();
-        RefreshPlaylist();
     }
 
     private static void SelectTag(ComboBox box, string tag)
@@ -1518,8 +1605,6 @@ public partial class ReplayWindow : Window
     private static string ComboTag(ComboBox box, string fallback) =>
         (box.SelectedItem as ComboBoxItem)?.Tag as string ?? fallback;
 
-    private void PlaylistList_DoubleClick(object sender, MouseButtonEventArgs e) => CueSelectedClip();
-
     private void CueSelectedClip()
     {
         if (PlaylistList.SelectedItem is not ClipRow row)
@@ -1534,24 +1619,32 @@ public partial class ReplayWindow : Window
 
     private void ClipRemove_Click(object sender, RoutedEventArgs e)
     {
-        if (_replay is null || PlaylistList.SelectedItem is not ClipRow row)
+        if (PlaylistList.SelectedItem is not ClipRow row)
         {
             Warn(Loc.T("replay.needClip"));
             return;
         }
+        RemoveClip(row.Uid);
+        RefreshPlaylist();
+    }
+
+    /// <summary>Removes one clip from the playlist the deck is showing.</summary>
+    private void RemoveClip(string uid)
+    {
+        if (_replay is null)
+            return;
         var playlist = ReplayModel.Playlist(_replay, _playlistId);
         if (playlist?["clips"] is not JsonArray clips)
             return;
         for (var index = clips.Count - 1; index >= 0; index--)
         {
-            if (clips[index] is JsonObject clip && (clip["uid"]?.GetValue<string>() ?? "") == row.Uid)
+            if (clips[index] is JsonObject clip && (clip["uid"]?.GetValue<string>() ?? "") == uid)
                 clips.RemoveAt(index);
         }
         playlist["revision"] = (playlist["revision"]?.GetValue<ulong>() ?? 0) + 1;
         // An animation step that cued this clip has nothing left to fire.
-        ReplayCues.Clear(_session.Scenes, clipUid: row.Uid);
+        ReplayCues.Clear(_session.Scenes, clipUid: uid);
         SaveDocument();
-        RefreshPlaylist();
     }
 
     private void Record_Click(object sender, RoutedEventArgs e)
@@ -1695,24 +1788,149 @@ public partial class ReplayWindow : Window
 
     private sealed record ChannelChoice(uint Index, string Label);
 
-    private sealed class EventRow
+    /// <summary>
+    /// One event, edited in its own row. The name and the protection flag are cells, so
+    /// an operator renaming or protecting an event does it where the event is.
+    /// </summary>
+    private sealed class EventRow : System.ComponentModel.INotifyPropertyChanged
     {
+        private string _name = "";
+        private bool _protected;
+        private bool _loading = true;
+
         public ulong Id { get; init; }
-        public string InText { get; init; } = "";
-        public string OutText { get; init; } = "";
-        public string DurationText { get; init; } = "";
-        public string AngleText { get; init; } = "";
-        public string Name { get; init; } = "";
-        public bool Protected { get; init; }
+
+        /// <summary>In, out and length, read-only: they come from the mark.</summary>
+        public string RangeText { get; set; } = "";
+
+        public string Name
+        {
+            get => _name;
+            set => Set(ref _name, value);
+        }
+
+        public bool Protected
+        {
+            get => _protected;
+            set => Set(ref _protected, value);
+        }
+
+        /// <summary>True while the window fills the row, so no write goes back to the document.</summary>
+        public bool IsLoading
+        {
+            get => _loading;
+            set => _loading = value;
+        }
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+        private void Set<T>(ref T field, T value, [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
+        {
+            if (System.Collections.Generic.EqualityComparer<T>.Default.Equals(field, value))
+                return;
+            field = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+        }
     }
 
-    private sealed class ClipRow
+    /// <summary>
+    /// One clip, edited in its own row. Every field an operator changes — angle, speed,
+    /// transition, length, gain, pitch, audio — is a cell of the row it belongs to, so
+    /// nothing is "select a clip, then use the controls somewhere else".
+    /// </summary>
+    private sealed class ClipRow : System.ComponentModel.INotifyPropertyChanged
     {
+        private Option<uint>? _angle;
+        private Option<uint>? _speed;
+        private Option<string>? _transition;
+        private Option<string>? _timing;
+        private ClipAudioChoice? _audio;
+        private string _transitionFrames = "0";
+        private string _gainDb = "0";
+        private bool _preservePitch;
+        private bool _loading = true;
+
         public string Uid { get; init; } = "";
-        public string InText { get; init; } = "";
-        public string OutText { get; init; } = "";
-        public string AngleText { get; init; } = "";
-        public string SpeedText { get; init; } = "";
-        public string TransitionText { get; init; } = "";
+
+        /// <summary>In, out and length, read-only: they come from the mark.</summary>
+        public string RangeText { get; set; } = "";
+
+        public IReadOnlyList<Option<uint>> AngleOptions { get; set; } = [];
+
+        public IReadOnlyList<Option<uint>> SpeedOptions { get; set; } = [];
+
+        public IReadOnlyList<Option<string>> TransitionOptions { get; set; } = [];
+
+        public IReadOnlyList<Option<string>> TimingOptions { get; set; } = [];
+
+        public IReadOnlyList<ClipAudioChoice> AudioOptions { get; set; } = [];
+
+        public string TagsText { get; set; } = "";
+
+        public Option<uint>? AngleOption
+        {
+            get => _angle;
+            set => Set(ref _angle, value);
+        }
+
+        public Option<uint>? SpeedOption
+        {
+            get => _speed;
+            set => Set(ref _speed, value);
+        }
+
+        public Option<string>? TransitionOption
+        {
+            get => _transition;
+            set => Set(ref _transition, value);
+        }
+
+        public Option<string>? TimingOption
+        {
+            get => _timing;
+            set => Set(ref _timing, value);
+        }
+
+        public ClipAudioChoice? AudioOption
+        {
+            get => _audio;
+            set => Set(ref _audio, value);
+        }
+
+        /// <summary>Frames the transition lasts, as text so it can be typed.</summary>
+        public string TransitionFrames
+        {
+            get => _transitionFrames;
+            set => Set(ref _transitionFrames, value);
+        }
+
+        public string GainDb
+        {
+            get => _gainDb;
+            set => Set(ref _gainDb, value);
+        }
+
+        public bool PreservePitch
+        {
+            get => _preservePitch;
+            set => Set(ref _preservePitch, value);
+        }
+
+        /// <summary>True while the window fills the row: no write goes back to the document.</summary>
+        public bool IsLoading
+        {
+            get => _loading;
+            set => _loading = value;
+        }
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+        private void Set<T>(ref T field, T value, [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
+        {
+            if (System.Collections.Generic.EqualityComparer<T>.Default.Equals(field, value))
+                return;
+            field = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+        }
     }
 }

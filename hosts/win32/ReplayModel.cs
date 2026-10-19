@@ -620,6 +620,23 @@ internal static class ReplayModel
             candidate = $"clip-{eventId}-{suffix}";
         return candidate;
     }
+
+    /// <summary>
+    /// The event a clip was cut from. A clip's uid starts with the event id, with a
+    /// suffix when the same event was filed twice, so the event list can offer the clip
+    /// that belongs to an event.
+    /// </summary>
+    public static ulong? EventIdOf(string clipUid)
+    {
+        const string prefix = "clip-";
+        if (!clipUid.StartsWith(prefix, StringComparison.Ordinal))
+            return null;
+        var rest = clipUid[prefix.Length..];
+        var dash = rest.IndexOf('-');
+        if (dash >= 0)
+            rest = rest[..dash];
+        return ulong.TryParse(rest, out var id) ? id : null;
+    }
 }
 
 
