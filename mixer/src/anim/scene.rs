@@ -1025,7 +1025,9 @@ fn step_from_ffi(step: EivizSequenceStepDesc) -> Result<StepDef, &'static str> {
     let replay = if step.replay_active == 0 || step.replay_clip.is_null() {
         None
     } else {
-        let bytes = unsafe { std::slice::from_raw_parts(step.replay_clip, step.replay_clip_len) };
+        let bytes = unsafe {
+            std::slice::from_raw_parts(step.replay_clip, step.replay_clip_len)
+        };
         Some(ReplayAction {
             channel: step.replay_channel,
             clip_uid: String::from_utf8_lossy(bytes).into_owned(),
@@ -1519,3 +1521,8 @@ mod tests {
         assert!(x_of(&next.layers, 1) < 0.5);
     }
 }
+
+
+
+
+

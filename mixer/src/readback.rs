@@ -50,21 +50,19 @@ impl UnitReadback {
         let stride = ((width * bytes_per_pixel + 255) / 256) * 256;
         let size = u64::from(stride * height);
         let depth = depth.max(2);
-        let slots: Vec<Slot> = (0..depth)
-            .map(|_| Slot {
-                buffer: device.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("eiviz frame readback"),
-                    size,
-                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                    mapped_at_creation: false,
-                }),
-                pending: false,
-                waiting: false,
-                ready: None,
-                pts: 0,
-                frame: 0,
-            })
-            .collect();
+        let slots: Vec<Slot> = (0..depth).map(|_| Slot {
+            buffer: device.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("eiviz frame readback"),
+                size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }),
+            pending: false,
+            waiting: false,
+            ready: None,
+            pts: 0,
+            frame: 0,
+        }).collect();
         Self {
             width,
             height,
@@ -282,3 +280,8 @@ impl ReadbackStore {
         self.units.get_mut(&unit_id)
     }
 }
+
+
+
+
+

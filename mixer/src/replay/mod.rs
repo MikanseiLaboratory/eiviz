@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use eiviz_control::error::ControlError;
 use eiviz_control::session::replay::{
-    AngleRecordMode, AngleSourceKind, ReplayDto, overflow_code, profile_code,
-    replay_channel_gpu_id, retention_code,
+    AngleRecordMode, AngleSourceKind, ReplayDto, overflow_code, profile_code, replay_channel_gpu_id,
+    retention_code,
 };
 use eiviz_pro_api::{
     Entitlements, LAYOUT_BGRA, PRO_BUSY, PRO_IO, PixelLayout, ProReplayAngle, ProReplayConfig,
@@ -204,10 +204,7 @@ impl Inbox {
 
     fn offer(&self, frame: RecordFrame) -> bool {
         let cap = self.cap.load(Ordering::Relaxed).max(1);
-        let mut queues = self
-            .queues
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut queues = self.queues.lock().unwrap_or_else(|error| error.into_inner());
         let queue = queues.entry(frame.angle_id).or_default();
         if queue.len() >= cap {
             return false;
@@ -218,10 +215,7 @@ impl Inbox {
     }
 
     fn pop(&self, stop: &AtomicBool) -> Option<RecordFrame> {
-        let mut queues = self
-            .queues
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut queues = self.queues.lock().unwrap_or_else(|error| error.into_inner());
         loop {
             if let Some(frame) = queues.values_mut().find_map(|queue| queue.pop_front()) {
                 return Some(frame);
@@ -425,16 +419,16 @@ impl ReplayEngine {
                 let mut transport = old
                     .iter_mut()
                     .find(|slot| slot.index == channel.index)
-                    .map(|slot| std::mem::replace(&mut slot.transport, channel::Transport::new()))
+                    .map(|slot| {
+                        std::mem::replace(&mut slot.transport, channel::Transport::new())
+                    })
                     .unwrap_or_else(channel::Transport::new);
                 transport.set_playlist(playlist_clips(&config, channel.playlist_id));
                 let audio = old
                     .iter()
                     .find(|slot| slot.index == channel.index)
                     .map(|slot| Arc::clone(&slot.audio))
-                    .unwrap_or_else(|| {
-                        Arc::new(Mutex::new(audio::PlaybackAudio::new(AUDIO_CHANNELS)))
-                    });
+                    .unwrap_or_else(|| Arc::new(Mutex::new(audio::PlaybackAudio::new(AUDIO_CHANNELS))));
                 ChannelSlot {
                     index: channel.index,
                     source_id: if channel.input_id == 0 {
@@ -494,22 +488,7 @@ impl ReplayEngine {
             self.stop(REPLAY_STOP_USER);
             return Ok(());
         }
-        let (
-            paths,
-            width,
-            height,
-            fps_num,
-            fps_den,
-            profile,
-            angles,
-            reserve,
-            queue,
-            write_mb,
-            overflow,
-            retention,
-            segment_frames,
-            protect_from,
-        ) = {
+        let (paths, width, height, fps_num, fps_den, profile, angles, reserve, queue, write_mb, overflow, retention, segment_frames, protect_from) = {
             let inner = self.lock();
             if !inner.config.enabled {
                 return Err(ReplayFailure::invalid(
@@ -697,8 +676,7 @@ impl ReplayEngine {
             ReplayFailure::io(format!("the Pro module refused the recording: {error}"))
         })?;
         self.stop_record.store(false, Ordering::Relaxed);
-        *self.store.lock().unwrap_or_else(|error| error.into_inner()) =
-            Some(Arc::new(Mutex::new(store)));
+        *self.store.lock().unwrap_or_else(|error| error.into_inner()) = Some(Arc::new(Mutex::new(store)));
         self.ensure_workers();
         let mut inner = self.lock();
         inner.recording = true;
@@ -756,10 +734,7 @@ impl ReplayEngine {
         self.release_store();
         self.stop_workers.store(true, Ordering::Relaxed);
         self.inbox.wake.notify_all();
-        let mut workers = self
-            .workers
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut workers = self.workers.lock().unwrap_or_else(|error| error.into_inner());
         for worker in workers.drain(..) {
             let _ = worker.join();
         }
@@ -792,9 +767,9 @@ impl ReplayEngine {
             .map(|angle| RecordTarget {
                 source: match angle.source {
                     AngleSourceKind::Input => RecordSource::Input(angle.input_id),
-                    AngleSourceKind::Scene => {
-                        RecordSource::Scene(eiviz_control::ids::scene_gpu_id(angle.scene_id))
-                    }
+                    AngleSourceKind::Scene => RecordSource::Scene(eiviz_control::ids::scene_gpu_id(
+                        angle.scene_id,
+                    )),
                 },
                 readback_key: REPLAY_RECORD_BASE | u64::from(angle.id),
                 width: inner.width,
@@ -825,7 +800,9 @@ impl ReplayEngine {
             .angles
             .iter()
             .filter_map(|angle| match angle.source {
-                AngleSourceKind::Scene => Some(eiviz_control::ids::scene_gpu_id(angle.scene_id)),
+                AngleSourceKind::Scene => {
+                    Some(eiviz_control::ids::scene_gpu_id(angle.scene_id))
+                }
                 AngleSourceKind::Input => None,
             })
             .collect();
@@ -852,14 +829,7 @@ impl ReplayEngine {
         ids
     }
 
-    pub fn offer_frame(
-        &self,
-        angle_id: u32,
-        frame_index: u64,
-        pts: i64,
-        data: Vec<u8>,
-        stride: usize,
-    ) {
+    pub fn offer_frame(&self, angle_id: u32, frame_index: u64, pts: i64, data: Vec<u8>, stride: usize) {
         let accepted = self.inbox.offer(RecordFrame {
             angle_id,
             frame_index,
@@ -976,13 +946,7 @@ impl ReplayEngine {
     }
 
     /// Copies an angle's waveform. Returns how many buckets were written.
-    pub fn copy_peaks(
-        &self,
-        angle_id: u32,
-        from: u32,
-        min_out: &mut [f32],
-        max_out: &mut [f32],
-    ) -> u32 {
+    pub fn copy_peaks(&self, angle_id: u32, from: u32, min_out: &mut [f32], max_out: &mut [f32]) -> u32 {
         let live = {
             let inner = self.lock();
             inner
@@ -1114,11 +1078,7 @@ impl ReplayEngine {
         Ok(())
     }
 
-    pub fn copy_stats(
-        &self,
-        out: &mut MixerReplayStats,
-        angles: &mut [MixerReplayAngleStats],
-    ) -> u32 {
+    pub fn copy_stats(&self, out: &mut MixerReplayStats, angles: &mut [MixerReplayAngleStats]) -> u32 {
         self.refresh_stats();
         let inner = self.lock();
         *out = inner.stats;
@@ -1373,24 +1333,12 @@ impl ReplayEngine {
                 path_writable: u32::from(estimate.path_writable),
             };
         }
-        let _ = (
-            path,
-            width,
-            height,
-            fps_num,
-            fps_den,
-            profile,
-            angles,
-            reserve_bytes,
-        );
+        let _ = (path, width, height, fps_num, fps_den, profile, angles, reserve_bytes);
         MixerReplayEstimateOut::default()
     }
 
     fn ensure_workers(&self) {
-        let mut workers = self
-            .workers
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut workers = self.workers.lock().unwrap_or_else(|error| error.into_inner());
         if !workers.is_empty() {
             return;
         }
@@ -1442,10 +1390,7 @@ impl ReplayEngine {
         let Some(store) = store else {
             return;
         };
-        let snapshot = store
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .stats();
+        let snapshot = store.lock().unwrap_or_else(|error| error.into_inner()).stats();
         let mut inner = self.lock();
         apply_pro_stats(&mut inner, &snapshot);
     }
@@ -1483,9 +1428,7 @@ fn apply_pro_stats(inner: &mut Inner, snapshot: &ReplayStats) {
         inner.config.angles.len().max(1) as u32,
     );
     inner.stats.estimate_rate_bps = rate;
-    let measured = inner
-        .started_at
-        .is_some_and(|start| start.elapsed() >= Duration::from_secs(5));
+    let measured = inner.started_at.is_some_and(|start| start.elapsed() >= Duration::from_secs(5));
     let pace = if measured && snapshot.write_rate_bps > 0 {
         snapshot.write_rate_bps.max(rate / 2)
     } else {
@@ -1538,11 +1481,7 @@ fn angle_stats(
         write_buffer_cap: angle.write_buffer_cap,
         write_latency_p95_ms: angle.write_latency_p95_ms,
         frames_written: angle.frames_written,
-        dropped_readback: inner
-            .dropped_readback
-            .get(&angle.angle_id)
-            .copied()
-            .unwrap_or(0),
+        dropped_readback: inner.dropped_readback.get(&angle.angle_id).copied().unwrap_or(0),
         dropped_encode: angle.dropped_encode,
         dropped_write: angle.dropped_write,
         bytes_written: angle.bytes_written,
@@ -1692,8 +1631,7 @@ fn health_loop(stop: Arc<AtomicBool>) {
                     storage_full: inner.stats.free_bytes > 0
                         && inner.stats.free_bytes <= inner.stats.reserve_bytes,
                     stop_reason: inner.stats.stop_reason,
-                    pro_unavailable: crate::pro::module().replay().is_none()
-                        && inner.config.enabled,
+                    pro_unavailable: crate::pro::module().replay().is_none() && inner.config.enabled,
                     // Only a measured free-space figure can be compared with the
                     // thresholds. A store that has not reported one yet (or cannot
                     // read the drive) reports zero, which is not "no room left".
@@ -1757,12 +1695,7 @@ fn channel_loop(stop: Arc<AtomicBool>) {
                     )
                 })
                 .collect::<Vec<_>>();
-            (
-                slots,
-                period,
-                inner.last_frame,
-                (inner.fps_num, inner.fps_den),
-            )
+            (slots, period, inner.last_frame, (inner.fps_num, inner.fps_den))
         };
         let store = engine
             .store
@@ -1791,8 +1724,7 @@ fn channel_loop(stop: Arc<AtomicBool>) {
             let elapsed = started.elapsed().as_micros() as u64;
             if let Some((pixels, frame_width, frame_height, stride, pts, substituted)) = decoded {
                 paint(source_id, &pixels, frame_width, frame_height, stride, pts);
-                transport.substituted =
-                    transport.substituted.saturating_add(u64::from(substituted));
+                transport.substituted = transport.substituted.saturating_add(u64::from(substituted));
             } else {
                 // A missing or corrupt frame must not pin the channel: keep the
                 // previous picture, advance, and surface the miss.
@@ -1933,8 +1865,9 @@ fn push_channel_audio(
     audio: &Arc<Mutex<audio::PlaybackAudio>>,
     fps: (u32, u32),
 ) {
-    let frames = (f64::from(AUDIO_SAMPLE_RATE) * f64::from(fps.1.max(1)) / f64::from(fps.0.max(1)))
-        .round() as usize;
+    let frames = (f64::from(AUDIO_SAMPLE_RATE) * f64::from(fps.1.max(1))
+        / f64::from(fps.0.max(1)))
+    .round() as usize;
     if frames == 0 {
         return;
     }
@@ -2013,9 +1946,7 @@ fn render_plan(
     if width == 0 || height == 0 {
         return None;
     }
-    let bytes = (width as usize)
-        .saturating_mul(height as usize)
-        .saturating_mul(2);
+    let bytes = (width as usize).saturating_mul(height as usize).saturating_mul(2);
     let mut primary = vec![0u8; bytes];
     let mut secondary = vec![0u8; bytes];
     let mut guard = store.lock().unwrap_or_else(|error| error.into_inner());
@@ -2045,7 +1976,14 @@ fn render_plan(
         }
     }
     drop(guard);
-    Some((primary, first.width, first.height, stride, pts, substituted))
+    Some((
+        primary,
+        first.width,
+        first.height,
+        stride,
+        pts,
+        substituted,
+    ))
 }
 
 /// Timestamp of a frame blended from two recordings: between the outgoing and the
@@ -2080,7 +2018,9 @@ fn clip_uid_hash(uid: &str) -> u64 {
 
 /// Clips of the playlist a channel selects, in play order.
 fn playlist_clips(config: &ReplayDto, playlist_id: Option<u64>) -> Vec<channel::Clip> {
-    use eiviz_control::session::replay::{ReplayTransitionKind, ReplayTransitionTiming};
+    use eiviz_control::session::replay::{
+        ReplayTransitionKind, ReplayTransitionTiming,
+    };
     let Some(list) = config
         .playlists
         .iter()
@@ -2227,9 +2167,7 @@ impl ReplayStore for FfiReplayStore {
         frame: &VideoFrame,
     ) -> eiviz_pro_api::ProResult<WriteOutcome> {
         let Some(write) = self.api.replay_write_video else {
-            return Err(eiviz_pro_api::ProError::unavailable(
-                "replay write is missing",
-            ));
+            return Err(eiviz_pro_api::ProError::unavailable("replay write is missing"));
         };
         let view = ProVideoView {
             width: frame.width,
@@ -2266,9 +2204,7 @@ impl ReplayStore for FfiReplayStore {
         dst: &mut [u8],
     ) -> eiviz_pro_api::ProResult<eiviz_pro_api::DecodedFrame> {
         let Some(decode) = self.api.replay_decode else {
-            return Err(eiviz_pro_api::ProError::unavailable(
-                "replay decode is missing",
-            ));
+            return Err(eiviz_pro_api::ProError::unavailable("replay decode is missing"));
         };
         let mut out = ProReplayDecoded {
             struct_size: std::mem::size_of::<ProReplayDecoded>() as u32,
@@ -2285,9 +2221,7 @@ impl ReplayStore for FfiReplayStore {
             )
         };
         if status.code != 0 {
-            return Err(eiviz_pro_api::ProError::unavailable(
-                "replay frame is not recorded",
-            ));
+            return Err(eiviz_pro_api::ProError::unavailable("replay frame is not recorded"));
         }
         Ok(eiviz_pro_api::DecodedFrame {
             actual_frame_index: out.actual_frame_index,
@@ -2433,10 +2367,7 @@ impl ReplayStore for FfiReplayStore {
         }
     }
 
-    fn export_start(
-        &mut self,
-        spec: eiviz_pro_api::ReplayExportSpec,
-    ) -> eiviz_pro_api::ProResult<()> {
+    fn export_start(&mut self, spec: eiviz_pro_api::ReplayExportSpec) -> eiviz_pro_api::ProResult<()> {
         let Some(start) = self.api.replay_export_start else {
             return Err(eiviz_pro_api::ProError::unavailable(
                 "replay export is missing",
@@ -2596,16 +2527,13 @@ impl ReplayStore for FfiReplayStore {
     }
 }
 
-pub fn open_ffi_store(
-    config: &ReplayStoreConfig,
-) -> eiviz_pro_api::ProResult<Box<dyn ReplayStore>> {
-    let loaded = crate::pro_load::loaded_api()
-        .ok_or_else(|| eiviz_pro_api::ProError::unavailable("replay module is not loaded"))?;
+pub fn open_ffi_store(config: &ReplayStoreConfig) -> eiviz_pro_api::ProResult<Box<dyn ReplayStore>> {
+    let loaded = crate::pro_load::loaded_api().ok_or_else(|| {
+        eiviz_pro_api::ProError::unavailable("replay module is not loaded")
+    })?;
     let (api, module) = loaded;
     let Some(open) = api.replay_open else {
-        return Err(eiviz_pro_api::ProError::unavailable(
-            "replay open is missing",
-        ));
+        return Err(eiviz_pro_api::ProError::unavailable("replay open is missing"));
     };
     let uuid = config.recording_uuid.as_bytes();
     let storages: Vec<ProReplayStorage> = config
@@ -2663,12 +2591,11 @@ pub fn estimate_ffi(
     angles: u32,
     reserve_bytes: u64,
 ) -> eiviz_pro_api::ProResult<eiviz_pro_api::ReplayEstimate> {
-    let (api, module) = crate::pro_load::loaded_api()
-        .ok_or_else(|| eiviz_pro_api::ProError::unavailable("replay module is not loaded"))?;
+    let (api, module) = crate::pro_load::loaded_api().ok_or_else(|| {
+        eiviz_pro_api::ProError::unavailable("replay module is not loaded")
+    })?;
     let Some(estimate) = api.replay_estimate else {
-        return Err(eiviz_pro_api::ProError::unavailable(
-            "replay estimate is missing",
-        ));
+        return Err(eiviz_pro_api::ProError::unavailable("replay estimate is missing"));
     };
     let mut out = ProReplayEstimateAbi {
         struct_size: std::mem::size_of::<ProReplayEstimateAbi>() as u32,
@@ -2783,9 +2710,7 @@ mod queue_tests {
         fill_black_uyvy(&mut buf);
         assert_eq!(
             buf,
-            [
-                128, 16, 128, 16, 128, 16, 128, 16, 128, 16, 128, 16, 128, 16, 128, 16
-            ]
+            [128, 16, 128, 16, 128, 16, 128, 16, 128, 16, 128, 16, 128, 16, 128, 16]
         );
     }
 
@@ -2889,12 +2814,7 @@ mod channel_audio_tests {
 
     impl ToneStore {
         /// The store, plus the log of angles and positions it was asked for.
-        fn new(
-            level: f32,
-        ) -> (
-            Arc<Mutex<Box<dyn ReplayStore>>>,
-            Arc<Mutex<Vec<(u32, u64)>>>,
-        ) {
+        fn new(level: f32) -> (Arc<Mutex<Box<dyn ReplayStore>>>, Arc<Mutex<Vec<(u32, u64)>>>) {
             let reads = Arc::new(Mutex::new(Vec::new()));
             let store: Box<dyn ReplayStore> = Box::new(Self {
                 level,
@@ -3002,10 +2922,7 @@ mod channel_audio_tests {
             playing.len()
         );
 
-        let paused = block(
-            &transport(clip(ClipAudioSource::Follow, 1.0), false),
-            &store,
-        );
+        let paused = block(&transport(clip(ClipAudioSource::Follow, 1.0), false), &store);
         assert!(
             paused.iter().all(|sample| *sample == 0.0),
             "a paused channel is silent"
@@ -3022,10 +2939,7 @@ mod channel_audio_tests {
             "a silent clip publishes silence even though the store has sound"
         );
 
-        let other = block(
-            &transport(clip(ClipAudioSource::Angle(3), 1.0), true),
-            &store,
-        );
+        let other = block(&transport(clip(ClipAudioSource::Angle(3), 1.0), true), &store);
         assert!(loud(&other, 0.5) > other.len() / 2);
         let asked: Vec<u32> = reads
             .lock()
@@ -3037,10 +2951,7 @@ mod channel_audio_tests {
             asked.contains(&3),
             "the clip's own angle must be the one read: {asked:?}"
         );
-        assert!(
-            !asked.contains(&1),
-            "the picture angle is not read: {asked:?}"
-        );
+        assert!(!asked.contains(&1), "the picture angle is not read: {asked:?}");
     }
 
     /// An inserted (additive) transition holds the picture past the clip's end.
@@ -3136,3 +3047,5 @@ mod blend_pts_tests {
         assert!(blend_pts(i64::MAX, i64::MAX, 0.5) > outgoing);
     }
 }
+
+

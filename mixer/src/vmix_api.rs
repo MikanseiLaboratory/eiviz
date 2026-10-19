@@ -402,11 +402,7 @@ fn dispatch_replay(
     if !REPLAY_FUNCTIONS.contains(&name) {
         return None;
     }
-    Some(
-        replay_command(name, params)
-            .map(execute_replay)
-            .and_then(|inner| inner),
-    )
+    Some(replay_command(name, params).map(execute_replay).and_then(|inner| inner))
 }
 
 /// Every vMix function this layer maps to Replay.
@@ -841,11 +837,7 @@ mod tests {
     #[test]
     fn replay_channel_accepts_a_letter_or_a_number_and_refuses_junk() {
         let mut params = HashMap::new();
-        assert_eq!(
-            super::replay_channel(&params).unwrap(),
-            0,
-            "default is channel A"
-        );
+        assert_eq!(super::replay_channel(&params).unwrap(), 0, "default is channel A");
         for (value, want) in [
             ("0", 0),
             ("2", 2),
@@ -879,7 +871,11 @@ mod tests {
         assert_eq!(super::replay_speed(&params).unwrap(), 1000);
         for (value, want) in [("0.5", 500), ("1", 1000), ("2", 2000), ("0.25", 250)] {
             params.insert("Value".into(), value.into());
-            assert_eq!(super::replay_speed(&params).unwrap(), want, "Value={value}");
+            assert_eq!(
+                super::replay_speed(&params).unwrap(),
+                want,
+                "Value={value}"
+            );
         }
         for value in ["fast", "0", "-1", "NaN"] {
             params.insert("Value".into(), value.into());

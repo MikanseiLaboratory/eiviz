@@ -44,8 +44,8 @@ pub use pro_load::{
 };
 pub use pro_load::{load_pro_module, prepare_pro_module};
 mod readback;
-mod rebar;
 mod replay;
+mod rebar;
 mod runtime;
 mod save;
 mod session;
@@ -70,17 +70,17 @@ pub use abi::{
     DURATION_MS, EASING_BEZIER, EASING_HOLD, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT,
     EASING_SMOOTHSTEP, ERR_ALREADY_CREATED, ERR_BUFFER_TOO_SMALL, ERR_DEVICE, ERR_INVALID_ARGUMENT,
     ERR_IO, ERR_NOT_CREATED, ERR_NOT_SUPPORTED_PLAN, EivizCurve, EivizMotion, EivizSceneCamera,
-    EivizSceneSequenceDesc, EivizSceneStateDesc, EivizSequenceStepDesc, GEN_BARS, GEN_SOLID,
-    INCOMING_PREVIEW, INCOMING_PROGRAM, InputRuntimeStats, MULTIVIEW_BASE, MixerCapabilities,
-    MixerLicenseStatus, MixerRebarInfo, MixerReplayAngleStats, MixerReplayChannelState,
-    MixerReplayEstimateIn, MixerReplayEstimateOut, MixerReplayStats, MixerRuntimeStats,
-    MixerSourceStatus, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK,
-    OUT_DECKLINK, OUT_NDI, OUT_OMT, OUT_RTMP, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE,
-    OutputRuntimeStats, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM,
-    SCENE_BASE, SCENE_SEQ_PLAY, SCENE_SEQ_REVERSE, SCENE_SEQ_STOP, SRC_BARS, SRC_BLACK, SRC_BLUE,
-    SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
-    SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
-    TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
+    EivizSceneSequenceDesc, EivizSceneStateDesc, EivizSequenceStepDesc, GEN_BARS,
+    GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, InputRuntimeStats, MULTIVIEW_BASE,
+    MixerCapabilities, MixerLicenseStatus, MixerRebarInfo, MixerReplayAngleStats,
+    MixerReplayChannelState, MixerReplayEstimateIn, MixerReplayEstimateOut, MixerReplayStats,
+    MixerRuntimeStats, MixerSourceStatus,
+    MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI,
+    OUT_OMT, OUT_RTMP, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE, OutputRuntimeStats,
+    OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS,
+    SCENE_SEQ_PLAY, SCENE_SEQ_REVERSE, SCENE_SEQ_STOP, SRC_BLACK, SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
+    SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR,
+    TRANSITION_BLINDS, TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
     TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DATAMOSH,
     TRANSITION_DIAMOND, TRANSITION_DIP, TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT,
     TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP, TRANSITION_DISPLACE, TRANSITION_FADE,
@@ -2139,7 +2139,13 @@ fn mixer_unit_attach_native_ffi(
     // unit that does not exist is wasted work, and it replaced the caller's
     // "not created" error with a device error on every platform. A mixer that does
     // not exist at all is still "not created": that is the code the hosts act on.
-    match with_mixer(|mixer| mixer.shared.lock_or_recover().units.contains_key(&unit_id)) {
+    match with_mixer(|mixer| {
+        mixer
+            .shared
+            .lock_or_recover()
+            .units
+            .contains_key(&unit_id)
+    }) {
         Err(code) => return code,
         Ok(false) => {
             return attach_invalid(format!(
@@ -4848,35 +4854,28 @@ pub unsafe extern "C" fn mixer_replay_export_progress(
     cap: usize,
     written: *mut usize,
 ) -> i32 {
-    ffi_guard(
-        "mixer_replay_export_progress",
-        ERR_INVALID_ARGUMENT,
-        || unsafe {
-            if out.is_null() || written.is_null() || cap == 0 {
-                return ERR_INVALID_ARGUMENT;
-            }
-            let json =
-                crate::replay::export_progress_json(&crate::replay::engine().export_progress());
-            let bytes = json.as_bytes();
-            let count = bytes.len().min(cap - 1);
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, count);
-            *out.add(count) = 0;
-            *written = count;
-            OK
-        },
-    )
+    ffi_guard("mixer_replay_export_progress", ERR_INVALID_ARGUMENT, || unsafe {
+        if out.is_null() || written.is_null() || cap == 0 {
+            return ERR_INVALID_ARGUMENT;
+        }
+        let json = crate::replay::export_progress_json(&crate::replay::engine().export_progress());
+        let bytes = json.as_bytes();
+        let count = bytes.len().min(cap - 1);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, count);
+        *out.add(count) = 0;
+        *written = count;
+        OK
+    })
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn mixer_replay_export_cancel() -> i32 {
-    ffi_guard(
-        "mixer_replay_export_cancel",
-        ERR_IO,
-        || match crate::replay::engine().export_cancel() {
+    ffi_guard("mixer_replay_export_cancel", ERR_IO, || {
+        match crate::replay::engine().export_cancel() {
             Ok(()) => OK,
             Err(code) => code,
-        },
-    )
+        }
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -4971,26 +4970,22 @@ pub unsafe extern "C" fn mixer_replay_channel_transport(
     speed_milli: i32,
     seek_frame: i64,
 ) -> i32 {
-    ffi_guard(
-        "mixer_replay_channel_transport",
-        ERR_IO,
-        || match crate::replay::engine().transport(channel, playing != 0, speed_milli, seek_frame) {
+    ffi_guard("mixer_replay_channel_transport", ERR_IO, || {
+        match crate::replay::engine().transport(channel, playing != 0, speed_milli, seek_frame) {
             Ok(()) => OK,
             Err(code) => code,
-        },
-    )
+        }
+    })
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_replay_channel_jump_to_now(channel: u32) -> i32 {
-    ffi_guard(
-        "mixer_replay_channel_jump_to_now",
-        ERR_IO,
-        || match crate::replay::engine().jump_to_now(channel) {
+    ffi_guard("mixer_replay_channel_jump_to_now", ERR_IO, || {
+        match crate::replay::engine().jump_to_now(channel) {
             Ok(()) => OK,
             Err(code) => code,
-        },
-    )
+        }
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -5018,17 +5013,13 @@ pub unsafe extern "C" fn mixer_replay_copy_channels(
     channels: *mut MixerReplayChannelState,
     cap: u32,
 ) -> i32 {
-    ffi_guard(
-        "mixer_replay_copy_channels",
-        ERR_INVALID_ARGUMENT,
-        || unsafe {
-            if channels.is_null() || cap == 0 {
-                return ERR_INVALID_ARGUMENT;
-            }
-            let slice = std::slice::from_raw_parts_mut(channels, cap as usize);
-            crate::replay::engine().copy_channels(slice) as i32
-        },
-    )
+    ffi_guard("mixer_replay_copy_channels", ERR_INVALID_ARGUMENT, || unsafe {
+        if channels.is_null() || cap == 0 {
+            return ERR_INVALID_ARGUMENT;
+        }
+        let slice = std::slice::from_raw_parts_mut(channels, cap as usize);
+        crate::replay::engine().copy_channels(slice) as i32
+    })
 }
 
 /// Buckets per second the replay waveform is stored at. The host needs it to map
@@ -7465,8 +7456,8 @@ mod tests {
             0,
             "session replace"
         );
-        let state =
-            eiviz_control::ControlFacade::replay_state_json(&MixerFacade).expect("replay state");
+        let state = eiviz_control::ControlFacade::replay_state_json(&MixerFacade)
+            .expect("replay state");
         mixer_destroy();
         assert!(state.contains("\"document\""), "{state}");
         assert!(state.contains("\"live\""), "{state}");
@@ -8234,3 +8225,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+
+
+
+
