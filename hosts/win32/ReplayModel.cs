@@ -136,6 +136,15 @@ internal sealed record ReplayAngleInfo(
 
 internal sealed record ReplayEventInfo(ulong Id, string RecordingUuid, ulong InFrame, ulong OutFrame, string Name, bool Protected);
 
+/// <summary>One playlist a project holds: its name and how many clips are filed in it.</summary>
+internal sealed record ReplayPlaylistInfo(ulong Id, string Name, int Clips)
+{
+    public string Label => Clips == 0 ? Name : $"{Name}  ({Clips})";
+
+    /// <summary>What a screen reader and the automation tree read out.</summary>
+    public override string ToString() => Label;
+}
+
 internal sealed record ReplayClipInfo(
     string Uid,
     uint AngleId,
@@ -460,6 +469,131 @@ internal static class ReplayModel
         });
         root["playlists"] = document;
         return id;
+    }
+
+    /// <summary>Every playlist the project holds, in the order the document lists them.</summary>
+    public static IReadOnlyList<ReplayPlaylistInfo> Playlists(JsonObject root)
+    {
+        var result = new List<ReplayPlaylistInfo>();
+        foreach (var item in Array(root, "playlists"))
+        {
+            if (item is not JsonObject playlist)
+                continue;
+            var id = playlist["id"]?.GetValue<ulong>() ?? 0;
+            if (id == 0)
+                continue;
+            var name = playlist["name"]?.GetValue<string>() ?? "";
+            result.Add(new ReplayPlaylistInfo(
+                id,
+                string.IsNullOrWhiteSpace(name) ? $"Playlist {id}" : name,
+                (playlist["clips"] as JsonArray)?.Count ?? 0));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// The playlist a channel plays. A project can hold several, and the channel is what
+    /// points at one, so the deck shows the channel's rather than whichever happens to
+    /// be first.
+    /// </summary>
+    public static ulong? ChannelPlaylist(JsonObject root, uint channelIndex)
+    {
+        foreach (var item in Array(root, "channels"))
+        {
+            if (item is not JsonObject channel)
+                continue;
+            if (channel["index"]?.GetValue<uint>() != channelIndex)
+                continue;
+            var id = channel["playlistId"]?.GetValue<ulong>() ?? 0;
+            if (id != 0)
+                return id;
+            break;
+        }
+        // A channel that names none, or names one that is gone, plays the first.
+        return Playlists(root).FirstOrDefault()?.Id;
+    }
+
+    /// <summary>Points a channel at a playlist, creating the channel entry when needed.</summary>
+    public static void SetChannelPlaylist(JsonObject root, uint channelIndex, ulong playlistId)
+    {
+        var channels = root["channels"] as JsonArray ?? new JsonArray();
+        foreach (var item in channels)
+        {
+            if (item is JsonObject channel && channel["index"]?.GetValue<uint>() == channelIndex)
+            {
+                channel["playlistId"] = playlistId;
+                root["channels"] = channels;
+                return;
+            }
+        }
+        channels.Add(new JsonObject
+        {
+            ["index"] = channelIndex,
+            ["playlistId"] = playlistId,
+            ["inputId"] = 0UL
+        });
+        root["channels"] = channels;
+    }
+
+    /// <summary>Adds an empty playlist and returns its id.</summary>
+    public static ulong AddPlaylist(JsonObject root, string name)
+    {
+        var id = ReservePlaylistId(root);
+        var document = root["playlists"] as JsonArray ?? new JsonArray();
+        document.Add(new JsonObject
+        {
+            ["id"] = id,
+            ["name"] = string.IsNullOrWhiteSpace(name) ? $"Playlist {id}" : name.Trim(),
+            ["revision"] = 1UL,
+            ["clips"] = new JsonArray()
+        });
+        root["playlists"] = document;
+        return id;
+    }
+
+    /// <summary>Renames a playlist. An empty name is refused rather than saved.</summary>
+    public static bool RenamePlaylist(JsonObject root, ulong playlistId, string name)
+    {
+        var trimmed = name.Trim();
+        if (trimmed.Length == 0)
+            return false;
+        foreach (var item in Array(root, "playlists"))
+        {
+            if (item is JsonObject playlist && playlist["id"]?.GetValue<ulong>() == playlistId)
+            {
+                playlist["name"] = trimmed;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>How many channels play this playlist, so it is not deleted under one.</summary>
+    public static int ChannelsUsingPlaylist(JsonObject root, ulong playlistId)
+    {
+        var count = 0;
+        foreach (var item in Array(root, "channels"))
+        {
+            if (item is JsonObject channel && channel["playlistId"]?.GetValue<ulong>() == playlistId)
+                count++;
+        }
+        return count;
+    }
+
+    /// <summary>Removes a playlist and its clips.</summary>
+    public static bool RemovePlaylist(JsonObject root, ulong playlistId)
+    {
+        if (root["playlists"] is not JsonArray playlists)
+            return false;
+        for (var index = 0; index < playlists.Count; index++)
+        {
+            if (playlists[index] is JsonObject playlist && playlist["id"]?.GetValue<ulong>() == playlistId)
+            {
+                playlists.RemoveAt(index);
+                return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>

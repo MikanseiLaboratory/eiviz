@@ -146,9 +146,29 @@
                               Background="{DynamicResource ButtonBorder}"/>
 
                 <DockPanel Grid.Row="2">
+                    <!-- Which playlist this channel plays, and its name, edited here. A
+                         project can hold several (first half, second half, sponsors), and
+                         the channel is what points at one. -->
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                         <TextBlock FontWeight="Bold" VerticalAlignment="Center"
                                    Text="{Binding [replay.playlist], Source={x:Static i18n:Loc.Source}}"/>
+                        <StackPanel Orientation="Horizontal" Margin="8,0,0,0">
+                            <ComboBox x:Name="PlaylistBox" Width="200" Height="28" DisplayMemberPath="Name"
+                                      SelectionChanged="Playlist_Changed"
+                                      ToolTip="{Binding [replay.playlistPickHelp], Source={x:Static i18n:Loc.Source}}"/>
+                            <TextBox x:Name="PlaylistNameBox" Width="180" Height="28" Margin="6,0,0,0"
+                                     LostFocus="PlaylistName_Changed"
+                                     ToolTip="{Binding [replay.playlistNameHelp], Source={x:Static i18n:Loc.Source}}"/>
+                            <Button x:Name="PlaylistAddButton" Width="90" Height="28" Margin="6,0,0,0" Click="PlaylistAdd_Click"
+                                    Content="{Binding [replay.playlistAdd], Source={x:Static i18n:Loc.Source}}"/>
+                            <Button x:Name="PlaylistRemoveButton" Width="90" Height="28" Margin="6,0,0,0" Click="PlaylistRemove_Click"
+                                    Content="{Binding [replay.playlistRemove], Source={x:Static i18n:Loc.Source}}"/>
+                        </StackPanel>
+                    </DockPanel>
+                    <!-- The clip actions belong to the clip list, not to the playlist row. -->
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                        <TextBlock VerticalAlignment="Center" Foreground="#B0B0B8"
+                                   Text="{Binding [replay.clipsHelp], Source={x:Static i18n:Loc.Source}}"/>
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
                             <Button x:Name="ClipCueButton" Width="100" Height="28" Click="ClipCue_Click"
                                     ToolTip="{Binding [replay.cueHint], Source={x:Static i18n:Loc.Source}}"

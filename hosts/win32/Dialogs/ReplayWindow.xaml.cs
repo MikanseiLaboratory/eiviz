@@ -38,6 +38,8 @@ public partial class ReplayWindow : Window
     private JsonObject? _replay;
     private string _lastJson = "";
     private ulong _playlistId;
+    /// <summary>The project's playlists, as the picker shows them.</summary>
+    private IReadOnlyList<ReplayPlaylistInfo> _playlistChoices = [];
     private uint _channel;
     private ulong? _inFrame;
     private ulong _outFrame;
@@ -95,7 +97,7 @@ public partial class ReplayWindow : Window
             return;
         }
         _lastJson = _session.ReplayJson;
-        _playlistId = ReplayModel.EnsurePlaylist(_replay);
+        RefreshPlaylistChoices();
         // The deck monitors: the channel's own picture (what goes out) and the angle
         // being recorded (what comes in).
         _outputMonitorId = _session.NextMonitorId++;
@@ -167,6 +169,112 @@ public partial class ReplayWindow : Window
         return ReplayModel.Angles(_replay).FirstOrDefault();
     }
 
+    /// <summary>
+    /// Fills the playlist picker from the document and shows the one this channel plays.
+    /// A project can hold several playlists, so the picker is what says which one the
+    /// deck below is showing.
+    /// </summary>
+    private void RefreshPlaylistChoices()
+    {
+        if (_replay is null)
+            return;
+        var lists = ReplayModel.Playlists(_replay);
+        if (lists.Count == 0)
+        {
+            ReplayModel.EnsurePlaylist(_replay);
+            lists = ReplayModel.Playlists(_replay);
+        }
+        var current = ReplayModel.ChannelPlaylist(_replay, _channel) ?? lists[0].Id;
+        _playlistId = current;
+        _playlistChoices = lists;
+        PlaylistBox.ItemsSource = lists;
+        PlaylistBox.DisplayMemberPath = nameof(ReplayPlaylistInfo.Label);
+        PlaylistBox.SelectedItem = lists.FirstOrDefault(list => list.Id == current) ?? lists[0];
+        PlaylistNameBox.Text = lists.FirstOrDefault(list => list.Id == current)?.Name ?? "";
+        PlaylistRemoveButton.IsEnabled = lists.Count > 1;
+    }
+
+    private void Playlist_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_replay is null || PlaylistBox.SelectedItem is not ReplayPlaylistInfo choice)
+            return;
+        if (choice.Id == _playlistId)
+            return;
+        // Switching the picker moves the *channel*: that is what plays a playlist.
+        _playlistId = choice.Id;
+        ReplayModel.SetChannelPlaylist(_replay, _channel, choice.Id);
+        PlaylistNameBox.Text = choice.Name;
+        SaveDocument();
+        RefreshPlaylist();
+    }
+
+    private void PlaylistName_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_replay is null)
+            return;
+        var name = PlaylistNameBox.Text.Trim();
+        if (name.Length == 0)
+        {
+            Warn(Loc.T("replay.playlistNameEmpty"));
+            RefreshPlaylistChoices();
+            return;
+        }
+        if (!ReplayModel.RenamePlaylist(_replay, _playlistId, name))
+            return;
+        SaveDocument();
+        RefreshPlaylistChoices();
+    }
+
+    private void PlaylistAdd_Click(object sender, RoutedEventArgs e)
+    {
+        if (_replay is null)
+            return;
+        var id = ReplayModel.AddPlaylist(_replay, Loc.Format("replay.playlistDefaultName", ReplayModel.Playlists(_replay).Count + 1));
+        // A new playlist is for this channel: creating one and then having to point the
+        // channel at it would be two steps for one intention.
+        ReplayModel.SetChannelPlaylist(_replay, _channel, id);
+        _playlistId = id;
+        SaveDocument();
+        RefreshPlaylistChoices();
+        RefreshPlaylist();
+        Warn(Loc.Format("replay.playlistAdded", PlaylistNameBox.Text));
+    }
+
+    private void PlaylistRemove_Click(object sender, RoutedEventArgs e)
+    {
+        if (_replay is null || _playlistChoices.Count <= 1)
+        {
+            Warn(Loc.T("replay.playlistLast"));
+            return;
+        }
+        var users = ReplayModel.ChannelsUsingPlaylist(_replay, _playlistId);
+        if (users > 1)
+        {
+            Warn(Loc.Format("replay.playlistInUse", users));
+            return;
+        }
+        var clips = ReplayModel.Clips(_replay, _playlistId).Count;
+        if (clips > 0)
+        {
+            var answer = MessageBox.Show(
+                this,
+                Loc.Format("replay.playlistDeleteClips", clips),
+                Title,
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.Yes)
+                return;
+        }
+        ReplayModel.RemovePlaylist(_replay, _playlistId);
+        var remaining = ReplayModel.Playlists(_replay);
+        var next = remaining.FirstOrDefault();
+        if (next is not null)
+            ReplayModel.SetChannelPlaylist(_replay, _channel, next.Id);
+        SaveDocument();
+        RefreshPlaylistChoices();
+        RefreshPlaylist();
+    }
+
     private void Tick()
     {
         // The document can change under us: the remote core accepts edits from
@@ -177,7 +285,7 @@ public partial class ReplayWindow : Window
             if (parsed is not null)
             {
                 _replay = parsed;
-                _playlistId = ReplayModel.EnsurePlaylist(_replay);
+                RefreshPlaylistChoices();
                 _lastJson = _session.ReplayJson;
                 BuildAngles();
                 RefreshEvents();
