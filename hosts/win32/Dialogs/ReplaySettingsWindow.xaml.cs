@@ -675,6 +675,22 @@ public partial class ReplaySettingsWindow : Window
         }
         _replay["angles"] = angles;
 
+        // This window owns the storage, the angles, the format and the buffering. The
+        // events, the playlists and which playlist each channel plays belong to the
+        // deck: an operator who marked a clip while this window was open must not lose
+        // it to an Apply. Sending the snapshot back whole did exactly that, and the
+        // mixer then played a playlist whose clip transitions had been reverted.
+        if (JsonNode.Parse(_session.ReplayJson) is JsonObject current)
+        {
+            foreach (var ownedByDeck in new[] { "events", "playlists", "channels", "activeAngleId" })
+            {
+                if (current[ownedByDeck] is { } value)
+                    _replay[ownedByDeck] = value.DeepClone();
+            }
+            if (current["enabled"] is { } enabled)
+                _replay["enabled"] = enabled.DeepClone();
+        }
+
         var json = ReplayModel.Serialize(_replay);
         _session.ReplayJson = json;
         try

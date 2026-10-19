@@ -611,6 +611,32 @@ mod tests {
     }
 
     #[test]
+    fn a_playlist_played_from_its_first_clip_dissolves_into_the_second() {
+        // The deck plays a playlist by handing it to the transport and starting it, not
+        // by cueing one clip. This covers that path: the dissolve belongs to the
+        // outgoing clip, so the boundary between the two must produce a two-frame plan.
+        let mut transport = Transport::new();
+        transport.set_playlist(vec![
+            clip("a", 0, 60, dissolve(TransitionTiming::Overwrap, 30)),
+            clip("b", 100, 160, ClipTransition::CUT),
+        ]);
+        transport.set_clip(
+            clip("a", 0, 60, dissolve(TransitionTiming::Overwrap, 30)),
+            0,
+        );
+        transport.set_playing(true);
+        let plans = play_out(&mut transport);
+        let blended: Vec<&FramePlan> = plans
+            .iter()
+            .filter(|plan| plan.secondary.is_some())
+            .collect();
+        assert!(
+            !blended.is_empty(),
+            "the boundary between the two clips must show both frames, got {} plans",
+            plans.len()
+        );
+    }
+    #[test]
     fn forward_shows_every_frame_and_stops_at_the_end() {
         let mut transport = Transport::new();
         transport.cue(Cue {
