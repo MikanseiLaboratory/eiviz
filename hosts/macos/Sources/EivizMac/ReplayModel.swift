@@ -127,7 +127,7 @@ struct ReplayAngleInfo: Identifiable, Hashable {
     /// `Composite` or `Passthrough` (OMT inputs only).
     var recordMode: String = "Composite"
     /// Mixing unit whose program mix feeds this angle. Zero means silent.
-    let audioUnitId: UInt64
+    var audioUnitId: UInt64
 
     var sceneGpuId: UInt64 { EIVIZ_SCENE_BASE | sceneId }
 

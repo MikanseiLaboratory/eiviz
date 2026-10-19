@@ -1165,10 +1165,8 @@ struct ReplaySettingsView: View {
     @State private var sourceSelection: UInt64 = 0
     /// Record mode for the add row: composite, or passthrough for an OMT input.
     @State private var addMode = "Composite"
-    /// The angle the edit row is editing. Zero means nothing is selected.
+    /// The angle the edit row is editing. Nothing selected means no edit row.
     @State private var selectedAngleId: UInt32?
-    /// Drive the add row files a new angle on.
-    @State private var driveSelection = 0
     /// Audio source the add row gives a new angle: zero is silence, otherwise the
     /// mixing unit whose program mix the angle records.
     @State private var audioSelection: UInt64 = 0
