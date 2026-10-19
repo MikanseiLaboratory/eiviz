@@ -218,8 +218,9 @@ pub fn cstring(text: &str) -> CString {
     CString::new(text).unwrap()
 }
 
-/// One pixel of a scene's composed picture, read the way a monitor shows it. The
-/// first request can land before a frame exists, so it is retried once.
+/// One pixel of a scene's composed picture, read the way a monitor shows it. The first
+/// request can land before a frame exists, and a software adapter under load can take
+/// seconds to produce one, so it is retried on a budget rather than once.
 pub fn scene_pixel(scene: u64, x: u32, y: u32) -> [u8; 3] {
     let path = std::env::temp_dir().join(format!(
         "eiviz-scene-{}-{scene}-{x}-{y}.png",
@@ -228,7 +229,8 @@ pub fn scene_pixel(scene: u64, x: u32, y: u32) -> [u8; 3] {
     let _ = std::fs::remove_file(&path);
     let cpath = CString::new(path.to_string_lossy().as_bytes()).unwrap();
     let mut code = unsafe { mixer_snapshot(scene, 0, cpath.as_ptr()) };
-    if code != OK {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while code != OK && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(250));
         code = unsafe { mixer_snapshot(scene, 0, cpath.as_ptr()) };
     }
