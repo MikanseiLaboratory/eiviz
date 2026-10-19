@@ -7,6 +7,7 @@
         Title="{Binding [replay.windowTitle], Source={x:Static i18n:Loc.Source}}"
         Width="1500" Height="1020" MinWidth="1180" MinHeight="820"
         WindowStartupLocation="CenterOwner"
+        PreviewKeyDown="Window_PreviewKeyDown"
         Background="{DynamicResource WindowBackground}">
     <Window.Resources>
         <Style x:Key="DeckList" TargetType="ListView">
@@ -182,7 +183,7 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.name], Source={x:Static i18n:Loc.Source}}" Width="200">
+                            <GridViewColumn Header="{Binding [replay.name], Source={x:Static i18n:Loc.Source}}" Width="150">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
@@ -199,7 +200,7 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Width="76">
+                            <GridViewColumn Width="90">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <StackPanel Orientation="Horizontal">
@@ -215,8 +216,11 @@
                             </GridViewColumn>
                         </GridView>
                     </ListView.View>
-                </ListView>
-            </DockPanel>
+                    </ListView>
+                    <!-- An empty list says what to do, rather than showing nothing. -->
+                    <TextBlock x:Name="EventEmptyText" DockPanel.Dock="Bottom" Style="{StaticResource Caption}" Visibility="Collapsed"
+                               Text="{Binding [replay.noEvents], Source={x:Static i18n:Loc.Source}}"/>
+                </DockPanel>
 
             <DockPanel Grid.Column="2">
                 <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
@@ -229,7 +233,7 @@
                         <TextBox x:Name="PlaylistNameBox" Width="150" Height="28" Margin="6,0,0,0"
                                  LostFocus="PlaylistName_Changed"
                                  ToolTip="{Binding [replay.playlistNameHelp], Source={x:Static i18n:Loc.Source}}"/>
-                        <Button Width="40" Height="28" Margin="6,0,0,0" Click="PlaylistAdd_Click"
+                        <Button x:Name="PlaylistAddButton" Width="40" Height="28" Margin="6,0,0,0" Click="PlaylistAdd_Click"
                                 FontFamily="Segoe MDL2 Assets" Content="&#xE710;"
                                 ToolTip="{Binding [replay.playlistAddHint], Source={x:Static i18n:Loc.Source}}"/>
                         <Button x:Name="PlaylistRemoveButton" Width="40" Height="28" Margin="6,0,0,0"
@@ -373,6 +377,9 @@
                         </GridView>
                     </ListView.View>
                 </ListView>
+                <!-- An empty playlist says how clips get into it. -->
+                <TextBlock x:Name="PlaylistEmptyText" DockPanel.Dock="Bottom" Style="{StaticResource Caption}" Visibility="Collapsed"
+                           Text="{Binding [replay.noClips], Source={x:Static i18n:Loc.Source}}"/>
             </DockPanel>
         </Grid>
 
@@ -453,6 +460,10 @@
                         Content="{Binding [replay.exportCancel], Source={x:Static i18n:Loc.Source}}"/>
             </WrapPanel>
             <TextBlock x:Name="ExportStatusText" Margin="0,6,0,0" TextWrapping="Wrap"/>
+            <!-- The keys an operator works by, on screen: a production tool should not
+                 hide its shortcuts in a manual. -->
+            <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" Foreground="#B0B0B8"
+                       Text="{Binding [replay.shortcutHelp], Source={x:Static i18n:Loc.Source}}"/>
             <!-- Recording health: where the frames went. -->
             <TextBlock x:Name="HealthText" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="#B0B0B8"/>
         </StackPanel>

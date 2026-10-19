@@ -275,6 +275,47 @@ public partial class ReplayWindow : Window
         RefreshPlaylist();
     }
 
+    /// <summary>
+    /// The keys an operator works by, the way a replay controller has them: mark, play,
+    /// step, cue. A field being typed into keeps its own keys, so a name can contain an
+    /// i or an o.
+    /// </summary>
+    private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (Keyboard.FocusedElement is TextBox or ComboBox)
+            return;
+        switch (e.Key)
+        {
+            case Key.Space:
+                Play_Click(this, new RoutedEventArgs());
+                break;
+            case Key.I:
+                MarkIn_Click(this, new RoutedEventArgs());
+                break;
+            case Key.O:
+                MarkOut_Click(this, new RoutedEventArgs());
+                break;
+            case Key.L:
+                Live_Click(this, new RoutedEventArgs());
+                break;
+            case Key.Left:
+                StepBack_Click(this, new RoutedEventArgs());
+                break;
+            case Key.Right:
+                StepForward_Click(this, new RoutedEventArgs());
+                break;
+            case Key.Enter:
+                CueSelectedClip();
+                break;
+            case Key.Delete:
+                ClipRemove_Click(this, new RoutedEventArgs());
+                break;
+            default:
+                return;
+        }
+        e.Handled = true;
+    }
+
     private void Tick()
     {
         // The document can change under us: the remote core accepts edits from
@@ -788,6 +829,7 @@ public partial class ReplayWindow : Window
             rows.Add(row);
         }
         EventList.ItemsSource = rows;
+        EventEmptyText.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>Writes an event's name or protection back to the document.</summary>
@@ -912,6 +954,7 @@ public partial class ReplayWindow : Window
             rows.Add(row);
         }
         PlaylistList.ItemsSource = rows;
+        PlaylistEmptyText.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>
