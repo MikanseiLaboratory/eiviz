@@ -66,15 +66,19 @@ fn an_angle_that_is_not_on_air_still_records() {
         mixer_replay_configure(config.as_ptr())
     });
     expect("record on", unsafe { mixer_replay_record(1) });
-    thread::sleep(Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(1500));
 
+    let mut first = MixerReplayStats::default();
+    let mut first_angles = vec![MixerReplayAngleStats::default(); 4];
+    unsafe { mixer_replay_copy_stats(&mut first, first_angles.as_mut_ptr(), 4) };
+
+    thread::sleep(Duration::from_millis(1500));
     let mut stats = MixerReplayStats::default();
     let mut angles = vec![MixerReplayAngleStats::default(); 4];
     unsafe { mixer_replay_copy_stats(&mut stats, angles.as_mut_ptr(), 4) };
     expect("record off", unsafe { mixer_replay_record(0) });
     mixer_destroy();
 
-    // The stats are read while recording is still on, so state is recording.
     assert_eq!(stats.angle_count, 1);
     assert!(
         stats.frames_pushed > 0,
@@ -84,10 +88,25 @@ fn an_angle_that_is_not_on_air_still_records() {
         stats.frames_offered,
         angles[0].dropped_readback
     );
+    // An off-air angle keeps recording: the recorder receives its frames and keeps
+    // receiving them. How many frames per second arrive depends on the adapter (a
+    // software one is slow), so this measures that recording progresses rather than
+    // a rate.
     assert!(
-        stats.frames_offered + 3 >= stats.frames_pushed,
-        "offered {} of {} frames handed to the readback",
+        stats.frames_offered > first.frames_offered,
+        "the recorder must keep receiving frames from an off-air angle: \
+         offered {} then {} of {} handed over",
+        first.frames_offered,
         stats.frames_offered,
+        stats.frames_pushed
+    );
+    // Nothing is invented: every frame the recorder reports was handed to the
+    // readback, and what it could not take is counted as a readback loss.
+    assert!(
+        stats.frames_offered + u64::from(angles[0].dropped_readback) <= stats.frames_pushed,
+        "offered {} + readback lost {} must not exceed pushed {}",
+        stats.frames_offered,
+        angles[0].dropped_readback,
         stats.frames_pushed
     );
     let _ = std::fs::remove_dir_all(&dir);

@@ -18,16 +18,16 @@ Until a Replay input exists, the Replay window and Replay Setup are not availabl
 
 Replay Setup is a dedicated window, opened from the main window. It holds everything the recording needs:
 
-- **Storage**: one or more drives. Angles record to the first drive unless they are assigned to another one, and an angle belongs to exactly one drive. Remaining time is free space minus the reserve, summed over the drives in the set.
+- **Storage**: one or more drives. Every angle is assigned to exactly one drive, and one drive holding every angle is the usual setup. Remaining time is free space minus the reserve, summed over the drives in the set.
 - **Profile**: HQ, SQ, or LQ. Quality is never reduced automatically.
-- **Segment frames**: how many frames one segment file holds.
+- **Segment frames**: how many frames one segment file holds (default 120, range 30–1800).
 - **Encode queue**: unencoded frames kept per angle (default 6, range 2–60).
 - **Write buffer**: bytes held before a segment is written (default 512 MiB, range 64–8192).
 - **Reserve**: space left untouched on every drive (MiB).
 - **Overflow**: drop frames, or stop recording, when encoding falls behind.
 - **When the disk is full**: stop recording and report, overwrite the oldest segments, or overwrite everything except the clips and protected events still in use.
 - **New clips**: the transition clips get when they are added later.
-- **Angles**: one per scene. Each angle records that scene's composited output, and can take its audio from a mixing unit's program mix or record silence.
+- **Angles**: each angle records either a scene's composited output or an input's own picture, and can take its audio from a mixing unit's program mix or record silence. An input angle needs no scene, which is what makes recording one camera cheap. The recording format (resolution and frame rate) comes from the first mixing unit, and every angle shares it.
 - **Add every new event to the playlist automatically**: uses the angle selected in the Replay window. Clips are never filed against a guessed camera.
 
 The angle set is fixed while recording: stop the recording before adding or removing angles.
@@ -60,7 +60,7 @@ The vMix-compatible API can record, mark, cue, and play Replay channels, so a St
 
 A scene's animation can also cue Replay: a sequence step can name a channel and a clip (or the newest clip on the channel) and start it, so a running order plays clips by its own timecode.
 
-The native API (`eivizctl`) runs the same operations. `input add --kind Replay` creates the channel together with its Replay settings, `replay configure --from-json` writes the drives and angles, and `replay record`, `mark-in`, `mark-out`, `cue`, and `play` drive the deck. `replay state` answers with the session's settings and the mixer's measurements together (recording state, each channel's position and speed, drop counters), so monitoring and automation need one call.
+The native API (`eivizctl`) runs the same operations. `input add --kind Replay` creates the channel together with its Replay settings, `replay configure --from-json` writes the drives and angles, `replay angle --id N` chooses the angle the mark uses, and `replay record`, `mark-in`, `mark-out`, `cue`, and `play` drive the deck. `replay state` answers with the session's settings and the mixer's measurements together (recording state, each channel's position and speed, drop counters), so monitoring and automation need one call.
 
 ## Remote
 
