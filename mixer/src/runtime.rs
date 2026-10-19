@@ -263,9 +263,7 @@ impl MixerPort for ProcessMixer {
                         .map(|action| action.channel)
                         .unwrap_or(0),
                     replay_active: u32::from(step.replay.is_some()),
-                    replay_play: u32::from(
-                        step.replay.as_ref().is_some_and(|action| action.play),
-                    ),
+                    replay_play: u32::from(step.replay.as_ref().is_some_and(|action| action.play)),
                     replay_clip: if clip.is_empty() {
                         std::ptr::null()
                     } else {

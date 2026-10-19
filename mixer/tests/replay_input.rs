@@ -15,7 +15,10 @@ use std::ffi::CString;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{cstring, expect, full_layer, is_red, load_test_module, scene_id, scene_pixel};
+use common::{
+    cstring, expect, full_layer, is_red, load_test_module, mark_in_when_ready, mark_out_after,
+    mark_out_when_ready, scene_id, scene_pixel,
+};
 use eiviz_mixer::{
     GEN_SOLID, MixerReplayChannelState, SRC_COLOR, UnitState, mixer_create, mixer_create_unit,
     mixer_define_generator, mixer_define_scene, mixer_destroy, mixer_replay_channel_cue,
@@ -37,9 +40,10 @@ fn an_input_angle_records_without_a_scene() {
 
     // The input that is recorded: a solid red generator. It is not part of any
     // scene, which is the point of an input angle.
-    expect("generator", mixer_define_generator(
-        SRC_COLOR, GEN_SOLID, 1.0, 0.0, 0.0, 1.0, 0
-    ));
+    expect(
+        "generator",
+        mixer_define_generator(SRC_COLOR, GEN_SOLID, 1.0, 0.0, 0.0, 1.0, 0),
+    );
 
     // Scene 1 shows the Replay channel, so the recording can be watched.
     let channel_layer = full_layer(CHANNEL_SOURCE);
@@ -75,24 +79,9 @@ fn an_input_angle_records_without_a_scene() {
     expect("record on", unsafe { mixer_replay_record(1) });
     thread::sleep(Duration::from_millis(1200));
 
-    let mut in_frame = 0u64;
-    expect("mark in", unsafe { mixer_replay_mark_in(&mut in_frame) });
-    thread::sleep(Duration::from_millis(800));
-    let mut out_frame = 0u64;
-    let mut uuid = vec![0u8; 64];
-    expect("mark out", unsafe {
-        mixer_replay_mark_out(
-            &mut in_frame,
-            &mut out_frame,
-            uuid.as_mut_ptr(),
-            uuid.len(),
-        )
-    });
+    let in_frame = mark_in_when_ready("replay_input");
+    let (uuid, in_frame, out_frame) = mark_out_after("replay_input", 30);
     assert!(out_frame > in_frame, "the mark must span recorded frames");
-    let uuid = String::from_utf8(uuid)
-        .unwrap()
-        .trim_end_matches('\0')
-        .to_string();
 
     // Before the channel carries the clip the program shows black.
     let before = scene_pixel(scene_id(1), 160, 90);

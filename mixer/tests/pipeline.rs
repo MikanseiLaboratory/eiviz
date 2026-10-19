@@ -2380,4 +2380,3 @@ fn vulkan_backend_is_explicit() {
     assert_eq!(mixer_create_unit(1, 320, 180), OK);
     mixer_destroy();
 }
-

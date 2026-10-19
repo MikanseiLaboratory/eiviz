@@ -31,11 +31,7 @@ impl ClipTransition {
 
     /// Frames the transition occupies on the timeline.
     pub fn span(self) -> u32 {
-        if self.dissolve {
-            self.frames
-        } else {
-            0
-        }
+        if self.dissolve { self.frames } else { 0 }
     }
 }
 
@@ -366,8 +362,7 @@ impl Transport {
             let span = self.span();
             let carry = match self.current.as_ref().map(|clip| clip.transition) {
                 Some(transition)
-                    if transition.span() > 0
-                        && transition.timing == TransitionTiming::Overwrap =>
+                    if transition.span() > 0 && transition.timing == TransitionTiming::Overwrap =>
                 {
                     transition.span() as f64
                 }
@@ -454,11 +449,7 @@ impl Transport {
 
     /// Source frames per output frame, signed: negative plays backwards.
     pub fn playback_speed(&self) -> f64 {
-        let clip_speed = self
-            .current
-            .as_ref()
-            .map(|clip| clip.speed)
-            .unwrap_or(1.0);
+        let clip_speed = self.current.as_ref().map(|clip| clip.speed).unwrap_or(1.0);
         if clip_speed.abs() < 1e-6 {
             1.0
         } else {
@@ -645,7 +636,11 @@ mod tests {
             .iter()
             .filter(|plan| plan.secondary.is_some())
             .collect();
-        assert_eq!(inserted.len(), 4, "the insertion lasts exactly its duration");
+        assert_eq!(
+            inserted.len(),
+            4,
+            "the insertion lasts exactly its duration"
+        );
         assert!(inserted.iter().all(|plan| plan.primary == Some((1, 20))));
         assert!(inserted.iter().all(|plan| plan.secondary == Some((1, 100))));
         assert_eq!(inserted[0].mix, 0.0);
@@ -730,8 +725,10 @@ mod tests {
         for _ in 0..10 {
             transport.step(1.0);
         }
-        assert!(transport.source_frame() < 1007, "{}", transport.source_frame());
+        assert!(
+            transport.source_frame() < 1007,
+            "{}",
+            transport.source_frame()
+        );
     }
 }
-
-

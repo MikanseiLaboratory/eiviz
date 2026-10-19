@@ -47,7 +47,11 @@ impl TimeStretch {
 
     /// Points the analysis pointer at a source frame and drops queued output.
     pub fn reset(&mut self, frame: f64) {
-        self.cursor = if frame.is_finite() { frame.max(0.0) } else { 0.0 };
+        self.cursor = if frame.is_finite() {
+            frame.max(0.0)
+        } else {
+            0.0
+        };
         self.pending.clear();
         self.pending.resize((FRAME - HOP) * self.channels, 0.0);
         self.tail.fill(0.0);
@@ -136,8 +140,7 @@ impl TimeStretch {
                 let weight = hann(index, FRAME);
                 for channel in 0..channels {
                     let from = (offset + index) * channels + channel;
-                    self.pending[start + index * channels + channel] +=
-                        self.source[from] * weight;
+                    self.pending[start + index * channels + channel] += self.source[from] * weight;
                 }
             }
         }
@@ -163,7 +166,13 @@ fn hann(index: usize, frame: usize) -> f32 {
 /// Offset within `search` frames whose window best continues `tail`. A shift has
 /// to beat the natural continuation clearly, otherwise a periodic signal would
 /// wander a whole period and shift its phase for no reason.
-fn best_offset(source: &[f32], tail: &[f32], overlap: usize, channels: usize, search: usize) -> usize {
+fn best_offset(
+    source: &[f32],
+    tail: &[f32],
+    overlap: usize,
+    channels: usize,
+    search: usize,
+) -> usize {
     let score_at = |offset: usize| -> f32 {
         let mut score = 0.0f32;
         let mut energy = 1e-6f32;
@@ -190,11 +199,7 @@ fn best_offset(source: &[f32], tail: &[f32], overlap: usize, channels: usize, se
             best = offset;
         }
     }
-    if best_score > natural * 1.02 {
-        best
-    } else {
-        0
-    }
+    if best_score > natural * 1.02 { best } else { 0 }
 }
 
 #[cfg(test)]
@@ -215,8 +220,7 @@ mod tests {
                     if frame >= self.frames {
                         break;
                     }
-                    let value =
-                        (std::f64::consts::TAU * hz * frame as f64 / 48_000.0).sin() as f32;
+                    let value = (std::f64::consts::TAU * hz * frame as f64 / 48_000.0).sin() as f32;
                     out[index * 2] = value;
                     out[index * 2 + 1] = value;
                     written += 1;
@@ -252,8 +256,7 @@ mod tests {
         // Overlap-add of a Hann window at half-frame hops sums to one, so the
         // samples come back as they went in.
         for index in 2048..written {
-            let expected =
-                (std::f64::consts::TAU * 440.0 * index as f64 / 48_000.0).sin() as f32;
+            let expected = (std::f64::consts::TAU * 440.0 * index as f64 / 48_000.0).sin() as f32;
             assert!(
                 (out[index * 2] - expected).abs() < 0.02,
                 "frame {index}: {} vs {expected}",
@@ -329,6 +332,3 @@ mod tests {
         assert_eq!(stretch.fill(1024, 1.0, &mut reader, &mut out), 1024);
     }
 }
-
-
-

@@ -104,13 +104,10 @@ fn replay_channels() -> Vec<MixerReplayChannelState> {
 /// One HTTP GET against the vMix API, with the credentials the test configured.
 fn http_get(path: &str) -> String {
     let mut stream = TcpStream::connect(("127.0.0.1", PORT as u16)).expect("connect");
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .ok();
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
     let token = base64_encode("user:secret");
-    let headers = format!(
-        "GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Basic {token}\r\n\r\n"
-    );
+    let headers =
+        format!("GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Basic {token}\r\n\r\n");
     stream.write_all(headers.as_bytes()).expect("write");
     let mut body = String::new();
     stream.read_to_string(&mut body).ok();
@@ -118,8 +115,7 @@ fn http_get(path: &str) -> String {
 }
 
 fn base64_encode(text: &str) -> String {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let bytes = text.as_bytes();
     let mut out = String::new();
     for chunk in bytes.chunks(3) {

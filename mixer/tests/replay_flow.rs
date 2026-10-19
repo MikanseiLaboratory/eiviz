@@ -11,12 +11,15 @@ use std::ffi::CString;
 use std::thread;
 use std::time::Duration;
 
-use common::{cstring, expect, full_layer, load_test_module};
+use common::{
+    cstring, expect, full_layer, load_test_module, mark_in_when_ready, mark_out_after,
+    mark_out_when_ready,
+};
 use eiviz_mixer::{
     MixerReplayChannelState, SCENE_BASE, SRC_BARS, UnitState, mixer_create, mixer_create_unit,
     mixer_define_scene, mixer_destroy, mixer_replay_channel_cue, mixer_replay_channel_transport,
-    mixer_replay_configure, mixer_replay_copy_channels, mixer_replay_mark_in, mixer_replay_mark_out,
-    mixer_replay_record, mixer_unit_set_state,
+    mixer_replay_configure, mixer_replay_copy_channels, mixer_replay_mark_in,
+    mixer_replay_mark_out, mixer_replay_record, mixer_unit_set_state,
 };
 
 #[test]
@@ -59,29 +62,16 @@ fn an_operator_records_marks_and_plays_back() {
     expect("record on", unsafe { mixer_replay_record(1) });
     thread::sleep(Duration::from_millis(1200));
 
-    // Mark In, let more of the recording land, then Mark Out.
-    let mut in_frame = 0u64;
-    expect("mark in", unsafe { mixer_replay_mark_in(&mut in_frame) });
+    // Mark In, let more of the recording land, then Mark Out. Both wait for the
+    // recording to reach the frame they need: a software adapter takes longer than
+    // any fixed sleep to produce one.
+    let in_frame = mark_in_when_ready("replay_flow");
     assert!(in_frame > 0, "Mark In should sit on a recorded frame");
-    thread::sleep(Duration::from_millis(600));
-    let mut out_frame = 0u64;
-    let mut uuid = vec![0u8; 64];
-    expect("mark out", unsafe {
-        mixer_replay_mark_out(
-            &mut in_frame,
-            &mut out_frame,
-            uuid.as_mut_ptr(),
-            uuid.len(),
-        )
-    });
+    let (uuid, in_frame, out_frame) = mark_out_after("replay_flow", 60);
     assert!(
         out_frame > in_frame,
         "Mark Out {out_frame} must sit after Mark In {in_frame}"
     );
-    let uuid = String::from_utf8(uuid)
-        .unwrap()
-        .trim_end_matches('\0')
-        .to_string();
     assert!(!uuid.is_empty(), "an event must name its recording");
     expect("record off", unsafe { mixer_replay_record(0) });
 
@@ -100,7 +90,9 @@ fn an_operator_records_marks_and_plays_back() {
     assert_eq!(channels[0].playing, 0, "a cue leaves the channel paused");
 
     // Play. A negative seek frame means "do not move the position".
-    expect("play", unsafe { mixer_replay_channel_transport(0, 1, 1000, -1) });
+    expect("play", unsafe {
+        mixer_replay_channel_transport(0, 1, 1000, -1)
+    });
     thread::sleep(Duration::from_millis(400));
     let count = unsafe { mixer_replay_copy_channels(channels.as_mut_ptr(), 4) };
     assert!(count >= 1);
@@ -113,7 +105,9 @@ fn an_operator_records_marks_and_plays_back() {
     );
 
     // Pause and check the transport is where it was told to stay.
-    expect("pause", unsafe { mixer_replay_channel_transport(0, 0, 1000, -1) });
+    expect("pause", unsafe {
+        mixer_replay_channel_transport(0, 0, 1000, -1)
+    });
     let count = unsafe { mixer_replay_copy_channels(channels.as_mut_ptr(), 4) };
     assert!(count >= 1);
     assert_eq!(channels[0].playing, 0, "the channel should be paused");
@@ -121,4 +115,3 @@ fn an_operator_records_marks_and_plays_back() {
     mixer_destroy();
     let _ = std::fs::remove_dir_all(&dir);
 }
-

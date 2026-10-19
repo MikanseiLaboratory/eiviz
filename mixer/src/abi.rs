@@ -808,7 +808,10 @@ mod tests {
             std::mem::offset_of!(EivizSequenceStepDesc, replay_channel),
             44
         );
-        assert_eq!(std::mem::offset_of!(EivizSequenceStepDesc, replay_active), 48);
+        assert_eq!(
+            std::mem::offset_of!(EivizSequenceStepDesc, replay_active),
+            48
+        );
         assert_eq!(std::mem::offset_of!(EivizSequenceStepDesc, replay_play), 52);
         assert_eq!(std::mem::offset_of!(EivizSequenceStepDesc, replay_clip), 56);
         assert_eq!(
@@ -856,6 +859,3 @@ pub struct OutputRuntimeStats {
     pub connections: u32,
     pub enabled: u32,
 }
-
-
-

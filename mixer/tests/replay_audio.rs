@@ -16,7 +16,10 @@ use std::ffi::CString;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{cstring, expect, full_layer, load_test_module, scene_id};
+use common::{
+    cstring, expect, full_layer, load_test_module, mark_in_when_ready, mark_out_after,
+    mark_out_when_ready, scene_id,
+};
 use eiviz_mixer::{
     AudioPeak, GEN_SOLID, OverlayDesc, SRC_COLOR, UnitState, mixer_audio_set_input,
     mixer_copy_audio_peaks, mixer_create, mixer_create_unit, mixer_define_generator,
@@ -79,10 +82,14 @@ fn the_recorded_sound_reaches_the_channel_meter() {
     // The tone source is the angle's picture and the sound the angle records. A
     // layer carries the sound only when it follows it, so the unit that feeds the
     // angle's audio has that layer.
-    expect("generator", mixer_define_generator(
-        SRC_COLOR, GEN_SOLID, 1.0, 0.0, 0.0, 1.0, 0
-    ));
-    expect("tone", mixer_generator_set_tone(SRC_COLOR, TONE_HZ, TONE_DBFS));
+    expect(
+        "generator",
+        mixer_define_generator(SRC_COLOR, GEN_SOLID, 1.0, 0.0, 0.0, 1.0, 0),
+    );
+    expect(
+        "tone",
+        mixer_generator_set_tone(SRC_COLOR, TONE_HZ, TONE_DBFS),
+    );
 
     let angle_layer = OverlayDesc {
         layer_id: 1,
@@ -148,7 +155,13 @@ fn the_recorded_sound_reaches_the_channel_meter() {
     // to the unit whose program carries it out.
     let tone_route = [2u64];
     expect("route tone", unsafe {
-        mixer_audio_set_input(SRC_COLOR, tone_route.as_ptr(), tone_route.len() as u32, 1.0, 0)
+        mixer_audio_set_input(
+            SRC_COLOR,
+            tone_route.as_ptr(),
+            tone_route.len() as u32,
+            1.0,
+            0,
+        )
     });
     let channel_route = [1u64];
     expect("route channel", unsafe {
@@ -166,18 +179,8 @@ fn the_recorded_sound_reaches_the_channel_meter() {
 
     expect("record on", unsafe { mixer_replay_record(1) });
     thread::sleep(Duration::from_millis(1500));
-    let mut in_frame = 0u64;
-    expect("mark in", unsafe { mixer_replay_mark_in(&mut in_frame) });
-    thread::sleep(Duration::from_millis(800));
-    let mut out_frame = 0u64;
-    let mut uuid = vec![0u8; 64];
-    expect("mark out", unsafe {
-        mixer_replay_mark_out(&mut in_frame, &mut out_frame, uuid.as_mut_ptr(), uuid.len())
-    });
-    let uuid = String::from_utf8(uuid)
-        .unwrap()
-        .trim_end_matches('\0')
-        .to_string();
+    let in_frame = mark_in_when_ready("replay_audio");
+    let (uuid, in_frame, out_frame) = mark_out_after("replay_audio", 60);
     assert!(out_frame > in_frame, "the mark must span recorded frames");
 
     let uuid_c = cstring(&uuid);

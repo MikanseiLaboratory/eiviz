@@ -17,7 +17,10 @@ use std::ffi::CString;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{expect, full_layer, load_test_module, scene_id, scene_pixel};
+use common::{
+    expect, full_layer, load_test_module, mark_in_when_ready, mark_out_after, mark_out_when_ready,
+    scene_id, scene_pixel,
+};
 use eiviz_mixer::{
     EASING_LINEAR, EivizMotion, EivizSceneCamera, EivizSceneSequenceDesc, EivizSceneStateDesc,
     EivizSequenceStepDesc, GEN_SOLID, MixerReplayChannelState, OverlayDesc, SCENE_SEQ_PLAY,
@@ -72,9 +75,10 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
     // The angle records whatever its scene shows, and the program shows the
     // channel. Starting red and switching to green gives the two clips their own
     // colour without a second angle.
-    expect("generator red", mixer_define_generator(
-        SRC_COLOR, GEN_SOLID, 1.0, 0.0, 0.0, 1.0, 0
-    ));
+    expect(
+        "generator red",
+        mixer_define_generator(SRC_COLOR, GEN_SOLID, 1.0, 0.0, 0.0, 1.0, 0),
+    );
     let angle_layer = full_layer(SRC_COLOR);
     expect("angle scene", unsafe {
         mixer_define_scene(scene_id(1), 320, 180, 1, &angle_layer)
@@ -118,38 +122,24 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
     expect("record on", unsafe { mixer_replay_record(1) });
 
     // Clip A: the red stretch. Mark Out is taken before the colour changes, so the
-    // clip holds one colour end to end.
+    // clip holds one colour end to end, and it has to be longer than the transition
+    // that will dissolve it.
     thread::sleep(Duration::from_millis(1200));
-    let mut in_a = 0u64;
-    expect("mark in A", unsafe { mixer_replay_mark_in(&mut in_a) });
-    thread::sleep(Duration::from_millis(1000));
-    let mut out_a = 0u64;
-    let mut uuid = vec![0u8; 64];
-    expect("mark out A", unsafe {
-        mixer_replay_mark_out(&mut in_a, &mut out_a, uuid.as_mut_ptr(), uuid.len())
-    });
-    let uuid = String::from_utf8(uuid)
-        .unwrap()
-        .trim_end_matches('\0')
-        .to_string();
+    let in_a = mark_in_when_ready("replay_transition A");
+    let (uuid, in_a, out_a) = mark_out_after("replay_transition A", u64::from(DISSOLVE_FRAMES) + 2);
     assert!(
         out_a > in_a + u64::from(DISSOLVE_FRAMES),
         "clip A must be longer than the transition: {in_a}..{out_a}"
     );
 
     // Clip B: the green stretch that follows.
-    expect("generator green", mixer_define_generator(
-        SRC_COLOR, GEN_SOLID, 0.0, 1.0, 0.0, 1.0, 0
-    ));
+    expect(
+        "generator green",
+        mixer_define_generator(SRC_COLOR, GEN_SOLID, 0.0, 1.0, 0.0, 1.0, 0),
+    );
     thread::sleep(Duration::from_millis(400));
-    let mut in_b = 0u64;
-    expect("mark in B", unsafe { mixer_replay_mark_in(&mut in_b) });
-    thread::sleep(Duration::from_millis(800));
-    let mut out_b = 0u64;
-    let mut dropped = vec![0u8; 64];
-    expect("mark out B", unsafe {
-        mixer_replay_mark_out(&mut in_b, &mut out_b, dropped.as_mut_ptr(), dropped.len())
-    });
+    let in_b = mark_in_when_ready("replay_transition B");
+    let (_dropped, in_b, out_b) = mark_out_after("replay_transition B", 30);
     assert!(out_b > in_b, "clip B must span recorded frames");
 
     // The playlist: A dissolves into B. The angle set is unchanged, so the
@@ -260,7 +250,11 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
             let pixel = scene_pixel(scene_id(2), 160, 90);
             let mut channels = vec![MixerReplayChannelState::default(); 2];
             let count = unsafe { mixer_replay_copy_channels(channels.as_mut_ptr(), 2) };
-            let position = if count >= 1 { channels[0].position_frame } else { 0 };
+            let position = if count >= 1 {
+                channels[0].position_frame
+            } else {
+                0
+            };
             if !started {
                 if position < in_a || position > out_a {
                     continue;

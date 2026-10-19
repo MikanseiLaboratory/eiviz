@@ -52,6 +52,96 @@ pub fn expect(action: &str, code: i32) {
     assert_eq!(code, OK, "{action} failed with {code}");
 }
 
+/// The reason the mixer gave for the last refusal.
+pub fn last_error() -> String {
+    let mut buffer = vec![0u8; 512];
+    unsafe { eiviz_mixer::mixer_last_error(buffer.as_mut_ptr(), buffer.len()) };
+    String::from_utf8_lossy(&buffer)
+        .trim_end_matches('\0')
+        .to_string()
+}
+
+/// Marks in as soon as the recorder has a frame to mark.
+///
+/// A fixed sleep is not enough on a software adapter: recording starts producing
+/// frames when the renderer has drawn them, which can take longer than any sleep a
+/// test is willing to write. This repeats the operator's own action until the engine
+/// accepts it, and reports the refusal reason if it never does.
+pub fn mark_in_when_ready(label: &str) -> u64 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let mut frame = 0u64;
+        let code = unsafe { eiviz_mixer::mixer_replay_mark_in(&mut frame) };
+        if code == OK {
+            return frame;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!("{label}: Mark In was never accepted: {}", last_error());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+/// Frames the recorder has taken from the readback so far.
+pub fn offered_frames() -> u64 {
+    let mut stats = eiviz_mixer::MixerReplayStats::default();
+    unsafe { eiviz_mixer::mixer_replay_copy_stats(&mut stats, std::ptr::null_mut(), 0) };
+    stats.frames_offered
+}
+
+/// Closes the mark once the recorder has taken at least `min_frames` frames since
+/// Mark In.
+///
+/// A slow adapter needs the wait (the range would otherwise be empty and refused),
+/// and a transition test needs the length: a clip shorter than the transition cannot
+/// be measured.
+pub fn mark_out_after(label: &str, min_frames: u64) -> (String, u64, u64) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let start = offered_frames();
+    while offered_frames().saturating_sub(start) < min_frames {
+        if std::time::Instant::now() >= deadline {
+            panic!(
+                "{label}: only {} frames were recorded after Mark In, wanted {min_frames}",
+                offered_frames().saturating_sub(start)
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    mark_out_when_ready(label)
+}
+
+/// Closes the mark once a frame has arrived after Mark In.
+///
+/// A range with no frames in it is refused (it would become a clip that can never
+/// show anything), so this waits for the recording to move on instead of sleeping a
+/// fixed time that a slow adapter may not cover.
+pub fn mark_out_when_ready(label: &str) -> (String, u64, u64) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let mut in_frame = 0u64;
+        let mut out_frame = 0u64;
+        let mut uuid = vec![0u8; 64];
+        let code = unsafe {
+            eiviz_mixer::mixer_replay_mark_out(
+                &mut in_frame,
+                &mut out_frame,
+                uuid.as_mut_ptr(),
+                uuid.len(),
+            )
+        };
+        if code == OK {
+            let uuid = String::from_utf8_lossy(&uuid)
+                .trim_end_matches('\0')
+                .to_string();
+            return (uuid, in_frame, out_frame);
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!("{label}: Mark Out was never accepted: {}", last_error());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 pub fn hex(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len() * 2);
     for byte in bytes {

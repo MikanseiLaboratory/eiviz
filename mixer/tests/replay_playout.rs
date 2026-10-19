@@ -15,7 +15,10 @@ use std::ffi::CString;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{cstring, expect, full_layer, is_black, is_red, load_test_module, scene_id, scene_pixel};
+use common::{
+    cstring, expect, full_layer, is_black, is_red, load_test_module, mark_in_when_ready,
+    mark_out_after, mark_out_when_ready, scene_id, scene_pixel,
+};
 use eiviz_mixer::{
     GEN_SOLID, MixerReplayChannelState, SRC_COLOR, UnitState, mixer_create, mixer_create_unit,
     mixer_define_generator, mixer_define_scene, mixer_destroy, mixer_last_error,
@@ -41,7 +44,11 @@ fn last_error() -> String {
 fn channel_state() -> MixerReplayChannelState {
     let mut channels = vec![MixerReplayChannelState::default(); 4];
     let count = unsafe { mixer_replay_copy_channels(channels.as_mut_ptr(), 4) };
-    if count >= 1 { channels[0] } else { MixerReplayChannelState::default() }
+    if count >= 1 {
+        channels[0]
+    } else {
+        MixerReplayChannelState::default()
+    }
 }
 
 #[test]
@@ -53,9 +60,10 @@ fn the_replay_picture_reaches_the_program_scene() {
     expect("create unit", mixer_create_unit(1, 320, 180));
 
     // The angle records a solid red scene.
-    expect("generator", mixer_define_generator(
-        SRC_COLOR, GEN_SOLID, 1.0, 0.0, 0.0, 1.0, 0
-    ));
+    expect(
+        "generator",
+        mixer_define_generator(SRC_COLOR, GEN_SOLID, 1.0, 0.0, 0.0, 1.0, 0),
+    );
     let angle_layer = full_layer(SRC_COLOR);
     expect("angle scene", unsafe {
         mixer_define_scene(scene_id(1), 320, 180, 1, &angle_layer)
@@ -97,26 +105,12 @@ fn the_replay_picture_reaches_the_program_scene() {
     // replay deck does, and the frames being marked are the ones just recorded.
     expect("record on", unsafe { mixer_replay_record(1) });
     thread::sleep(Duration::from_millis(1200));
-    let mut in_frame = 0u64;
-    expect("mark in", unsafe { mixer_replay_mark_in(&mut in_frame) });
+    let in_frame = mark_in_when_ready("replay_playout");
     assert!(in_frame > 0, "Mark In should sit on a recorded frame");
     // A clip long enough to watch play: the rate assertions below need more than a
-    // few frames of material.
-    thread::sleep(Duration::from_millis(1500));
-    let mut out_frame = 0u64;    let mut uuid = vec![0u8; 64];
-    expect("mark out", unsafe {
-        mixer_replay_mark_out(
-            &mut in_frame,
-            &mut out_frame,
-            uuid.as_mut_ptr(),
-            uuid.len(),
-        )
-    });
+    // few frames of material, so the close waits for the recording to move on.
+    let (uuid, in_frame, out_frame) = mark_out_after("replay_playout", 90);
     assert!(out_frame > in_frame, "the mark must span recorded frames");
-    let uuid = String::from_utf8(uuid)
-        .unwrap()
-        .trim_end_matches('\0')
-        .to_string();
     assert!(!uuid.is_empty());
 
     // Before the channel carries a clip the program shows black, not the
@@ -148,7 +142,11 @@ fn the_replay_picture_reaches_the_program_scene() {
 
     let mut channels = vec![MixerReplayChannelState::default(); 4];
     let count = unsafe { mixer_replay_copy_channels(channels.as_mut_ptr(), 4) };
-    let position = if count >= 1 { channels[0].position_frame } else { 0 };
+    let position = if count >= 1 {
+        channels[0].position_frame
+    } else {
+        0
+    };
     assert!(
         is_red(pixel),
         "the recorded angle must reach the program through the channel: \

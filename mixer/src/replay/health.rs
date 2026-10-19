@@ -51,8 +51,8 @@ pub struct HealthView {
 pub fn step(memory: &mut HealthMemory, sample: &HealthSample, now_ms: u64) -> HealthView {
     let mut issues = 0u32;
     let mut severity = SEVERITY_OK;
-    let encode_slow = sample.frame_period_ms > 0.0
-        && sample.encode_ms_avg > sample.frame_period_ms * 0.8;
+    let encode_slow =
+        sample.frame_period_ms > 0.0 && sample.encode_ms_avg > sample.frame_period_ms * 0.8;
     if sample.encode_queue_ratio >= 0.5 || encode_slow {
         memory.encode_hot_since.get_or_insert(now_ms);
         memory.encode_cool_since = None;
@@ -67,14 +67,14 @@ pub fn step(memory: &mut HealthMemory, sample: &HealthSample, now_ms: u64) -> He
         .encode_hot_since
         .is_some_and(|started| now_ms.saturating_sub(started) >= 500)
         || encode_slow;
-    let encode_critical =
-        sample.encode_queue_ratio >= 0.9 || sample.dropped_encode_recent > 0;
+    let encode_critical = sample.encode_queue_ratio >= 0.9 || sample.dropped_encode_recent > 0;
     let encode_clear = memory
         .encode_cool_since
         .is_some_and(|started| now_ms.saturating_sub(started) >= 2_000)
         && sample.dropped_encode_recent == 0;
     if encode_critical || encode_hot || (memory.issues & ISSUE_CPU_ENCODE != 0 && !encode_clear) {
-        if encode_critical || encode_hot || (memory.issues & ISSUE_CPU_ENCODE != 0 && !encode_clear) {
+        if encode_critical || encode_hot || (memory.issues & ISSUE_CPU_ENCODE != 0 && !encode_clear)
+        {
             issues |= ISSUE_CPU_ENCODE;
             severity = severity.max(if encode_critical {
                 SEVERITY_CRITICAL
@@ -140,9 +140,8 @@ pub fn step(memory: &mut HealthMemory, sample: &HealthSample, now_ms: u64) -> He
         issues |= ISSUE_STORAGE_FULL;
         severity = severity.max(SEVERITY_CRITICAL);
     }
-    let dropped = sample.dropped_encode_recent
-        + sample.dropped_write_recent
-        + sample.dropped_readback_recent;
+    let dropped =
+        sample.dropped_encode_recent + sample.dropped_write_recent + sample.dropped_readback_recent;
     if dropped > 0 {
         issues |= ISSUE_FRAMES_DROPPED;
         severity = severity.max(SEVERITY_WARNING);
@@ -166,7 +165,8 @@ pub fn step(memory: &mut HealthMemory, sample: &HealthSample, now_ms: u64) -> He
         issues |= ISSUE_STORAGE_WRITE;
         severity = severity.max(SEVERITY_CRITICAL);
     }
-    let changed = issues != memory.issues || severity != memory.severity || low_tier != memory.low_tier;
+    let changed =
+        issues != memory.issues || severity != memory.severity || low_tier != memory.low_tier;
     memory.issues = issues;
     memory.severity = severity;
     memory.low_tier = low_tier;
