@@ -21,11 +21,36 @@ pub struct TransitionPass {
 
 impl TransitionPass {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        Self::with_shader(
+            device,
+            format,
+            include_str!("../../shaders/replay_transition.wgsl"),
+            "replay-transition",
+        )
+    }
+
+    /// The same transition over packed UYVY frames, the layout the replay decoder
+    /// produces. One texel carries two pixels; both frames use the same layout, so
+    /// blending texel against texel is the same picture as blending pixel against
+    /// pixel.
+    pub fn new_packed(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        Self::with_shader(
+            device,
+            format,
+            include_str!("../../shaders/replay_transition_packed.wgsl"),
+            "replay-transition-packed",
+        )
+    }
+
+    fn with_shader(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        source: &str,
+        label: &str,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("replay-transition"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../shaders/replay_transition.wgsl").into(),
-            ),
+            label: Some(label),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("replay-transition-layout"),
@@ -341,6 +366,166 @@ mod tests {
         row
     }
 
+    /// Packed frames carry two pixels per texel: (Y0, U, Y1, V). Luma is what moves in
+    /// a dissolve, so a packed blend is judged on the luma bytes.
+    fn packed_solid(device: &GpuDevice, queue: &wgpu::Queue, luma: u8) -> wgpu::Texture {
+        let texture = device.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("replay-transition-test-packed"),
+            size: wgpu::Extent3d {
+                width: W / 2,
+                height: H,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mut pixels = vec![0u8; (ROW * H) as usize];
+        for row in 0..H {
+            for column in 0..(W / 2) {
+                let at = (row * ROW + column * 4) as usize;
+                pixels[at..at + 4].copy_from_slice(&[luma, 128, luma, 128]);
+            }
+        }
+        queue.write_texture(
+            texture.as_image_copy(),
+            &pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(ROW),
+                rows_per_image: Some(H),
+            },
+            wgpu::Extent3d {
+                width: W / 2,
+                height: H,
+                depth_or_array_layers: 1,
+            },
+        );
+        texture
+    }
+
+    /// Runs one packed transition and returns the middle row's luma samples.
+    fn run_packed(kind: TransitionKind, mix: f32) -> Vec<u8> {
+        let device = match GpuDevice::with_backend(BackendRequest::Auto) {
+            Ok(device) => device,
+            Err(_) => return Vec::new(),
+        };
+        let outgoing = packed_solid(&device, &device.queue, 16);
+        let incoming = packed_solid(&device, &device.queue, 235);
+        let target = device.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("replay-transition-test-packed-target"),
+            size: wgpu::Extent3d {
+                width: W / 2,
+                height: H,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let mut pass = TransitionPass::new_packed(&device.device, wgpu::TextureFormat::Rgba8Unorm);
+        let mut encoder = device
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("replay-transition-test-packed"),
+            });
+        pass.run(
+            &device.device,
+            &device.queue,
+            &mut encoder,
+            &outgoing.create_view(&Default::default()),
+            &incoming.create_view(&Default::default()),
+            &target.create_view(&Default::default()),
+            kind,
+            TransitionDirection::Left,
+            mix,
+        );
+        let readback = device.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("replay-transition-test-packed-readback"),
+            size: (ROW * H) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            target.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(ROW),
+                    rows_per_image: Some(H),
+                },
+            },
+            wgpu::Extent3d {
+                width: W / 2,
+                height: H,
+                depth_or_array_layers: 1,
+            },
+        );
+        let submission = device.queue.submit(Some(encoder.finish()));
+        let slice = readback.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = device.device.poll(wgpu::PollType::Wait {
+            submission_index: Some(submission),
+            timeout: None,
+        });
+        let data = slice
+            .get_mapped_range()
+            .expect("map packed transition readback");
+        let middle = (ROW * (H / 2)) as usize;
+        let row = (0..(W / 2) as usize)
+            .map(|i| data[middle + i * 4])
+            .collect();
+        drop(data);
+        readback.unmap();
+        row
+    }
+
+    #[test]
+    fn a_packed_dissolve_mixes_luma() {
+        let row = run_packed(TransitionKind::Dissolve, 0.5);
+        if row.is_empty() {
+            return;
+        }
+        let luma = row[row.len() / 2];
+        assert!(
+            (100..=150).contains(&luma),
+            "luma should sit between the two frames: {luma}"
+        );
+    }
+
+    #[test]
+    fn a_packed_cut_stays_on_the_outgoing_frame() {
+        let row = run_packed(TransitionKind::Cut, 0.5);
+        if row.is_empty() {
+            return;
+        }
+        assert!(
+            row[row.len() / 2] < 40,
+            "a cut at half shows the outgoing frame: {:?}",
+            row
+        );
+    }
+
+    #[test]
+    fn a_packed_wipe_reaches_the_incoming_frame_on_the_far_side() {
+        let row = run_packed(TransitionKind::Wipe, 0.5);
+        if row.is_empty() {
+            return;
+        }
+        assert!(row[0] < 40, "the left keeps the outgoing frame: {:?}", row);
+        assert!(
+            *row.last().unwrap() > 200,
+            "the right shows the incoming frame: {:?}",
+            row
+        );
+    }
     #[test]
     fn a_dissolve_mixes_both_frames() {
         let row = run(TransitionKind::Dissolve, TransitionDirection::Left, 0.5);
