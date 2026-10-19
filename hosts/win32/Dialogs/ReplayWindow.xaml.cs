@@ -1799,6 +1799,10 @@ public partial class ReplayWindow : Window
 
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
+        /// <summary>What a screen reader and the automation tree read out.</summary>
+        public override string ToString() =>
+            string.IsNullOrWhiteSpace(Name) ? $"{InText} → {OutText}" : $"{Name}  ({InText} → {OutText})";
+
         private void Set<T>(ref T field, T value, [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
         {
             if (System.Collections.Generic.EqualityComparer<T>.Default.Equals(field, value))
@@ -1905,6 +1909,10 @@ public partial class ReplayWindow : Window
         }
 
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+        /// <summary>What a screen reader and the automation tree read out.</summary>
+        public override string ToString() =>
+            $"{InText} → {OutText}  {AngleOption?.Label ?? ""}  {SpeedOption?.Label ?? ""}";
 
         private void Set<T>(ref T field, T value, [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
         {
