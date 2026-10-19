@@ -106,6 +106,8 @@ public partial class ReplayWindow : Window
         LiveMonitor.Loaded += (_, _) => RetargetMonitors();
         BuildChannels();
         BuildAngles();
+        // The speed the deck starts on is lit, the way a controller's transport shows it.
+        RefreshSpeedButtons();
         RefreshEvents();
         RefreshPlaylist();
         Tick();
