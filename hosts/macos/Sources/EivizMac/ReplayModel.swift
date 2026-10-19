@@ -117,7 +117,8 @@ struct ReplayFormatValues {
 
 struct ReplayAngleInfo: Identifiable, Hashable {
     let id: UInt32
-    let name: String
+    /// Name the operator sees and edits.
+    var name: String
     /// `Scene` or `Input`: what this angle records from.
     var source: String = "Scene"
     let sceneId: UInt64

@@ -1159,8 +1159,17 @@ struct ReplaySettingsView: View {
     @State private var overflow = "DropFrames"
     @State private var autoAdd = false
     @State private var angles: [ReplayAngleInfo] = []
-    @State private var sceneSelection: UInt64 = 0
-    /// Audio source the assign button applies: zero is silence, otherwise the
+    /// What the add row records: a scene's composited output, or an input's picture.
+    @State private var sourceKind = "Scene"
+    /// Scene or input the add row points at.
+    @State private var sourceSelection: UInt64 = 0
+    /// Record mode for the add row: composite, or passthrough for an OMT input.
+    @State private var addMode = "Composite"
+    /// The angle the edit row is editing. Zero means nothing is selected.
+    @State private var selectedAngleId: UInt32?
+    /// Drive the add row files a new angle on.
+    @State private var driveSelection = 0
+    /// Audio source the add row gives a new angle: zero is silence, otherwise the
     /// mixing unit whose program mix the angle records.
     @State private var audioSelection: UInt64 = 0
     @State private var status = ""
@@ -1239,36 +1248,99 @@ struct ReplaySettingsView: View {
             GroupBox(L10n.t("replay.angles")) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(L10n.t("replay.anglesHelp")).font(.caption)
-                    List {
+                    List(selection: $selectedAngleId) {
                         ForEach(angles) { angle in
                             HStack {
                                 Text(angle.label)
-                                Text(sceneName(angle.sceneId)).foregroundStyle(EivizTheme.dim)
+                                Text(sourceKindLabel(angle)).foregroundStyle(EivizTheme.dim)
+                                Text(sourceName(angle)).foregroundStyle(EivizTheme.dim)
                                 Spacer()
-                                Text("\(driveOf(angle.id) + 1)")
+                                Text(modeLabel(angle)).foregroundStyle(EivizTheme.dim)
+                                Text(audioLabel(angle.audioUnitId)).foregroundStyle(EivizTheme.dim)
+                                Text(driveOf(angle.id) >= 0 ? "\(driveOf(angle.id) + 1)" : "-")
                             }
+                            .tag(angle.id)
                         }
                     }
                     .frame(minHeight: 120)
+
+                    // The selected angle is edited in place: no "assign" step to forget.
+                    Text(L10n.t("replay.selectedAngle")).font(.caption)
                     HStack {
-                        Picker("", selection: $sceneSelection) {
-                            ForEach(mixer.session.scenes) { scene in
-                                Text(scene.name).tag(scene.id)
+                        TextField(L10n.t("replay.name"), text: Binding(
+                            get: { selectedAngle()?.name ?? "" },
+                            set: { renameSelected($0) }
+                        ))
+                        .frame(width: 140)
+                        .disabled(selectedAngle() == nil)
+                        Picker("", selection: Binding(
+                            get: { selectedAngle()?.recordMode ?? "Composite" },
+                            set: { setSelectedMode($0) }
+                        )) {
+                            Text(L10n.t("replay.recordComposite")).tag("Composite")
+                            if selectedAngleIsOmt() {
+                                Text(L10n.t("replay.recordPassthrough")).tag("Passthrough")
                             }
                         }
                         .labelsHidden()
-                        .frame(width: 200)
-                        .onChange(of: sceneSelection) { _, _ in syncAudioSelection() }
-                        Button(L10n.t("replay.addAngle")) { addAngle() }
-                        Button(L10n.t("replay.removeAngle")) { removeLastAngle() }
-                        Picker("", selection: $driveSelection) {
+                        .frame(width: 130)
+                        .disabled(selectedAngle() == nil)
+                        .help(L10n.t("replay.passthroughHelp"))
+                        Picker("", selection: Binding(
+                            get: { selectedAngle()?.audioUnitId ?? 0 },
+                            set: { setSelectedAudio($0) }
+                        )) {
+                            Text(L10n.t("replay.audioSilent")).tag(UInt64(0))
+                            ForEach(mixer.session.units) { unit in
+                                Text(unit.name).tag(unit.id)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 150)
+                        .disabled(selectedAngle() == nil)
+                        .help(L10n.t("replay.audioHelp"))
+                        Picker("", selection: Binding(
+                            get: { driveOf(selectedAngleId ?? 0) },
+                            set: { assignSelectedDrive($0) }
+                        )) {
                             ForEach(Array(storages.enumerated()), id: \.offset) { index, storage in
                                 Text("\(index + 1): \(storage.path)").tag(index)
                             }
                         }
                         .labelsHidden()
-                        .frame(width: 180)
-                        Button(L10n.t("replay.assignStorage")) { assignAngleToDrive() }
+                        .frame(width: 170)
+                        .disabled(selectedAngle() == nil)
+                        .help(L10n.t("replay.storageHelp"))
+                        Button(L10n.t("replay.removeAngle")) { removeSelectedAngle() }
+                    }
+
+                    // Adding one: pick what to record, how, and where.
+                    Text(L10n.t("replay.addAngle")).font(.caption)
+                    HStack {
+                        Picker("", selection: $sourceKind) {
+                            Text(L10n.t("replay.sourceScene")).tag("Scene")
+                            Text(L10n.t("replay.sourceInput")).tag("Input")
+                        }
+                        .labelsHidden()
+                        .frame(width: 100)
+                        .onChange(of: sourceKind) { _, _ in syncSourceSelection() }
+                        Picker("", selection: $sourceSelection) {
+                            ForEach(addSources(), id: \.id) { source in
+                                Text(source.name).tag(source.id)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 190)
+                        .onChange(of: sourceSelection) { _, _ in syncAddMode() }
+                        Picker("", selection: $addMode) {
+                            Text(L10n.t("replay.recordComposite")).tag("Composite")
+                            if addSourceIsOmt() {
+                                Text(L10n.t("replay.recordPassthrough")).tag("Passthrough")
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 130)
+                        .help(L10n.t("replay.passthroughHelp"))
                         Picker("", selection: $audioSelection) {
                             Text(L10n.t("replay.audioSilent")).tag(UInt64(0))
                             ForEach(mixer.session.units) { unit in
@@ -1276,8 +1348,17 @@ struct ReplaySettingsView: View {
                             }
                         }
                         .labelsHidden()
-                        .frame(width: 180)
-                        Button(L10n.t("replay.assignAudio")) { assignAngleAudio() }
+                        .frame(width: 150)
+                        .help(L10n.t("replay.audioHelp"))
+                        Picker("", selection: $driveSelection) {
+                            ForEach(Array(storages.enumerated()), id: \.offset) { index, storage in
+                                Text("\(index + 1): \(storage.path)").tag(index)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 170)
+                        .help(L10n.t("replay.storageHelp"))
+                        Button(L10n.t("replay.addAngle")) { addAngle() }
                     }
                 }
             }
@@ -1344,30 +1425,124 @@ struct ReplaySettingsView: View {
         overflow = buffering.overflow
         autoAdd = current.autoAddToPlaylist
         angles = current.angles
-        sceneSelection = mixer.session.scenes.first?.id ?? 0
+        selectedAngleId = angles.first?.id
+        // The add row starts on scenes, which is what most projects record.
+        sourceKind = "Scene"
+        syncSourceSelection()
         driveSelection = 0
-        syncAudioSelection()
+        audioSelection = 0
     }
 
-    /// Shows the audio source the selected scene's angle already records, so the
-    /// picker never claims a setting the angle does not have.
-    private func syncAudioSelection() {
-        guard let scene = mixer.session.scenes.first(where: { $0.id == sceneSelection }),
-              let angle = angles.first(where: { $0.sceneId == scene.id })
-        else {
-            audioSelection = 0
-            return
+    /// The angle the edit row is editing.
+    private func selectedAngle() -> ReplayAngleInfo? {
+        guard let id = selectedAngleId else { return nil }
+        return angles.first { $0.id == id }
+    }
+
+    /// Whether the selected angle records an OMT input, which is the only source
+    /// whose frames can be stored as they arrive.
+    private func selectedAngleIsOmt() -> Bool {
+        guard let angle = selectedAngle(), angle.source == "Input" else { return false }
+        return inputKind(angle.inputId) == .omt
+    }
+
+    /// Whether the add row points at an OMT input.
+    private func addSourceIsOmt() -> Bool {
+        sourceKind == "Input" && inputKind(sourceSelection) == .omt
+    }
+
+    private func inputKind(_ inputId: UInt64) -> InputKind? {
+        mixer.session.inputs.first { $0.id == inputId }?.kind
+    }
+
+    private func inputName(_ inputId: UInt64) -> String {
+        mixer.session.inputs.first { $0.id == inputId }?.name
+            ?? L10n.format("replay.inputMissing", "\(inputId)")
+    }
+
+    /// One entry of the add row's source list.
+    private struct SourceOption: Identifiable {
+        let id: UInt64
+        let name: String
+    }
+
+    /// What the add row can record: scenes, or the inputs that have a picture. A
+    /// Replay channel is not a camera, and an audio input has nothing to record.
+    private func addSources() -> [SourceOption] {
+        if sourceKind == "Input" {
+            return mixer.session.inputs
+                .filter { $0.kind != .replay && $0.kind != .audio }
+                .map { SourceOption(id: $0.id, name: $0.name) }
         }
-        audioSelection = angle.audioUnitId
+        return mixer.session.scenes.map { SourceOption(id: $0.id, name: $0.name) }
+    }
+
+    /// Points the add row at the first source of the chosen kind.
+    private func syncSourceSelection() {
+        sourceSelection = addSources().first?.id ?? 0
+        syncAddMode()
+    }
+
+    /// Keeps the mode honest: passthrough exists only for an OMT input.
+    private func syncAddMode() {
+        if addMode == "Passthrough" && !addSourceIsOmt() {
+            addMode = "Composite"
+        }
+    }
+
+    private func sourceKindLabel(_ angle: ReplayAngleInfo) -> String {
+        angle.source == "Input" ? L10n.t("replay.sourceInput") : L10n.t("replay.sourceScene")
+    }
+
+    private func sourceName(_ angle: ReplayAngleInfo) -> String {
+        angle.source == "Input" ? inputName(angle.inputId) : sceneName(angle.sceneId)
+    }
+
+    private func modeLabel(_ angle: ReplayAngleInfo) -> String {
+        angle.recordMode == "Passthrough"
+            ? L10n.t("replay.recordPassthrough")
+            : L10n.t("replay.recordComposite")
+    }
+
+    /// Rebuilds one angle, keeping the fields the edit row does not touch.
+    private func updateSelected(_ body: (inout ReplayAngleInfo) -> Void) {
+        guard let id = selectedAngleId, let index = angles.firstIndex(where: { $0.id == id }) else { return }
+        var angle = angles[index]
+        body(&angle)
+        angles[index] = angle
+    }
+
+    private func renameSelected(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        updateSelected { $0.name = trimmed }
+    }
+
+    private func setSelectedMode(_ mode: String) {
+        updateSelected { $0.recordMode = mode }
+    }
+
+    private func setSelectedAudio(_ unitId: UInt64) {
+        updateSelected { $0.audioUnitId = unitId }
+    }
+
+    /// Moves the selected angle to the drive the operator picked.
+    private func assignSelectedDrive(_ index: Int) {
+        guard let id = selectedAngleId, index >= 0, index < storages.count else { return }
+        for slot in storages.indices {
+            storages[slot].angleIds.removeAll { $0 == id }
+        }
+        storages[index].angleIds.append(id)
     }
 
     private func driveIndex(_ storage: ReplayDocument.StorageSpec) -> Int {
         storages.firstIndex(of: storage) ?? 0
     }
 
-    /// Drive an angle records to. Angles that name no drive use the first one.
+    /// Drive an angle records to. Angles that name no drive report zero, which the
+    /// list shows as such: Apply refuses a setup with an unassigned angle.
     private func driveOf(_ angleId: UInt32) -> Int {
-        storages.firstIndex { $0.angleIds.contains(angleId) } ?? 0
+        storages.firstIndex { $0.angleIds.contains(angleId) } ?? -1
     }
 
     /// Asks for a folder the way every other path on this host is chosen, and files
@@ -1409,40 +1584,6 @@ struct ReplaySettingsView: View {
         driveSelection = 0
     }
 
-    private func assignAngleToDrive() {
-        guard let scene = mixer.session.scenes.first(where: { $0.id == sceneSelection }),
-              let angle = angles.first(where: { $0.sceneId == scene.id })
-        else {
-            status = L10n.t("replay.selectAngle")
-            return
-        }
-        for index in storages.indices {
-            storages[index].angleIds.removeAll { $0 == angle.id }
-        }
-        // Drive 1 is the default, so naming it explicitly is not required.
-        if driveSelection > 0 && driveSelection < storages.count {
-            storages[driveSelection].angleIds.append(angle.id)
-        }
-    }
-
-    /// Sets the angle's audio source. Silence is zero; otherwise it names the
-    /// mixing unit whose program mix is recorded.
-    private func assignAngleAudio() {
-        guard let scene = mixer.session.scenes.first(where: { $0.id == sceneSelection }),
-              let index = angles.firstIndex(where: { $0.sceneId == scene.id })
-        else {
-            status = L10n.t("replay.selectAngle")
-            return
-        }
-        let angle = angles[index]
-        angles[index] = ReplayAngleInfo(
-            id: angle.id,
-            name: angle.name,
-            sceneId: angle.sceneId,
-            audioUnitId: audioSelection
-        )
-    }
-
     /// Audio source label for the angle list.
     private func audioLabel(_ unitId: UInt64) -> String {
         if unitId == 0 {
@@ -1452,10 +1593,11 @@ struct ReplaySettingsView: View {
             ?? L10n.format("replay.audioUnit", "\(unitId)")
     }
 
+    /// Adds an angle from the add row: what to record, how, its audio, and the drive
+    /// it records to. Every refusal names what is missing instead of doing nothing.
     private func addAngle() {
-        guard let scene = mixer.session.scenes.first(where: { $0.id == sceneSelection }) else { return }
-        guard !angles.contains(where: { $0.sceneId == scene.id }) else {
-            status = L10n.t("replay.angleDuplicate")
+        guard !storages.isEmpty else {
+            status = L10n.t("replay.needDriveForAngle")
             return
         }
         if let limits = mixer.replayLimits(), limits.angles != .max, angles.count >= Int(limits.angles) {
@@ -1463,13 +1605,53 @@ struct ReplaySettingsView: View {
             return
         }
         let id = (angles.map(\.id).max() ?? 0) + 1
-        angles.append(
-            ReplayAngleInfo(id: id, name: scene.name, sceneId: scene.id, audioUnitId: 0)
-        )
+        let angle: ReplayAngleInfo
+        if sourceKind == "Input" {
+            guard let input = mixer.session.inputs.first(where: { $0.id == sourceSelection }) else {
+                status = L10n.t("replay.selectSource")
+                return
+            }
+            guard !angles.contains(where: { $0.source == "Input" && $0.inputId == input.id }) else {
+                status = L10n.t("replay.angleDuplicateInput")
+                return
+            }
+            angle = ReplayAngleInfo(
+                id: id,
+                name: input.name,
+                source: "Input",
+                sceneId: 0,
+                inputId: input.id,
+                recordMode: addSourceIsOmt() ? addMode : "Composite",
+                audioUnitId: audioSelection
+            )
+        } else {
+            guard let scene = mixer.session.scenes.first(where: { $0.id == sourceSelection }) else {
+                status = L10n.t("replay.selectSource")
+                return
+            }
+            guard !angles.contains(where: { $0.source == "Scene" && $0.sceneId == scene.id }) else {
+                status = L10n.t("replay.angleDuplicate")
+                return
+            }
+            angle = ReplayAngleInfo(
+                id: id,
+                name: scene.name,
+                source: "Scene",
+                sceneId: scene.id,
+                inputId: 0,
+                recordMode: "Composite",
+                audioUnitId: audioSelection
+            )
+        }
+        angles.append(angle)
+        let drive = driveSelection >= 0 && driveSelection < storages.count ? driveSelection : 0
+        storages[drive].angleIds.append(id)
+        selectedAngleId = id
+        status = L10n.format("replay.angleAdded", angle.name)
     }
 
-    private func removeLastAngle() {
-        guard let angle = angles.last else { return }
+    private func removeSelectedAngle() {
+        guard let id = selectedAngleId, let angle = angles.first(where: { $0.id == id }) else { return }
         // A clip that plays this angle, or takes its sound from it, would be left
         // pointing at nothing, so the angle waits until those clips are gone.
         let users = clipCount(using: angle.id)
@@ -1477,11 +1659,12 @@ struct ReplaySettingsView: View {
             status = L10n.format("replay.angleInUse", "\(users)")
             return
         }
-        angles.removeLast()
+        angles.removeAll { $0.id == angle.id }
         // A drive that still listed it would fail validation on Apply.
         for index in storages.indices {
             storages[index].angleIds.removeAll { $0 == angle.id }
         }
+        selectedAngleId = angles.first?.id
     }
 
     /// How many clips play this angle, or take their sound from it.
