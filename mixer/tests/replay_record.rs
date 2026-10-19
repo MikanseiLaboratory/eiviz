@@ -79,11 +79,22 @@ fn recording_keeps_the_frames_the_renderer_produced() {
     });
     expect("record on", unsafe { mixer_replay_record(1) });
 
-    // Let it render and record for a couple of seconds.
-    thread::sleep(Duration::from_secs(2));
-
+    // Wait until enough frames have been offered to judge the accounting. Two seconds is
+    // plenty on a GPU adapter, but a software one under load produces far fewer frames,
+    // and "too short to judge" is a property of the runner, not of the recorder.
     let mut stats = MixerReplayStats::default();
     let mut angles = vec![MixerReplayAngleStats::default(); 4];
+    let deadline = std::time::Instant::now() + Duration::from_secs(40);
+    loop {
+        stats = MixerReplayStats::default();
+        angles = vec![MixerReplayAngleStats::default(); 4];
+        unsafe { mixer_replay_copy_stats(&mut stats, angles.as_mut_ptr(), 4) };
+        if stats.frames_offered >= 30 || std::time::Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+
     // The call reports OK; the count of angle entries is in the stats.
     unsafe { mixer_replay_copy_stats(&mut stats, angles.as_mut_ptr(), 4) };
     expect("record off", unsafe { mixer_replay_record(0) });
