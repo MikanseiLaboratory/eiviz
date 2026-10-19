@@ -50,10 +50,26 @@ session_string_enum! {
 }
 
 session_string_enum! {
+    /// What an angle records. A `Scene` angle records that scene's composited
+    /// output; an `Input` angle records the input's own picture, without composing
+    /// a scene first.
+    #[derive(Default)]
+    pub enum AngleSourceKind {
+        #[default]
+        Scene,
+        Input,
+    }
+}
+
+session_string_enum! {
     #[derive(Default)]
     pub enum AngleRecordMode {
         #[default]
         Composite,
+        /// Keep the frames as they arrive, without re-encoding them. Only an input
+        /// that already delivers compressed frames (OMT) can do this, and the
+        /// operator chooses it per angle: nothing switches to it on its own.
+        Passthrough,
     }
 }
 
@@ -180,6 +196,16 @@ impl ReplayDto {
         id
     }
 
+    /// Allocates the next angle id and advances the counter. Angles are added by
+    /// the hosts and by the API, so the id has to come from the document rather
+    /// than from a count that a deleted angle would skew.
+    pub fn reserve_angle_id(&mut self) -> u32 {
+        let highest = self.angles.iter().map(|angle| angle.id).max().unwrap_or(0);
+        let id = self.next_angle_id.max(highest.saturating_add(1)).max(1);
+        self.next_angle_id = id.saturating_add(1);
+        id
+    }
+
     /// Records a Mark Out. The event is always filed; the clip is filed only when
     /// the document asks for it, and it inherits the playlist's default
     /// transition. The UI offers that setting as "new clips", so it has to mean
@@ -256,6 +282,58 @@ impl ReplayDto {
 
 fn highest(values: impl Iterator<Item = u64>) -> u64 {
     values.max().unwrap_or(0)
+}
+
+/// The part of a Replay document that Replay Setup owns.
+///
+/// Settings are written on their own so that applying them cannot overwrite the
+/// events and playlists an operator is building at the same time. The hosts send
+/// this, and the whole-document `UpsertReplaySettings` stays for clients that
+/// really do mean to replace the document.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaySettingsDto {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub storage: Vec<ReplayStorageDto>,
+    #[serde(default)]
+    pub format: ReplayFormatDto,
+    #[serde(default)]
+    pub buffering: ReplayBufferingDto,
+    #[serde(default)]
+    pub retention: ReplayRetention,
+    #[serde(default)]
+    pub angles: Vec<AngleDto>,
+    #[serde(default)]
+    pub auto_add_to_playlist: bool,
+}
+
+impl ReplaySettingsDto {
+    /// The settings of an existing document, for a host that read it and wants to
+    /// send back only what it edited.
+    pub fn from_document(replay: &ReplayDto) -> Self {
+        Self {
+            enabled: replay.enabled,
+            storage: replay.storage.clone(),
+            format: replay.format.clone(),
+            buffering: replay.buffering.clone(),
+            retention: replay.retention,
+            angles: replay.angles.clone(),
+            auto_add_to_playlist: replay.auto_add_to_playlist,
+        }
+    }
+
+    /// Writes these settings onto a document, leaving everything else in place.
+    pub fn apply_to(self, replay: &mut ReplayDto) {
+        replay.enabled = self.enabled;
+        replay.storage = self.storage;
+        replay.format = self.format;
+        replay.buffering = self.buffering;
+        replay.retention = self.retention;
+        replay.angles = self.angles;
+        replay.auto_add_to_playlist = self.auto_add_to_playlist;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -368,8 +446,15 @@ pub struct AngleDto {
     pub id: u32,
     #[serde(default)]
     pub name: String,
+    /// What this angle records. `Scene` uses `scene_id`; `Input` uses `input_id`.
+    #[serde(default)]
+    pub source: AngleSourceKind,
+    /// Scene this angle records when `source` is `Scene`. Zero for an input angle.
     #[serde(default)]
     pub scene_id: u64,
+    /// Input this angle records when `source` is `Input`. Zero for a scene angle.
+    #[serde(default)]
+    pub input_id: u64,
     #[serde(default)]
     pub audio: AngleAudio,
     /// Mixing unit whose program mix feeds this angle when `audio` is `Unit`.
@@ -437,7 +522,9 @@ pub struct ClipDto {
     #[serde(default)]
     pub tags: Vec<String>,
     /// Hold the pitch when the clip plays at something other than normal speed.
-    #[serde(default)]
+    /// Defaults to on: a replay that drops in speed should not sound like a tape
+    /// running down.
+    #[serde(default = "preserve_pitch_default")]
     pub preserve_pitch: bool,
     /// Audio source for this clip.
     #[serde(default)]
@@ -451,6 +538,11 @@ pub struct ClipDto {
 
 fn speed_one() -> f32 {
     1.0
+}
+
+/// Pitch is held unless the operator turns it off.
+fn preserve_pitch_default() -> bool {
+    true
 }
 
 impl Default for ClipDto {
@@ -467,7 +559,7 @@ impl Default for ClipDto {
             speed: 1.0,
             gain_db: 0.0,
             tags: Vec::new(),
-            preserve_pitch: false,
+            preserve_pitch: true,
             audio: ClipAudio::FollowAngle,
             audio_angle_id: 0,
             transition: ClipTransitionDto::default(),
@@ -601,9 +693,50 @@ pub fn channel_letter(index: u32) -> char {
     char::from_u32(u32::from('A') + index).unwrap_or('A')
 }
 
+/// Recording format a fresh Replay document starts with.
+///
+/// The resolution and rate come from the first Mixing Unit, because Replay records
+/// one format for every angle and the operator is already working in that format.
+/// A document created without one can never record, and the mixer would only be
+/// able to say "the format is missing" much later.
+pub fn seed_format(doc: &Document) -> Result<ReplayFormatDto, String> {
+    let Some(unit) = doc.units.first() else {
+        return Err("A Mixing Unit is required for Replay".to_string());
+    };
+    Ok(ReplayFormatDto {
+        width: unit.width,
+        height: unit.height,
+        fps_num: unit.fps_num,
+        fps_den: unit.fps_den,
+        profile: ReplayProfile::Sq,
+        segment_frames: DEFAULT_SEGMENT_FRAMES,
+    })
+}
+
+/// Two seconds at 60 fps. The operator can change it in Replay Setup.
+pub const DEFAULT_SEGMENT_FRAMES: u32 = 120;
+
+/// Segment length bounds, in frames. A recording that quietly picks its own
+/// segment length is not the recording the operator asked for.
+pub const SEGMENT_FRAMES_MIN: u32 = 30;
+pub const SEGMENT_FRAMES_MAX: u32 = 1800;
+/// Encode queue bounds, in frames per angle.
+pub const ENCODE_QUEUE_MIN: u32 = 2;
+pub const ENCODE_QUEUE_MAX: u32 = 60;
+/// Write buffer bounds, in MiB.
+pub const WRITE_BUFFER_MIN_MB: u32 = 64;
+pub const WRITE_BUFFER_MAX_MB: u32 = 8192;
+
 /// Add one explicit Replay channel input. The first call creates the replay
 /// document; no Replay state is present in a default session.
 pub fn add_channel_input(doc: &mut Document) -> Result<u32, String> {
+    if doc.replay.is_none() {
+        let format = seed_format(doc)?;
+        doc.replay = Some(ReplayDto {
+            format,
+            ..ReplayDto::default()
+        });
+    }
     let replay = doc.replay.get_or_insert_with(ReplayDto::default);
     replay.normalize();
     let index = (0..26u32)
@@ -652,6 +785,15 @@ pub fn adopt_channel_input(doc: &mut Document, input_id: u64) -> Result<u32, Str
     // input they added. An id outside the band is not a Replay channel.
     let index = replay_channel_index(input_id)
         .ok_or_else(|| format!("input {input_id} is not a Replay channel id"))?;
+    if doc.replay.is_none() {
+        // The client added the input, so the document has to be usable: a format
+        // seeded from the first Mixing Unit is what makes recording possible.
+        let format = seed_format(doc)?;
+        doc.replay = Some(ReplayDto {
+            format,
+            ..ReplayDto::default()
+        });
+    }
     let replay = doc.replay.get_or_insert_with(ReplayDto::default);
     replay.normalize();
     if let Some(channel) = replay
@@ -848,13 +990,31 @@ mod tests {
 
     #[test]
     fn channel_inputs_use_the_replay_band_only() {
-        let mut doc: Document = serde_json::from_str("{\"version\":2}").unwrap();
+        // A Mixing Unit is what gives the new document its recording format.
+        let mut doc: Document =
+            serde_json::from_str(r#"{"version":2,"units":[{"id":1,"name":"MU 1"}]}"#).unwrap();
         let index = add_channel_input(&mut doc).unwrap();
         assert_eq!(index, 0);
         let id = doc.inputs[0].id;
         assert!(id >= REPLAY_CHANNEL_BASE && id < REPLAY_CHANNEL_BASE + 0x1_0000);
         assert_eq!(channel_letter(index), 'A');
         assert_eq!(doc.inputs[0].kind, InputKind::Replay);
+        // The document arrives ready to record: the format comes from the unit.
+        let format = &doc.replay.as_ref().unwrap().format;
+        assert_eq!(format.width, 1920);
+        assert_eq!(format.height, 1080);
+        assert_eq!(format.segment_frames, DEFAULT_SEGMENT_FRAMES);
+    }
+
+    /// A document with no Mixing Unit has no format to record in. Creating one
+    /// anyway would leave a project that can never record, so it is refused with
+    /// the reason.
+    #[test]
+    fn a_replay_document_needs_a_mixing_unit() {
+        let mut doc: Document = serde_json::from_str(r#"{"version":2}"#).unwrap();
+        let error = add_channel_input(&mut doc).unwrap_err();
+        assert!(error.contains("Mixing Unit"), "{error}");
+        assert!(doc.replay.is_none(), "nothing was created");
     }
 
     #[test]
@@ -902,6 +1062,8 @@ mod tests {
         replay.angles.push(AngleDto {
             id: 1,
             name: "A".into(),
+            source: crate::session::replay::AngleSourceKind::Scene,
+            input_id: 0,
             scene_id: 1,
             audio: AngleAudio::Silent,
             audio_unit_id: 0,
@@ -961,6 +1123,8 @@ mod tests {
         replay.angles.push(AngleDto {
             id: 1,
             name: "A".into(),
+            source: crate::session::replay::AngleSourceKind::Scene,
+            input_id: 0,
             scene_id: 1,
             audio: AngleAudio::Silent,
             audio_unit_id: 0,
@@ -994,6 +1158,8 @@ mod tests {
         replay.angles.push(AngleDto {
             id: 2,
             name: "B".into(),
+            source: crate::session::replay::AngleSourceKind::Scene,
+            input_id: 0,
             scene_id: 2,
             audio: AngleAudio::Silent,
             audio_unit_id: 0,

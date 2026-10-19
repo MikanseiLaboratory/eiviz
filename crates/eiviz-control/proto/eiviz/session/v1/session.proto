@@ -464,6 +464,15 @@ enum AngleAudio {
 
 enum AngleRecordMode {
   ANGLE_RECORD_MODE_COMPOSITE = 0;
+  /// Keep the frames as they arrive, without re-encoding them. OMT inputs only.
+  ANGLE_RECORD_MODE_PASSTHROUGH = 1;
+}
+
+/// What an angle records. A scene angle records that scene's composited output; an
+/// input angle records the input's own picture without composing a scene.
+enum AngleSourceKind {
+  ANGLE_SOURCE_KIND_SCENE = 0;
+  ANGLE_SOURCE_KIND_INPUT = 1;
 }
 
 enum ClipSourceKind {
@@ -512,9 +521,11 @@ message ReplayBuffering {
 }
 
 message ReplayWarnings {
-  uint32 remaining_warn_secs = 1;
-  uint32 remaining_alert_secs = 2;
-  uint32 remaining_critical_secs = 3;
+  // Presence matters: a warning threshold of 0 is a value the operator chose, and
+  // rewriting it to a default would silently change when warnings appear.
+  optional uint32 remaining_warn_secs = 1;
+  optional uint32 remaining_alert_secs = 2;
+  optional uint32 remaining_critical_secs = 3;
 }
 
 message Angle {
@@ -524,6 +535,10 @@ message Angle {
   AngleAudio audio = 4;
   AngleRecordMode record_mode = 5;
   uint64 audio_unit_id = 6;
+  /// Where this angle records from. `scene_id` is used when this is SCENE,
+  /// `input_id` when it is INPUT.
+  AngleSourceKind source = 7;
+  uint64 input_id = 8;
 }
 
 message ReplayEvent {

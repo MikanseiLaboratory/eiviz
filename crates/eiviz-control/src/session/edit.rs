@@ -419,6 +419,8 @@ mod tests {
         replay.angles.push(crate::session::replay::AngleDto {
             id: 1,
             name: "A".into(),
+            source: crate::session::replay::AngleSourceKind::Scene,
+            input_id: 0,
             scene_id: 1,
             audio: crate::session::replay::AngleAudio::Silent,
             audio_unit_id: 0,

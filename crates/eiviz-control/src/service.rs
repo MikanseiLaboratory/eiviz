@@ -12,6 +12,7 @@ use crate::live::ResourceStatus;
 use crate::port::{AutoApply, MixerPort, OverlayAutoApply};
 use crate::query::{Query, Snapshot};
 use crate::session::Document;
+use crate::session::InputKind;
 use crate::session::mutate;
 use crate::session::reconcile::{plan, reinforce_streams, repair_live};
 use crate::session::store::CanonicalSessionStore;
@@ -550,34 +551,43 @@ impl ControlService {
         document: &Document,
         mutation: &SessionMutation,
     ) -> ControlResult<()> {
-        let settings = match mutation {
-            SessionMutation::UpsertReplaySettings { replay } => Some(replay.as_ref()),
-            _ => None,
+        // Every path that can end up with Replay state is checked here: a client
+        // that adds the Replay input itself (`UpsertInput`) used to slip past the
+        // channel limit, and the session then held a document that could never run.
+        let adds_channel = match mutation {
+            SessionMutation::AddReplayChannel => true,
+            SessionMutation::CreateInput { input } | SessionMutation::UpsertInput { input } => {
+                input.kind == InputKind::Replay
+            }
+            _ => false,
         };
-        if settings.is_none() && !matches!(mutation, SessionMutation::AddReplayChannel) {
-            return Ok(());
-        }
+        let current = document.replay.as_ref();
+        let current_channels = current.map(|replay| replay.channels.len()).unwrap_or(0);
+        let current_angles = current.map(|replay| replay.angles.len()).unwrap_or(0);
+        // `UpdateReplaySettings` never touches the channels, so they stay as they
+        // are; a whole-document upsert brings its own.
+        let (channels, angles) = match mutation {
+            SessionMutation::UpsertReplaySettings { replay } => {
+                (replay.channels.len(), replay.angles.len())
+            }
+            SessionMutation::UpdateReplaySettings { settings } => {
+                (current_channels, settings.angles.len())
+            }
+            _ if adds_channel => (current_channels + 1, current_angles),
+            _ => return Ok(()),
+        };
         let capabilities = self.port.capabilities();
         if !capabilities.replay_linked || capabilities.replay_channel_limit == 0 {
             return Err(ControlError::invalid(
                 "Instant Replay requires a Professional license and the Pro module",
             ));
         }
-        let current = document.replay.as_ref();
-        let channels = match settings {
-            Some(replay) => replay.channels.len(),
-            None => current.map(|replay| replay.channels.len()).unwrap_or(0) + 1,
-        };
         if u64::from(capabilities.replay_channel_limit) < channels as u64 {
             return Err(ControlError::invalid(format!(
                 "this plan allows {} Replay channels",
                 capabilities.replay_channel_limit
             )));
         }
-        let angles = match settings {
-            Some(replay) => replay.angles.len(),
-            None => current.map(|replay| replay.angles.len()).unwrap_or(0),
-        };
         if u64::from(capabilities.replay_angle_limit) < angles as u64 {
             return Err(ControlError::invalid(format!(
                 "this plan allows {} Replay angles",
@@ -1491,10 +1501,16 @@ mod tests {
             { "id": 2, "name": "Bars", "kind": "Bars" },
             { "id": 524289, "name": "Replay A", "kind": "Replay" }
           ],
-          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "scenes": [
+            { "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] },
+            { "id": 2, "name": "Scene 2", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] },
+            { "id": 3, "name": "Scene 3", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }
+          ],
           "units": [{ "id": 1, "name": "MU 1" }],
           "replay": {
-            "enabled": false,
+            "enabled": true,
+            "storage": [{ "path": "D:/replay", "angleIds": [1] }],
+            "format": { "width": 1920, "height": 1080, "fpsNum": 60000, "fpsDen": 1001, "profile": "Sq", "segmentFrames": 120 },
             "angles": [{ "id": 1, "name": "Cam 1", "sceneId": 1, "audio": "Silent", "recordMode": "Composite" }],
             "channels": [{ "index": 0, "playlistId": 7, "inputId": 524289 }],
             "playlists": [{ "id": 7, "name": "Replay", "revision": 1, "clips": [
@@ -1580,7 +1596,7 @@ mod tests {
     /// with a reason instead of leaving the document and the mixer apart.
     #[test]
     fn changing_the_replay_angles_while_recording_is_refused() {
-        use crate::session::replay::{AngleAudio, AngleDto, AngleRecordMode};
+        use crate::session::replay::{AngleAudio, AngleDto, AngleRecordMode, AngleSourceKind};
         on_big_stack(|| {
             let recording = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let fake = FakeMixer {
@@ -1591,16 +1607,25 @@ mod tests {
             let angle = |id: u32| AngleDto {
                 id,
                 name: format!("Cam {id}"),
-                scene_id: 1,
+                source: AngleSourceKind::Scene,
+                // One scene per angle: two angles on one scene is a document the
+                // control layer refuses, and this test is about the angle set.
+                scene_id: u64::from(id),
+                input_id: 0,
                 audio: AngleAudio::Silent,
                 audio_unit_id: 0,
                 record_mode: AngleRecordMode::Composite,
             };
             svc.replace_session(replay_doc(), None, "1").unwrap();
 
-            // Idle: the angle set may change freely.
+            // Idle: the angle set may change freely. A new angle also needs a
+            // drive, because recording never guesses which disk to use.
             let mut two = replay_doc();
-            two.replay.as_mut().unwrap().angles.push(angle(2));
+            {
+                let replay = two.replay.as_mut().unwrap();
+                replay.angles.push(angle(2));
+                replay.storage[0].angle_ids = vec![1, 2];
+            }
             svc.replace_session(two.clone(), None, "2").unwrap();
 
             // The same set is fine while recording.
@@ -1609,7 +1634,11 @@ mod tests {
 
             // Adding an angle is not, and the document keeps the set it had.
             let mut three = two.clone();
-            three.replay.as_mut().unwrap().angles.push(angle(3));
+            {
+                let replay = three.replay.as_mut().unwrap();
+                replay.angles.push(angle(3));
+                replay.storage[0].angle_ids = vec![1, 2, 3];
+            }
             let err = svc.replace_session(three.clone(), None, "4").unwrap_err();
             assert!(
                 err.message().contains("stop Replay recording"),

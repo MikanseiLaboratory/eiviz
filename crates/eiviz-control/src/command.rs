@@ -341,6 +341,13 @@ pub enum SessionMutation {
     UpsertReplaySettings {
         replay: Box<crate::session::replay::ReplayDto>,
     },
+    /// Writes only the recording settings (drives, format, buffering, retention,
+    /// angles, auto-add, enabled). Events, playlists, channels and the id counters
+    /// are left alone, so a host that applies Replay Setup from a document it read
+    /// a moment ago cannot clobber an event another client just marked.
+    UpdateReplaySettings {
+        settings: Box<crate::session::replay::ReplaySettingsDto>,
+    },
     /// Creates the optional replay document on demand and returns its next
     /// available channel through the resulting session snapshot.
     AddReplayChannel,
@@ -377,6 +384,7 @@ impl SessionMutation {
             Self::UpsertScenePreset { .. } => "UpsertScenePreset",
             Self::DeleteScenePreset { .. } => "DeleteScenePreset",
             Self::UpsertReplaySettings { .. } => "UpsertReplaySettings",
+            Self::UpdateReplaySettings { .. } => "UpdateReplaySettings",
             Self::AddReplayChannel => "AddReplayChannel",
             Self::DeleteReplay => "DeleteReplay",
         }

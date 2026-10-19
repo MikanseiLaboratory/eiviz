@@ -1,3 +1,6 @@
+use crate::session::replay::{
+    AngleRecordMode, AngleSourceKind, SEGMENT_FRAMES_MAX, SEGMENT_FRAMES_MIN,
+};
 use crate::session::{
     AudioCaptureMode, Document, InputKind, MixSource, OutputSourceKind, OutputTransport,
 };
@@ -453,7 +456,38 @@ fn validate_replay(doc: &Document) -> Result<(), ValidationError> {
         {
             return Err(ValidationError::new("every replay storage needs a path"));
         }
+        // Recording is one format for every angle, and a recording cannot start
+        // without one. Leaving these at zero used to reach the mixer as an opaque
+        // refusal, so the document is refused here with the missing piece named.
+        let format = &replay.format;
+        if format.width == 0 || format.height == 0 {
+            return Err(ValidationError::new(
+                "replay format needs a resolution; apply Replay Setup",
+            ));
+        }
+        if format.fps_num == 0 || format.fps_den == 0 {
+            return Err(ValidationError::new(
+                "replay format needs a frame rate; apply Replay Setup",
+            ));
+        }
+        if !(SEGMENT_FRAMES_MIN..=SEGMENT_FRAMES_MAX).contains(&format.segment_frames) {
+            return Err(ValidationError::new(format!(
+                "replay segment frames must be between {SEGMENT_FRAMES_MIN} and {SEGMENT_FRAMES_MAX}"
+            )));
+        }
+        if replay.angles.is_empty() {
+            return Err(ValidationError::new(
+                "replay is enabled but has no angles; add one in Replay Setup",
+            ));
+        }
+    } else if !replay.storage.is_empty() && !replay.angles.is_empty() {
+        // The flag is not a separate switch: a document with a drive and an angle
+        // is a recording setup, and saying otherwise hides that from the operator.
+        return Err(ValidationError::new(
+            "replay has a drive and an angle, so it must be enabled",
+        ));
     }
+    let mut sources = std::collections::HashSet::new();
     let mut angles = std::collections::HashSet::new();
     for angle in &replay.angles {
         if angle.id == 0 || !angles.insert(angle.id) {
@@ -462,11 +496,77 @@ fn validate_replay(doc: &Document) -> Result<(), ValidationError> {
                 angle.id
             )));
         }
-        if !doc.scenes.iter().any(|scene| scene.id == angle.scene_id) {
-            return Err(ValidationError::new(format!(
-                "replay angle {} scene {} does not exist",
-                angle.id, angle.scene_id
-            )));
+        match angle.source {
+            AngleSourceKind::Scene => {
+                if angle.input_id != 0 {
+                    return Err(ValidationError::new(format!(
+                        "replay angle {} records a scene, so it cannot name input {}",
+                        angle.id, angle.input_id
+                    )));
+                }
+                if angle.record_mode == AngleRecordMode::Passthrough {
+                    // A scene is composited, so its frames never arrive encoded:
+                    // "passthrough" would have to mean "composite anyway".
+                    return Err(ValidationError::new(format!(
+                        "replay angle {} cannot use passthrough on a Scene",
+                        angle.id
+                    )));
+                }
+                if !doc.scenes.iter().any(|scene| scene.id == angle.scene_id) {
+                    return Err(ValidationError::new(format!(
+                        "replay angle {} scene {} does not exist",
+                        angle.id, angle.scene_id
+                    )));
+                }
+                if !sources.insert((0u8, angle.scene_id)) {
+                    return Err(ValidationError::new(format!(
+                        "replay angle {} records scene {}, which another angle already records",
+                        angle.id, angle.scene_id
+                    )));
+                }
+            }
+            AngleSourceKind::Input => {
+                if angle.scene_id != 0 {
+                    return Err(ValidationError::new(format!(
+                        "replay angle {} records an input, so it cannot name scene {}",
+                        angle.id, angle.scene_id
+                    )));
+                }
+                let Some(input) = doc.inputs.iter().find(|input| input.id == angle.input_id) else {
+                    return Err(ValidationError::new(format!(
+                        "replay angle {} input {} does not exist",
+                        angle.id, angle.input_id
+                    )));
+                };
+                if input.kind == InputKind::Replay {
+                    // A Replay channel recording itself is a loop, not a camera.
+                    return Err(ValidationError::new(format!(
+                        "replay angle {} cannot record a Replay channel",
+                        angle.id
+                    )));
+                }
+                if !input.kind.has_video() {
+                    return Err(ValidationError::new(format!(
+                        "replay angle {} input {} has no picture",
+                        angle.id, angle.input_id
+                    )));
+                }
+                if angle.record_mode == AngleRecordMode::Passthrough && input.kind != InputKind::OMT
+                {
+                    // Only OMT hands the mixer compressed frames today. Anything
+                    // else would have to be encoded, which is not passthrough.
+                    return Err(ValidationError::new(format!(
+                        "replay angle {} passthrough is only valid for an OMT input",
+                        angle.id
+                    )));
+                }
+                if !sources.insert((1u8, angle.input_id)) {
+                    return Err(ValidationError::new(format!(
+                        "replay angle {} records input {}, which another angle already records",
+                        angle.id, angle.input_id
+                    )));
+                }
+            }
         }
         // Choosing an audio source that is not there would record silence while
         // claiming otherwise.
@@ -535,7 +635,9 @@ fn validate_replay(doc: &Document) -> Result<(), ValidationError> {
             }
         }
     }
-    // An angle can belong to only one drive, and only to drives that exist.
+    // An angle can belong to only one drive, and only to drives that exist. Every
+    // angle needs one: recording to a drive the operator did not choose is worse
+    // than refusing the document.
     let mut claimed: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
     for (index, storage) in replay.storage.iter().enumerate() {
         for angle_id in &storage.angle_ids {
@@ -547,6 +649,16 @@ fn validate_replay(doc: &Document) -> Result<(), ValidationError> {
             if claimed.insert(*angle_id, index).is_some() {
                 return Err(ValidationError::new(format!(
                     "replay angle {angle_id} is assigned to more than one storage"
+                )));
+            }
+        }
+    }
+    if replay.enabled {
+        for angle in &replay.angles {
+            if !claimed.contains_key(&angle.id) {
+                return Err(ValidationError::new(format!(
+                    "replay angle {} has no storage assigned",
+                    angle.id
                 )));
             }
         }
@@ -891,7 +1003,8 @@ mod tests {
         }"#,
         )
         .unwrap();
-        doc.replay = Some(crate::session::replay::ReplayDto::default());
+        // Let the document be created the way a host creates it: the channel input
+        // seeds the format from the first Mixing Unit.
         crate::session::replay::add_channel_input(&mut doc).unwrap();
         doc.replay.as_mut().unwrap().enabled = true;
         assert!(validate(&doc).is_err());
@@ -901,7 +1014,7 @@ mod tests {
             .storage
             .push(crate::session::replay::ReplayStorageDto {
                 path: "D:/replay".into(),
-                angle_ids: Vec::new(),
+                angle_ids: vec![1],
             });
         doc.replay
             .as_mut()
@@ -910,6 +1023,8 @@ mod tests {
             .push(crate::session::replay::AngleDto {
                 id: 1,
                 name: "A".into(),
+                source: crate::session::replay::AngleSourceKind::Scene,
+                input_id: 0,
                 scene_id: 1,
                 audio: crate::session::replay::AngleAudio::Silent,
                 audio_unit_id: 0,
@@ -945,17 +1060,25 @@ mod tests {
             br#"{
           "version": 2,
           "inputs": [{ "id": 2, "name": "Bars", "kind": "Bars" }],
-          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "scenes": [
+            { "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] },
+            { "id": 2, "name": "Scene 2", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }
+          ],
           "units": [{ "id": 1, "name": "MU 1" }]
         }"#,
         )
         .unwrap();
         doc.replay = Some(ReplayDto::default());
         assert_eq!(add_channel_input(&mut doc).unwrap(), 0);
+        // The fixture records like a host would: a document without a format could
+        // never record, so it carries the one seeded from the Mixing Unit.
+        doc.replay.as_mut().unwrap().format = seed_format(&doc).unwrap();
         let replay = doc.replay.as_mut().unwrap();
         replay.angles.push(AngleDto {
             id: 1,
             name: "A".into(),
+            source: crate::session::replay::AngleSourceKind::Scene,
+            input_id: 0,
             scene_id: 1,
             audio: AngleAudio::Silent,
             audio_unit_id: 0,
@@ -975,6 +1098,153 @@ mod tests {
             tags: Vec::new(),
             protected: false,
         }
+    }
+
+    /// A document that is ready to record: one scene angle on one drive, with the
+    /// format a host seeds from its first Mixing Unit.
+    fn recordable_replay() -> Document {
+        use crate::session::replay::*;
+        let mut doc = session_with_replay();
+        {
+            let replay = doc.replay.as_mut().unwrap();
+            replay.enabled = true;
+            replay.storage = vec![ReplayStorageDto {
+                path: "D:/replay".into(),
+                angle_ids: vec![1],
+            }];
+        }
+        doc
+    }
+
+    /// Recording needs a resolution and a frame rate. A document without them used
+    /// to reach the mixer, which could only answer with a bare code.
+    #[test]
+    fn replay_format_is_required_while_enabled() {
+        use crate::session::replay::*;
+        let mut doc = recordable_replay();
+        doc.replay.as_mut().unwrap().format = ReplayFormatDto::default();
+        let err = validate(&doc).unwrap_err();
+        assert!(err.message.contains("format"), "{}", err.message);
+    }
+
+    /// The segment length is the operator's setting; the recorder no longer picks
+    /// one when the document says zero.
+    #[test]
+    fn replay_segment_frames_must_be_in_range() {
+        let mut doc = recordable_replay();
+        doc.replay.as_mut().unwrap().format.segment_frames = 0;
+        let err = validate(&doc).unwrap_err();
+        assert!(err.message.contains("segment frames"), "{}", err.message);
+    }
+
+    /// Recording never guesses a drive: an angle without one is a setup error.
+    #[test]
+    fn every_angle_needs_a_drive() {
+        let mut doc = recordable_replay();
+        doc.replay.as_mut().unwrap().storage[0].angle_ids.clear();
+        let err = validate(&doc).unwrap_err();
+        assert!(
+            err.message.contains("no storage assigned"),
+            "{}",
+            err.message
+        );
+    }
+
+    /// A drive and an angle are a recording setup, so the flag has to say so.
+    #[test]
+    fn a_drive_and_an_angle_require_enabled() {
+        let mut doc = recordable_replay();
+        doc.replay.as_mut().unwrap().enabled = false;
+        let err = validate(&doc).unwrap_err();
+        assert!(err.message.contains("must be enabled"), "{}", err.message);
+    }
+
+    /// An input angle records the input's own picture. A Replay channel recording
+    /// itself is a loop, and an audio-only input has no picture to record.
+    #[test]
+    fn input_angles_reject_a_replay_channel_and_audio_only_inputs() {
+        use crate::session::replay::*;
+        let mut doc = recordable_replay();
+        doc.inputs.push(
+            serde_json::from_value(
+                serde_json::json!({ "id": 10, "name": "Audio", "kind": "Audio" }),
+            )
+            .unwrap(),
+        );
+        {
+            let replay = doc.replay.as_mut().unwrap();
+            replay.angles[0] = AngleDto {
+                id: 1,
+                name: "A".into(),
+                source: AngleSourceKind::Input,
+                scene_id: 0,
+                input_id: 524289,
+                audio: AngleAudio::Silent,
+                audio_unit_id: 0,
+                record_mode: AngleRecordMode::Composite,
+            };
+        }
+        let err = validate(&doc).unwrap_err();
+        assert!(err.message.contains("Replay channel"), "{}", err.message);
+
+        doc.replay.as_mut().unwrap().angles[0].input_id = 10;
+        let err = validate(&doc).unwrap_err();
+        assert!(err.message.contains("no picture"), "{}", err.message);
+    }
+
+    /// Passthrough means "store the frames as they arrive". Only OMT delivers
+    /// compressed frames, and a scene is composited, so neither may claim it.
+    #[test]
+    fn passthrough_is_only_for_an_omt_input() {
+        use crate::session::replay::*;
+        let mut doc = recordable_replay();
+        doc.inputs.push(
+            serde_json::from_value(serde_json::json!({ "id": 10, "name": "Cam", "kind": "UVC" }))
+                .unwrap(),
+        );
+        {
+            let replay = doc.replay.as_mut().unwrap();
+            replay.angles[0].source = AngleSourceKind::Input;
+            replay.angles[0].scene_id = 0;
+            replay.angles[0].input_id = 10;
+            replay.angles[0].record_mode = AngleRecordMode::Passthrough;
+        }
+        let err = validate(&doc).unwrap_err();
+        assert!(err.message.contains("passthrough"), "{}", err.message);
+
+        // The same on a scene angle is refused too.
+        let mut scene = recordable_replay();
+        scene.replay.as_mut().unwrap().angles[0].record_mode = AngleRecordMode::Passthrough;
+        let err = validate(&scene).unwrap_err();
+        assert!(err.message.contains("passthrough"), "{}", err.message);
+
+        // An OMT input is the one that may.
+        doc.inputs.last_mut().unwrap().kind = InputKind::OMT;
+        validate(&doc).unwrap();
+    }
+
+    /// Two angles recording one source would record the same picture twice and
+    /// silently double the encode load.
+    #[test]
+    fn two_angles_cannot_record_one_source() {
+        use crate::session::replay::*;
+        let mut doc = recordable_replay();
+        {
+            let replay = doc.replay.as_mut().unwrap();
+            replay.angles.push(AngleDto {
+                id: 2,
+                name: "B".into(),
+                source: AngleSourceKind::Scene,
+                scene_id: 1,
+                input_id: 0,
+                audio: AngleAudio::Silent,
+                audio_unit_id: 0,
+                record_mode: AngleRecordMode::Composite,
+            });
+            replay.storage[0].angle_ids = vec![1, 2];
+        }
+        let err = validate(&doc).unwrap_err();
+        assert!(err.message.contains("already records"), "{}", err.message);
     }
 
     #[test]
@@ -1110,7 +1380,9 @@ mod tests {
             replay.angles.push(AngleDto {
                 id: 2,
                 name: "B".into(),
-                scene_id: 1,
+                source: crate::session::replay::AngleSourceKind::Scene,
+                input_id: 0,
+                scene_id: 2,
                 audio: AngleAudio::Silent,
                 audio_unit_id: 0,
                 record_mode: AngleRecordMode::Composite,

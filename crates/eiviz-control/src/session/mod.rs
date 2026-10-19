@@ -1476,6 +1476,12 @@ impl Document {
             doc.headphone_listen_kind = 0;
             doc.headphone_listen_id = 0;
         }
+        // Replay counters are repaired from the ids the document already holds.
+        // A host that wrote its own Replay JSON without the counters would otherwise
+        // reuse id 1 for the next event.
+        if let Some(replay) = doc.replay.as_mut() {
+            replay.normalize();
+        }
         for input in &mut doc.inputs {
             if input.kind == InputKind::Mix {
                 input.audio_units.clear();

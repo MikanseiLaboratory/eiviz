@@ -35,16 +35,13 @@ use crate::upload::CpuFormat;
 
 pub use health::{HealthMemory, HealthSample, step as health_step};
 
-/// Segment length bounds, in frames. The store used to substitute 120 frames when
-/// the setting was zero; a recording that quietly chooses its own segment length is
-/// not the recording the operator asked for, so the range is enforced instead.
-pub const SEGMENT_FRAMES_MIN: u32 = 30;
-pub const SEGMENT_FRAMES_MAX: u32 = 1800;
-/// Encode queue bounds. The store clamped these silently; the refusal belongs here.
-pub const ENCODE_QUEUE_MIN: u32 = 2;
-pub const ENCODE_QUEUE_MAX: u32 = 60;
-pub const WRITE_BUFFER_MIN_MB: u32 = 64;
-pub const WRITE_BUFFER_MAX_MB: u32 = 8192;
+/// Segment length and buffering bounds. They live in the session model so the
+/// document validation and the recorder refuse the same values; a store that
+/// quietly clamped them could record something the operator never asked for.
+pub use eiviz_control::session::replay::{
+    ENCODE_QUEUE_MAX, ENCODE_QUEUE_MIN, SEGMENT_FRAMES_MAX, SEGMENT_FRAMES_MIN,
+    WRITE_BUFFER_MAX_MB, WRITE_BUFFER_MIN_MB,
+};
 
 /// Why a Replay command was refused.
 ///

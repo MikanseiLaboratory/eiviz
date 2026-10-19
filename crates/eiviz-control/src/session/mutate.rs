@@ -276,6 +276,26 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
                 ));
             }
             document.replay = Some(*replay);
+            if let Some(replay) = document.replay.as_mut() {
+                replay.normalize();
+            }
+            Ok(())
+        }
+        SessionMutation::UpdateReplaySettings { settings } => {
+            let Some(replay) = document.replay.as_mut() else {
+                return Err(ControlError::invalid(
+                    "add a Replay input before editing Replay settings",
+                ));
+            };
+            if replay.channels.is_empty() {
+                return Err(ControlError::invalid(
+                    "Replay settings require an explicitly added Replay input",
+                ));
+            }
+            // Only the settings move: an event marked a moment ago survives an
+            // Apply that was built from an older copy of the document.
+            settings.apply_to(replay);
+            replay.normalize();
             Ok(())
         }
         SessionMutation::AddReplayChannel => {
@@ -712,6 +732,43 @@ mod tests {
         doc
     }
 
+    /// Applying Replay Setup writes the settings and nothing else. A host that
+    /// built the request from a document it read a moment ago must not be able to
+    /// delete an event another client marked in between.
+    #[test]
+    fn updating_replay_settings_keeps_events_and_playlists() {
+        use crate::session::replay::{ReplayEventDto, ReplaySettingsDto};
+        let mut doc = bars_with_replay();
+        {
+            let replay = doc.replay.as_mut().unwrap();
+            replay.events.push(ReplayEventDto {
+                id: 1,
+                recording_uuid: "rec".into(),
+                in_frame: 10,
+                out_frame: 40,
+                name: "Goal".into(),
+                tags: Vec::new(),
+                protected: false,
+            });
+        }
+        // The stale copy the host would send carries no events at all.
+        let mut stale = doc.clone();
+        stale.replay.as_mut().unwrap().events.clear();
+        let settings = ReplaySettingsDto::from_document(stale.replay.as_ref().unwrap());
+
+        apply(
+            &mut doc,
+            SessionMutation::UpdateReplaySettings {
+                settings: Box::new(settings),
+            },
+        )
+        .unwrap();
+
+        let replay = doc.replay.as_ref().unwrap();
+        assert_eq!(replay.events.len(), 1, "the event survives an Apply");
+        assert_eq!(replay.events[0].name, "Goal");
+    }
+
     #[test]
     fn delete_replay_removes_the_document_and_every_input() {
         let mut doc = bars_with_replay();
@@ -943,6 +1000,8 @@ mod tests {
         doc.replay.as_mut().unwrap().angles.push(AngleDto {
             id: 1,
             name: "Cam 1".into(),
+            source: crate::session::replay::AngleSourceKind::Scene,
+            input_id: 0,
             scene_id: 1,
             audio: AngleAudio::Silent,
             audio_unit_id: 0,
@@ -974,6 +1033,8 @@ mod tests {
         doc.replay.as_mut().unwrap().angles.push(AngleDto {
             id: 1,
             name: "Cam 1".into(),
+            source: crate::session::replay::AngleSourceKind::Scene,
+            input_id: 0,
             scene_id: 1,
             audio: AngleAudio::Unit,
             audio_unit_id: 2,

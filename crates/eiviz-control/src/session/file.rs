@@ -1492,9 +1492,9 @@ fn replay_to_pb(replay: &crate::session::replay::ReplayDto) -> pb::Replay {
             reserve_mb: replay.buffering.reserve_mb,
         }),
         warnings: Some(pb::ReplayWarnings {
-            remaining_warn_secs: replay.warnings.remaining_warn_secs,
-            remaining_alert_secs: replay.warnings.remaining_alert_secs,
-            remaining_critical_secs: replay.warnings.remaining_critical_secs,
+            remaining_warn_secs: Some(replay.warnings.remaining_warn_secs),
+            remaining_alert_secs: Some(replay.warnings.remaining_alert_secs),
+            remaining_critical_secs: Some(replay.warnings.remaining_critical_secs),
         }),
         retention: match replay.retention {
             ReplayRetention::Overwrite => pb::ReplayRetention::Overwrite as i32,
@@ -1516,8 +1516,18 @@ fn replay_to_pb(replay: &crate::session::replay::ReplayDto) -> pb::Replay {
                 },
                 record_mode: match angle.record_mode {
                     AngleRecordMode::Composite => pb::AngleRecordMode::Composite as i32,
+                    AngleRecordMode::Passthrough => pb::AngleRecordMode::Passthrough as i32,
                 },
                 audio_unit_id: angle.audio_unit_id,
+                source: match angle.source {
+                    crate::session::replay::AngleSourceKind::Scene => {
+                        pb::AngleSourceKind::Scene as i32
+                    }
+                    crate::session::replay::AngleSourceKind::Input => {
+                        pb::AngleSourceKind::Input as i32
+                    }
+                },
+                input_id: angle.input_id,
             })
             .collect(),
         events: replay
@@ -1623,22 +1633,18 @@ fn replay_from_pb(replay: pb::Replay) -> Result<crate::session::replay::ReplayDt
             },
             reserve_mb: buffering.reserve_mb,
         },
+        // A threshold that is absent takes the document's default; one that is
+        // present is kept as written, including zero.
         warnings: ReplayWarningsDto {
-            remaining_warn_secs: if warnings.remaining_warn_secs == 0 {
-                600
-            } else {
-                warnings.remaining_warn_secs
-            },
-            remaining_alert_secs: if warnings.remaining_alert_secs == 0 {
-                300
-            } else {
-                warnings.remaining_alert_secs
-            },
-            remaining_critical_secs: if warnings.remaining_critical_secs == 0 {
-                60
-            } else {
-                warnings.remaining_critical_secs
-            },
+            remaining_warn_secs: warnings
+                .remaining_warn_secs
+                .unwrap_or_else(|| ReplayWarningsDto::default().remaining_warn_secs),
+            remaining_alert_secs: warnings
+                .remaining_alert_secs
+                .unwrap_or_else(|| ReplayWarningsDto::default().remaining_alert_secs),
+            remaining_critical_secs: warnings
+                .remaining_critical_secs
+                .unwrap_or_else(|| ReplayWarningsDto::default().remaining_critical_secs),
         },
         retention: match pb::ReplayRetention::try_from(replay.retention) {
             Ok(pb::ReplayRetention::Overwrite) => ReplayRetention::Overwrite,
@@ -1651,13 +1657,21 @@ fn replay_from_pb(replay: pb::Replay) -> Result<crate::session::replay::ReplayDt
             .map(|angle| AngleDto {
                 id: angle.id,
                 name: angle.name,
+                source: match pb::AngleSourceKind::try_from(angle.source) {
+                    Ok(pb::AngleSourceKind::Input) => AngleSourceKind::Input,
+                    _ => AngleSourceKind::Scene,
+                },
                 scene_id: angle.scene_id,
+                input_id: angle.input_id,
                 audio: match pb::AngleAudio::try_from(angle.audio) {
                     Ok(pb::AngleAudio::Unit) => AngleAudio::Unit,
                     _ => AngleAudio::Silent,
                 },
                 audio_unit_id: angle.audio_unit_id,
-                record_mode: AngleRecordMode::Composite,
+                record_mode: match pb::AngleRecordMode::try_from(angle.record_mode) {
+                    Ok(pb::AngleRecordMode::Passthrough) => AngleRecordMode::Passthrough,
+                    _ => AngleRecordMode::Composite,
+                },
             })
             .collect(),
         events: replay
