@@ -433,7 +433,23 @@ impl ReplayEngine {
                     .find(|slot| slot.index == channel.index)
                     .map(|slot| std::mem::replace(&mut slot.transport, channel::Transport::new()))
                     .unwrap_or_else(channel::Transport::new);
-                transport.set_playlist(playlist_clips(&config, channel.playlist_id));
+                let clips = playlist_clips(&config, channel.playlist_id);
+                // What the channel was actually given, transitions included: a playlist
+                // that arrives without them plays as a row of cuts.
+                crate::diag::warn_throttled(
+                    "replay-configure-clips",
+                    &format!(
+                        "replay channel={} playlist={:?} clips={} transitions={:?}",
+                        channel.index,
+                        channel.playlist_id,
+                        clips.len(),
+                        clips
+                            .iter()
+                            .map(|clip| (clip.transition.kind, clip.transition.frames))
+                            .collect::<Vec<_>>()
+                    ),
+                );
+                transport.set_playlist(clips);
                 let audio = old
                     .iter()
                     .find(|slot| slot.index == channel.index)
