@@ -1073,6 +1073,7 @@ mod tests {
     fn a_cut_never_occupies_timeline_frames() {
         let cut = ClipTransitionDto {
             kind: ReplayTransitionKind::Cut,
+            direction: ReplayTransitionDirection::Left,
             timing: ReplayTransitionTiming::Additive,
             duration_frames: 30,
         };
@@ -1105,6 +1106,7 @@ mod tests {
             record_mode: AngleRecordMode::Composite,
         });
         let default = ClipTransitionDto {
+            direction: ReplayTransitionDirection::Left,
             kind: ReplayTransitionKind::Dissolve,
             timing: ReplayTransitionTiming::Additive,
             duration_frames: 25,
