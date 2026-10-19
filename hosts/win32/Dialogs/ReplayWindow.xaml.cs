@@ -1156,6 +1156,11 @@ public partial class ReplayWindow : Window
     {
         if (_replay is null)
             return;
+        // The channel has to name the playlist it plays. The mixer builds the transport's
+        // running order from that name; a nameless channel has no next clip, so a cue
+        // plays one clip and stops. Writing it down is what makes "play the playlist"
+        // mean the whole list.
+        ReplayModel.SetChannelPlaylist(_replay, _channel, _playlistId);
         var json = ReplayModel.Serialize(_replay);
         _session.ReplayJson = json;
         _lastJson = json;
@@ -1700,14 +1705,72 @@ public partial class ReplayWindow : Window
             Warn(Refusal(Loc.T("replay.recordRefused")));
     }
 
-    private void Stop_Click(object sender, RoutedEventArgs e)
+    private void RecordToggle_Click(object sender, RoutedEventArgs e)
     {
-        // Stopping a recorder that is not running is not an error, so it stays
-        // quiet instead of reporting a refusal the operator cannot act on.
+        if (_recording == true)
+        {
+            StopRecording();
+            return;
+        }
+        Record_Click(sender, e);
+    }
+
+    private void Stop_Click(object sender, RoutedEventArgs e) => StopRecording();
+
+    /// <summary>
+    /// Stops the recorder. Stopping one that is not running is not an error, so it stays
+    /// quiet instead of reporting a refusal the operator cannot act on.
+    /// </summary>
+    private void StopRecording()
+    {
         if (_recording != true)
             return;
         if (Backend?.ReplayRecord(false) != true)
             Warn(Refusal(Loc.T("replay.commandRefused")));
+    }
+
+    /// <summary>
+    /// Plays the playlist from its head. The transport takes the next clip as each one
+    /// ends, so one press plays the whole list with its transitions, and a clip added
+    /// while it runs is picked up at the end.
+    /// </summary>
+    private void PlaylistPlay_Click(object sender, RoutedEventArgs e)
+    {
+        if (_replay is null)
+            return;
+        var clips = ReplayModel.Clips(_replay, _playlistId);
+        if (clips.Count == 0)
+        {
+            Warn(Loc.T("replay.playlistEmpty"));
+            return;
+        }
+        if (Backend?.ReplayCue(_channel, clips[0].Uid) != true)
+        {
+            Warn(Refusal(Loc.T("replay.cueRefused")));
+            return;
+        }
+        _live = false;
+        if (Backend?.ReplayTransport(_channel, true, _speedMilli, -1) != true)
+        {
+            Warn(Refusal(Loc.T("replay.commandRefused")));
+            return;
+        }
+        _playing = true;
+        UpdatePlayButton();
+        RefreshStatus();
+    }
+
+    /// <summary>Stops the playlist where it is; the picture stays, so it can resume.</summary>
+    private void PlaylistStop_Click(object sender, RoutedEventArgs e)
+    {
+        if (Backend?.ReplayTransport(_channel, false, _speedMilli, -1) != true)
+        {
+            Warn(Refusal(Loc.T("replay.commandRefused")));
+            return;
+        }
+        _playing = false;
+        UpdatePlayButton();
+        RefreshStatus();
     }
 
     private void Live_Click(object sender, RoutedEventArgs e) => Live();

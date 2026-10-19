@@ -2334,11 +2334,15 @@ fn playlist_clips(config: &ReplayDto, playlist_id: Option<u64>) -> Vec<channel::
     use eiviz_control::session::replay::{
         ReplayTransitionKind, ReplayTransitionTiming,
     };
-    let Some(list) = config
-        .playlists
-        .iter()
-        .find(|list| Some(list.id) == playlist_id)
-    else {
+    // A channel that names no playlist plays the first one. That is the rule the host
+    // already applies, and a project that has never had its channel pointed anywhere is
+    // exactly what a fresh one looks like: without this the transport has no list, so a
+    // cue plays a single clip and stops instead of running the playlist.
+    let list = match playlist_id {
+        Some(id) => config.playlists.iter().find(|list| list.id == id),
+        None => config.playlists.first(),
+    };
+    let Some(list) = list else {
         return Vec::new();
     };
     list.clips

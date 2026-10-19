@@ -69,7 +69,6 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="2*" MinHeight="260"/>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="3*" MinHeight="240"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
@@ -101,6 +100,8 @@
                 <ColumnDefinition Width="10"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
+            <!-- Input on the left, output on the right: where the picture comes from,
+                 and what goes out, in the order the eye reads them. -->
             <Grid Grid.Column="0">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -108,15 +109,15 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <TextBlock Grid.Row="0" FontWeight="Bold"
-                           Text="{Binding [replay.output], Source={x:Static i18n:Loc.Source}}"/>
+                           Text="{Binding [replay.liveInput], Source={x:Static i18n:Loc.Source}}"/>
                 <!-- The same container the main window uses: the picture keeps its shape
                      and follows the window, instead of being stretched into the box. -->
                 <preview:AspectBox Grid.Row="1">
                     <Border Style="{StaticResource MonitorBox}">
-                        <preview:SwapchainHost x:Name="OutputMonitor"/>
+                        <preview:SwapchainHost x:Name="LiveMonitor"/>
                     </Border>
                 </preview:AspectBox>
-                <TextBlock Grid.Row="2" x:Name="OutputLabel" Style="{StaticResource Caption}"/>
+                <TextBlock Grid.Row="2" x:Name="LiveLabel" Style="{StaticResource Caption}"/>
             </Grid>
             <Grid Grid.Column="2">
                 <Grid.RowDefinitions>
@@ -125,31 +126,18 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <TextBlock Grid.Row="0" FontWeight="Bold"
-                           Text="{Binding [replay.liveInput], Source={x:Static i18n:Loc.Source}}"/>
+                           Text="{Binding [replay.output], Source={x:Static i18n:Loc.Source}}"/>
                 <preview:AspectBox Grid.Row="1">
                     <Border Style="{StaticResource MonitorBox}">
-                        <preview:SwapchainHost x:Name="LiveMonitor"/>
+                        <preview:SwapchainHost x:Name="OutputMonitor"/>
                     </Border>
                 </preview:AspectBox>
-                <TextBlock Grid.Row="2" x:Name="LiveLabel" Style="{StaticResource Caption}"/>
+                <TextBlock Grid.Row="2" x:Name="OutputLabel" Style="{StaticResource Caption}"/>
             </Grid>
         </Grid>
 
-        <!-- Angles: one numbered button per camera, the way a replay controller labels
-             them. The picture of the selected one is the monitor above. -->
-        <DockPanel Grid.Row="2" Margin="0,10,0,0">
-            <TextBlock DockPanel.Dock="Left" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0"
-                       Text="{Binding [replay.angles], Source={x:Static i18n:Loc.Source}}"/>
-            <TextBlock DockPanel.Dock="Right" HorizontalAlignment="Right" VerticalAlignment="Center"
-                       Foreground="#B0B0B8"
-                       Text="{Binding [replay.anglesHelpShort], Source={x:Static i18n:Loc.Source}}"/>
-            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                <WrapPanel x:Name="AnglePanel" Orientation="Horizontal"/>
-            </ScrollViewer>
-        </DockPanel>
-
         <!-- Events and the playlist: one row per item, edited in the row. -->
-        <Grid Grid.Row="3" Margin="0,10,0,0">
+        <Grid Grid.Row="2" Margin="0,10,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" MinWidth="420"/>
                 <ColumnDefinition Width="10"/>
@@ -245,6 +233,15 @@
                         <Button x:Name="PlaylistRemoveButton" Width="40" Height="28" Margin="6,0,0,0"
                                 Click="PlaylistRemove_Click" FontFamily="Segoe MDL2 Assets" Content="&#xE74D;"
                                 ToolTip="{Binding [replay.playlistRemove], Source={x:Static i18n:Loc.Source}}"/>
+                        <!-- The whole list from its head: the issue's "smooth playback of
+                             several clips" needs a way to start it. -->
+                        <Button x:Name="PlaylistPlayButton" Height="28" MinWidth="140" Margin="12,0,0,0"
+                                Click="PlaylistPlay_Click"
+                                ToolTip="{Binding [replay.playlistPlayHint], Source={x:Static i18n:Loc.Source}}"
+                                Content="{Binding [replay.playlistPlay], Source={x:Static i18n:Loc.Source}}"/>
+                        <Button x:Name="PlaylistStopButton" Width="40" Height="28" Margin="6,0,0,0"
+                                Click="PlaylistStop_Click" FontFamily="Segoe MDL2 Assets" Content="&#xE71A;"
+                                ToolTip="{Binding [replay.playlistStopHint], Source={x:Static i18n:Loc.Source}}"/>
                     </StackPanel>
                 </DockPanel>
                 <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,6">
@@ -385,8 +382,19 @@
             </DockPanel>
         </Grid>
 
-        <!-- Deck controls: marks first, then transport, then export and health. -->
-        <StackPanel Grid.Row="4" Margin="0,10,0,0">
+        <!-- Every operation control at the bottom, in the order an operator works:
+             angle, marks, transport, export. -->
+        <StackPanel Grid.Row="3" Margin="0,10,0,0">
+            <DockPanel Margin="0,0,0,8">
+                <TextBlock DockPanel.Dock="Left" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0"
+                           Text="{Binding [replay.angles], Source={x:Static i18n:Loc.Source}}"/>
+                <TextBlock DockPanel.Dock="Right" HorizontalAlignment="Right" VerticalAlignment="Center"
+                           Foreground="#B0B0B8"
+                           Text="{Binding [replay.anglesHelpShort], Source={x:Static i18n:Loc.Source}}"/>
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                    <WrapPanel x:Name="AnglePanel" Orientation="Horizontal"/>
+                </ScrollViewer>
+            </DockPanel>
             <local:ReplayWaveform x:Name="Waveform" Height="52" Margin="0,0,0,8"/>
             <DockPanel>
                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
@@ -420,7 +428,7 @@
             </DockPanel>
 
             <WrapPanel Margin="0,10,0,0">
-                <Button x:Name="RecordButton" Style="{StaticResource IconButton}" Click="Record_Click"
+                <Button x:Name="RecordButton" Style="{StaticResource IconButton}" Click="RecordToggle_Click"
                         ToolTip="{Binding [replay.recordHint], Source={x:Static i18n:Loc.Source}}">
                     <Ellipse Width="18" Height="18" Fill="#E05252"/>
                 </Button>
