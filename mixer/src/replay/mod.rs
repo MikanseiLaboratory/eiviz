@@ -1523,10 +1523,18 @@ fn apply_pro_stats(inner: &mut Inner, snapshot: &ReplayStats) {
         rate
     };
     inner.stats.remaining_is_estimate = u32::from(!measured || snapshot.write_rate_bps == 0);
-    inner.stats.remaining_secs = remaining_secs(
-        snapshot.free_bytes.saturating_sub(snapshot.reserve_bytes),
-        pace,
-    );
+    // A store that has not measured the drive reports zero free bytes, and zero seconds
+    // left would read as "the disk is full" while nothing is known. A disk that really
+    // is full says so through its own issue flag, so unknown is reported as unknown and
+    // the operator is not sent to clear space that is already there.
+    inner.stats.remaining_secs = if snapshot.free_bytes == 0 {
+        u32::MAX
+    } else {
+        remaining_secs(
+            snapshot.free_bytes.saturating_sub(snapshot.reserve_bytes),
+            pace,
+        )
+    };
     // One entry per configured angle, so the operator sees the readback drops and
     // the queue even when the module has not reported that angle yet.
     let configured: Vec<(u32, u64)> = inner

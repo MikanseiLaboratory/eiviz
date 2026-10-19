@@ -957,6 +957,9 @@ public partial class ReplayWindow : Window
         }
         PlaylistList.ItemsSource = rows;
         PlaylistEmptyText.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        // The picker shows how many clips each playlist holds, so it is rebuilt with the
+        // list: a count left over from before a delete is a lie about the project.
+        RefreshPlaylistChoices();
     }
 
     /// <summary>
