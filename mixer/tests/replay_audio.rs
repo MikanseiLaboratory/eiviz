@@ -198,8 +198,10 @@ fn the_recorded_sound_reaches_the_channel_meter() {
     expect("pause", unsafe {
         mixer_replay_channel_transport(0, 0, 1000, -1)
     });
-    // A paused deck is silent: the meter drops instead of freezing on the tail.
-    let quiet_deadline = Instant::now() + Duration::from_secs(3);
+    // A paused deck is silent: the meter drops instead of freezing on the tail. The
+    // decay follows the audio blocks the mixer produces, so a slow adapter needs more
+    // wall clock for the same number of blocks; the deadline is generous for that.
+    let quiet_deadline = Instant::now() + Duration::from_secs(30);
     let mut quiet = channel_peak();
     while Instant::now() < quiet_deadline && quiet > 0.01 {
         thread::sleep(Duration::from_millis(50));
