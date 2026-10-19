@@ -265,18 +265,26 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
             if position == out_a {
                 held_here += 1;
             }
-            if position >= window_first && position <= out_a {
-                inside += 1;
-                if is_dissolve_mix(pixel) {
-                    mixed += 1;
-                }
-            } else if position < window_first {
+            if position < window_first {
+                // Clip A plays on its own before the transition.
                 if is_red(pixel) {
                     red += 1;
                 }
-            } else if is_green(pixel) {
-                // B is on screen: the playlist ran to its end.
-                break;
+            } else {
+                // The transition window is `window_first..=out_a`.
+                if position <= out_a {
+                    inside += 1;
+                }
+                // The blend is looked for from the window onwards, not only inside it:
+                // Overwrap dissolves over the tail of A, while Additive inserts the
+                // transition after A's last frame, so the blended picture appears on
+                // either side of `out_a` depending on the timing.
+                if is_dissolve_mix(pixel) {
+                    mixed += 1;
+                } else if is_green(pixel) {
+                    // B is on screen: the playlist ran to its end.
+                    break;
+                }
             }
         }
 
