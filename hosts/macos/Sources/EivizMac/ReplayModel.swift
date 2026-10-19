@@ -78,6 +78,17 @@ enum ReplayIssues {
     }
 }
 
+/// One playlist a project holds: its name and how many clips are filed in it.
+///
+/// Top level rather than nested in the document: the deck shows the list directly.
+struct PlaylistInfo: Identifiable, Hashable {
+    let id: UInt64
+    let name: String
+    let clips: Int
+
+    var label: String { clips == 0 ? name : "\(name)  (\(clips))" }
+}
+
 struct ReplayChannelInfo: Identifiable, Hashable {
     let index: UInt32
     let inputId: UInt64
@@ -888,14 +899,6 @@ struct ReplayDocument {
         raw["playlists"] = .array(playlists)
     }
 
-    /// One playlist a project holds: its name and how many clips are filed in it.
-    struct PlaylistInfo: Identifiable, Hashable {
-        let id: UInt64
-        let name: String
-        let clips: Int
-
-        var label: String { clips == 0 ? name : "\(name)  (\(clips))" }
-    }
 
     /// One recording drive. An angle may name the drive it records to.
     struct StorageSpec: Identifiable, Hashable {
