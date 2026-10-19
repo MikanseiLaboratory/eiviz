@@ -889,7 +889,7 @@ public sealed class MultiviewLayout
     public uint ResolvedPresentInterval(SessionSettings settings)
     {
         if (PresentInterval == 0)
-            return ClampPresentInterval(settings.DefaultPresentInterval == 0 ? 3 : settings.DefaultPresentInterval);
+            return ClampPresentInterval(settings.DefaultPresentInterval == 0 ? 2 : settings.DefaultPresentInterval);
         return ClampPresentInterval(PresentInterval);
     }
 
@@ -1233,7 +1233,12 @@ public sealed class SessionSettings
     public string Theme { get; set; } = "Charcoal";
     public ulong DefaultMultiviewUnitId { get; set; } = 1;
     public uint FrameBufferFrames { get; set; } = 3;
-    public uint DefaultPresentInterval { get; set; } = 3;
+    /// <summary>
+    /// Presentation interval for preview surfaces. Every second frame by default: a
+    /// preview at half the master rate is still smooth to the eye, and it costs half the
+    /// GPU time of presenting every frame.
+    /// </summary>
+    public uint DefaultPresentInterval { get; set; } = 2;
     /// <summary>
     /// Presentation interval for the replay deck's monitors. Zero follows
     /// <see cref="DefaultPresentInterval"/>.
@@ -1277,7 +1282,7 @@ public sealed class SessionSettings
     }
 
     public uint ResolvedPresentInterval() =>
-        MultiviewLayout.ClampPresentInterval(DefaultPresentInterval == 0 ? 3 : DefaultPresentInterval);
+        MultiviewLayout.ClampPresentInterval(DefaultPresentInterval == 0 ? 2 : DefaultPresentInterval);
 
     /// <summary>
     /// How often the replay deck's monitors are presented. Zero follows the project's

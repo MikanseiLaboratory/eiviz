@@ -1422,27 +1422,27 @@ impl ReplayEngine {
         angles: u32,
         reserve_bytes: u64,
     ) -> MixerReplayEstimateOut {
-        if let Some(backend) = crate::pro::module().replay()
-            && let Ok(estimate) = backend.estimate(
-                path,
-                width,
-                height,
-                fps_num,
-                fps_den,
-                profile,
-                angles,
-                reserve_bytes,
-            )
-        {
-            return MixerReplayEstimateOut {
-                free_bytes: estimate.free_bytes,
-                estimate_rate_bps: estimate.estimate_rate_bps,
-                remaining_secs: estimate.remaining_secs,
-                path_writable: u32::from(estimate.path_writable),
-            };
+        // Worked out here rather than taken from the module. Free space is the OS's
+        // answer for this path, and the rate is the same bitrate model the recorder
+        // uses, so both halves of the division are ones this process can stand behind.
+        // A module built against an older estimate struct would otherwise hand the
+        // operator a confident wrong number: that is how a 124 GB drive came to read
+        // "1 TiB".
+        let free = eiviz_pro_api::free_bytes(path).unwrap_or(0);
+        let rate = eiviz_pro_api::estimate_rate_bps(
+            profile,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            angles.max(1),
+        );
+        MixerReplayEstimateOut {
+            free_bytes: free,
+            estimate_rate_bps: rate,
+            remaining_secs: eiviz_pro_api::remaining_secs(free.saturating_sub(reserve_bytes), rate),
+            path_writable: u32::from(std::fs::create_dir_all(path).is_ok()),
         }
-        let _ = (path, width, height, fps_num, fps_den, profile, angles, reserve_bytes);
-        MixerReplayEstimateOut::default()
     }
 
     fn ensure_workers(&self) {

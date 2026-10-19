@@ -290,7 +290,10 @@ public partial class ReplaySettingsWindow : Window
                     ReserveBytes = (ulong)reserveMb * 1024 * 1024,
                 };
                 var output = default(MixerReplayEstimateOut);
-                if (MixerNative.ReplayEstimate(ref input, ref output) == 0 && output.PathWritable != 0)
+                var code = MixerNative.ReplayEstimate(ref input, ref output);
+                // A drive the mixer cannot write to says so rather than showing a number
+                // that would send the operator chasing space that is already there.
+                if (code == 0 && output.PathWritable != 0)
                 {
                     row.Free = $"{FormatBytes(output.FreeBytes)}  ({FormatDuration(output.RemainingSecs)})";
                 }

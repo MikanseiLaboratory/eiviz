@@ -77,7 +77,7 @@ public partial class SettingsWindow : Window
         SelectTag(SizeBox, $"{Settings.DefaultWidth}x{Settings.DefaultHeight}");
         SelectTag(BufferBox, Settings.FrameBufferFrames.ToString());
         SelectTag(ColorFormatBox, Settings.InternalColorFormat == InternalColorFormat.Bgra ? "bgra" : "uyvy");
-        SelectTag(MvPresentBox, MultiviewLayout.ClampPresentInterval(Settings.DefaultPresentInterval == 0 ? 3 : Settings.DefaultPresentInterval).ToString());
+        SelectTag(MvPresentBox, MultiviewLayout.ClampPresentInterval(Settings.DefaultPresentInterval == 0 ? 2 : Settings.DefaultPresentInterval).ToString());
         SelectTag(FlipBudgetBox, Settings.FlipSwapchainLimit.ToString());
         MvUnitBox.ItemsSource = session.Units;
         MvUnitBox.SelectedItem = session.Units.FirstOrDefault(item => item.Id == Settings.DefaultMultiviewUnitId)

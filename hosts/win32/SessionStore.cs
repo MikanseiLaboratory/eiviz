@@ -329,7 +329,7 @@ internal static class SessionStore
             session.Settings.Theme = Settings.Theme;
             session.Settings.DefaultMultiviewUnitId = Settings.DefaultMultiviewUnitId;
             session.Settings.FrameBufferFrames = Settings.FrameBufferFrames == 0 ? 3 : Math.Clamp(Settings.FrameBufferFrames, 1u, 8u);
-            session.Settings.DefaultPresentInterval = Settings.DefaultPresentInterval == 0 ? 3 : Math.Clamp(Settings.DefaultPresentInterval, 1u, 8u);
+            session.Settings.DefaultPresentInterval = Settings.DefaultPresentInterval == 0 ? 2 : Math.Clamp(Settings.DefaultPresentInterval, 1u, 8u);
             session.Settings.FlipSwapchainLimit = Settings.FlipSwapchainLimit is 0 or 4 or 6 or 8 or 10 or 12 or 16
                 ? Settings.FlipSwapchainLimit
                 : 0;

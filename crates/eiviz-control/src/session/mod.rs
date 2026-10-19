@@ -110,7 +110,7 @@ pub struct SessionSettings {
     pub default_multiview_unit_id: u64,
     #[serde(default = "three")]
     pub frame_buffer_frames: u32,
-    #[serde(default = "three")]
+    #[serde(default = "two")]
     pub default_present_interval: u32,
     /// Presentation interval for the replay deck's monitors. Zero follows
     /// `default_present_interval`.
@@ -168,7 +168,7 @@ impl Default for SessionSettings {
             theme: theme_charcoal(),
             default_multiview_unit_id: 1,
             frame_buffer_frames: 3,
-            default_present_interval: 3,
+            default_present_interval: 2,
             replay_present_interval: 0,
             flip_swapchain_limit: 0,
             internal_color_format: InternalColorFormat::Uyvy,
@@ -291,6 +291,10 @@ fn de_bool_null_true<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Resul
 
 fn three() -> u32 {
     3
+}
+
+fn two() -> u32 {
+    2
 }
 
 fn api_port() -> u32 {
