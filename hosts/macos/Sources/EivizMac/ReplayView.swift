@@ -126,7 +126,7 @@ struct ReplayView: View {
             monitor(title: L10n.t("replay.liveInput"),
                     caption: liveCaption,
                     monitorId: liveMonitor,
-                    sourceId: activeAngle?.sceneGpuId ?? 0)
+                    sourceId: activeAngle?.liveSourceId ?? 0)
         }
     }
 
@@ -233,7 +233,7 @@ struct ReplayView: View {
                                     // because the body must not mutate state.
                                     if let monitor = angleMonitors[angle.id], monitor != 0 {
                                         MetalPreviewRepresentable(
-                                            role: .monitor(monitorId: monitor, sourceId: angle.sceneGpuId)
+                                            role: .monitor(monitorId: monitor, sourceId: angle.liveSourceId)
                                         )
                                         .aspectRatio(16.0 / 9.0, contentMode: .fit)
                                         .frame(maxWidth: .infinity)

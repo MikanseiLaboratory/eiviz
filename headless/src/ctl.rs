@@ -818,6 +818,12 @@ pub enum ReplayCmd {
         #[arg(long, action = clap::ArgAction::Set)]
         on: bool,
     },
+    /// Chooses the angle the next mark records, the same choice the deck's angle
+    /// tiles make.
+    Angle {
+        #[arg(long)]
+        id: u32,
+    },
     MarkIn,
     MarkOut {
         #[arg(long, default_value = "")]
@@ -881,6 +887,15 @@ async fn replay_cmd(session: &ControlSession, cmd: ReplayCmd) -> Result<CmdResul
         ReplayCmd::Record { on } => {
             session.replay_record(on).await.map_err(map_err)?;
             ok_live(session, json!({ "on": on })).await
+        }
+        ReplayCmd::Angle { id } => {
+            mutate(
+                session,
+                SessionMutation::SetReplayActiveAngle { angle_id: id },
+                None,
+                false,
+            )
+            .await
         }
         ReplayCmd::MarkIn => {
             session.replay_mark_in().await.map_err(map_err)?;

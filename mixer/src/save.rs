@@ -128,6 +128,14 @@ pub fn mark_replay_scenes(
     }
 }
 
+/// Inputs an input angle records directly. Their receivers must stay at full
+/// quality while recording, exactly like an angle scene's inputs do.
+pub fn mark_replay_inputs(input_ids: &[u64], roles: &mut HashMap<u64, SourceRoles>) {
+    for id in input_ids {
+        roles.entry(*id).or_default().on_replay = true;
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Role {
     Program,

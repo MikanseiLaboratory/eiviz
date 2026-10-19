@@ -348,6 +348,12 @@ pub enum SessionMutation {
     UpdateReplaySettings {
         settings: Box<crate::session::replay::ReplaySettingsDto>,
     },
+    /// Chooses the angle the next mark records. The deck selects it by clicking a
+    /// tile; a control client selects it here.
+    SetReplayActiveAngle {
+        #[serde(alias = "angle_id")]
+        angle_id: u32,
+    },
     /// Creates the optional replay document on demand and returns its next
     /// available channel through the resulting session snapshot.
     AddReplayChannel,
@@ -385,6 +391,7 @@ impl SessionMutation {
             Self::DeleteScenePreset { .. } => "DeleteScenePreset",
             Self::UpsertReplaySettings { .. } => "UpsertReplaySettings",
             Self::UpdateReplaySettings { .. } => "UpdateReplaySettings",
+            Self::SetReplayActiveAngle { .. } => "SetReplayActiveAngle",
             Self::AddReplayChannel => "AddReplayChannel",
             Self::DeleteReplay => "DeleteReplay",
         }

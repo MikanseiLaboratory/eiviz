@@ -378,6 +378,10 @@ pub(crate) fn render_loop(
             }
             let replay_scenes = crate::replay::engine().replay_scene_ids();
             mark_replay_scenes(&scene_specs, &replay_scenes, &mut roles);
+            // An input angle records an input's own picture, so that input has to
+            // arrive at full quality too.
+            let replay_inputs = crate::replay::engine().live_angle_input_ids();
+            crate::save::mark_replay_inputs(&replay_inputs, &mut roles);
             {
                 let guard = shared.lock_or_recover();
                 for (id, receiver) in &guard.receivers {
@@ -694,7 +698,17 @@ pub(crate) fn render_loop(
             thumbs.capture(&device, &mut composer, &mut encoder, frame_i, &thumbs_snap);
             let replay_targets = crate::replay::engine().record_targets();
             for target in &replay_targets {
-                let Some(src) = composer.scene_texture(target.scene_gpu_id).cloned() else {
+                let picture = match target.source {
+                    crate::replay::RecordSource::Scene(gpu_id) => {
+                        composer.scene_texture(gpu_id).cloned()
+                    }
+                    // An input angle records the input's own picture. A packed input
+                    // (OMT/NDI) is unpacked first: the recorder reads RGBA.
+                    crate::replay::RecordSource::Input(input_id) => {
+                        replay_input_texture(&mut composer, &device, input_id)
+                    }
+                };
+                let Some(src) = picture else {
                     // The angle has no picture this frame. Counted: a frame the
                     // recorder never saw must not vanish silently.
                     crate::replay::engine().note_replaced(target.angle_id, 1);
@@ -974,8 +988,21 @@ fn push_cpu_packed(
     packed_copies.push((output.output_id, packed_w, packed_h));
 }
 
-fn push_replay_packed(
+/// The input's own picture as RGBA, for an input angle. A packed input is blitted
+/// into an RGBA texture first, because the recorder's readback is RGBA.
+fn replay_input_texture(
     composer: &mut Composer,
+    device: &GpuDevice,
+    input_id: u64,
+) -> Option<wgpu::Texture> {
+    if composer.source_is_packed(input_id) {
+        composer.blit_source_rgba(device, input_id)
+    } else {
+        composer.source_texture(input_id).cloned()
+    }
+}
+
+fn push_replay_packed(    composer: &mut Composer,
     device: &GpuDevice,
     encoder: &mut wgpu::CommandEncoder,
     readbacks: &mut ReadbackStore,

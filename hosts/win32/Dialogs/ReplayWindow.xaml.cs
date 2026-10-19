@@ -2,6 +2,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -140,7 +141,7 @@ public partial class ReplayWindow : Window
             : Loc.Format("replay.outputLabel", channel.Label, _playing ? Loc.T("replay.playing") : Loc.T("replay.stopped"));
 
         var angle = ActiveAngle();
-        var live = angle?.SceneGpuId ?? 0;
+        var live = angle?.LiveSourceId ?? 0;
         if (live != _liveSource)
         {
             _liveSource = live;
@@ -642,7 +643,7 @@ public partial class ReplayWindow : Window
                 Margin = new Thickness(6, 0, 6, 0)
             };
             var monitorId = _session.NextMonitorId++;
-            surface.Loaded += (_, _) => surface.RetargetMonitor(monitorId, angle.SceneGpuId);
+            surface.Loaded += (_, _) => surface.RetargetMonitor(monitorId, angle.LiveSourceId);
             var tile = new Border
             {
                 BorderThickness = new Thickness(selected ? 3 : 1),
@@ -657,6 +658,10 @@ public partial class ReplayWindow : Window
                 if (sender is Border { Tag: uint id })
                     SelectAngle(id);
             };
+            // Automation and tests address a tile by its angle, and the label alone
+            // is ambiguous (the event list shows angle names too).
+            AutomationProperties.SetAutomationId(tile, $"AngleTile{angle.Id}");
+            AutomationProperties.SetName(tile, angle.Label);
             AnglePanel.Children.Add(tile);
             _angleHosts.Add(surface);
         }

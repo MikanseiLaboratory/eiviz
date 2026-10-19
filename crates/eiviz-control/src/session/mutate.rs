@@ -298,6 +298,16 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             replay.normalize();
             Ok(())
         }
+        SessionMutation::SetReplayActiveAngle { angle_id } => {
+            let Some(replay) = document.replay.as_mut() else {
+                return Err(ControlError::invalid("Replay is not in this session"));
+            };
+            if !replay.angles.iter().any(|angle| angle.id == angle_id) {
+                return Err(ControlError::not_found(format!("replay angle {angle_id}")));
+            }
+            replay.active_angle_id = Some(angle_id);
+            Ok(())
+        }
         SessionMutation::AddReplayChannel => {
             crate::session::replay::add_channel_input(document).map_err(ControlError::invalid)?;
             Ok(())

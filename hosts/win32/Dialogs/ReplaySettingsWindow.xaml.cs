@@ -26,11 +26,10 @@ public partial class ReplaySettingsWindow : Window
     {
         InitializeComponent();
         _session = session;
-        // The add row's kind starts on scenes. Input angles are in the data model and
-        // are validated, but the recorder cannot capture an input directly yet, so
-        // the choice is not offered until that path exists: an option that records
-        // nothing is worse than one that is not there.
+        // What an angle records: a scene's composited output, or an input's own
+        // picture without composing a scene for it.
         SourceKindBox.Items.Add(new ComboBoxItem { Content = Loc.T("replay.sourceScene"), Tag = "Scene" });
+        SourceKindBox.Items.Add(new ComboBoxItem { Content = Loc.T("replay.sourceInput"), Tag = "Input" });
         SourceKindBox.SelectedIndex = 0;
         RetentionBox.Items.Add(new ComboBoxItem { Content = Loc.T("replay.retentionStop"), Tag = "StopWhenFull" });
         RetentionBox.Items.Add(new ComboBoxItem { Content = Loc.T("replay.retentionOverwrite"), Tag = "Overwrite" });

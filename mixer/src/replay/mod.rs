@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 
 use eiviz_control::error::ControlError;
 use eiviz_control::session::replay::{
-    ReplayDto, overflow_code, profile_code, replay_channel_gpu_id, retention_code,
+    AngleRecordMode, AngleSourceKind, ReplayDto, overflow_code, profile_code, replay_channel_gpu_id,
+    retention_code,
 };
 use eiviz_pro_api::{
     Entitlements, LAYOUT_BGRA, PRO_BUSY, PRO_IO, PixelLayout, ProReplayAngle, ProReplayConfig,
@@ -287,8 +288,17 @@ pub struct ReplayEngine {
     workers: Mutex<Vec<JoinHandle<()>>>,
 }
 
+/// Where a recording angle takes its picture from. A scene angle records the
+/// scene's composited output; an input angle records the input's own picture
+/// without composing a scene first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordSource {
+    Scene(u64),
+    Input(u64),
+}
+
 pub struct RecordTarget {
-    pub scene_gpu_id: u64,
+    pub source: RecordSource,
     pub readback_key: u64,
     pub width: u32,
     pub height: u32,
@@ -560,13 +570,39 @@ impl ReplayEngine {
             )));
         }
         for angle in &angles {
-            let gpu = eiviz_control::ids::scene_gpu_id(angle.scene_id);
-            if !scene_ids.contains(&gpu) && !scene_ids.contains(&angle.scene_id) {
-                return Err(ReplayFailure::io(format!(
-                    "replay angle {} scene {} is not defined in the mixer",
-                    angle.id, angle.scene_id
-                )));
+            match angle.source {
+                AngleSourceKind::Scene => {
+                    let gpu = eiviz_control::ids::scene_gpu_id(angle.scene_id);
+                    if !scene_ids.contains(&gpu) && !scene_ids.contains(&angle.scene_id) {
+                        return Err(ReplayFailure::io(format!(
+                            "replay angle {} scene {} is not defined in the mixer",
+                            angle.id, angle.scene_id
+                        )));
+                    }
+                }
+                AngleSourceKind::Input => {
+                    // The session already refused an angle whose input does not
+                    // exist. A source the renderer has no texture for is counted as
+                    // a replaced frame rather than invented here.
+                    if angle.input_id == 0 {
+                        return Err(ReplayFailure::invalid(format!(
+                            "replay angle {} records an input but names none",
+                            angle.id
+                        )));
+                    }
+                }
             }
+        }
+        if angles
+            .iter()
+            .any(|angle| angle.record_mode == AngleRecordMode::Passthrough)
+        {
+            // Passthrough stores the frames an OMT input already sends. That path
+            // arrives with the compressed-frame capture, so until it exists the
+            // recorder says so instead of writing nothing for the angle.
+            return Err(ReplayFailure::invalid(
+                "passthrough recording is not available yet; use composite for this angle",
+            ));
         }
         // Free space has to be known before a recording starts: an unreadable
         // drive is not a full drive, and treating it as zero hid the real reason.
@@ -725,8 +761,16 @@ impl ReplayEngine {
             .config
             .angles
             .iter()
+            // A passthrough angle arrives already encoded; it never goes through the
+            // readback path.
+            .filter(|angle| angle.record_mode != AngleRecordMode::Passthrough)
             .map(|angle| RecordTarget {
-                scene_gpu_id: eiviz_control::ids::scene_gpu_id(angle.scene_id),
+                source: match angle.source {
+                    AngleSourceKind::Input => RecordSource::Input(angle.input_id),
+                    AngleSourceKind::Scene => RecordSource::Scene(eiviz_control::ids::scene_gpu_id(
+                        angle.scene_id,
+                    )),
+                },
                 readback_key: REPLAY_RECORD_BASE | u64::from(angle.id),
                 width: inner.width,
                 height: inner.height,
@@ -735,10 +779,14 @@ impl ReplayEngine {
             .collect()
     }
 
+    /// Scenes the recorder reads. Only scene angles need them drawn.
     pub fn replay_scene_ids(&self) -> Vec<u64> {
         self.record_targets()
             .into_iter()
-            .map(|target| target.scene_gpu_id)
+            .filter_map(|target| match target.source {
+                RecordSource::Scene(gpu_id) => Some(gpu_id),
+                RecordSource::Input(_) => None,
+            })
             .collect()
     }
 
@@ -751,7 +799,30 @@ impl ReplayEngine {
             .config
             .angles
             .iter()
-            .map(|angle| eiviz_control::ids::scene_gpu_id(angle.scene_id))
+            .filter_map(|angle| match angle.source {
+                AngleSourceKind::Scene => {
+                    Some(eiviz_control::ids::scene_gpu_id(angle.scene_id))
+                }
+                AngleSourceKind::Input => None,
+            })
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    }
+
+    /// Inputs the recorder reads directly. Their receivers stay at full quality
+    /// while recording, exactly as an angle scene does.
+    pub fn live_angle_input_ids(&self) -> Vec<u64> {
+        let inner = self.lock();
+        let mut ids: Vec<u64> = inner
+            .config
+            .angles
+            .iter()
+            .filter_map(|angle| match angle.source {
+                AngleSourceKind::Input => Some(angle.input_id),
+                AngleSourceKind::Scene => None,
+            })
             .collect();
         ids.sort_unstable();
         ids.dedup();

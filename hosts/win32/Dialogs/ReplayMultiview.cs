@@ -51,7 +51,7 @@ internal static class ReplayMultiview
                 labels.Add(pin);
                 layers[index] = new OverlayDesc
                 {
-                    SourceId = angles[index].SceneGpuId,
+                    SourceId = angles[index].LiveSourceId,
                     Rect = new Interop.Rect
                     {
                         X = column / (float)Columns,
