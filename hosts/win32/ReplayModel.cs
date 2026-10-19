@@ -163,7 +163,7 @@ internal sealed record ReplayClipInfo(
 /// Transition out of a clip. `Overwrap` overlaps the two clips, `Additive`
 /// inserts the duration between them.
 /// </summary>
-internal sealed record ReplayTransitionInfo(string Kind, string Timing, uint DurationFrames)
+internal sealed record ReplayTransitionInfo(string Kind, string Timing, uint DurationFrames, string Direction = "Left")
 {
     public static readonly ReplayTransitionInfo Cut = new("Cut", "Overwrap", 0);
 
@@ -184,7 +184,8 @@ internal sealed record ReplayTransitionInfo(string Kind, string Timing, uint Dur
         return new ReplayTransitionInfo(
             entry["kind"]?.GetValue<string>() ?? "Cut",
             entry["timing"]?.GetValue<string>() ?? "Overwrap",
-            entry["durationFrames"]?.GetValue<uint>() ?? 0);
+            entry["durationFrames"]?.GetValue<uint>() ?? 0,
+            entry["direction"]?.GetValue<string>() ?? "Left");
     }
 }
 

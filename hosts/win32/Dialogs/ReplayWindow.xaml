@@ -304,29 +304,25 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}" Width="110">
+                            <!-- One column for the transition: kind, direction and length
+                                 belong together, and a clip row is already wide. -->
+                            <GridViewColumn Header="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}" Width="330">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <ComboBox Height="24" Margin="1" DisplayMemberPath="Label"
-                                                  ItemsSource="{Binding TransitionOptions}" SelectedItem="{Binding TransitionOption}"
-                                                  ToolTip="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}"/>
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.timing], Source={x:Static i18n:Loc.Source}}" Width="140">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <ComboBox Height="24" Margin="1" DisplayMemberPath="Label"
-                                                  ItemsSource="{Binding TimingOptions}" SelectedItem="{Binding TimingOption}"
-                                                  ToolTip="{Binding [replay.timingHelp], Source={x:Static i18n:Loc.Source}}"/>
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.transitionFrames], Source={x:Static i18n:Loc.Source}}" Width="70">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBox Height="24" Margin="1" VerticalContentAlignment="Center"
-                                                 Text="{Binding TransitionFrames, UpdateSourceTrigger=LostFocus}"/>
+                                        <StackPanel Orientation="Horizontal">
+                                            <ComboBox Width="120" Height="24" Margin="1" DisplayMemberPath="Label"
+                                                      ItemsSource="{Binding TransitionOptions}" SelectedItem="{Binding TransitionOption}"
+                                                      ToolTip="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}"/>
+                                            <ComboBox Width="104" Height="24" Margin="4,1,1,1" DisplayMemberPath="Label"
+                                                      ItemsSource="{Binding DirectionOptions}" SelectedItem="{Binding DirectionOption}"
+                                                      ToolTip="{Binding [replay.directionHelp], Source={x:Static i18n:Loc.Source}}"/>
+                                            <ComboBox Width="96" Height="24" Margin="4,1,1,1" DisplayMemberPath="Label"
+                                                      ItemsSource="{Binding TimingOptions}" SelectedItem="{Binding TimingOption}"
+                                                      ToolTip="{Binding [replay.timingHelp], Source={x:Static i18n:Loc.Source}}"/>
+                                            <TextBox Width="52" Height="24" Margin="4,1,1,1" VerticalContentAlignment="Center"
+                                                     Text="{Binding TransitionFrames, UpdateSourceTrigger=LostFocus}"
+                                                     ToolTip="{Binding [replay.transitionFrames], Source={x:Static i18n:Loc.Source}}"/>
+                                        </StackPanel>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>

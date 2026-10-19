@@ -936,13 +936,28 @@ public partial class ReplayWindow : Window
             ];
             row.SpeedOption = row.SpeedOptions.FirstOrDefault(option => option.Value == (uint)Math.Round(clip.Speed * 1000))
                 ?? row.SpeedOptions[3];
+            // The mixing unit's names, limited to the ones the replay path can draw: it
+            // composes two decoded frames, where the rest are GPU warps.
             row.TransitionOptions =
             [
                 new("Cut", Loc.T("replay.transitionCut")),
                 new("Dissolve", Loc.T("replay.transitionDissolve")),
+                new("Dip", Loc.T("replay.transitionDip")),
+                new("Wipe", Loc.T("replay.transitionWipe")),
+                new("Slide", Loc.T("replay.transitionSlide")),
+                new("Push", Loc.T("replay.transitionPush")),
             ];
             row.TransitionOption = row.TransitionOptions.FirstOrDefault(option => option.Value == clip.Transition.Kind)
                 ?? row.TransitionOptions[0];
+            row.DirectionOptions =
+            [
+                new("Left", Loc.T("replay.directionLeft")),
+                new("Right", Loc.T("replay.directionRight")),
+                new("Up", Loc.T("replay.directionUp")),
+                new("Down", Loc.T("replay.directionDown")),
+            ];
+            row.DirectionOption = row.DirectionOptions.FirstOrDefault(option => option.Value == clip.Transition.Direction)
+                ?? row.DirectionOptions[0];
             row.TimingOptions =
             [
                 new("Overwrap", Loc.T("replay.timingOverwrap")),
@@ -1893,6 +1908,7 @@ public partial class ReplayWindow : Window
         private Option<uint>? _angle;
         private Option<uint>? _speed;
         private Option<string>? _transition;
+        private Option<string>? _direction;
         private Option<string>? _timing;
         private ClipAudioChoice? _audio;
         private string _transitionFrames = "0";
@@ -1919,6 +1935,9 @@ public partial class ReplayWindow : Window
 
         public IReadOnlyList<Option<string>> TimingOptions { get; set; } = [];
 
+        /// <summary>Which way a Wipe, Slide or Push travels.</summary>
+        public IReadOnlyList<Option<string>> DirectionOptions { get; set; } = [];
+
         public IReadOnlyList<ClipAudioChoice> AudioOptions { get; set; } = [];
 
         public string TagsText { get; set; } = "";
@@ -1939,6 +1958,12 @@ public partial class ReplayWindow : Window
         {
             get => _transition;
             set => Set(ref _transition, value);
+        }
+
+        public Option<string>? DirectionOption
+        {
+            get => _direction;
+            set => Set(ref _direction, value);
         }
 
         public Option<string>? TimingOption
