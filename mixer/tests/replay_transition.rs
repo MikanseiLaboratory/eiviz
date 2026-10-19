@@ -286,16 +286,18 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
                     if position <= out_a {
                         inside += 1;
                     }
-                    // The blend is looked for from the window onwards, not only inside
-                    // it: Overwrap dissolves over the tail of A, while Additive inserts
-                    // the transition after A's last frame, so the blended picture
-                    // appears on either side of `out_a` depending on the timing.
-                    if is_dissolve_mix(pixel) {
-                        mixed += 1;
-                    } else if is_green(pixel) {
+                    if is_green(pixel) {
                         // B is on screen: the playlist ran to its end.
                         break;
                     }
+                }
+                // The blend is looked for in every sample of the run rather than tied to
+                // the reported position: the composed picture is read back through the
+                // GPU, and on a software adapter that lags the transport by more than a
+                // transition lasts, so the two do not line up. Before the transition the
+                // picture is one solid colour, so a blend can only come from it.
+                if is_dissolve_mix(pixel) {
+                    mixed += 1;
                 }
             }
             if mixed > 0 {
