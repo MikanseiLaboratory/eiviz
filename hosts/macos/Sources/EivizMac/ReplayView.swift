@@ -399,17 +399,35 @@ struct ReplayView: View {
                 }
                 .width(84)
                 TableColumn(L10n.t("replay.transition")) { clip in
-                    // One column for the transition: kind, timing and length belong
-                    // together, and a table column builder takes at most ten columns.
+                    // One column for the transition: kind, direction, timing and length
+                    // belong together, and a table column builder takes at most ten.
                     HStack(spacing: 4) {
                         Picker("", selection: Binding(
                             get: { clip.transition.kind },
                             set: { setClipTransition(clip.uid, kind: $0, timing: nil, frames: nil) }
                         )) {
+                            // The mixing unit's names, limited to the ones the replay path
+                            // can draw: it composes two decoded frames, where the rest are
+                            // GPU warps.
                             Text(L10n.t("replay.transitionCut")).tag("Cut")
                             Text(L10n.t("replay.transitionDissolve")).tag("Dissolve")
+                            Text(L10n.t("replay.transitionDip")).tag("Dip")
+                            Text(L10n.t("replay.transitionWipe")).tag("Wipe")
+                            Text(L10n.t("replay.transitionSlide")).tag("Slide")
+                            Text(L10n.t("replay.transitionPush")).tag("Push")
                         }
                         .labelsHidden()
+                        Picker("", selection: Binding(
+                            get: { clip.transition.direction },
+                            set: { setClipTransition(clip.uid, direction: $0) }
+                        )) {
+                            Text(L10n.t("replay.directionLeft")).tag("Left")
+                            Text(L10n.t("replay.directionRight")).tag("Right")
+                            Text(L10n.t("replay.directionUp")).tag("Up")
+                            Text(L10n.t("replay.directionDown")).tag("Down")
+                        }
+                        .labelsHidden()
+                        .help(L10n.t("replay.directionHelp"))
                         Picker("", selection: Binding(
                             get: { clip.transition.timing },
                             set: { setClipTransition(clip.uid, kind: nil, timing: $0, frames: nil) }
@@ -426,7 +444,7 @@ struct ReplayView: View {
                         .frame(width: 48)
                     }
                 }
-                .width(300)
+                .width(380)
                 TableColumn(L10n.t("replay.gain")) { clip in
                     TextField("", value: Binding(
                         get: { clip.gainDb },
@@ -1059,7 +1077,13 @@ struct ReplayView: View {
     /// Writes one part of a clip's transition, keeping the parts the caller left out.
     /// A cut has no length, so choosing it clears the frames instead of leaving a stale
     /// duration behind.
-    private func setClipTransition(_ uid: String, kind: String?, timing: String?, frames: UInt32?) {
+    private func setClipTransition(
+        _ uid: String,
+        kind: String? = nil,
+        direction: String? = nil,
+        timing: String? = nil,
+        frames: UInt32? = nil
+    ) {
         guard var current = document,
               let clip = clips.first(where: { $0.uid == uid })
         else { return }
@@ -1073,7 +1097,12 @@ struct ReplayView: View {
         current.setClipTransition(
             playlistId: playlistId,
             uid: uid,
-            transition: ReplayTransitionInfo(kind: nextKind, timing: nextTiming, durationFrames: nextFrames)
+            transition: ReplayTransitionInfo(
+                kind: nextKind,
+                direction: direction ?? clip.transition.direction,
+                timing: nextTiming,
+                durationFrames: nextFrames
+            )
         )
         save(current)
     }

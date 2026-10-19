@@ -106,6 +106,15 @@ public partial class ReplayWindow : Window
         _liveMonitorId = _session.NextMonitorId++;
         OutputMonitor.Loaded += (_, _) => RetargetMonitors();
         LiveMonitor.Loaded += (_, _) => RetargetMonitors();
+        // The same rule the main window applies to its preview surfaces: a monitor is
+        // presented every N master frames, N coming from the session. Presenting every
+        // frame costs GPU time for a picture an eye cannot tell apart, and the deck is
+        // one of several consumers of the same texture.
+        var interval = _session.Settings.ResolvedPresentInterval();
+        OutputMonitor.PresentInterval = interval;
+        LiveMonitor.PresentInterval = interval;
+        OutputMonitor.ApplyPresentInterval();
+        LiveMonitor.ApplyPresentInterval();
         BuildChannels();
         BuildAngles();
         // The speed the deck starts on is lit, the way a controller's transport shows it.

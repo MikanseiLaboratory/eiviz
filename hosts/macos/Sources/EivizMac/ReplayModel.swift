@@ -163,6 +163,8 @@ struct ReplayEventInfo: Identifiable, Hashable {
 /// inserts the duration between them.
 struct ReplayTransitionInfo: Hashable {
     var kind: String
+    /// Which way a `Wipe`, `Slide` or `Push` travels. Ignored by the others.
+    var direction: String = "Left"
     var timing: String
     var durationFrames: UInt32
 
@@ -175,6 +177,7 @@ struct ReplayTransitionInfo: Hashable {
     var value: JSONValue {
         .object([
             "kind": .string(kind),
+            "direction": .string(direction),
             "timing": .string(timing),
             "durationFrames": .number(Double(durationFrames)),
         ])
@@ -189,6 +192,7 @@ struct ReplayTransitionInfo: Hashable {
         guard let object = node?.objectValue else { return .cut }
         return ReplayTransitionInfo(
             kind: object["kind"]?.stringValue ?? "Cut",
+            direction: object["direction"]?.stringValue ?? "Left",
             timing: object["timing"]?.stringValue ?? "Overwrap",
             durationFrames: object["durationFrames"]?.uint32Value ?? 0
         )
