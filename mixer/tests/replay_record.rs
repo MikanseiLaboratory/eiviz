@@ -100,16 +100,18 @@ fn recording_keeps_the_frames_the_renderer_produced() {
     );
     // Every frame handed to the readback is either recorded or counted as a readback
     // loss: a frame that disappears without a reason would be a silent hole in the
-    // recording. The readback keeps a small ring of copies in flight, so a few frames
-    // may still be on their way when the stats are read. How many frames a second the
-    // adapter manages is not this test's business (a software one is slow, and drops
-    // there are counted, not hidden).
+    // recording. The readback ring holds eight copies and the one being handed over
+    // right now is the ninth, so a frame still in flight is expected; what must not
+    // happen is a frame with no reason at all. How many frames a second the adapter
+    // manages is not this test's business (a software one is slow, and its drops are
+    // counted, not hidden).
+    const IN_FLIGHT: u64 = 9;
     assert!(
         offered + lost <= pushed,
         "offered {offered} + readback lost {lost} must not exceed pushed {pushed}"
     );
     assert!(
-        offered + lost + 8 >= pushed,
+        offered + lost + IN_FLIGHT >= pushed,
         "every handed-over frame is recorded or counted: offered {offered}, lost {lost}, \
          pushed {pushed}"
     );
