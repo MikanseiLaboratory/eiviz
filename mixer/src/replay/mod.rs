@@ -1141,6 +1141,18 @@ impl ReplayEngine {
         Ok(())
     }
 
+    /// Turns looping on or off for a channel's playlist.
+    pub fn set_looping(&self, channel: u32, looping: bool) -> Result<(), i32> {
+        let mut inner = self.lock();
+        let slot = inner
+            .channels
+            .iter_mut()
+            .find(|slot| slot.index == channel)
+            .ok_or(ERR_INVALID_ARGUMENT)?;
+        slot.transport.set_looping(looping);
+        Ok(())
+    }
+
     pub fn jump_to_now(&self, channel: u32) -> Result<(), i32> {
         let mut inner = self.lock();
         let frame = inner.last_frame.saturating_sub(3);

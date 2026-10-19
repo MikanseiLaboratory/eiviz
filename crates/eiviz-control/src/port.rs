@@ -201,6 +201,12 @@ pub trait MixerPort: Send {
         Ok(())
     }
 
+    /// Turns looping on or off for a channel's playlist. A transport that reaches the
+    /// end of the list either parks there or goes round again.
+    fn replay_set_looping(&mut self, _channel: u32, _looping: bool) -> ControlResult<()> {
+        Ok(())
+    }
+
     fn replay_state_json(&self) -> String {
         "{}".into()
     }

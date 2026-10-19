@@ -4929,6 +4929,20 @@ pub unsafe extern "C" fn mixer_replay_mark_out(
 }
 
 #[unsafe(no_mangle)]
+/// Turns looping on or off for a replay channel's playlist.
+///
+/// # Safety
+/// A plain C call: no pointers cross the boundary.
+pub unsafe extern "C" fn mixer_replay_loop(channel: u32, on: u32) -> i32 {
+    ffi_guard("mixer_replay_loop", ERR_INVALID_ARGUMENT, || {
+        match crate::replay::engine().set_looping(channel, on != 0) {
+            Ok(()) => OK,
+            Err(code) => code,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_replay_record(on: u32) -> i32 {
     ffi_guard("mixer_replay_record", ERR_IO, || {
         match crate::replay::engine().record(on != 0) {

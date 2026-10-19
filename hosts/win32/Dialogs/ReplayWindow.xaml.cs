@@ -24,6 +24,8 @@ public partial class ReplayWindow : Window
     private const uint MarkUnknown = uint.MaxValue;
 
     private readonly Session _session;
+    /// <summary>The window that opened the deck, for the messages it sends back.</summary>
+    private readonly MainWindow? _main;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(200) };
     private readonly List<SwapchainHost> _angleHosts = [];
     /// <summary>
@@ -44,6 +46,8 @@ public partial class ReplayWindow : Window
     private ulong? _inFrame;
     /// <summary>True while the channel follows the recording edge instead of a clip.</summary>
     private bool _live;
+    /// <summary>True while the playlist goes round again at its end.</summary>
+    private bool _looping;
     private ulong _outFrame;
     /// <summary>
     /// True between Mark In and Mark Out. The mark itself stays on screen after it
@@ -79,10 +83,11 @@ public partial class ReplayWindow : Window
 
     private static IEivizBackend? Backend => (Application.Current as App)?.Backend;
 
-    public ReplayWindow(Session session)
+    public ReplayWindow(Session session, MainWindow? main = null)
     {
         InitializeComponent();
         _session = session;
+        _main = main;
         Loaded += OnLoaded;
         Closed += OnClosed;
         _timer.Tick += (_, _) => Tick();
@@ -1166,7 +1171,7 @@ public partial class ReplayWindow : Window
         _lastJson = json;
         if (App.IsRemote)
         {
-            if (Owner is MainWindow main)
+            if (_main is { } main)
                 main.RemoteMutate("{\"kind\":\"upsertReplaySettings\",\"replay\":" + json + "}", Title);
             return;
         }
@@ -1196,7 +1201,7 @@ public partial class ReplayWindow : Window
     /// </summary>
     private void ReplaySetup_Click(object sender, RoutedEventArgs e)
     {
-        if (Owner is MainWindow main)
+        if (_main is { } main)
             main.OpenReplaySettings();
         else
             Warn(Loc.T("replay.openSetupUnavailable"));
@@ -1758,6 +1763,22 @@ public partial class ReplayWindow : Window
         _playing = true;
         UpdatePlayButton();
         RefreshStatus();
+    }
+
+    /// <summary>
+    /// Loops the playlist. The transport goes round again at the end instead of parking
+    /// on the last frame; the button stays lit while it does.
+    /// </summary>
+    private void PlaylistLoop_Click(object sender, RoutedEventArgs e)
+    {
+        _looping = !_looping;
+        if (Backend?.ReplayLoop(_channel, _looping) != true)
+        {
+            _looping = false;
+            Warn(Refusal(Loc.T("replay.commandRefused")));
+            return;
+        }
+        SetLit(PlaylistLoopButton, _looping, Color.FromRgb(0x7F, 0xD1, 0x4B));
     }
 
     /// <summary>Stops the playlist where it is; the picture stays, so it can resume.</summary>

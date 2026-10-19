@@ -57,6 +57,8 @@ internal interface IEivizBackend
     bool ReplayCue(uint channel, string clipUid);
     bool ReplayTransport(uint channel, bool playing, int speedMilli, long seekFrame);
     bool ReplayJumpToNow(uint channel);
+    /// <summary>Turns looping on or off for a channel's playlist.</summary>
+    bool ReplayLoop(uint channel, bool on);
     /// <summary>Recorded frame range of one angle, or null when it has none.</summary>
     (ulong First, ulong Last)? ReplayAngleRange(uint angleId);
     /// <summary>MP4 export of recorded segments. Returns the progress JSON.</summary>
@@ -488,6 +490,7 @@ internal sealed class LocalEivizBackend : IEivizBackend
         MixerNative.ReplayTransport(channel, playing ? 1u : 0u, speedMilli, seekFrame) == 0;
 
     public bool ReplayJumpToNow(uint channel) => MixerNative.ReplayJumpToNow(channel) == 0;
+    public bool ReplayLoop(uint channel, bool on) => MixerNative.ReplayLoop(channel, on ? 1u : 0u) == 0;
     public (ulong First, ulong Last)? ReplayAngleRange(uint angleId)
     {
         ulong first = 0;
@@ -802,6 +805,12 @@ internal sealed class RemoteEivizBackend : IEivizBackend
         MixerRemote.ReplayTransport(_handle, channel, playing ? 1u : 0u, speedMilli, seekFrame) == 0;
 
     public bool ReplayJumpToNow(uint channel) => MixerRemote.ReplayJumpToNow(_handle, channel) == 0;
+    /// <summary>A Remote drives the recording machine, which owns the playlist too.</summary>
+    public bool ReplayLoop(uint channel, bool on)
+    {
+        _ = (channel, on);
+        return false;
+    }
     public (ulong First, ulong Last)? ReplayAngleRange(uint angleId) => null;
 
     public bool ReplayExportStart(string json, out string error)
@@ -1445,6 +1454,7 @@ internal sealed class DisconnectedRemoteBackend : IEivizBackend
     public bool ReplayCue(uint channel, string clipUid) { _ = (channel, clipUid); return false; }
     public bool ReplayTransport(uint channel, bool playing, int speedMilli, long seekFrame) { _ = (channel, playing, speedMilli, seekFrame); return false; }
     public bool ReplayJumpToNow(uint channel) { _ = channel; return false; }
+    public bool ReplayLoop(uint channel, bool on) { _ = (channel, on); return false; }
     public (ulong First, ulong Last)? ReplayAngleRange(uint angleId) => null;
 
     public bool ReplayExportStart(string json, out string error)

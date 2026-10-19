@@ -181,6 +181,8 @@ pub struct Transport {
     pub substituted: u64,
     pub decode_us_sum: u64,
     pub decode_samples: u64,
+    /// Restart the playlist at its head when the last clip ends.
+    pub looping: bool,
     shown: Option<FramePlan>,
 }
 
@@ -201,6 +203,7 @@ impl Transport {
             substituted: 0,
             decode_us_sum: 0,
             decode_samples: 0,
+            looping: false,
             shown: None,
         }
     }
@@ -274,6 +277,10 @@ impl Transport {
 
     pub fn set_playing(&mut self, playing: bool) {
         self.playing = playing;
+    }
+
+    pub fn set_looping(&mut self, looping: bool) {
+        self.looping = looping;
     }
 
     pub fn is_playing(&self) -> bool {
@@ -422,6 +429,18 @@ impl Transport {
                     self.shown = None;
                 }
                 None => {
+                    // The end of the list. A looping channel goes round again instead of
+                    // parking on the last frame.
+                    if self.looping {
+                        if let Some(first) = self.list.first().cloned() {
+                            self.index = 0;
+                            self.current = Some(first);
+                            self.position = (self.position - span).max(0.0);
+                            self.shown = None;
+                            guard += 1;
+                            continue;
+                        }
+                    }
                     self.position = span;
                     self.playing = false;
                     break;

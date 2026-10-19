@@ -421,6 +421,10 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_channel_jump_to_now")]
     internal static partial int ReplayJumpToNow(uint channel);
 
+    /// <summary>Turns looping on or off for a channel's playlist.</summary>
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_loop")]
+    internal static partial int ReplayLoop(uint channel, uint on);
+
     /// <summary>
     /// Asks the mixer how much space a drive has and how long the current settings
     /// would record there. Replay Setup shows it per drive, because an operator

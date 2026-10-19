@@ -566,6 +566,12 @@ impl MixerPort for ProcessMixer {
             .map_err(crate::replay::control_error)
     }
 
+    fn replay_set_looping(&mut self, channel: u32, looping: bool) -> ControlResult<()> {
+        crate::replay::engine()
+            .set_looping(channel, looping)
+            .map_err(crate::replay::control_error)
+    }
+
     fn replay_jump_to_now(&mut self, channel: u32) -> ControlResult<()> {
         crate::replay::engine()
             .jump_to_now(channel)

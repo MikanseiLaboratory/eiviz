@@ -1285,9 +1285,13 @@ public sealed class SessionSettings
     /// window, so an operator who wants the deck smooth and the switcher thrifty (or the
     /// other way round) sets them apart here.
     /// </summary>
+    /// <summary>
+    /// How often the replay deck's monitors are presented. Zero means every frame: the
+    /// deck is what an operator watches while marking, and a picture that updates at a
+    /// third of the rate reads as a broken preview rather than as a cheap one.
+    /// </summary>
     public uint ResolvedReplayPresentInterval() =>
-        MultiviewLayout.ClampPresentInterval(
-            ReplayPresentInterval == 0 ? ResolvedPresentInterval() : ReplayPresentInterval);
+        MultiviewLayout.ClampPresentInterval(ReplayPresentInterval == 0 ? 1 : ReplayPresentInterval);
 }
 
 public sealed class RgbColor

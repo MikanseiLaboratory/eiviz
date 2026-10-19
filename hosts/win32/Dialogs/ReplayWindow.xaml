@@ -6,7 +6,8 @@
         xmlns:preview="clr-namespace:Eiviz.Host.Preview"
         Title="{Binding [replay.windowTitle], Source={x:Static i18n:Loc.Source}}"
         Width="1500" Height="1020" MinWidth="1180" MinHeight="820"
-        WindowStartupLocation="CenterOwner"
+        WindowStartupLocation="CenterScreen"
+        ShowInTaskbar="True"
         PreviewKeyDown="Window_PreviewKeyDown"
         Background="{DynamicResource WindowBackground}">
     <Window.Resources>
@@ -242,6 +243,9 @@
                         <Button x:Name="PlaylistStopButton" Width="40" Height="28" Margin="6,0,0,0"
                                 Click="PlaylistStop_Click" FontFamily="Segoe MDL2 Assets" Content="&#xE71A;"
                                 ToolTip="{Binding [replay.playlistStopHint], Source={x:Static i18n:Loc.Source}}"/>
+                        <Button x:Name="PlaylistLoopButton" Width="48" Height="28" Margin="6,0,0,0"
+                                Click="PlaylistLoop_Click" FontFamily="Segoe MDL2 Assets" Content="&#xE8EE;"
+                                ToolTip="{Binding [replay.playlistLoopHint], Source={x:Static i18n:Loc.Source}}"/>
                     </StackPanel>
                 </DockPanel>
                 <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,6">

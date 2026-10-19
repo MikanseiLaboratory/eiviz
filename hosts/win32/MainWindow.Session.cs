@@ -40,7 +40,9 @@ public partial class MainWindow
             _replayWindow.Activate();
             return;
         }
-        _replayWindow = new ReplayWindow(_session) { Owner = this };
+        // Not owned by the main window: an owned window always rides above its owner,
+        // and an operator moving the switcher over the deck is a normal thing to do.
+        _replayWindow = new ReplayWindow(_session, this);
         _replayWindow.Closed += (_, _) => _replayWindow = null;
         _replayWindow.Show();
     }
