@@ -399,36 +399,34 @@ struct ReplayView: View {
                 }
                 .width(84)
                 TableColumn(L10n.t("replay.transition")) { clip in
-                    Picker("", selection: Binding(
-                        get: { clip.transition.kind },
-                        set: { setClipTransition(clip.uid, kind: $0, timing: nil, frames: nil) }
-                    )) {
-                        Text(L10n.t("replay.transitionCut")).tag("Cut")
-                        Text(L10n.t("replay.transitionDissolve")).tag("Dissolve")
+                    // One column for the transition: kind, timing and length belong
+                    // together, and a table column builder takes at most ten columns.
+                    HStack(spacing: 4) {
+                        Picker("", selection: Binding(
+                            get: { clip.transition.kind },
+                            set: { setClipTransition(clip.uid, kind: $0, timing: nil, frames: nil) }
+                        )) {
+                            Text(L10n.t("replay.transitionCut")).tag("Cut")
+                            Text(L10n.t("replay.transitionDissolve")).tag("Dissolve")
+                        }
+                        .labelsHidden()
+                        Picker("", selection: Binding(
+                            get: { clip.transition.timing },
+                            set: { setClipTransition(clip.uid, kind: nil, timing: $0, frames: nil) }
+                        )) {
+                            Text(L10n.t("replay.timingOverwrap")).tag("Overwrap")
+                            Text(L10n.t("replay.timingAdditive")).tag("Additive")
+                        }
+                        .labelsHidden()
+                        .help(L10n.t("replay.timingHelp"))
+                        TextField("", value: Binding(
+                            get: { clip.transition.durationFrames },
+                            set: { setClipTransition(clip.uid, kind: nil, timing: nil, frames: $0) }
+                        ), format: .number)
+                        .frame(width: 48)
                     }
-                    .labelsHidden()
                 }
-                .width(104)
-                TableColumn(L10n.t("replay.timing")) { clip in
-                    Picker("", selection: Binding(
-                        get: { clip.transition.timing },
-                        set: { setClipTransition(clip.uid, kind: nil, timing: $0, frames: nil) }
-                    )) {
-                        Text(L10n.t("replay.timingOverwrap")).tag("Overwrap")
-                        Text(L10n.t("replay.timingAdditive")).tag("Additive")
-                    }
-                    .labelsHidden()
-                    .help(L10n.t("replay.timingHelp"))
-                }
-                .width(130)
-                TableColumn(L10n.t("replay.transitionFrames")) { clip in
-                    TextField("", value: Binding(
-                        get: { clip.transition.durationFrames },
-                        set: { setClipTransition(clip.uid, kind: nil, timing: nil, frames: $0) }
-                    ), format: .number)
-                    .frame(width: 52)
-                }
-                .width(64)
+                .width(300)
                 TableColumn(L10n.t("replay.gain")) { clip in
                     TextField("", value: Binding(
                         get: { clip.gainDb },
