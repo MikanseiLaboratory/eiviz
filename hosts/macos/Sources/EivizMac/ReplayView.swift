@@ -1150,6 +1150,8 @@ struct ReplaySettingsView: View {
     @State private var storages: [ReplayDocument.StorageSpec] = []
     @State private var driveSelection = 0
     @State private var profile = "Sq"
+    /// Segment length in frames, as text so the operator can type it.
+    @State private var segmentFrames = "120"
     @State private var retention = "StopWhenFull"
     @State private var queue = "6"
     @State private var buffer = "512"
@@ -1215,6 +1217,20 @@ struct ReplaySettingsView: View {
                         Picker(L10n.t("replay.overflow"), selection: $overflow) {
                             Text(L10n.t("replay.overflowDrop")).tag("DropFrames")
                             Text(L10n.t("replay.overflowStop")).tag("StopRecording")
+                        }
+                    }
+                    HStack(alignment: .top) {
+                        // One format for every angle, taken from the first Mixing Unit.
+                        // It is shown rather than edited here.
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L10n.t("replay.formatFromUnit")).font(.caption)
+                            Text(formatText).font(.system(.body, design: .monospaced))
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L10n.t("replay.segmentFrames")).font(.caption)
+                            TextField("120", text: $segmentFrames)
+                                .frame(width: 90)
+                                .help(L10n.t("replay.segmentFramesRange"))
                         }
                     }
                     Text(L10n.t("replay.retentionHelp")).font(.caption)
@@ -1290,12 +1306,20 @@ struct ReplaySettingsView: View {
         .onAppear { load() }
     }
 
-    private var planText: String {
-        guard let limits = mixer.replayLimits() else { return "" }
+    private var planText: String {        guard let limits = mixer.replayLimits() else { return "" }
         if limits.angles == 0 || limits.channels == 0 {
             return L10n.t("replay.planDenied")
         }
         return L10n.format("replay.planLimits", "\(limits.angles)", "\(limits.channels)")
+    }
+
+    /// The format Replay records in: the first Mixing Unit's picture and rate. It is
+    /// shown rather than edited, because every angle shares one format.
+    private var formatText: String {
+        guard let unit = mixer.session.units.first else {
+            return L10n.t("replay.needMixingUnit")
+        }
+        return "\(unit.width) x \(unit.height)   \(unit.fpsNum)/\(unit.fpsDen)"
     }
 
     private func sceneName(_ sceneId: UInt64) -> String {
@@ -1311,6 +1335,7 @@ struct ReplaySettingsView: View {
         document = current
         storages = current.storages
         profile = current.profile
+        segmentFrames = "\(current.segmentFrames)"
         retention = current.retention
         let buffering = current.buffering
         queue = "\(buffering.queue)"
@@ -1484,6 +1509,18 @@ struct ReplaySettingsView: View {
             status = L10n.t("replay.badBuffering")
             return
         }
+        // The segment length is the operator's setting: the recorder no longer
+        // substitutes one when it is missing or out of range.
+        guard let segmentValue = UInt32(segmentFrames), (30...1800).contains(segmentValue) else {
+            status = L10n.t("replay.segmentFramesRange")
+            return
+        }
+        guard let unit = mixer.session.units.first else {
+            // Every angle records one format, and the format comes from the Mixing
+            // Unit. Without one there is nothing to record in.
+            status = L10n.t("replay.needMixingUnit")
+            return
+        }
         let usable = storages.filter { !$0.path.trimmingCharacters(in: .whitespaces).isEmpty }
         if !usable.isEmpty && angles.isEmpty {
             status = L10n.t("replay.needStorable")
@@ -1502,7 +1539,15 @@ struct ReplaySettingsView: View {
         }
         current.setStorages(storages)
         var format = current.raw["format"]?.objectValue ?? [:]
+        // The whole format travels: a document that keeps a zero resolution or a zero
+        // segment length can never record, and the mixer would only be able to say so
+        // much later.
+        format["width"] = .number(Double(unit.width))
+        format["height"] = .number(Double(unit.height))
+        format["fpsNum"] = .number(Double(unit.fpsNum))
+        format["fpsDen"] = .number(Double(unit.fpsDen))
         format["profile"] = .string(profile)
+        format["segmentFrames"] = .number(Double(segmentValue))
         current.raw["format"] = .object(format)
         current.raw["buffering"] = .object([
             "encodeQueueFrames": .number(Double(queueValue)),

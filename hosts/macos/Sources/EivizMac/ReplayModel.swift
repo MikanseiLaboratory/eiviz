@@ -383,6 +383,12 @@ struct ReplayDocument {
 
     var activeAngleId: UInt32 { raw["activeAngleId"]?.uint32Value ?? 0 }
 
+    /// Segment length the recorder writes, in frames.
+    var segmentFrames: UInt32 {
+        let value = raw["format"]?.objectValue?["segmentFrames"]?.uint32Value ?? 0
+        return value == 0 ? EIVIZ_REPLAY_DEFAULT_SEGMENT_FRAMES : value
+    }
+
     /// Angle the operator is on: the one they picked, or the first angle when the
     /// document has never had one chosen. The mixer treats the first angle as the
     /// default (live follows it, `jump_to_now` records it), so the deck reads the
