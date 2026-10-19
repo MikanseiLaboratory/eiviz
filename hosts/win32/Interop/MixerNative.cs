@@ -1245,6 +1245,10 @@ internal struct MixerReplayStats
     public uint MarkInValid;
     public ulong FramesOffered;
     public ulong FramesPushed;
+    /// <summary>Frames stored as the sender encoded them (passthrough angles).</summary>
+    public ulong EncodedFrames;
+    /// <summary>Encoded frames the store refused.</summary>
+    public ulong EncodedDropped;
 }
 
 [StructLayout(LayoutKind.Sequential)]

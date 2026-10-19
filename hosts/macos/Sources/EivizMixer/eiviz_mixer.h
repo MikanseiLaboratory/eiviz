@@ -154,6 +154,10 @@ typedef struct EivizReplayStats {
     uint64_t frames_offered;
     /* Frames handed to the readback. */
     uint64_t frames_pushed;
+    /* Frames stored as the sender encoded them (passthrough angles). */
+    uint64_t encoded_frames;
+    /* Encoded frames the store refused. */
+    uint64_t encoded_dropped;
 } EivizReplayStats;
 
 typedef struct EivizReplayAngleStats {
