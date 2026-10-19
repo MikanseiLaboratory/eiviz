@@ -27,7 +27,7 @@ Replay Setup is a dedicated window, opened from the main window. It holds everyt
 - **Overflow**: drop frames, or stop recording, when encoding falls behind.
 - **When the disk is full**: stop recording and report, overwrite the oldest segments, or overwrite everything except the clips and protected events still in use.
 - **New clips**: the transition clips get when they are added later.
-- **Angles**: each angle records either a scene's composited output or an input's own picture, and can take its audio from a mixing unit's program mix or record silence. An input angle needs no scene, which is what makes recording one camera cheap. The recording format (resolution and frame rate) comes from the first mixing unit, and every angle shares it.
+- **Angles**: each angle records either a scene's composited output or an input's own picture, and can take its audio from a mixing unit's program mix or record silence. An input angle needs no scene, which is what makes recording one camera cheap. An **OMT input** angle can also use **passthrough**: the frames the sender already encoded are stored as they arrive, with no GPU readback and no second encoder, so the recording costs neither picture quality nor CPU. The recording format (resolution and frame rate) comes from the first mixing unit, and every angle shares it.
 - **Add every new event to the playlist automatically**: uses the angle selected in the Replay window. Clips are never filed against a guessed camera.
 
 The angle set is fixed while recording: stop the recording before adding or removing angles.
