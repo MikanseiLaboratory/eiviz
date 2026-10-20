@@ -107,15 +107,34 @@ internal sealed class ReplayWaveform : FrameworkElement
     }
 
     /// The recording frame under an x coordinate, clamped to the drawn range.
-    public ulong FrameAt(double x)
+    public ulong FrameAt(double x) =>
+        FrameAtRatio(
+            ActualWidth <= 0 ? 0.0 : Math.Clamp(x / ActualWidth, 0.0, 1.0),
+            _dropped,
+            _buckets,
+            _fps,
+            _rate,
+            _positionFrame);
+
+    /// Maps a position across the drawn waveform to a recording frame.
+    ///
+    /// Separated from the control so the mapping can be reasoned about (and tested)
+    /// without a laid-out window: `ratio` 0 is the oldest bucket drawn, 1 the newest.
+    internal static ulong FrameAtRatio(
+        double ratio,
+        uint dropped,
+        uint buckets,
+        double fps,
+        uint rate,
+        ulong fallback)
     {
-        var first = (long)_dropped;
-        var last = first + _buckets;
-        if (_buckets == 0 || last <= first || ActualWidth <= 0)
-            return _positionFrame;
-        var ratio = Math.Clamp(x / ActualWidth, 0.0, 1.0);
-        var bucket = first + (long)((last - first) * ratio);
-        return (ulong)Math.Max(0, (long)(bucket * _fps / Math.Max(1, _rate)));
+        if (buckets == 0)
+            return fallback;
+        var first = (long)dropped;
+        var last = first + buckets;
+        var clamped = Math.Clamp(ratio, 0.0, 1.0);
+        var bucket = first + (long)((last - first) * clamped);
+        return (ulong)Math.Max(0, (long)(bucket * fps / Math.Max(1, rate)));
     }
 
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)

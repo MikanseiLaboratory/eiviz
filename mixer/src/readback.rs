@@ -232,10 +232,6 @@ impl UnitReadback {
         self.mapped.pop_front()
     }
 
-    pub fn has_mapped(&self) -> bool {
-        !self.mapped.is_empty()
-    }
-
     /// Frames that finished and were replaced before anyone read them, since the
     /// previous call.
     pub fn take_replaced(&mut self) -> u64 {

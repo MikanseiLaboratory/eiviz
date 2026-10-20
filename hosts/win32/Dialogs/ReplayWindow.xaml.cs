@@ -1948,6 +1948,7 @@ public partial class ReplayWindow : Window
         if (now - _lastSeekAt < 16)
             return;
         _lastSeekAt = now;
+        HostLog.Write("INFO", $"replay waveform seek frame={frame}");
         var target = (long)Math.Min(frame, long.MaxValue);
         if (Backend?.ReplayTransport(_channel, _playing, _speedMilli, target) != true)
             return;
