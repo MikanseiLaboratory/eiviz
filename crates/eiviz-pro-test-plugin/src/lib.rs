@@ -487,7 +487,9 @@ fn base_api() -> ProApi {
         license_fingerprint: Some(license_fingerprint),
         license_email: Some(license_email),
         replay_open: Some(replay_open),
-        replay_close: Some(replay_close),
+        // The test plugin has no recording to attach to.
+    replay_attach: None,
+    replay_close: Some(replay_close),
         replay_write_video: Some(replay_write_video),
         replay_decode: Some(replay_decode),
         replay_range: Some(replay_range),
