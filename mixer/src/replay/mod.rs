@@ -1640,6 +1640,17 @@ impl ReplayEngine {
     /// Live Replay state as JSON. `GetReplayState` needs this because the session
     /// document alone cannot tell a client what is playing.
     pub fn state_json(&self) -> String {
+        // The readback totals belong in the state report: whether the ring is deep enough
+        // is a measured question, not one to guess at.
+        let (readback_mapped, readback_exhausted) = {
+            let inner = self.lock();
+            inner
+                .angle_readback
+                .values()
+                .fold((0u64, 0u64), |(mapped, exhausted), pair| {
+                    (mapped + pair.0, exhausted + pair.1)
+                })
+        };
         let mut stats = MixerReplayStats::default();
         let mut angle_stats = [MixerReplayAngleStats::default(); 32];
         let angle_count = self.copy_stats(&mut stats, &mut angle_stats) as usize;
@@ -1710,6 +1721,10 @@ impl ReplayEngine {
             "markInValid": stats.mark_in_valid != 0,
             "recordingUuid": self.recording_uuid(),
             "audioBlocksDropped": self.audio_drops(),
+            // Readback totals across angles: frames the recorder received, and copies it
+            // could not take because every ring slot was still busy.
+            "readbackMapped": readback_mapped,
+            "readbackExhausted": readback_exhausted,
             "angles": angles,
             "channels": channels,
         })
