@@ -297,6 +297,10 @@ impl Transport {
         self.list.len()
     }
 
+    pub fn is_looping(&self) -> bool {
+        self.looping
+    }
+
     pub fn set_looping(&mut self, looping: bool) {
         self.looping = looping;
     }

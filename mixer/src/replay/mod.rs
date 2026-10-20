@@ -433,6 +433,10 @@ impl ReplayEngine {
                     .find(|slot| slot.index == channel.index)
                     .map(|slot| std::mem::replace(&mut slot.transport, channel::Transport::new()))
                     .unwrap_or_else(channel::Transport::new);
+                // The operator's channel settings outlive a reconfiguration: editing the
+                // playlist must not silently reset the speed or turn looping off.
+                let keep_looping = transport.is_looping();
+                let keep_rate = transport.rate();
                 let clips = playlist_clips(&config, channel.playlist_id);
                 // What the channel was actually given, transitions included: a playlist
                 // that arrives without them plays as a row of cuts.
@@ -450,6 +454,8 @@ impl ReplayEngine {
                     ),
                 );
                 transport.set_playlist(clips);
+                transport.set_looping(keep_looping);
+                transport.set_rate(keep_rate);
                 let audio = old
                     .iter()
                     .find(|slot| slot.index == channel.index)
