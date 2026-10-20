@@ -360,7 +360,9 @@ public partial class ReplaySettingsWindow : Window
         }
         else
         {
-            PlanText.Text = string.Empty;
+            // No limits means Enterprise: say so, rather than leaving the operator to
+            // wonder whether the banner is broken.
+            PlanText.Text = Loc.T("replay.planUnlimited");
         }
         var active = _replay is null ? 0 : ReplayModel.ActiveAngle(_replay);
         ActiveAngleText.Text = active == 0
