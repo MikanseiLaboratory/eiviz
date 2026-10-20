@@ -426,7 +426,9 @@ impl Transport {
     }
 
     fn advance(&mut self, dt: f64) {
-        self.position += dt;
+        // The transport owns the position, and the speed is the rate it advances at.
+        // Without the rate here the deck showed 50% and played at 100%.
+        self.position = (self.position + dt * self.rate).max(0.0);
         let mut guard = 0;
         while self.position >= self.span() && guard < 64 {
             let span = self.span();
@@ -634,6 +636,35 @@ mod tests {
             !blended.is_empty(),
             "the boundary between the two clips must show both frames, got {} plans",
             plans.len()
+        );
+    }
+    #[test]
+    fn the_playback_speed_sets_how_fast_the_position_advances() {
+        // The deck offers 25/50/75/100 percent. The transport owns the position, so the
+        // speed has to be applied here; ignoring it meant 50 percent played at 100.
+        let mut transport = Transport::new();
+        transport.set_playlist(vec![clip("a", 0, 1_000, ClipTransition::CUT)]);
+        transport.set_clip(clip("a", 0, 1_000, ClipTransition::CUT), 0);
+        transport.set_playing(true);
+        transport.set_rate(0.5);
+        // One second of wall clock at 60 output frames.
+        for _ in 0..60 {
+            transport.step(1.0);
+        }
+        let half = transport.source_position();
+        assert!(
+            (29.0..=31.0).contains(&half),
+            "half speed must advance about 30 frames per second, got {half}"
+        );
+        transport.set_rate(1.0);
+        let before = transport.source_position();
+        for _ in 0..60 {
+            transport.step(1.0);
+        }
+        let moved = transport.source_position() - before;
+        assert!(
+            (59.0..=61.0).contains(&moved),
+            "full speed must advance about 60 frames per second, got {moved}"
         );
     }
     #[test]

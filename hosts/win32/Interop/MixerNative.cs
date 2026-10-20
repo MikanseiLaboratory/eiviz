@@ -430,6 +430,9 @@ internal static partial class MixerNative
     /// would record there. Replay Setup shows it per drive, because an operator
     /// choosing a drive needs to know what fits.
     /// </summary>
+    [DllImport(LibraryName, EntryPoint = "mixer_replay_copy_channels")]
+    internal static extern int ReplayCopyChannels([Out] MixerReplayChannelState[] channels, uint capacity);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_estimate", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int ReplayEstimate(ref MixerReplayEstimateIn input, ref MixerReplayEstimateOut output);
 
@@ -1261,6 +1264,25 @@ internal struct MixerReplayStats
     public ulong EncodedFrames;
     /// <summary>Encoded frames the store refused.</summary>
     public ulong EncodedDropped;
+}
+
+/// <summary>What a replay channel is showing, and where in its clip it is.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixerReplayChannelState
+{
+    public uint ChannelIndex;
+    public ulong SourceId;
+    public uint Playing;
+    public int SpeedMilli;
+    /// <summary>Source frame the channel is on, in the recording's own numbering.</summary>
+    public ulong PositionFrame;
+    public ulong InFrame;
+    public ulong OutFrame;
+    public uint AngleId;
+    public ulong ClipUidHash;
+    public ulong SubstitutedFrames;
+    public uint DecodeMsAvgMilli;
+    public ulong DecodeMisses;
 }
 
 [StructLayout(LayoutKind.Sequential)]

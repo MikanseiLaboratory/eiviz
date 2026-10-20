@@ -59,6 +59,12 @@ internal interface IEivizBackend
     bool ReplayJumpToNow(uint channel);
     /// <summary>Turns looping on or off for a channel's playlist.</summary>
     bool ReplayLoop(uint channel, bool on);
+
+    /// <summary>
+    /// Where a replay channel is playing. Stepping and the waveform playhead need it:
+    /// the recorder's frame says nothing about what the channel is showing.
+    /// </summary>
+    MixerReplayChannelState? ReplayChannelState(uint channel);
     /// <summary>Recorded frame range of one angle, or null when it has none.</summary>
     (ulong First, ulong Last)? ReplayAngleRange(uint angleId);
     /// <summary>MP4 export of recorded segments. Returns the progress JSON.</summary>
@@ -491,6 +497,19 @@ internal sealed class LocalEivizBackend : IEivizBackend
 
     public bool ReplayJumpToNow(uint channel) => MixerNative.ReplayJumpToNow(channel) == 0;
     public bool ReplayLoop(uint channel, bool on) => MixerNative.ReplayLoop(channel, on ? 1u : 0u) == 0;
+
+    public MixerReplayChannelState? ReplayChannelState(uint channel)
+    {
+        var states = new MixerReplayChannelState[4];
+        if (MixerNative.ReplayCopyChannels(states, (uint)states.Length) != 0)
+            return null;
+        foreach (var state in states)
+        {
+            if (state.ChannelIndex == channel)
+                return state;
+        }
+        return null;
+    }
     public (ulong First, ulong Last)? ReplayAngleRange(uint angleId)
     {
         ulong first = 0;
@@ -811,6 +830,8 @@ internal sealed class RemoteEivizBackend : IEivizBackend
         _ = (channel, on);
         return false;
     }
+    /// <summary>The recording machine owns the channel position; a Remote reports none.</summary>
+    public MixerReplayChannelState? ReplayChannelState(uint channel) { _ = channel; return null; }
     public (ulong First, ulong Last)? ReplayAngleRange(uint angleId) => null;
 
     public bool ReplayExportStart(string json, out string error)
@@ -1455,6 +1476,8 @@ internal sealed class DisconnectedRemoteBackend : IEivizBackend
     public bool ReplayTransport(uint channel, bool playing, int speedMilli, long seekFrame) { _ = (channel, playing, speedMilli, seekFrame); return false; }
     public bool ReplayJumpToNow(uint channel) { _ = channel; return false; }
     public bool ReplayLoop(uint channel, bool on) { _ = (channel, on); return false; }
+
+    public MixerReplayChannelState? ReplayChannelState(uint channel) { _ = channel; return null; }
     public (ulong First, ulong Last)? ReplayAngleRange(uint angleId) => null;
 
     public bool ReplayExportStart(string json, out string error)
