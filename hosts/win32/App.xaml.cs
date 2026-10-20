@@ -191,6 +191,15 @@ public partial class App : Application
         SessionStore.ReplaceRuntime(Session);
         ApplyVmixApi();
         SessionStore.Publish(Session);
+        // The mixer starts with no Replay at all, so a project that already has one needs
+        // its settings and clip list pushed once. Without this the clips of an earlier
+        // run have nothing to play from, even though the host shows them.
+        if (!string.IsNullOrWhiteSpace(Session.ReplayJson))
+        {
+            MixerNative.ThrowIfFailed(
+                MixerNative.ReplayConfigure(Session.ReplayJson),
+                "Replay configure");
+        }
         MixerApply.ApplySceneBuses(Session);
     }
 
