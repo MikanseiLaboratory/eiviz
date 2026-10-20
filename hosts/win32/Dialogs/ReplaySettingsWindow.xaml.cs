@@ -553,6 +553,49 @@ public partial class ReplaySettingsWindow : Window
 
     // ---- apply --------------------------------------------------------------------
 
+    /// <summary>
+    /// Measures the machine and reports what it means for the angle count in this dialog.
+    /// The measurement encodes frames and writes a scratch file, so it runs off the UI
+    /// thread and the window stays usable while it works.
+    /// </summary>
+    private async void Capacity_Click(object sender, RoutedEventArgs e)
+    {
+        CapacityButton.IsEnabled = false;
+        CapacityText.Text = Loc.T("replay.capacityRunning");
+        try
+        {
+            var storage = (_replay?["storage"] as JsonArray)?.FirstOrDefault()?["path"]?.GetValue<string>() ?? "";
+            var width = _replay?["format"]?["width"]?.GetValue<uint>() ?? 1920;
+            var height = _replay?["format"]?["height"]?.GetValue<uint>() ?? 1080;
+            var backend = (Application.Current as App)?.Backend;
+            var measured = backend is null
+                ? null
+                : await Task.Run(() => backend.BenchmarkCapacity(storage, width, height));
+            if (string.IsNullOrWhiteSpace(measured))
+            {
+                CapacityText.Text = Loc.T("replay.capacityFailed");
+                return;
+            }
+            var root = JsonNode.Parse(measured)?.AsObject();
+            double Number(string name) => root?[name]?.GetValue<double>() ?? 0;
+            CapacityText.Text = string.Format(
+                Loc.T("replay.capacityResult"),
+                Number("encodeFps"),
+                Number("diskWriteMbS"),
+                Number("diskReadMbS"),
+                (int)Number("anglesAt60"),
+                Number("totalFps"));
+        }
+        catch (Exception error)
+        {
+            HostLog.Write("ERROR", $"capacity bench: {error}");
+            CapacityText.Text = Loc.T("replay.capacityFailed");
+        }
+        finally
+        {
+            CapacityButton.IsEnabled = true;
+        }
+    }
     private void Apply_Click(object sender, RoutedEventArgs e)
     {
         if (_replay is null)

@@ -462,6 +462,20 @@ impl ReplayEngine {
         }
         let mut inner = self.lock();
         let mut old = std::mem::take(&mut inner.channels);
+        // The recording store is opened with the angle set the operator had at the time,
+        // and it keeps that list: a later configure with more angles left the extra ones
+        // without a store entry, so their statistics read zero even though the recorder
+        // wrote them. A changed angle set while stopped reopens it.
+        let previous_angles: Vec<u32> = inner.config.angles.iter().map(|angle| angle.id).collect();
+        let next_angles: Vec<u32> = dto.angles.iter().map(|angle| angle.id).collect();
+        let angles_changed = previous_angles != next_angles;
+        let recording = inner.recording;
+        drop(inner);
+        if angles_changed && !recording {
+            self.release_store();
+            *self.store.lock().unwrap_or_else(|error| error.into_inner()) = None;
+        }
+        let mut inner = self.lock();
         inner.config = dto;
         inner.playlist_revision = inner.playlist_revision.wrapping_add(1);
         let config = inner.config.clone();
