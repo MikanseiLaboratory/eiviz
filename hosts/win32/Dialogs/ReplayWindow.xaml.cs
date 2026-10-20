@@ -446,13 +446,26 @@ public partial class ReplayWindow : Window
 
     private void Export_Click(object sender, RoutedEventArgs e)
     {
-        if (_replay is null || ExportModeBox.SelectedItem is not ExportModeChoice mode)
+        if (_replay is null)
             return;
+        if (ExportModeBox.SelectedItem is not ExportModeChoice mode)
+        {
+            // Saying nothing here left the button looking dead.
+            ExportStatusText.Text = Loc.T("replay.exportNeedMode");
+            return;
+        }
         var path = ExportPathBox.Text.Trim();
         if (path.Length == 0)
         {
             ExportStatusText.Text = Loc.T("replay.exportNeedPath");
             return;
+        }
+        // A folder is a reasonable thing to type, and the MP4 writer answers it with an
+        // opaque E_INVALIDARG. Put a name inside it instead of failing.
+        if (Directory.Exists(path))
+        {
+            path = Path.Combine(path, $"replay-{DateTime.Now:yyyyMMdd-HHmmss}.mp4");
+            ExportPathBox.Text = path;
         }
         var segments = string.Join(",", BuildSegments(mode.Key).Select(segment =>
             $"{{\"angleId\":{segment.AngleId},\"fromFrame\":{segment.From},\"toFrame\":{segment.To}}}"));
