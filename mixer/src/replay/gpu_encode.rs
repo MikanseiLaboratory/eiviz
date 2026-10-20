@@ -5,29 +5,32 @@
 //! the recorder at a handful of frames a second. Encoding from the texture keeps the
 //! picture on the GPU from the scene that produced it to the packet that reaches disk.
 //!
-//! Angles are spread over a small pool of encoder threads. Two measurements shaped this:
-//! one thread per angle let the last angle starve (at nine angles the ninth recorded
-//! nothing, because every thread waited for its own encode and the GPU ran them in
-//! submission order), and a single shared thread was fair but serialised everything
-//! (287 frames a second against 450 before). An angle is now pinned to one thread — so its
-//! bitstream keeps a single codec state — while the threads overlap their waits on the
-//! GPU, and each thread serves the angles it owns.
+//! Angles are spread over a small pool of encoder threads. One thread per angle let the
+//! last angle starve: every thread waited for its own encode and the GPU runs them in
+//! submission order, so past eight angles the ninth never finished in time and recorded
+//! nothing while the earlier angles looked healthy.
+//!
+//! Each thread owns a short work list, and a full list drops its oldest entry rather than
+//! refusing the newest frame. A bounded channel was wrong here: once full it kept replaying
+//! the two oldest frames and refused everything else, so with sixteen angles the same eight
+//! always won. A replay recorder wants the newest picture, so every angle makes progress on
+//! every frame and the encoder's finite throughput is shared evenly.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use vmx::{Codec, ColorSpace, Config, Profile};
 
 /// Textures kept per angle, so a frame can be copied while the previous one encodes.
 const RING: usize = 3;
 
-/// Frames each encoder thread can hold before the renderer counts drops: deep enough to
-/// ride out a slow frame, shallow enough that a slow machine is reported.
+/// Frames each encoder thread holds. A deeper list absorbs jitter and lets a slow machine
+/// lose its oldest frames rather than blocking the renderer.
 const QUEUE: usize = 4;
 
-/// Encoder threads. See the module comment for why this is neither one per angle nor one.
+/// Encoder threads: neither one per angle (the last angle starved) nor one in total (it
+/// serialised the waits and measured 287 frames a second against 450).
 const THREADS: usize = 4;
 
 /// One frame waiting to be encoded.
@@ -44,12 +47,15 @@ struct Angle {
     width: u32,
     height: u32,
     profile: u32,
-    /// Frames this angle could not hand over because its queue was full.
+    /// Frames this angle lost because a list was full.
     dropped: Arc<AtomicU32>,
 }
 
+/// One encoder thread's work list.
+type Pending = Arc<(Mutex<VecDeque<Job>>, Condvar)>;
+
 static ANGLES: Mutex<Option<HashMap<u32, Angle>>> = Mutex::new(None);
-static QUEUES: OnceLock<Vec<SyncSender<Job>>> = OnceLock::new();
+static QUEUES: OnceLock<Vec<Pending>> = OnceLock::new();
 
 /// The replay format's profile code (0 high, 1 standard, 2 low) as the codec's preset.
 fn profile_of(code: u32) -> Profile {
@@ -132,30 +138,31 @@ pub fn prepare(
 
 /// Hands a copied texture to the encoder that owns this angle.
 ///
-/// Returns false when the queue is full, which the caller counts as a dropped frame.
+/// Never fails: when the list is full the oldest frame is dropped instead, so every angle
+/// keeps moving.
 pub fn dispatch(angle_id: u32, job: CopyJob) -> bool {
     let Some(queues) = QUEUES.get() else {
         return false;
     };
-    let tx = &queues[angle_id as usize % queues.len()];
-    match tx.try_send(Job {
+    let queue = &queues[angle_id as usize % queues.len()];
+    let (list, wake) = &**queue;
+    let mut pending = list.lock().unwrap_or_else(|error| error.into_inner());
+    while pending.len() >= QUEUE {
+        let Some(stale) = pending.pop_front() else {
+            break;
+        };
+        note_dropped(stale.angle_id);
+        return_to_ring(stale.angle_id, stale.texture);
+    }
+    pending.push_back(Job {
         angle_id,
         texture: job.texture,
         frame: job.frame,
         pts: job.pts,
-    }) {
-        Ok(()) => true,
-        Err(TrySendError::Full(job)) => {
-            note_dropped(angle_id);
-            return_to_ring(angle_id, job.texture);
-            false
-        }
-        Err(TrySendError::Disconnected(job)) => {
-            crate::diag::error("replay encode: an encoder thread is gone");
-            return_to_ring(angle_id, job.texture);
-            false
-        }
-    }
+    });
+    drop(pending);
+    wake.notify_one();
+    true
 }
 
 fn note_dropped(angle_id: u32) {
@@ -177,29 +184,37 @@ fn ensure_encoder(device: &wgpu::Device, queue: &wgpu::Queue) {
     if QUEUES.get().is_some() {
         return;
     }
-    let mut senders = Vec::with_capacity(THREADS);
-    let mut receivers = Vec::with_capacity(THREADS);
-    for _ in 0..THREADS {
-        let (tx, rx) = sync_channel::<Job>(QUEUE);
-        senders.push(tx);
-        receivers.push(rx);
-    }
-    if QUEUES.set(senders).is_err() {
+    let queues: Vec<Pending> = (0..THREADS)
+        .map(|_| Arc::new((Mutex::new(VecDeque::new()), Condvar::new())))
+        .collect();
+    if QUEUES.set(queues).is_err() {
         return;
     }
-    for (index, rx) in receivers.into_iter().enumerate() {
+    let Some(queues) = QUEUES.get() else {
+        return;
+    };
+    for (index, entry) in queues.iter().cloned().enumerate() {
         let device = device.clone();
         let queue = queue.clone();
         let _ = std::thread::Builder::new()
             .name(format!("eiviz-replay-encode-{index}"))
-            .spawn(move || encode_loop(rx, device, queue));
+            .spawn(move || encode_loop(entry, device, queue));
     }
 }
 
-fn encode_loop(rx: Receiver<Job>, device: wgpu::Device, queue: wgpu::Queue) {
+fn encode_loop(pending: Pending, device: wgpu::Device, queue: wgpu::Queue) {
     let mut codecs: HashMap<u32, Codec> = HashMap::new();
     let mut packet = vec![0u8; 1024 * 1024];
-    while let Ok(job) = rx.recv() {
+    let (list, wake) = &*pending;
+    loop {
+        let job = {
+            let mut guard = list.lock().unwrap_or_else(|error| error.into_inner());
+            while guard.is_empty() {
+                guard = wake.wait(guard).unwrap_or_else(|error| error.into_inner());
+            }
+            guard.pop_front()
+        };
+        let Some(job) = job else { break };
         if !codecs.contains_key(&job.angle_id) {
             match build_codec(job.angle_id) {
                 Some(codec) => {
