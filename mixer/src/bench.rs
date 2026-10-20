@@ -45,8 +45,13 @@ pub struct Capacity {
     pub total_fps: f64,
     /// GPU to CPU readback bandwidth, which caps how many angles CPU encoding can carry.
     pub readback_mb_s: f64,
-    /// Angles CPU encoding can read back while holding 60 fps.
+    /// Angles CPU encoding can read back while holding 60 fps. This is the bandwidth
+    /// ceiling, not the practical one: the encoder itself is the tighter limit and is
+    /// reported as `angles_at_60_cpu`.
     pub angles_by_readback: u32,
+    /// Angles the measured CPU encoder can hold 60 fps at. Measured at ~80 frames a second
+    /// in total on a 24-core machine at 1080p, so this is one or two, not thirty.
+    pub angles_at_60_cpu: u32,
 }
 
 /// Remembers the device the render loop runs on. Called once, when it starts.
@@ -82,11 +87,13 @@ pub fn run(path: &str, width: u32, height: u32) -> Result<Capacity, String> {
     let frame_bytes = f64::from(width.max(16)) * f64::from(height.max(16)) * 4.0;
     let angles_by_readback =
         (readback_mb_s * 1024.0 * 1024.0 / (frame_bytes * 60.0)).floor() as u32;
+    let angles_at_60_cpu = (encode_fps_cpu / 60.0).floor().max(0.0) as u32;
     Ok(Capacity {
         encode_fps,
         encode_fps_cpu,
         readback_mb_s,
         angles_by_readback,
+        angles_at_60_cpu,
         disk_write_mb_s,
         disk_read_mb_s,
         angles_at_60,
@@ -101,7 +108,7 @@ impl Capacity {
         format!(
             concat!(
                 "{{\"encodeFps\":{:.1},\"encodeFpsCpu\":{:.1},\"diskWriteMbS\":{:.1},\"diskReadMbS\":{:.1},",
-                "\"readbackMbS\":{:.1},\"anglesByReadback\":{},",
+                "\"readbackMbS\":{:.1},\"anglesByReadback\":{},\"anglesAt60Cpu\":{},",
                 "\"anglesAt60\":{},\"anglesByDisk\":{},\"totalFps\":{:.1}}}"
             ),
             self.encode_fps,
@@ -110,6 +117,7 @@ impl Capacity {
             self.disk_read_mb_s,
             self.readback_mb_s,
             self.angles_by_readback,
+            self.angles_at_60_cpu,
             self.angles_at_60,
             self.angles_by_disk,
             self.total_fps

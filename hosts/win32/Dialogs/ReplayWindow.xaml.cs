@@ -1989,7 +1989,7 @@ public partial class ReplayWindow : Window
                 ? Loc.Format("replay.capacityResultCpu", Math.Max(gpu, cpu) / Math.Min(gpu, cpu), faster)
                 : "";
             var readback = Number("readbackMbS");
-            var readbackAngles = (int)Number("anglesByReadback");
+            var cpuAngles = (int)Number("anglesAt60Cpu");
             CapacityText.Text = string.Format(
                 Loc.T("replay.capacityResult"),
                 gpu,
@@ -1998,7 +1998,7 @@ public partial class ReplayWindow : Window
                 (int)Number("anglesAt60"),
                 Number("totalFps"),
                 cpu)
-                + string.Format(Loc.T("replay.capacityReadback"), readback, readbackAngles)
+                + string.Format(Loc.T("replay.capacityReadback"), readback, cpuAngles)
                 + (ratio.Length > 0 ? "　" + ratio : "");
         }
         catch (Exception error)
