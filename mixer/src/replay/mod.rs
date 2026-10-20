@@ -412,6 +412,54 @@ impl ReplayEngine {
         if !dto.enabled {
             self.stop(REPLAY_STOP_USER);
         }
+        // A recording from an earlier run is attached for playback: clips reference it,
+        // and without it they play black and cannot be exported. Only when nothing is
+        // open, so a running recording is never replaced.
+        {
+            let open = self
+                .store
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_some();
+            if !open {
+                // Any recording the playlist names will do: a clip from a recording that
+                // has since been removed must not stop the clips that are still on disk
+                // from playing.
+                let root = dto
+                    .playlists
+                    .iter()
+                    .flat_map(|list| list.clips.iter())
+                    .filter_map(|clip| {
+                        let uuid = clip.recording_uuid.trim();
+                        if uuid.is_empty() {
+                            return None;
+                        }
+                        dto.storage
+                            .first()
+                            .map(|storage| std::path::Path::new(&storage.path).join(uuid))
+                    })
+                    .find(|root| root.is_dir());
+                match root {
+                    Some(root) => {
+                        let path = root.display().to_string();
+                        match crate::pro_load::loaded_api() {
+                            Some((api, module)) => match attach_ffi(api, module, &path) {
+                                Ok(store) => {
+                                    *self.store.lock().unwrap_or_else(|error| error.into_inner()) =
+                                        Some(std::sync::Arc::new(std::sync::Mutex::new(store)));
+                                    crate::diag::info(&format!("replay attach: attached {path}"));
+                                }
+                                Err(error) => crate::diag::error(&format!(
+                                    "replay attach: {path} could not be opened: {error}"
+                                )),
+                            },
+                            None => crate::diag::error("replay attach: no module is loaded"),
+                        }
+                    }
+                    None => crate::diag::info("replay attach: no earlier recording to attach"),
+                }
+            }
+        }
         let mut inner = self.lock();
         let mut old = std::mem::take(&mut inner.channels);
         inner.config = dto;
