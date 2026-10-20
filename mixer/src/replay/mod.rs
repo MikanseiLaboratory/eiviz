@@ -477,7 +477,25 @@ impl ReplayEngine {
         let angles_changed = previous_angles != next_angles;
         let recording = inner.recording;
         drop(inner);
-        if angles_changed && !recording {
+        // Only when the store actually holds a different angle set: closing one that
+        // already matches would drop a recording the operator is still working with.
+        let stale_store = angles_changed
+            && !recording
+            && self
+                .store
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .is_some_and(|store| {
+                    let reported = store
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .stats()
+                        .angles
+                        .len();
+                    reported != next_angles.len()
+                });
+        if stale_store {
             self.release_store();
             *self.store.lock().unwrap_or_else(|error| error.into_inner()) = None;
         }
