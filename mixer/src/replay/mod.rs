@@ -254,6 +254,11 @@ struct ChannelSlot {
 
 struct Inner {
     config: ReplayDto,
+    /// Frames this engine accepted per angle. The store reports its own count, and a
+    /// module that under-reports an angle past the eighth left the operator looking at
+    /// zeros next to files that were plainly written; the larger of the two is shown,
+    /// since both only grow.
+    angle_written: std::collections::HashMap<u32, u64>,
     /// Bumped whenever the playlist reaches the engine, so the playout loop can
     /// drop a stale snapshot instead of overwriting a newer one.
     playlist_revision: u64,
@@ -327,6 +332,7 @@ impl ReplayEngine {
         let engine = Self {
             inner: Mutex::new(Inner {
                 config: ReplayDto::default(),
+                angle_written: std::collections::HashMap::new(),
                 playlist_revision: 1,
                 recording: false,
                 uuid: String::new(),
@@ -1010,6 +1016,7 @@ impl ReplayEngine {
         match outcome {
             Ok(WriteOutcome::Accepted) => {
                 let mut inner = self.lock();
+                *inner.angle_written.entry(angle_id).or_insert(0) += 1;
                 inner.stats.encoded_frames = inner.stats.encoded_frames.saturating_add(1);
                 true
             }
@@ -1070,6 +1077,7 @@ impl ReplayEngine {
         match outcome {
             Ok(WriteOutcome::Accepted) => {
                 let mut inner = self.lock();
+                *inner.angle_written.entry(angle_id).or_insert(0) += 1;
                 inner.stats.encoded_frames = inner.stats.encoded_frames.saturating_add(1);
                 if !inner.has_frames {
                     inner.first_frame = frame_index;
@@ -1820,7 +1828,13 @@ fn apply_pro_stats(inner: &mut Inner, snapshot: &ReplayStats) {
             .iter()
             .find(|angle| angle.angle_id == angle_id)
             .unwrap_or(&empty);
-        angles.push(angle_stats(reported, &inner, scene_gpu_id));
+        // The store and the engine both count what was written. Whichever is larger is
+        // the truth: a module that under-reports an angle must not hide frames that are
+        // on disk, and a store that has flushed more than this engine saw is ahead.
+        let ours = inner.angle_written.get(&angle_id).copied().unwrap_or(0);
+        let mut stats = angle_stats(reported, &inner, scene_gpu_id);
+        stats.frames_written = stats.frames_written.max(ours);
+        angles.push(stats);
     }
     inner.angles = angles;
     // What the copy actually reports, not what the module happened to send.
