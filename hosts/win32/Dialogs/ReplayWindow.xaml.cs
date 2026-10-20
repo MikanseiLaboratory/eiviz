@@ -1982,13 +1982,17 @@ public partial class ReplayWindow : Window
             }
             var root = System.Text.Json.Nodes.JsonNode.Parse(measured)?.AsObject();
             double Number(string name) => root?[name]?.GetValue<double>() ?? 0;
+            var gpu = Number("encodeFps");
+            var cpu = Number("encodeFpsCpu");
+            var ratio = cpu > 0 ? Loc.Format("replay.capacityResultCpu", gpu / cpu) : "";
             CapacityText.Text = string.Format(
                 Loc.T("replay.capacityResult"),
-                Number("encodeFps"),
+                gpu,
                 Number("diskWriteMbS"),
                 Number("diskReadMbS"),
                 (int)Number("anglesAt60"),
-                Number("totalFps"));
+                Number("totalFps"),
+                cpu) + (ratio.Length > 0 ? "　" + ratio : "");
         }
         catch (Exception error)
         {

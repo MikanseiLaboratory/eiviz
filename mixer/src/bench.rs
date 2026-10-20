@@ -29,8 +29,12 @@ const DISK_MB: usize = 192;
 /// What the machine can do, and what that means for angles.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Capacity {
-    /// Encoder frames a second at the replay format, one stream.
+    /// Encoder frames a second at the replay format, one stream, encoding on the GPU.
     pub encode_fps: f64,
+    /// The same with the CPU encoder. The codec is a wavelet encoder: it uses one slice
+    /// pool of about six threads, so it is far slower than the GPU at 1080p, and the
+    /// number is reported so an operator can see that rather than guess.
+    pub encode_fps_cpu: f64,
     pub disk_write_mb_s: f64,
     pub disk_read_mb_s: f64,
     /// Angles whose recording fits the measured encoder throughput at 60 fps.
@@ -57,6 +61,9 @@ pub fn run(path: &str, width: u32, height: u32) -> Result<Capacity, String> {
         .cloned()
         .ok_or_else(|| "the mixer has not started its GPU yet".to_owned())?;
     let encode_fps = measure_encode(&device, &queue, width, height)?;
+    // A shorter run for the CPU encoder: it is an order of magnitude slower, and the
+    // operator is waiting.
+    let encode_fps_cpu = measure_encode_cpu(width, height, 12)?;
     let (disk_write_mb_s, disk_read_mb_s) = measure_disk(path)?;
     let total_fps = encode_fps;
     let angles_at_60 = (total_fps / 60.0).floor().max(0.0) as u32;
@@ -66,6 +73,7 @@ pub fn run(path: &str, width: u32, height: u32) -> Result<Capacity, String> {
     let angles_by_disk = (bytes_per_second / (BYTES_PER_ANGLE_FRAME * 60.0)).floor() as u32;
     Ok(Capacity {
         encode_fps,
+        encode_fps_cpu,
         disk_write_mb_s,
         disk_read_mb_s,
         angles_at_60,
@@ -79,10 +87,11 @@ impl Capacity {
     pub fn to_json(&self) -> String {
         format!(
             concat!(
-                "{{\"encodeFps\":{:.1},\"diskWriteMbS\":{:.1},\"diskReadMbS\":{:.1},",
+                "{{\"encodeFps\":{:.1},\"encodeFpsCpu\":{:.1},\"diskWriteMbS\":{:.1},\"diskReadMbS\":{:.1},",
                 "\"anglesAt60\":{},\"anglesByDisk\":{},\"totalFps\":{:.1}}}"
             ),
             self.encode_fps,
+            self.encode_fps_cpu,
             self.disk_write_mb_s,
             self.disk_read_mb_s,
             self.angles_at_60,
@@ -142,6 +151,44 @@ fn measure_encode(
         return Err("the encoder finished too quickly to measure".to_owned());
     }
     Ok(f64::from(ENCODE_FRAMES) / seconds)
+}
+
+fn measure_encode_cpu(width: u32, height: u32, frames: u32) -> Result<f64, String> {
+    let width = width.max(16);
+    let height = height.max(16);
+    let mut codec = Codec::new(Config {
+        width: width as i32,
+        height: height as i32,
+        profile: Profile::Sq,
+        color_space: ColorSpace::Bt709,
+    })
+    .map_err(|error| format!("the CPU encoder could not be built: {error}"))?;
+    // A mid-grey frame: the codec cost depends on the picture, and grey is the honest
+    // middle for "what does a second of this cost".
+    let frame = vec![0x80u8; width as usize * height as usize * 2];
+    let stride = width as usize * 2;
+    let mut packet = vec![0u8; 1024 * 1024];
+    let warm = codec
+        .encode_uyvy(&frame, stride)
+        .map_err(|error| format!("the CPU encoder failed: {error}"))?;
+    let _ = warm;
+    let started = Instant::now();
+    for _ in 0..frames {
+        if codec.encode_uyvy(&frame, stride).is_err() {
+            return Err("the CPU encoder failed".to_owned());
+        }
+        loop {
+            match codec.save_to(&mut packet) {
+                Ok(_) => break,
+                Err(_) => packet.resize(packet.len().saturating_mul(2).max(1024), 0),
+            }
+        }
+    }
+    let seconds = started.elapsed().as_secs_f64();
+    if seconds <= 0.0 {
+        return Err("the CPU encoder finished too quickly to measure".to_owned());
+    }
+    Ok(f64::from(frames) / seconds)
 }
 
 fn measure_disk(path: &str) -> Result<(f64, f64), String> {
