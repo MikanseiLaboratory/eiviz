@@ -617,7 +617,9 @@ public partial class ReplayWindow : Window
             return;
         var fps = ReplayModel.Fps(_replay, _session);
         MixerReplayStats stats = default;
-        var angleBuffer = stackalloc MixerReplayAngleStats[8];
+        // One entry per angle the plan allows: Enterprise is unlimited, so this is the
+        // mixer-side cap (32) rather than a number that happened to fit Professional.
+        var angleBuffer = stackalloc MixerReplayAngleStats[32];
         MixerReplayAngleStats selected = default;
         var selectedAngle = ActiveAngleId();
         var hasSelected = false;
@@ -631,7 +633,7 @@ public partial class ReplayWindow : Window
             // The recording timecode lives with the recording, not here.
             RecordTcText.Text = "--:--:--:--";
         }
-        else if (MixerNative.ReplayCopyStats(&stats, (nint)angleBuffer, 8) == 0 && stats.State != 0)
+        else if (MixerNative.ReplayCopyStats(&stats, (nint)angleBuffer, 32) == 0 && stats.State != 0)
         {
             _recording = stats.State == 1;
             StateText.Text = stats.State switch
