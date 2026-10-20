@@ -1984,7 +1984,10 @@ public partial class ReplayWindow : Window
             double Number(string name) => root?[name]?.GetValue<double>() ?? 0;
             var gpu = Number("encodeFps");
             var cpu = Number("encodeFpsCpu");
-            var ratio = cpu > 0 ? Loc.Format("replay.capacityResultCpu", gpu / cpu) : "";
+            var faster = gpu >= cpu ? "GPU" : "CPU";
+            var ratio = cpu > 0 && gpu > 0
+                ? Loc.Format("replay.capacityResultCpu", Math.Max(gpu, cpu) / Math.Min(gpu, cpu), faster)
+                : "";
             CapacityText.Text = string.Format(
                 Loc.T("replay.capacityResult"),
                 gpu,

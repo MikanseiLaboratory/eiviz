@@ -163,9 +163,11 @@ fn measure_encode_cpu(width: u32, height: u32, frames: u32) -> Result<f64, Strin
         color_space: ColorSpace::Bt709,
     })
     .map_err(|error| format!("the CPU encoder could not be built: {error}"))?;
-    // A mid-grey frame: the codec cost depends on the picture, and grey is the honest
-    // middle for "what does a second of this cost".
-    let frame = vec![0x80u8; width as usize * height as usize * 2];
+    // A frame that changes every time. Encoding the same picture repeatedly let the
+    // codec predict almost everything away and reported 2092 frames a second, while the
+    // real recorder managed 10: the measurement has to carry the motion the recorder
+    // carries.
+    let mut frame = vec![0x80u8; width as usize * height as usize * 2];
     let stride = width as usize * 2;
     let mut packet = vec![0u8; 1024 * 1024];
     let warm = codec
@@ -173,7 +175,18 @@ fn measure_encode_cpu(width: u32, height: u32, frames: u32) -> Result<f64, Strin
         .map_err(|error| format!("the CPU encoder failed: {error}"))?;
     let _ = warm;
     let started = Instant::now();
-    for _ in 0..frames {
+    for index in 0..frames {
+        // Fill the frame with a fresh pseudo-random pattern. Noise is the worst case for
+        // this codec: a picture that barely changes let it predict almost everything away
+        // and reported thousands of frames a second while the recorder managed ten, so the
+        // measurement deliberately overstates the cost rather than understates it.
+        let mut state = 0x9E37_79B9u32 ^ (index as u32).wrapping_mul(2_654_435_761);
+        for byte in frame.iter_mut() {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            *byte = (state >> 24) as u8;
+        }
         if codec.encode_uyvy(&frame, stride).is_err() {
             return Err("the CPU encoder failed".to_owned());
         }
