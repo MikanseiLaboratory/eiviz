@@ -430,6 +430,9 @@ internal static partial class MixerNative
     /// would record there. Replay Setup shows it per drive, because an operator
     /// choosing a drive needs to know what fits.
     /// </summary>
+    [DllImport(LibraryName, EntryPoint = "mixer_replay_channel_step")]
+    internal static extern int ReplayChannelStep(uint channel, int delta);
+
     [DllImport(LibraryName, EntryPoint = "mixer_replay_copy_channels")]
     internal static extern int ReplayCopyChannels([Out] MixerReplayChannelState[] channels, uint capacity);
 

@@ -1926,15 +1926,10 @@ public partial class ReplayWindow : Window
 
     private void Step(int delta)
     {
-        // A channel with a clip has its own position, and that is what the buttons say
-        // they move. Requiring a mark here meant the buttons did nothing on a cued clip.
-        if (Backend?.ReplayChannelState(_channel) is { InFrame: > 0 } channel)
+        // The mixer owns the position, so it does the step. Doing it here needed a local
+        // mark and jumped to it, which is not what the buttons say they do.
+        if (Backend?.ReplayStep(_channel, delta) == true)
         {
-            var low = (long)channel.InFrame;
-            var high = (long)channel.OutFrame;
-            var step = Math.Clamp((long)channel.PositionFrame + delta, low, high);
-            if (Backend?.ReplayTransport(_channel, false, _speedMilli, step) != true)
-                Warn(Loc.T("replay.commandRefused"));
             _playing = false;
             UpdatePlayButton();
             return;

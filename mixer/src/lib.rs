@@ -4946,6 +4946,18 @@ pub unsafe extern "C" fn mixer_replay_loop(channel: u32, on: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn mixer_replay_channel_step(channel: u32, delta: i32) -> i32 {
+    ffi_guard(
+        "mixer_replay_channel_step",
+        ERR_INVALID_ARGUMENT,
+        || match crate::replay::engine().step_channel(channel, delta) {
+            Ok(()) => OK,
+            Err(code) => code,
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_replay_record(on: u32) -> i32 {
     ffi_guard("mixer_replay_record", ERR_IO, || {
         match crate::replay::engine().record(on != 0) {

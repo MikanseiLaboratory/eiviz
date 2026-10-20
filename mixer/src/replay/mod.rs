@@ -1296,6 +1296,28 @@ impl ReplayEngine {
         Ok(())
     }
 
+    /// Moves a channel by `delta` frames inside the clip it is playing.
+    ///
+    /// Stepping belongs here: the transport owns the position, and the host has no
+    /// business reconstructing it from a mark.
+    pub fn step_channel(&self, channel: u32, delta: i32) -> Result<(), i32> {
+        let mut inner = self.lock();
+        let slot = inner
+            .channels
+            .iter_mut()
+            .find(|slot| slot.index == channel)
+            .ok_or(ERR_INVALID_ARGUMENT)?;
+        let Some(clip) = slot.transport.clip() else {
+            return Err(ERR_INVALID_ARGUMENT);
+        };
+        let current = slot.transport.source_frame() as i64;
+        let target =
+            (current + i64::from(delta)).clamp(clip.in_frame as i64, clip.out_frame as i64);
+        slot.transport.seek_source(target as u64);
+        slot.transport.set_playing(false);
+        Ok(())
+    }
+
     pub fn jump_to_now(&self, channel: u32) -> Result<(), i32> {
         let mut inner = self.lock();
         let frame = inner.last_frame.saturating_sub(3);

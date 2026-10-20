@@ -60,6 +60,9 @@ internal interface IEivizBackend
     /// <summary>Turns looping on or off for a channel's playlist.</summary>
     bool ReplayLoop(uint channel, bool on);
 
+    /// <summary>Moves a channel by whole frames inside the clip it is playing.</summary>
+    bool ReplayStep(uint channel, int delta);
+
     /// <summary>
     /// Where a replay channel is playing. Stepping and the waveform playhead need it:
     /// the recorder's frame says nothing about what the channel is showing.
@@ -498,6 +501,8 @@ internal sealed class LocalEivizBackend : IEivizBackend
     public bool ReplayJumpToNow(uint channel) => MixerNative.ReplayJumpToNow(channel) == 0;
     public bool ReplayLoop(uint channel, bool on) => MixerNative.ReplayLoop(channel, on ? 1u : 0u) == 0;
 
+    public bool ReplayStep(uint channel, int delta) => MixerNative.ReplayChannelStep(channel, delta) == 0;
+
     public MixerReplayChannelState? ReplayChannelState(uint channel)
     {
         var states = new MixerReplayChannelState[4];
@@ -832,6 +837,7 @@ internal sealed class RemoteEivizBackend : IEivizBackend
     }
     /// <summary>The recording machine owns the channel position; a Remote reports none.</summary>
     public MixerReplayChannelState? ReplayChannelState(uint channel) { _ = channel; return null; }
+    public bool ReplayStep(uint channel, int delta) { _ = (channel, delta); return false; }
     public (ulong First, ulong Last)? ReplayAngleRange(uint angleId) => null;
 
     public bool ReplayExportStart(string json, out string error)
@@ -1478,6 +1484,7 @@ internal sealed class DisconnectedRemoteBackend : IEivizBackend
     public bool ReplayLoop(uint channel, bool on) { _ = (channel, on); return false; }
 
     public MixerReplayChannelState? ReplayChannelState(uint channel) { _ = channel; return null; }
+    public bool ReplayStep(uint channel, int delta) { _ = (channel, delta); return false; }
     public (ulong First, ulong Last)? ReplayAngleRange(uint angleId) => null;
 
     public bool ReplayExportStart(string json, out string error)
