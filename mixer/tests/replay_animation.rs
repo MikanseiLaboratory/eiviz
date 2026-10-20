@@ -140,10 +140,26 @@ fn an_animation_step_cues_a_replay_clip() {
     expect("play sequence", unsafe {
         mixer_scene_sequence(scene_id(2), 1, SCENE_SEQ_PLAY)
     });
-    thread::sleep(Duration::from_millis(1500));
-
+    // The sequence advances on rendered frames, and a CI runner without a GPU renders
+    // them slowly. Wait for the cue with a deadline instead of assuming half a second
+    // of wall clock is enough, which made this test fail on slow machines only.
     let mut channels = vec![MixerReplayChannelState::default(); 4];
-    let count = unsafe { mixer_replay_copy_channels(channels.as_mut_ptr(), 4) };
+    let mut count = 0i32;
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while std::time::Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(200));
+        channels = vec![MixerReplayChannelState::default(); 4];
+        count = unsafe { mixer_replay_copy_channels(channels.as_mut_ptr(), 4) };
+        if count >= 1 && channels[0].out_frame == 90 {
+            break;
+        }
+    }
+    if count >= 1 && channels[0].out_frame != 90 {
+        // One more read after a short settle, so a frame that landed between the poll
+        // and the assertion is still seen.
+        thread::sleep(Duration::from_millis(500));
+        count = unsafe { mixer_replay_copy_channels(channels.as_mut_ptr(), 4) };
+    }
     let mut stats = MixerReplayStats::default();
     unsafe { mixer_replay_copy_stats(&mut stats, std::ptr::null_mut(), 0) };
     expect("record off", unsafe { mixer_replay_record(0) });
