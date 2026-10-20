@@ -11,6 +11,8 @@ pub(crate) fn render_loop(
     cmds: mpsc::Receiver<GpuCmd>,
     stop: Arc<AtomicBool>,
 ) {
+    // The capacity measurement needs the device, and this is where it becomes known.
+    crate::bench::remember(&device.device, &device.queue);
     let mut composer = match Composer::new(&device) {
         Ok(composer) => composer,
         Err(error) => {

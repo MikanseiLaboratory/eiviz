@@ -4,6 +4,7 @@ mod abi;
 mod anim;
 mod audio;
 mod audio_in;
+pub(crate) mod bench;
 mod clock;
 mod compose;
 #[cfg(windows)]
@@ -4824,6 +4825,46 @@ pub unsafe extern "C" fn mixer_replay_angle_range(
 }
 
 /// Starts an MP4 export. The JSON names the file and the segments to write.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_bench_capacity(
+    path: *const u8,
+    path_len: usize,
+    width: u32,
+    height: u32,
+    out: *mut u8,
+    cap: usize,
+    written: *mut usize,
+) -> i32 {
+    ffi_guard("mixer_bench_capacity", ERR_INVALID_ARGUMENT, || unsafe {
+        if out.is_null() || written.is_null() {
+            return ERR_INVALID_ARGUMENT;
+        }
+        if path.is_null() {
+            return ERR_INVALID_ARGUMENT;
+        }
+        let bytes = std::slice::from_raw_parts(path, path_len);
+        let Ok(path) = std::str::from_utf8(bytes) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        match crate::bench::run(path, width, height) {
+            Ok(capacity) => {
+                let json = capacity.to_json();
+                let result = write_bytes(out, cap, json.as_bytes());
+                if result >= 0 {
+                    *written = result as usize;
+                    OK
+                } else {
+                    result
+                }
+            }
+            Err(error) => {
+                crate::diag::error(&format!("capacity bench failed: {error}"));
+                ERR_IO
+            }
+        }
+    })
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_replay_export_start(json: *const c_char) -> i32 {
     ffi_guard("mixer_replay_export_start", ERR_IO, || unsafe {

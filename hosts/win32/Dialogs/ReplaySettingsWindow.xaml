@@ -156,6 +156,7 @@
                         <TextBox x:Name="ReserveBox" Height="28" Text="2048"/>
                     </StackPanel>
                 </Grid>
+
                 <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
                     <TextBlock Text="{Binding [replay.overflow], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center"/>
                     <ComboBox x:Name="OverflowBox" Width="220" Height="28" Margin="8,0,0,0">

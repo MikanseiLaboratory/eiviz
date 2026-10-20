@@ -64,6 +64,13 @@ internal interface IEivizBackend
     bool ReplayStep(uint channel, int delta);
 
     /// <summary>
+    /// Measures the machine that owns the mixer: encoder throughput and drive speed, from
+    /// which the Replay settings show how many angles fit. Returns the mixer JSON, or null
+    /// when the measurement could not run (a remote or disconnected session).
+    /// </summary>
+    string? BenchmarkCapacity(string path, uint width, uint height);
+
+    /// <summary>
     /// Where a replay channel is playing. Stepping and the waveform playhead need it:
     /// the recorder's frame says nothing about what the channel is showing.
     /// </summary>
@@ -543,6 +550,29 @@ internal sealed class LocalEivizBackend : IEivizBackend
         return status == 0;
     }
 
+    /// <summary>
+    /// Measures what this machine can record, on a worker thread so the UI stays live.
+    /// Returns the mixer JSON, or null when the measurement could not run.
+    /// </summary>
+    public string? BenchmarkCapacity(string path, uint width, uint height)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(path);
+        var buffer = new byte[512];
+        unsafe
+        {
+            fixed (byte* input = bytes)
+            fixed (byte* output = buffer)
+            {
+                nuint written = 0;
+                var status = MixerNative.BenchCapacity(
+                    input, (nuint)bytes.Length, width, height, output, (nuint)buffer.Length, &written);
+                if (status != 0)
+                    return null;
+                return System.Text.Encoding.UTF8.GetString(buffer, 0, (int)written);
+            }
+        }
+    }
+
     public string ReplayExportProgress()
     {
         var buffer = new byte[1024];
@@ -855,6 +885,13 @@ internal sealed class RemoteEivizBackend : IEivizBackend
         // session must run the export there, not here.
         error = Loc.T("replay.exportLocalOnly");
         return false;
+    }
+
+    /// <summary>The measurement runs on the machine that owns the mixer.</summary>
+    public string? BenchmarkCapacity(string path, uint width, uint height)
+    {
+        _ = (path, width, height);
+        return null;
     }
 
     public string ReplayExportProgress() => "";
@@ -1500,6 +1537,13 @@ internal sealed class DisconnectedRemoteBackend : IEivizBackend
     {
         error = "";
         return false;
+    }
+
+    /// <summary>The measurement runs on the machine that owns the mixer.</summary>
+    public string? BenchmarkCapacity(string path, uint width, uint height)
+    {
+        _ = (path, width, height);
+        return null;
     }
 
     public string ReplayExportProgress() => "";

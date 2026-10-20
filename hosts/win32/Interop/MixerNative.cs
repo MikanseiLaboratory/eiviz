@@ -408,6 +408,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_copy_stats")]
     internal static unsafe partial int ReplayCopyStats(MixerReplayStats* stats, nint angles, uint cap);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_bench_capacity")]
+    internal static unsafe partial int BenchCapacity(byte* path, nuint pathLen, uint width, uint height, byte* outBuffer, nuint cap, nuint* written);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_record")]
     internal static partial int ReplayRecord(uint on);
 
