@@ -1018,9 +1018,12 @@ impl ReplayEngine {
                 false
             }
             Err(error) => {
+                // Counted, not flagged. A single refused write used to light the storage
+                // warning for the rest of the session; the health line already reports a
+                // disk that is genuinely behind, and the drop counter says how many
+                // frames were lost.
                 let mut inner = self.lock();
                 inner.stats.encoded_dropped = inner.stats.encoded_dropped.saturating_add(1);
-                inner.stats.issues |= crate::abi::REPLAY_ISSUE_STORAGE_WRITE;
                 crate::diag::error(&format!("replay GPU encode write failed: {error}"));
                 false
             }

@@ -704,6 +704,9 @@ pub(crate) fn render_loop(
             );
             thumbs.capture(&device, &mut composer, &mut encoder, frame_i, &thumbs_snap);
             let replay_targets = crate::replay::engine().record_targets();
+            // Copies queued this frame; handed to the per-angle workers once the copy
+            // has been submitted, so the worker sees the picture and not the scene.
+            let mut gpu_jobs: Vec<(u32, crate::replay::gpu_encode::CopyJob)> = Vec::new();
             for target in &replay_targets {
                 let picture = match target.source {
                     crate::replay::RecordSource::Scene(gpu_id) => {
@@ -747,27 +750,38 @@ pub(crate) fn render_loop(
                             }
                         }
                     };
-                // A GPU angle is encoded from the texture it was just composed into:
-                // nothing is copied back, which is what used to cap the recorder at a
-                // handful of frames a second.
+                // A GPU angle is encoded from a copy of the picture, on a worker per
+                // angle. Doing the encode here made the angles serial: at four angles
+                // the renderer waited for one encode after another and the recording
+                // fell from 60 to 42 frames a second. The copy is one GPU operation;
+                // the encode and the packet write happen on the worker.
                 if target.gpu_encode {
-                    let encoded = crate::replay::gpu_encode::encode_frame(
+                    match crate::replay::gpu_encode::prepare(
                         target.angle_id,
                         target.width,
                         target.height,
                         target.profile,
                         &device.device,
                         &device.queue,
-                        &picture,
-                    );
-                    match encoded {
-                        Some(payload) => {
-                            crate::replay::engine().write_gpu_encoded(
-                                target.angle_id,
-                                frame_i,
-                                pts,
-                                &payload,
+                    ) {
+                        Some(ring) => {
+                            encoder.copy_texture_to_texture(
+                                picture.as_image_copy(),
+                                ring.as_image_copy(),
+                                wgpu::Extent3d {
+                                    width: target.width,
+                                    height: target.height,
+                                    depth_or_array_layers: 1,
+                                },
                             );
+                            gpu_jobs.push((
+                                target.angle_id,
+                                crate::replay::gpu_encode::CopyJob {
+                                    texture: ring,
+                                    frame: frame_i,
+                                    pts,
+                                },
+                            ));
                         }
                         None => crate::replay::engine().note_replaced(target.angle_id, 1),
                     }
@@ -788,6 +802,13 @@ pub(crate) fn render_loop(
                 );
             }
             device.submit(Some(encoder.finish()));
+            // The copy is on the same queue as the encode, so a worker that picks the
+            // texture up now still encodes the picture, in submission order.
+            for (angle_id, job) in gpu_jobs.drain(..) {
+                if !crate::replay::gpu_encode::dispatch(angle_id, job) {
+                    crate::replay::engine().note_replaced(angle_id, 1);
+                }
+            }
             flush_snapshots(
                 &device,
                 &mut composer,

@@ -84,26 +84,37 @@ pub fn step(memory: &mut HealthMemory, sample: &HealthSample, now_ms: u64) -> He
         }
     }
 
-    if sample.write_buffer_ratio >= 0.25 || sample.write_latency_p95_ms > 250 {
+    // A buffered writer normally holds a few megabytes, so the buffer being non-empty
+    // says nothing. What says something is a buffer that is nearly full, a write that
+    // takes longer than a quarter of a second, or writes being dropped.
+    let write_trouble = sample.dropped_write_recent > 0
+        || sample.write_latency_p95_ms > 250
+        || sample.write_buffer_ratio >= 0.9;
+    if write_trouble {
         memory.write_hot_since.get_or_insert(now_ms);
         memory.write_cool_since = None;
-    } else if sample.write_buffer_ratio < 0.1 {
+    } else {
         memory.write_cool_since.get_or_insert(now_ms);
         memory.write_hot_since = None;
-    } else {
-        memory.write_hot_since = None;
-        memory.write_cool_since = None;
     }
     let write_hot = memory
         .write_hot_since
         .is_some_and(|started| now_ms.saturating_sub(started) >= 1_000)
         || sample.write_latency_p95_ms > 250;
-    let write_critical = sample.write_buffer_ratio >= 0.75 || sample.dropped_write_recent > 0;
+    let write_critical = sample.write_buffer_ratio >= 0.98 || sample.dropped_write_recent > 0;
     let write_clear = memory
         .write_cool_since
         .is_some_and(|started| now_ms.saturating_sub(started) >= 2_000)
         && sample.dropped_write_recent == 0;
-    if write_critical || write_hot || (memory.issues & ISSUE_STORAGE_WRITE != 0 && !write_clear) {
+    // A storage warning must not outlive the trouble that caused it. The cool timer
+    // handles the ordinary case; this clears the latch as soon as the numbers are
+    // healthy, so a single hiccup at the start of a recording does not read as a
+    // failing disk for the rest of the session.
+    let write_healthy = sample.dropped_write_recent == 0 && sample.write_latency_p95_ms <= 250;
+    if write_critical
+        || write_hot
+        || (memory.issues & ISSUE_STORAGE_WRITE != 0 && !write_clear && !write_healthy)
+    {
         if write_critical || write_hot {
             issues |= ISSUE_STORAGE_WRITE;
             severity = severity.max(if write_critical {
