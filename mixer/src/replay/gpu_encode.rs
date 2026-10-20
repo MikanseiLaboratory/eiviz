@@ -23,11 +23,27 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use vmx::{Codec, ColorSpace, Config, Profile};
 
 /// Textures kept per angle, so a frame can be copied while the previous one encodes.
-const RING: usize = 3;
+///
+/// More angles means more rings resident at once, so the ring shrinks as the angle count
+/// grows: a ring covers one encode of latency, it does not hoard memory.
+fn ring_for(angles: usize) -> usize {
+    match angles {
+        0..=4 => 4,
+        5..=8 => 3,
+        _ => 2,
+    }
+}
 
 /// Frames each encoder thread holds. A deeper list absorbs jitter and lets a slow machine
-/// lose its oldest frames rather than blocking the renderer.
-const QUEUE: usize = 4;
+/// lose its oldest frames rather than blocking the renderer. It shrinks with the angle
+/// count for the same reason the ring does.
+fn queue_for(angles: usize) -> usize {
+    match angles {
+        0..=4 => 6,
+        5..=8 => 4,
+        _ => 3,
+    }
+}
 
 /// Encoder threads: neither one per angle (the last angle starved) nor one in total (it
 /// serialised the waits). Measured on a 24-core machine in a release build, total
@@ -131,8 +147,10 @@ pub fn prepare(
     if stale {
         angles.remove(&angle_id);
     }
+    // Read the count before the entry borrows the map.
+    let ring = ring_for(angles.len());
     let angle = angles.entry(angle_id).or_insert_with(|| Angle {
-        free: (0..RING)
+        free: (0..ring)
             .map(|_| make_texture(device, width, height))
             .collect(),
         width,
@@ -160,7 +178,14 @@ pub fn dispatch(angle_id: u32, job: CopyJob) -> bool {
     let queue = &queues[angle_id as usize % queues.len()];
     let (list, wake) = &**queue;
     let mut pending = list.lock().unwrap_or_else(|error| error.into_inner());
-    while pending.len() >= QUEUE {
+    let cap = queue_for(
+        ANGLES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .map_or(1, |angles| angles.len()),
+    );
+    while pending.len() >= cap {
         let Some(stale) = pending.pop_front() else {
             break;
         };
@@ -296,4 +321,33 @@ fn build_codec(angle_id: u32) -> Option<Codec> {
             None
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_ring_shrinks_as_angles_grow() {
+        // Four angles at 1080p already hold 4 x 4 x 8 MB of ring; sixteen would be 512 MB
+        // with a fixed ring of four, which is why the ring follows the angle count.
+        assert!(ring_for(4) >= ring_for(8));
+        assert!(ring_for(8) >= ring_for(16));
+        assert!(ring_for(64) >= 2);
+    }
+
+    #[test]
+    fn the_queue_shrinks_as_angles_grow() {
+        assert!(queue_for(4) >= queue_for(8));
+        assert!(queue_for(8) >= queue_for(16));
+        assert!(queue_for(64) >= 2);
+    }
+}
+/// Bytes the encoder rings will hold for this configuration, so a caller can refuse a
+/// setting that would not fit instead of discovering it when the driver fails.
+pub fn ring_bytes(config: &eiviz_control::session::replay::ReplayDto) -> u64 {
+    let angles = config.angles.len().max(1);
+    let ring = ring_for(angles) as u64;
+    let frame = u64::from(config.format.width.max(1)) * u64::from(config.format.height.max(1)) * 4;
+    angles as u64 * ring * frame
 }

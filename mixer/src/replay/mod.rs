@@ -398,6 +398,24 @@ impl ReplayEngine {
             return Ok(());
         };
         self.gate(&dto)?;
+        // Encoding needs a ring of full-size textures per angle. Refusing here, with the
+        // numbers, beats allocating until the driver fails somewhere unrelated.
+        {
+            let ring = crate::replay::gpu_encode::ring_bytes(&dto);
+            // Three gigabytes of ring: far more than any supported angle count needs at
+            // 1080p, so hitting this means the configuration is out of scope, not unlucky.
+            const BUDGET: u64 = 3 * 1024 * 1024 * 1024;
+            if ring > BUDGET {
+                return Err(ReplayFailure::invalid(format!(
+                    "{} angles need {:.1} GB of encoder ring at {}x{}, which is above the {:.1} GB this recorder reserves; lower the angle count or the recording size",
+                    dto.angles.len().max(1),
+                    ring as f64 / (1024.0 * 1024.0 * 1024.0),
+                    dto.format.width,
+                    dto.format.height,
+                    BUDGET as f64 / (1024.0 * 1024.0 * 1024.0),
+                )));
+            }
+        }
         {
             // The module was opened with a fixed angle set. A change mid-recording
             // cannot be honoured (the new angle has no earlier frames), so refuse
