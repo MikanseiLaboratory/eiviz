@@ -200,6 +200,7 @@ impl UnitReadback {
                         self.mapped.pop_front();
                         self.replaced = self.replaced.saturating_add(1);
                     }
+                    self.mapped_frames = self.mapped_frames.saturating_add(1);
                     self.mapped
                         .push_back((packed, self.slots[i].pts, self.slots[i].frame));
                 }
