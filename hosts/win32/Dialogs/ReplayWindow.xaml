@@ -82,10 +82,16 @@
                 <TextBlock Text="{Binding [replay.recordTc], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                 <TextBlock x:Name="RecordTcText" FontFamily="Consolas" FontSize="20" VerticalAlignment="Center"
                            Foreground="{DynamicResource HudForeground}"/>
+                <Button x:Name="CapacityButton" Height="34" MinWidth="170" Margin="16,0,0,0" Click="Capacity_Click"
+                        AutomationProperties.AutomationId="CapacityButton"
+                        ToolTip="{Binding [replay.capacityIdle], Source={x:Static i18n:Loc.Source}}"
+                        Content="{Binding [replay.capacityRun], Source={x:Static i18n:Loc.Source}}"/>
                 <Button x:Name="OpenSetupButton" Height="34" MinWidth="170" Margin="16,0,0,0" Click="ReplaySetup_Click"
                         ToolTip="{Binding [replay.openSetupHint], Source={x:Static i18n:Loc.Source}}"
                         Content="{Binding [replay.openSetup], Source={x:Static i18n:Loc.Source}}"/>
             </StackPanel>
+            <TextBlock x:Name="CapacityText" DockPanel.Dock="Bottom" Margin="0,0,0,6" TextWrapping="Wrap"
+                       AutomationProperties.AutomationId="CapacityText" Foreground="#B0B0B8"/>
             <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBlock Text="{Binding [replay.channel], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center"/>
                 <ComboBox x:Name="ChannelBox" Width="130" Height="34" Margin="8,0,0,0" SelectionChanged="ChannelBox_SelectionChanged"/>
