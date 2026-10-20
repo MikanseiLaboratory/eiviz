@@ -57,9 +57,17 @@ public partial class MainWindow
             _replaySettingsWindow.Activate();
             return;
         }
-        _replaySettingsWindow = new ReplaySettingsWindow(_session) { Owner = this };
-        _replaySettingsWindow.Closed += (_, _) => _replaySettingsWindow = null;
-        _replaySettingsWindow.Show();
+        try
+        {
+            _replaySettingsWindow = new ReplaySettingsWindow(_session) { Owner = this };
+            _replaySettingsWindow.Closed += (_, _) => _replaySettingsWindow = null;
+            _replaySettingsWindow.Show();
+        }
+        catch (Exception error)
+        {
+            HostLog.Write("ERROR", $"replay settings failed: {error}");
+            _replaySettingsWindow = null;
+        }
     }
 
     /// Replay is available only while the project has a Replay input. Without one
