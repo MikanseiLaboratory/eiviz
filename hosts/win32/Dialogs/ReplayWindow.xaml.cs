@@ -85,9 +85,15 @@ public partial class ReplayWindow : Window
 
     private static IEivizBackend? Backend => (Application.Current as App)?.Backend;
 
+    /// <summary>When the operator last dragged the waveform, so a drag does not flood
+    /// the mixer with one seek per pixel.</summary>
+    private long _lastSeekAt;
+
     public ReplayWindow(Session session, MainWindow? main = null)
     {
         InitializeComponent();
+        // The waveform doubles as the seek bar.
+        Waveform.SeekRequested += OnWaveformSeek;
         _session = session;
         _main = main;
         Loaded += OnLoaded;
@@ -1930,6 +1936,23 @@ public partial class ReplayWindow : Window
     private void StepBack_Click(object sender, RoutedEventArgs e) => Step(-1);
 
     private void StepForward_Click(object sender, RoutedEventArgs e) => Step(1);
+
+    /// <summary>
+    /// Seeks the channel to the frame under the pointer. A drag emits one call per mouse
+    /// move, and the mixer only needs the latest, so it is throttled to about one per
+    /// frame.
+    /// </summary>
+    private void OnWaveformSeek(ulong frame)
+    {
+        var now = Environment.TickCount64;
+        if (now - _lastSeekAt < 16)
+            return;
+        _lastSeekAt = now;
+        var target = (long)Math.Min(frame, long.MaxValue);
+        if (Backend?.ReplayTransport(_channel, _playing, _speedMilli, target) != true)
+            return;
+        Waveform.PositionFrame = frame;
+    }
 
     private void Step(int delta)
     {

@@ -408,7 +408,10 @@
                     <WrapPanel x:Name="AnglePanel" Orientation="Horizontal"/>
                 </ScrollViewer>
             </DockPanel>
-            <local:ReplayWaveform x:Name="Waveform" Height="52" Margin="0,0,0,8"/>
+            <local:ReplayWaveform x:Name="Waveform" Height="52" Margin="0,0,0,8"
+                                           AutomationProperties.AutomationId="Waveform"
+                                           AutomationProperties.Name="{Binding [replay.waveformSeek], Source={x:Static i18n:Loc.Source}}"
+                                           ToolTip="{Binding [replay.waveformSeekHint], Source={x:Static i18n:Loc.Source}}"/>
             <DockPanel>
                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
                     <Button x:Name="MarkInButton" Width="180" Height="52" FontSize="17" FontWeight="Bold"

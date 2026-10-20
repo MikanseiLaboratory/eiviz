@@ -246,19 +246,3 @@ pub fn dispatch(angle_id: u32, job: CopyJob) -> bool {
         }
     }
 }
-
-/// Forgets the worker for an angle, e.g. when a recording stops.
-pub fn forget(angle_id: u32) {
-    let mut guard = WORKERS.lock().unwrap_or_else(|error| error.into_inner());
-    if let Some(workers) = guard.as_mut() {
-        workers.remove(&angle_id);
-    }
-}
-
-/// Forgets every worker. Called when the replay configuration changes.
-pub fn forget_all() {
-    let mut guard = WORKERS.lock().unwrap_or_else(|error| error.into_inner());
-    if let Some(workers) = guard.as_mut() {
-        workers.clear();
-    }
-}

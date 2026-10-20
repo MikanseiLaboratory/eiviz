@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Media;
 using Eiviz.Host.Interop;
 
@@ -30,10 +31,17 @@ internal sealed class ReplayWaveform : FrameworkElement
     private static readonly Pen Mark = new(new SolidColorBrush(Color.FromRgb(0xFF, 0xD1, 0x54)), 1);
     private static readonly Pen Playhead = new(new SolidColorBrush(Color.FromRgb(0xE0, 0x60, 0x60)), 2);
 
+    /// <summary>Raised while the operator drags across the waveform.</summary>
+    public event Action<ulong>? SeekRequested;
+
     public ReplayWaveform()
     {
         ClipToBounds = true;
         MinHeight = 56;
+        // The waveform is the seek bar: an operator who wants a different frame points
+        // at it rather than nudging with a jog wheel.
+        Cursor = Cursors.Hand;
+        Focusable = true;
     }
 
     public ulong InFrame
@@ -96,6 +104,44 @@ internal sealed class ReplayWaveform : FrameworkElement
         _buckets = count;
         InvalidateVisual();
         return _buckets;
+    }
+
+    /// The recording frame under an x coordinate, clamped to the drawn range.
+    public ulong FrameAt(double x)
+    {
+        var first = (long)_dropped;
+        var last = first + _buckets;
+        if (_buckets == 0 || last <= first || ActualWidth <= 0)
+            return _positionFrame;
+        var ratio = Math.Clamp(x / ActualWidth, 0.0, 1.0);
+        var bucket = first + (long)((last - first) * ratio);
+        return (ulong)Math.Max(0, (long)(bucket * _fps / Math.Max(1, _rate)));
+    }
+
+    protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
+    {
+        base.OnMouseLeftButtonDown(e);
+        CaptureMouse();
+        Focus();
+        SeekRequested?.Invoke(FrameAt(e.GetPosition(this).X));
+        e.Handled = true;
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        if (!IsMouseCaptured)
+            return;
+        SeekRequested?.Invoke(FrameAt(e.GetPosition(this).X));
+        e.Handled = true;
+    }
+
+    protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
+    {
+        base.OnMouseLeftButtonUp(e);
+        if (IsMouseCaptured)
+            ReleaseMouseCapture();
+        e.Handled = true;
     }
 
     /// Bucket index of a video frame, in absolute numbering.
