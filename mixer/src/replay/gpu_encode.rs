@@ -30,8 +30,21 @@ const RING: usize = 3;
 const QUEUE: usize = 4;
 
 /// Encoder threads: neither one per angle (the last angle starved) nor one in total (it
-/// serialised the waits and measured 287 frames a second against 450).
+/// serialised the waits). Measured on a 24-core machine in a release build, total
+/// throughput at 16 and 24 angles was 510/518 frames a second with two threads,
+/// 902/893 with four, 904/886 with eight and 917/902 with sixteen: four saturates the
+/// encoder, and more threads only add contention. `EIVIZ_REPLAY_ENCODE_THREADS` overrides
+/// it so the pool can be swept again on other hardware without a rebuild.
 const THREADS: usize = 4;
+
+/// The number of encoder threads to use, honouring the override.
+fn thread_count() -> usize {
+    std::env::var("EIVIZ_REPLAY_ENCODE_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(THREADS)
+        .clamp(1, 32)
+}
 
 /// One frame waiting to be encoded.
 struct Job {
@@ -184,7 +197,7 @@ fn ensure_encoder(device: &wgpu::Device, queue: &wgpu::Queue) {
     if QUEUES.get().is_some() {
         return;
     }
-    let queues: Vec<Pending> = (0..THREADS)
+    let queues: Vec<Pending> = (0..thread_count())
         .map(|_| Arc::new((Mutex::new(VecDeque::new()), Condvar::new())))
         .collect();
     if QUEUES.set(queues).is_err() {
