@@ -3061,6 +3061,28 @@ pub fn open_ffi_store(
     Ok(Box::new(FfiReplayStore { api, handle }))
 }
 
+/// Attaches a finished recording for playback only, through the loaded module.
+///
+/// The returned store refuses writes, so clips from an earlier run can be played and
+/// exported without risking the recording on disk.
+pub fn attach_ffi(
+    api: eiviz_pro_api::ProApi,
+    module: *mut std::ffi::c_void,
+    path: &str,
+) -> eiviz_pro_api::ProResult<Box<dyn eiviz_pro_api::ReplayStore>> {
+    let Some(attach) = api.replay_attach else {
+        return Err(eiviz_pro_api::ProError::unavailable(
+            "replay attach is missing",
+        ));
+    };
+    let mut handle = std::ptr::null_mut();
+    let status = unsafe { attach(module, path.as_ptr(), path.len(), &mut handle) };
+    if status.code != 0 || handle.is_null() {
+        return Err(eiviz_pro_api::ProError::io("replay attach failed"));
+    }
+    Ok(Box::new(FfiReplayStore { api, handle }))
+}
+
 pub fn estimate_ffi(
     path: &str,
     width: u32,

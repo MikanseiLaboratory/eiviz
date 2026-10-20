@@ -291,6 +291,14 @@ pub struct ProApi {
     pub replay_open: Option<
         unsafe extern "C" fn(*mut c_void, *const ProReplayConfig, *mut *mut c_void) -> ProStatus,
     >,
+    /// Opens a finished recording for playback only.
+    ///
+    /// Writing into a recording that is being read would destroy it, so a module that
+    /// attaches this way refuses every write. It exists so clips from an earlier run can
+    /// be played and exported without re-recording them.
+    pub replay_attach: Option<
+        unsafe extern "C" fn(*mut c_void, *const u8, usize, *mut *mut c_void) -> ProStatus,
+    >,
     pub replay_close: Option<unsafe extern "C" fn(*mut c_void) -> ProStatus>,
     pub replay_write_video: Option<
         unsafe extern "C" fn(*mut c_void, u32, u64, *const ProVideoView) -> ProStatus,
