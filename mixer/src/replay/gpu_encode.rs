@@ -146,7 +146,10 @@ pub fn prepare(
             },
         );
     }
-    let worker = workers.get(&angle_id)?;
+    let Some(worker) = workers.get(&angle_id) else {
+        crate::diag::error(&format!("replay encode: no worker for angle {angle_id}"));
+        return None;
+    };
     // Reuse a returned texture; make one if the ring is still out with the worker.
     let texture = {
         let mut free = worker
@@ -237,6 +240,9 @@ pub fn dispatch(angle_id: u32, job: CopyJob) -> bool {
             false
         }
         Err(TrySendError::Disconnected(job)) => {
+            crate::diag::error(&format!(
+                "replay encode: worker for angle {angle_id} is gone; frames are not being recorded"
+            ));
             let mut free = worker
                 .free
                 .lock()

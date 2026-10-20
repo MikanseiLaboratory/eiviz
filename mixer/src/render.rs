@@ -35,6 +35,10 @@ pub(crate) fn render_loop(
     let mut scene_cameras = HashMap::new();
     let mut generators = Vec::new();
     let mut outputs_snap = Vec::new();
+    // Two clock reads per phase, only when asked for: this is how the parallelisation
+    // work is measured, and it must not cost anything in normal runs.
+    let profile_frames = std::env::var_os("EIVIZ_PROFILE_FRAME").is_some();
+    let mut phases = (0f32, 0f32, 0f32, 0u32);
     let mut cached_mem = (0u64, 0u64);
     let mut cached_adapter = 0u64;
     let mut mem_at = Instant::now()
@@ -576,8 +580,8 @@ pub(crate) fn render_loop(
                 }
                 device.submit(Some(encoder.finish()));
                 emit_packed(&mut readbacks, &device, &packed_copies, &outputs_snap);
-                emit_gpu_encode(&gpu_copies, pts);
             }
+
             frame_delay.consume_display(false);
             composer.set_bus_colors(bus_colors.preview, bus_colors.program, bus_colors.inactive);
             composer.sync_scenes(&device, &scene_specs, &scene_labels, &scene_cameras);
@@ -598,11 +602,13 @@ pub(crate) fn render_loop(
                     &mix_sources,
                 );
             }
+            let scenes_started = Instant::now();
             if let Err(error) =
                 composer.render_scenes(&device, &used_scenes, &mut encoder, &tallies)
             {
                 set_error(&telemetry, error);
             }
+            let scenes_ms = scenes_started.elapsed().as_secs_f32() * 1000.0;
             let mut packed_copies: Vec<(u64, u32, u32)> = Vec::new();
             let mut gpu_copies: Vec<GpuEncodeCopy> = Vec::new();
             for snap in &snapshot {
@@ -703,6 +709,7 @@ pub(crate) fn render_loop(
                 pts,
             );
             thumbs.capture(&device, &mut composer, &mut encoder, frame_i, &thumbs_snap);
+            let replay_started = Instant::now();
             let replay_targets = crate::replay::engine().record_targets();
             // Copies queued this frame; handed to the per-angle workers once the copy
             // has been submitted, so the worker sees the picture and not the scene.
@@ -801,7 +808,26 @@ pub(crate) fn render_loop(
                     frame_i,
                 );
             }
+            let replay_ms = replay_started.elapsed().as_secs_f32() * 1000.0;
+            let submit_started = Instant::now();
             device.submit(Some(encoder.finish()));
+            let submit_ms = submit_started.elapsed().as_secs_f32() * 1000.0;
+            if profile_frames {
+                phases.0 += scenes_ms;
+                phases.1 += replay_ms;
+                phases.2 += submit_ms;
+                phases.3 += 1;
+                if phases.3 >= 120 {
+                    let frames = phases.3 as f32;
+                    crate::diag::info(&format!(
+                        "frame phases over {frames:.0} frames: scenes {:.2} ms, replay {:.2} ms, submit {:.2} ms",
+                        phases.0 / frames,
+                        phases.1 / frames,
+                        phases.2 / frames
+                    ));
+                    phases = (0.0, 0.0, 0.0, 0);
+                }
+            }
             // The copy is on the same queue as the encode, so a worker that picks the
             // texture up now still encodes the picture, in submission order.
             for (angle_id, job) in gpu_jobs.drain(..) {
