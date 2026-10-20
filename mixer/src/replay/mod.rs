@@ -259,6 +259,10 @@ struct Inner {
     /// zeros next to files that were plainly written; the larger of the two is shown,
     /// since both only grow.
     angle_written: std::collections::HashMap<u32, u64>,
+    /// Latest readback figures per angle: frames that reached the recorder, and copies
+    /// refused because every slot was still busy. The second number is what says whether
+    /// the ring is deep enough.
+    angle_readback: std::collections::HashMap<u32, (u64, u64)>,
     /// Bumped whenever the playlist reaches the engine, so the playout loop can
     /// drop a stale snapshot instead of overwriting a newer one.
     playlist_revision: u64,
@@ -333,6 +337,7 @@ impl ReplayEngine {
             inner: Mutex::new(Inner {
                 config: ReplayDto::default(),
                 angle_written: std::collections::HashMap::new(),
+                angle_readback: std::collections::HashMap::new(),
                 playlist_revision: 1,
                 recording: false,
                 uuid: String::new(),
@@ -1586,6 +1591,21 @@ impl ReplayEngine {
         result.map_err(|_| ERR_IO)
     }
 
+    /// Latest readback figures for an angle: (frames delivered, copies refused).
+    pub fn readback_state(&self, angle_id: u32) -> (u64, u64) {
+        self.lock()
+            .angle_readback
+            .get(&angle_id)
+            .copied()
+            .unwrap_or((0, 0))
+    }
+
+    /// Records what the readback path did for an angle, for the state report.
+    pub fn note_readback(&self, angle_id: u32, mapped: u64, exhausted: u64) {
+        let mut inner = self.lock();
+        inner.angle_readback.insert(angle_id, (mapped, exhausted));
+    }
+
     /// Progress of the running export, or an idle snapshot when none is running.
     pub fn export_progress(&self) -> eiviz_pro_api::ReplayExportProgress {
         let Some(store) = self
@@ -1660,6 +1680,8 @@ impl ReplayEngine {
                     "encodeQueueLen": angle.encode_queue_len,
                     "writeLatencyP95Ms": angle.write_latency_p95_ms,
                     "framesWritten": angle.frames_written,
+                    // What the readback path delivered and refused, which is how the ring
+                    // depth is judged rather than guessed at.
                     "droppedReadback": angle.dropped_readback,
                     "droppedEncode": angle.dropped_encode,
                     "droppedWrite": angle.dropped_write,
