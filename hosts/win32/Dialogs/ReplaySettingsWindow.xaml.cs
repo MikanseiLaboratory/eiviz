@@ -352,18 +352,18 @@ public partial class ReplaySettingsWindow : Window
     private void RefreshPlan()
     {
         _hasLimits = PlanGate.TryReplayLimits(out _angleLimit, out _channelLimit);
-        if (_hasLimits)
+        // A plan without a limit reports the largest number the field can hold, which
+        // used to be printed as "4294967295 angles" on Enterprise. Unlimited is a quota of
+        // its own, not a very large one.
+        const uint unlimited = uint.MaxValue;
+        var limited = _angleLimit is not 0 and not unlimited
+            && _channelLimit is not 0 and not unlimited;
+        PlanText.Text = _hasLimits switch
         {
-            PlanText.Text = _angleLimit == 0 || _channelLimit == 0
-                ? Loc.T("replay.planDenied")
-                : Loc.Format("replay.planLimits", _angleLimit, _channelLimit);
-        }
-        else
-        {
-            // No limits means Enterprise: say so, rather than leaving the operator to
-            // wonder whether the banner is broken.
-            PlanText.Text = Loc.T("replay.planUnlimited");
-        }
+            _ when _hasLimits && (_angleLimit == 0 || _channelLimit == 0) => Loc.T("replay.planDenied"),
+            _ when limited => Loc.Format("replay.planLimits", _angleLimit, _channelLimit),
+            _ => Loc.T("replay.planUnlimited"),
+        };
         var active = _replay is null ? 0 : ReplayModel.ActiveAngle(_replay);
         ActiveAngleText.Text = active == 0
             ? Loc.T("replay.noActiveAngle")
