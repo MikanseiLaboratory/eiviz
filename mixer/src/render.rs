@@ -714,7 +714,16 @@ pub(crate) fn render_loop(
             // Copies queued this frame; handed to the per-angle workers once the copy
             // has been submitted, so the worker sees the picture and not the scene.
             let mut gpu_jobs: Vec<(u32, crate::replay::gpu_encode::CopyJob)> = Vec::new();
-            for target in &replay_targets {
+            // Each encoder thread serves several angles in queue order, so a fixed
+            // iteration order would always starve the later angles of every thread. Starting
+            // one angle further each frame shares the encoder evenly.
+            let replay_from = if replay_targets.is_empty() {
+                0
+            } else {
+                frame_i as usize % replay_targets.len()
+            };
+            for offset in 0..replay_targets.len() {
+                let target = &replay_targets[(replay_from + offset) % replay_targets.len()];
                 let picture = match target.source {
                     crate::replay::RecordSource::Scene(gpu_id) => {
                         composer.scene_texture(gpu_id).cloned()
@@ -790,7 +799,16 @@ pub(crate) fn render_loop(
                                 },
                             ));
                         }
-                        None => crate::replay::engine().note_replaced(target.angle_id, 1),
+                        None => {
+                            crate::diag::warn_throttled(
+                                "replay-prepare-none",
+                                &format!(
+                                    "replay record: prepare returned None for angle {} {}x{} profile={}",
+                                    target.angle_id, target.width, target.height, target.profile
+                                ),
+                            );
+                            crate::replay::engine().note_replaced(target.angle_id, 1);
+                        }
                     }
                     continue;
                 }
