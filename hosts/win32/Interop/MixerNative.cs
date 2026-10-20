@@ -87,6 +87,8 @@ internal static partial class MixerNative
     internal const uint SceneSeqStop = 3;
 
     internal static string TransitionLabel(uint kind) => TransitionCatalog.Label(kind);
+    /// <summary>No recorded material is open: nothing has been recorded yet this run.</summary>
+    internal const int ErrIo = 5;
     internal const int ErrBufferTooSmall = 6;
     internal const int ErrNotSupportedPlan = 7;
     internal const uint FormatUyvy = 0;

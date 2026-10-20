@@ -529,10 +529,17 @@ internal sealed class LocalEivizBackend : IEivizBackend
 
     public bool ReplayExportStart(string json, out string error)
     {
-        HostLog.Write("INFO", $"replay export request {json}");
         var status = MixerNative.ReplayExportStart(json);
-        HostLog.Write("INFO", $"replay export start status {status}");
-        error = status == 0 ? "" : Loc.T("replay.exportFailed");
+        // ErrIo here means there is no open recording to read. The recorded material is
+        // opened when a recording starts, so a clip from an earlier run cannot be
+        // exported until something has been recorded in this one. Saying that beats a
+        // bare "failed", which reads as a broken export.
+        error = status switch
+        {
+            0 => "",
+            MixerNative.ErrIo => Loc.T("replay.exportNoMaterial"),
+            _ => Loc.T("replay.exportFailed"),
+        };
         return status == 0;
     }
 
