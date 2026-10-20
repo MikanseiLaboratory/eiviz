@@ -691,6 +691,47 @@ public partial class ReplaySettingsWindow : Window
                 _replay["enabled"] = enabled.DeepClone();
         }
 
+        // Removing an angle strands every clip that plays it, and the control layer
+        // refuses the whole change when that happens. Say how many clips would go and
+        // let the operator decide, rather than failing with a message they cannot act
+        // on or deleting their work without asking.
+        var keptAngles = _angles.Select(angle => angle.Id).ToHashSet();
+        if (_replay["playlists"] is JsonArray lists)
+        {
+            var stranded = 0;
+            foreach (var list in lists.OfType<JsonObject>())
+            {
+                if (list["clips"] is not JsonArray clips)
+                    continue;
+                stranded += clips.OfType<JsonObject>()
+                    .Count(clip => !keptAngles.Contains(clip["angleId"]?.GetValue<uint>() ?? 0));
+            }
+            if (stranded > 0)
+            {
+                var answer = MessageBox.Show(
+                    this,
+                    Loc.Format("replay.orphanClips", stranded),
+                    Title,
+                    MessageBoxButton.OKCancel,
+                    MessageBoxImage.Warning);
+                if (answer != MessageBoxResult.OK)
+                    return;
+                foreach (var list in lists.OfType<JsonObject>())
+                {
+                    if (list["clips"] is not JsonArray clips)
+                        continue;
+                    for (var index = clips.Count - 1; index >= 0; index--)
+                    {
+                        if (clips[index] is JsonObject clip
+                            && !keptAngles.Contains(clip["angleId"]?.GetValue<uint>() ?? 0))
+                        {
+                            clips.RemoveAt(index);
+                        }
+                    }
+                }
+            }
+        }
+
         var json = ReplayModel.Serialize(_replay);
         _session.ReplayJson = json;
         try
