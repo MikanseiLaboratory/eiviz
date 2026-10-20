@@ -26,6 +26,11 @@ struct Slot {
 }
 
 pub struct UnitReadback {
+    /// Copies refused because every slot was still busy. A ring that is too shallow is
+    /// the difference between a recording that keeps up and one that does not.
+    pub exhausted: u64,
+    /// Frames whose map completed, i.e. what the recorder actually had to work with.
+    pub mapped_frames: u64,
     pub width: u32,
     pub height: u32,
     pub stride: u32,
@@ -73,6 +78,8 @@ impl UnitReadback {
             slots,
             write: 0,
             mapped: VecDeque::new(),
+            exhausted: 0,
+            mapped_frames: 0,
             replaced: 0,
         }
     }
@@ -113,7 +120,10 @@ impl UnitReadback {
             }
         }
         let Some(index) = chosen else {
-            // Every slot is busy, so this frame cannot be read back.
+            // Every slot is busy, so this frame cannot be read back. Counted apart from the
+            // size-mismatch case below: one says the ring is too shallow, the other that the
+            // picture changed shape.
+            self.exhausted = self.exhausted.saturating_add(1);
             self.replaced = self.replaced.saturating_add(1);
             return;
         };
