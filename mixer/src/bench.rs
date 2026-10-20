@@ -43,6 +43,10 @@ pub struct Capacity {
     pub angles_by_disk: u32,
     /// Total frames a second the encoder can produce.
     pub total_fps: f64,
+    /// GPU to CPU readback bandwidth, which caps how many angles CPU encoding can carry.
+    pub readback_mb_s: f64,
+    /// Angles CPU encoding can read back while holding 60 fps.
+    pub angles_by_readback: u32,
 }
 
 /// Remembers the device the render loop runs on. Called once, when it starts.
@@ -64,6 +68,9 @@ pub fn run(path: &str, width: u32, height: u32) -> Result<Capacity, String> {
     // A shorter run for the CPU encoder: it is an order of magnitude slower, and the
     // operator is waiting.
     let encode_fps_cpu = measure_encode_cpu(width, height, 12)?;
+    // How fast a rendered frame can come back to the CPU at all. CPU encoding needs one
+    // readback per angle per frame, so this is what decides how many angles it can carry.
+    let readback_mb_s = measure_readback(&device, &queue, width, height)?;
     let (disk_write_mb_s, disk_read_mb_s) = measure_disk(path)?;
     let total_fps = encode_fps;
     let angles_at_60 = (total_fps / 60.0).floor().max(0.0) as u32;
@@ -71,9 +78,15 @@ pub fn run(path: &str, width: u32, height: u32) -> Result<Capacity, String> {
     // raw size keeps the estimate conservative: a drive that clears this clears anything.
     let bytes_per_second = disk_write_mb_s * 1024.0 * 1024.0;
     let angles_by_disk = (bytes_per_second / (BYTES_PER_ANGLE_FRAME * 60.0)).floor() as u32;
+    // 1080p59.94, one BGRA readback per angle per frame.
+    let frame_bytes = f64::from(width.max(16)) * f64::from(height.max(16)) * 4.0;
+    let angles_by_readback =
+        (readback_mb_s * 1024.0 * 1024.0 / (frame_bytes * 60.0)).floor() as u32;
     Ok(Capacity {
         encode_fps,
         encode_fps_cpu,
+        readback_mb_s,
+        angles_by_readback,
         disk_write_mb_s,
         disk_read_mb_s,
         angles_at_60,
@@ -88,12 +101,15 @@ impl Capacity {
         format!(
             concat!(
                 "{{\"encodeFps\":{:.1},\"encodeFpsCpu\":{:.1},\"diskWriteMbS\":{:.1},\"diskReadMbS\":{:.1},",
+                "\"readbackMbS\":{:.1},\"anglesByReadback\":{},",
                 "\"anglesAt60\":{},\"anglesByDisk\":{},\"totalFps\":{:.1}}}"
             ),
             self.encode_fps,
             self.encode_fps_cpu,
             self.disk_write_mb_s,
             self.disk_read_mb_s,
+            self.readback_mb_s,
+            self.angles_by_readback,
             self.angles_at_60,
             self.angles_by_disk,
             self.total_fps
@@ -202,6 +218,89 @@ fn measure_encode_cpu(width: u32, height: u32, frames: u32) -> Result<f64, Strin
         return Err("the CPU encoder finished too quickly to measure".to_owned());
     }
     Ok(f64::from(frames) / seconds)
+}
+
+/// Measures how fast a full frame can be read back from the GPU.
+///
+/// CPU encoding needs one readback per angle per frame, so this number decides how many
+/// angles it can carry: at 1080p59.94 one angle costs 1920x1080x4 bytes sixty times a
+/// second, and the drive is not the limit.
+fn measure_readback(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    width: u32,
+    height: u32,
+) -> Result<f64, String> {
+    let width = width.max(16);
+    let height = height.max(16);
+    let row = width as usize * 4;
+    let bytes = (row * height as usize) as u64;
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("eiviz-capacity-readback"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("eiviz-capacity-readback"),
+        size: bytes,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let frames = 8u32;
+    let started = Instant::now();
+    for _ in 0..frames {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("eiviz-capacity-readback"),
+        });
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row as u32),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(Some(encoder.finish()));
+        let slice = buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(5)),
+        });
+        let mapped = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .map_err(|error| format!("the readback never completed: {error}"))?;
+        if mapped.is_err() {
+            return Err("the readback failed".to_owned());
+        }
+        buffer.unmap();
+    }
+    let seconds = started.elapsed().as_secs_f64();
+    if seconds <= 0.0 {
+        return Err("the readback finished too quickly to measure".to_owned());
+    }
+    let megabytes = (bytes * u64::from(frames)) as f64 / (1024.0 * 1024.0);
+    Ok(megabytes / seconds)
 }
 
 fn measure_disk(path: &str) -> Result<(f64, f64), String> {
