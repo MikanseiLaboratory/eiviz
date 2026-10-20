@@ -529,7 +529,9 @@ internal sealed class LocalEivizBackend : IEivizBackend
 
     public bool ReplayExportStart(string json, out string error)
     {
+        HostLog.Write("INFO", $"replay export request {json}");
         var status = MixerNative.ReplayExportStart(json);
+        HostLog.Write("INFO", $"replay export start status {status}");
         error = status == 0 ? "" : Loc.T("replay.exportFailed");
         return status == 0;
     }

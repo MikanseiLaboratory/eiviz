@@ -1466,11 +1466,18 @@ impl ReplayEngine {
             .unwrap_or_else(|error| error.into_inner())
             .clone()
             .ok_or(ERR_IO)?;
-        store
+        let result = store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .export_start(spec)
-            .map_err(|_| ERR_IO)
+            .export_start(spec);
+        // The ABI only carries a code, so whatever the module says about a refusal
+        // never reaches the operator. Keep it in the log, or a refused export is a dead
+        // button with no explanation.
+        match &result {
+            Ok(()) => crate::diag::info("replay export start accepted"),
+            Err(error) => crate::diag::error(&format!("replay export start refused: {error}")),
+        }
+        result.map_err(|_| ERR_IO)
     }
 
     /// Progress of the running export, or an idle snapshot when none is running.
