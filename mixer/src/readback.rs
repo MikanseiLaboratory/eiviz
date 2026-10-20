@@ -31,6 +31,14 @@ pub struct UnitReadback {
     pub exhausted: u64,
     /// Frames whose map completed, i.e. what the recorder actually had to work with.
     pub mapped_frames: u64,
+    /// Slots examined by `advance`, and how many of those were still pending.
+    pub inspected: u64,
+    pub pending_seen: u64,
+    /// `try_recv` outcomes while a map was in flight: ready and not yet ready.
+    pub callbacks_ready: u64,
+    pub callbacks_waiting: u64,
+    /// Frames handed to the recorder by `take_latest`.
+    pub taken: u64,
     pub width: u32,
     pub height: u32,
     pub stride: u32,
@@ -80,6 +88,11 @@ impl UnitReadback {
             mapped: VecDeque::new(),
             exhausted: 0,
             mapped_frames: 0,
+            inspected: 0,
+            pending_seen: 0,
+            callbacks_ready: 0,
+            callbacks_waiting: 0,
+            taken: 0,
             replaced: 0,
         }
     }
@@ -165,6 +178,10 @@ impl UnitReadback {
     pub fn advance(&mut self, device: &GpuDevice) {
         let _ = device.device.poll(wgpu::PollType::Poll);
         for i in 0..self.slots.len() {
+            self.inspected = self.inspected.saturating_add(1);
+            if self.slots[i].pending {
+                self.pending_seen = self.pending_seen.saturating_add(1);
+            }
             if !self.slots[i].waiting {
                 continue;
             }
@@ -173,8 +190,10 @@ impl UnitReadback {
                 .as_ref()
                 .and_then(|rx| rx.try_recv().ok())
             else {
+                self.callbacks_waiting = self.callbacks_waiting.saturating_add(1);
                 continue;
             };
+            self.callbacks_ready = self.callbacks_ready.saturating_add(1);
             if result.is_ok() {
                 let slice = self.slots[i].buffer.slice(..);
                 if let Ok(view) = slice.get_mapped_range() {
@@ -240,7 +259,11 @@ impl UnitReadback {
 
     /// Oldest finished frame, so a consumer that writes them out keeps order.
     pub fn take_latest(&mut self) -> Option<(Vec<u8>, i64, u64)> {
-        self.mapped.pop_front()
+        let frame = self.mapped.pop_front();
+        if frame.is_some() {
+            self.taken = self.taken.saturating_add(1);
+        }
+        frame
     }
 
     /// Frames that finished and were replaced before anyone read them, since the
