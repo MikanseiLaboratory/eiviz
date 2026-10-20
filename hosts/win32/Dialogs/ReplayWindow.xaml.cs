@@ -467,6 +467,13 @@ public partial class ReplayWindow : Window
             path = Path.Combine(path, $"replay-{DateTime.Now:yyyyMMdd-HHmmss}.mp4");
             ExportPathBox.Text = path;
         }
+        else if (!Path.HasExtension(path))
+        {
+            // The MP4 writer picks its container from the extension; a path without one
+            // fails with a bare E_INVALIDARG that says nothing about the cause.
+            path += ".mp4";
+            ExportPathBox.Text = path;
+        }
         var segments = string.Join(",", BuildSegments(mode.Key).Select(segment =>
             $"{{\"angleId\":{segment.AngleId},\"fromFrame\":{segment.From},\"toFrame\":{segment.To}}}"));
         if (segments.Length == 0)
