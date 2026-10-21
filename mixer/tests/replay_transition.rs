@@ -48,9 +48,10 @@ fn linear(frames: u32) -> EivizMotion {
     }
 }
 
-/// The second clip's picture: solid green.
+/// The second clip's picture: solid green. A dissolve near its end still carries a
+/// little red, so the pure-colour test has to exclude that rather than call it green.
 fn is_green(pixel: [u8; 3]) -> bool {
-    pixel[1] > 200 && pixel[0] < 60 && pixel[2] < 60
+    pixel[1] > 200 && pixel[0] < 20 && pixel[2] < 20
 }
 
 /// Both clips on screen at once, which is what a dissolve is. The two clips are pure
@@ -62,7 +63,7 @@ fn is_dissolve_mix(pixel: [u8; 3]) -> bool {
 }
 
 fn is_red(pixel: [u8; 3]) -> bool {
-    pixel[0] > 200 && pixel[1] < 60 && pixel[2] < 60
+    pixel[0] > 200 && pixel[1] < 20 && pixel[2] < 20
 }
 
 #[test]
@@ -232,11 +233,14 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
         // renderer runs. On a software adapter a whole transition can pass between two
         // samples, so the run is repeated when the blend was missed entirely. The
         // picture the operator sees is what is measured either way.
-        let mut red = 0;
-        let mut mixed = 0;
         let mut held_here = 0;
         let mut last = [0, 0, 0];
-        let mut inside = 0;
+        // Real-time playout can move a whole clip past between two scene readbacks,
+        // especially in a debug build. The counters are accumulated across attempts so
+        // a run that sampled only the transition still proves clip A played.
+        let mut red_total = 0;
+        let mut inside_total = 0;
+        let mut mixed_total = 0;
         let attempts = 4;
         // A's last frame and the frames the transition covers. Overwrap runs the
         // transition over the tail of A; Additive holds A's last frame for it.
@@ -249,10 +253,10 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
                 mixer_scene_sequence(scene_id(2), 1, SCENE_SEQ_PLAY)
             });
 
-            red = 0;
-            mixed = 0;
+            let mut red = 0;
+            let mut mixed = 0;
+            let mut inside = 0;
             held_here = 0;
-            inside = 0;
             // The previous run leaves the channel on its last clip until the step cues
             // the first one again, so the run has not started until the channel reports
             // a frame of clip A.
@@ -301,7 +305,10 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
                     mixed += 1;
                 }
             }
-            if mixed > 0 {
+            red_total += red;
+            inside_total += inside;
+            mixed_total += mixed;
+            if mixed > 0 && red > 0 {
                 break;
             }
             assert!(
@@ -318,21 +325,21 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
         // with each other rather than against a sample count the frame rate decides.
         held.push(held_here);
         assert!(
-            red > 0,
+            red_total > 0,
             "{timing}: the first clip must play before the transition: last {last:?}"
         );
         assert!(
-            inside > 0,
+            inside_total > 0,
             "{timing}: the transition window must be sampled: out_a {out_a}, last {last:?}"
         );
         assert!(
-            mixed > 0,
-            "{timing}: the dissolve must put both clips on screen: {inside} samples in \
+            mixed_total > 0,
+            "{timing}: the dissolve must put both clips on screen: {inside_total} samples in \
              {window_first}..={out_a}, last {last:?}"
         );
         assert!(
             is_green(last),
-            "{timing}: the playlist must end on the second clip: last {last:?}, mixed {mixed}"
+            "{timing}: the playlist must end on the second clip: last {last:?}, mixed {mixed_total}"
         );
     }
     // "Overwrap" then "Additive": the insertion is the whole difference, because it

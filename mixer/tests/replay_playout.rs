@@ -87,6 +87,8 @@ fn the_replay_picture_reaches_the_program_scene() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.display().to_string().replace('\\', "/");
+    // The synchronous playout path: the queue is a jitter guard, so the path it
+    // falls back to has to keep working on its own.
     let config = CString::new(format!(
         r#"{{"enabled":true,"storage":[{{"path":"{path}","angleIds":[1]}}],
 "angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent","recordMode":"Composite"}}],
@@ -94,7 +96,7 @@ fn the_replay_picture_reaches_the_program_scene() {
 "channels":[{{"index":0,"playlistId":null,"inputId":0}}],
 "playlists":[],"events":[],
 "format":{{"width":320,"height":180,"fpsNum":60000,"fpsDen":1001,"profile":"Sq","segmentFrames":120}},
-"buffering":{{"encodeQueueFrames":6,"writeBufferMb":64,"overflowPolicy":"DropFrames","reserveMb":0}}}}"#
+"buffering":{{"encodeQueueFrames":6,"writeBufferMb":64,"overflowPolicy":"DropFrames","reserveMb":0}},"decodeAhead":false}}"#
     ))
     .unwrap();
     expect("configure", unsafe {

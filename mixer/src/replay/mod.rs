@@ -5,10 +5,11 @@ mod audio;
 pub mod channel;
 pub mod gpu_encode;
 mod health;
+pub(crate) mod profile;
 mod stretch;
 pub mod transition_pass;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -21,11 +22,13 @@ use eiviz_control::session::replay::{
 };
 use eiviz_pro_api::{
     EncodedFrame, Entitlements, LAYOUT_BGRA, PRO_BUSY, PRO_IO, PixelLayout, ProReplayAngle,
-    ProReplayConfig, ProReplayDecoded, ProReplayEstimateAbi, ProReplayStatsAbi, ProReplayStorage,
-    ProVideoView, ReplayAngleStats, ReplayStats, ReplayStore, ReplayStoreConfig, STATE_RECORDING,
-    STATE_STOPPED, VideoFrame, WriteOutcome, estimate_rate_bps, free_bytes, remaining_secs,
+    ProReplayConfig, ProReplayDecoded, ProReplayEstimateAbi, ProReplayPacket, ProReplayStatsAbi,
+    ProReplayStorage, ProVideoView, ReplayAngleStats, ReplayPacket, ReplayStats, ReplayStore,
+    ReplayStoreConfig, STATE_RECORDING, STATE_STOPPED, VideoFrame, WriteOutcome, estimate_rate_bps,
+    free_bytes, remaining_secs,
 };
 
+use self::transition_pass::TransitionPass;
 use crate::abi::{
     ERR_INVALID_ARGUMENT, ERR_IO, ERR_NOT_SUPPORTED_PLAN, MixerReplayAngleStats,
     MixerReplayChannelState, MixerReplayEstimateOut, MixerReplayStats, REPLAY_ISSUE_CPU_ENCODE,
@@ -117,16 +120,20 @@ struct RecordFrame {
     frame_index: u64,
     pts: i64,
     stride: usize,
+    layout: PixelLayout,
     data: Vec<u8>,
 }
 
 struct Inbox {
-    queues: Mutex<HashMap<u32, VecDeque<RecordFrame>>>,
+    /// Angles kept in key order, so the recorder can serve them round-robin without
+    /// rebuilding and sorting a key list on every frame. A recording runs this path
+    /// sixty times a second, and the sort was pure overhead.
+    queues: Mutex<BTreeMap<u32, VecDeque<RecordFrame>>>,
     /// Frames that may wait per angle before the render thread drops one. Tied to
     /// the operator's queue setting, so a short encoder hiccup is absorbed instead
     /// of losing picture.
     /// Which angle to serve next, so one angle cannot monopolise the recorder.
-    cursor: Mutex<usize>,
+    cursor: Mutex<u32>,
     cap: AtomicUsize,
     wake: Condvar,
 }
@@ -194,7 +201,7 @@ impl AudioInbox {
 impl Inbox {
     fn new() -> Self {
         Self {
-            queues: Mutex::new(HashMap::new()),
+            queues: Mutex::new(BTreeMap::new()),
             // Two frames is the old behaviour, used until a session configures a
             // real queue length.
             cursor: Mutex::new(0),
@@ -236,17 +243,23 @@ impl Inbox {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         loop {
-            if !queues.is_empty() {
-                let mut keys: Vec<u32> = queues.keys().copied().collect();
-                keys.sort_unstable();
-                for offset in 0..keys.len() {
-                    let index = (*cursor + offset) % keys.len();
-                    let key = keys[index];
-                    let served = queues.get_mut(&key).and_then(|queue| queue.pop_front());
-                    if let Some(frame) = served {
-                        *cursor = (index + 1) % keys.len();
-                        return Some(frame);
-                    }
+            // BTreeMap keys are already ordered, so the next angle is a range lookup
+            // rather than a fresh Vec allocation and sort every frame.
+            let start = *cursor;
+            let next = queues
+                .range(start..)
+                .find(|(_, queue)| !queue.is_empty())
+                .map(|(key, _)| *key)
+                .or_else(|| {
+                    queues
+                        .range(..start)
+                        .find(|(_, queue)| !queue.is_empty())
+                        .map(|(key, _)| *key)
+                });
+            if let Some(key) = next {
+                if let Some(frame) = queues.get_mut(&key).and_then(|queue| queue.pop_front()) {
+                    *cursor = key.wrapping_add(1);
+                    return Some(frame);
                 }
             }
             if stop.load(Ordering::Relaxed) {
@@ -268,13 +281,27 @@ struct ChannelSlot {
     index: u32,
     source_id: u64,
     transport: channel::Transport,
+    /// Bumped by every control change. The playout loop takes a snapshot to decode a
+    /// frame and used to write the whole transport back afterwards, which discarded a
+    /// cue or speed change that landed while the frame was in flight. The revision lets
+    /// it keep the newer transport instead.
+    transport_revision: u64,
     /// Playback audio cursor for this channel, kept outside the engine lock so a
     /// file read never blocks the render thread.
     audio: Arc<Mutex<audio::PlaybackAudio>>,
 }
 
+impl ChannelSlot {
+    fn touch_transport(&mut self) {
+        self.transport_revision = self.transport_revision.wrapping_add(1);
+    }
+}
+
 struct Inner {
     config: ReplayDto,
+    /// Whether playout decodes a frame or two ahead of the picture. The operator
+    /// owns this from Replay Setup: it buys jitter tolerance with picture memory.
+    decode_ahead: bool,
     /// Frames this engine accepted per angle. The store reports its own count, and a
     /// module that under-reports an angle past the eighth left the operator looking at
     /// zeros next to files that were plainly written; the larger of the two is shown,
@@ -284,6 +311,10 @@ struct Inner {
     /// refused because every slot was still busy. The second number is what says whether
     /// the ring is deep enough.
     angle_readback: std::collections::HashMap<u32, (u64, u64)>,
+    /// Frames a GPU angle lost because its encode ring had no free texture. Kept
+    /// apart from readback drops because the two say different things: one is a
+    /// shallow readback ring, the other an encoder that is behind.
+    angle_gpu_dropped: std::collections::HashMap<u32, u64>,
     /// Bumped whenever the playlist reaches the engine, so the playout loop can
     /// drop a stale snapshot instead of overwriting a newer one.
     playlist_revision: u64,
@@ -309,6 +340,10 @@ struct Inner {
     stats: MixerReplayStats,
     angles: Vec<MixerReplayAngleStats>,
     channels: Vec<ChannelSlot>,
+    /// The recording targets the render loop asks for every frame. Rebuilding this
+    /// Vec and re-locking the engine several times per frame was measurable, so it is
+    /// built when the config or the recording state changes and cloned as an Arc.
+    targets_cache: Option<Arc<[RecordTarget]>>,
     /// Waveform buckets per angle, filled from the audio the scheduler mixes.
     peaks: HashMap<u32, eiviz_pro_api::PeakAccumulator>,
     health: HealthMemory,
@@ -324,6 +359,27 @@ pub struct ReplayEngine {
     stop_record: Arc<AtomicBool>,
     stop_workers: Arc<AtomicBool>,
     workers: Mutex<Vec<JoinHandle<()>>>,
+    /// The render device, shared with the playout decoder. Set once when the
+    /// renderer starts; the channel worker can then decode packets on the GPU.
+    gpu: OnceLock<(wgpu::Device, wgpu::Queue)>,
+    /// Decoders whose GPU pipelines were built before playback needed them. The
+    /// first vmx decode builds shader pipelines and can take a second on a debug
+    /// build; doing that in front of the first clip would freeze playout.
+    prepared: Mutex<HashMap<u32, PreparedDecoder>>,
+    warming: AtomicBool,
+}
+
+struct PreparedDecoder {
+    width: u32,
+    height: u32,
+    profile: u32,
+    codec: vmx::Codec,
+    /// The incoming side of a transition needs its own codec: one codec cannot
+    /// have two decodes in flight because both use its coefficient buffer.
+    secondary: Option<vmx::Codec>,
+    /// The blend that joins the two textures. Built here so the first transition
+    /// does not compile a shader in front of playout.
+    transition: Option<TransitionPass>,
 }
 
 /// Where a recording angle takes its picture from. A scene angle records the
@@ -343,6 +399,9 @@ pub struct RecordTarget {
     pub angle_id: u32,
     /// Encode from the scene texture instead of reading it back first.
     pub gpu_encode: bool,
+    /// What the CPU path reads back. A CPU encoder gets packed UYVY straight from
+    /// the GPU pack pass; a GPU angle never reads back a picture at all.
+    pub layout: PixelLayout,
     /// Replay format profile code, for the codec preset.
     pub profile: u32,
 }
@@ -357,8 +416,10 @@ impl ReplayEngine {
         let engine = Self {
             inner: Mutex::new(Inner {
                 config: ReplayDto::default(),
+                decode_ahead: true,
                 angle_written: std::collections::HashMap::new(),
                 angle_readback: std::collections::HashMap::new(),
+                angle_gpu_dropped: std::collections::HashMap::new(),
                 playlist_revision: 1,
                 recording: false,
                 uuid: String::new(),
@@ -380,6 +441,7 @@ impl ReplayEngine {
                 stats: MixerReplayStats::default(),
                 angles: Vec::new(),
                 channels: Vec::new(),
+                targets_cache: None,
                 peaks: HashMap::new(),
                 health: HealthMemory::default(),
                 started_at: None,
@@ -391,7 +453,18 @@ impl ReplayEngine {
             stop_record: Arc::new(AtomicBool::new(true)),
             stop_workers: Arc::new(AtomicBool::new(false)),
             workers: Mutex::new(Vec::new()),
+            gpu: OnceLock::new(),
+            prepared: Mutex::new(HashMap::new()),
+            warming: AtomicBool::new(false),
         };
+        // A recording that silently runs the scalar path on an AVX2 machine is hard
+        // to tell from a slow disk. Name the path once, where the log starts.
+        let simd = vmx::SimdCapabilities::detect().select_path(960);
+        crate::diag::info(&format!(
+            "replay simd path={simd} color={} profile={}",
+            vmx::ColorSimdPath::detect(),
+            profile::is_enabled(),
+        ));
         engine.spawn_workers();
         engine
     }
@@ -404,6 +477,153 @@ impl ReplayEngine {
         // Workers are started on record/configure so the engine can be created
         // before the control service exists.
         let _ = (inbox, stop);
+    }
+
+    /// Remembers the render device so a channel can decode a packet on the GPU.
+    /// Called once, when the render loop starts.
+    pub fn set_gpu(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let _ = self.gpu.set((device.clone(), queue.clone()));
+        self.warm_decoders();
+    }
+
+    fn gpu_device(&self) -> Option<(wgpu::Device, wgpu::Queue)> {
+        self.gpu.get().cloned()
+    }
+
+    /// Builds each channel's GPU decoder before playout needs it. The first vmx
+    /// decode creates the compute pipelines, which is far too slow to do in front
+    /// of the first frame of a clip.
+    fn warm_decoders(&self) {
+        if self.warming.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let Some((device, queue)) = self.gpu_device() else {
+            self.warming.store(false, Ordering::Release);
+            return;
+        };
+        let (width, height, profile, channels, recording) = {
+            let inner = self.lock();
+            (
+                inner.width,
+                inner.height,
+                profile_code(inner.config.format.profile),
+                inner
+                    .channels
+                    .iter()
+                    .map(|slot| slot.index)
+                    .collect::<Vec<_>>(),
+                inner.recording,
+            )
+        };
+        if recording || channels.is_empty() {
+            self.warming.store(false, Ordering::Release);
+            return;
+        }
+        // A stop that follows another stop, or a re-apply of the same document,
+        // must not rebuild pipelines that are already waiting.
+        let already_ready = {
+            let prepared = self
+                .prepared
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            channels.iter().all(|index| {
+                prepared.get(index).is_some_and(|entry| {
+                    entry.width == width && entry.height == height && entry.profile == profile
+                })
+            })
+        };
+        if already_ready {
+            self.warming.store(false, Ordering::Release);
+            return;
+        }
+        let _ = thread::Builder::new()
+            .name("eiviz-replay-warm".into())
+            .spawn(move || {
+                let engine = engine();
+                for index in channels {
+                    if !engine.warming.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let profile_vmx = match profile {
+                        0 => vmx::Profile::Hq,
+                        2 => vmx::Profile::Lq,
+                        _ => vmx::Profile::Sq,
+                    };
+                    let Ok(mut codec) = vmx::Codec::new(vmx::Config {
+                        width: width as i32,
+                        height: height as i32,
+                        profile: profile_vmx,
+                        color_space: vmx::ColorSpace::Bt709,
+                    }) else {
+                        break;
+                    };
+                    // The blank decode is only there to build the pipelines; its
+                    // picture is discarded.
+                    {
+                        let _guard = crate::device::lock_gpu_queue();
+                        let _ = codec.decode_to_texture(&device, &queue);
+                    }
+                    let secondary = vmx::Codec::new(vmx::Config {
+                        width: width as i32,
+                        height: height as i32,
+                        profile: profile_vmx,
+                        color_space: vmx::ColorSpace::Bt709,
+                    })
+                    .ok()
+                    .map(|mut second| {
+                        let _guard = crate::device::lock_gpu_queue();
+                        let _ = second.decode_to_texture(&device, &queue);
+                        second
+                    });
+                    // A transition between two clips blends their textures, so the
+                    // pipeline is built here instead of on the channel worker.
+                    let transition = Some(TransitionPass::new(
+                        &device,
+                        wgpu::TextureFormat::Bgra8Unorm,
+                    ));
+                    engine
+                        .prepared
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .insert(
+                            index,
+                            PreparedDecoder {
+                                width,
+                                height,
+                                profile,
+                                codec,
+                                secondary,
+                                transition,
+                            },
+                        );
+                }
+                engine.warming.store(false, Ordering::Release);
+                crate::diag::info("replay GPU decoders warmed");
+            });
+    }
+
+    fn is_warming(&self) -> bool {
+        self.warming.load(Ordering::Relaxed)
+    }
+
+    fn take_prepared(
+        &self,
+        index: u32,
+        width: u32,
+        height: u32,
+        profile: u32,
+    ) -> Option<PreparedDecoder> {
+        let mut prepared = self
+            .prepared
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        // Taken rather than borrowed: the decoder owns it from here, and an entry
+        // that does not match the current format would only go stale.
+        let entry = prepared.remove(&index)?;
+        if entry.width != width || entry.height != height || entry.profile != profile {
+            return None;
+        }
+        Some(entry)
     }
 
     pub fn configure(&self, json: &str) -> Result<(), ReplayFailure> {
@@ -424,6 +644,9 @@ impl ReplayEngine {
             return Ok(());
         };
         self.gate(&dto)?;
+        // Both are the operator's to set now, so a configure is what turns them on.
+        profile::set_enabled(dto.profiling);
+        self.lock().decode_ahead = dto.decode_ahead;
         // Encoding needs a ring of full-size textures per angle. Refusing here, with the
         // numbers, beats allocating until the driver fails somewhere unrelated.
         {
@@ -545,6 +768,7 @@ impl ReplayEngine {
         }
         let mut inner = self.lock();
         inner.config = dto;
+        inner.targets_cache = None;
         inner.playlist_revision = inner.playlist_revision.wrapping_add(1);
         let config = inner.config.clone();
         // The queue the operator asked for is the queue the encoder gets; the
@@ -601,10 +825,17 @@ impl ReplayEngine {
                         channel.input_id
                     },
                     transport,
+                    transport_revision: 0,
                     audio,
                 }
             })
             .collect();
+        drop(inner);
+        self.prepared
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        self.warm_decoders();
         self.ensure_workers();
         Ok(())
     }
@@ -871,6 +1102,7 @@ impl ReplayEngine {
         inner.mark_in = None;
         // A new recording starts a new waveform and a new audio tail.
         inner.peaks.clear();
+        inner.angle_gpu_dropped.clear();
         self.audio_inbox.clear();
         inner.width = width;
         inner.height = height;
@@ -884,6 +1116,7 @@ impl ReplayEngine {
         inner.stats.stop_reason = REPLAY_STOP_NONE;
         inner.stats.remaining_is_estimate = 1;
         inner.config.angles = remembered;
+        inner.targets_cache = None;
         Ok(())
     }
 
@@ -897,12 +1130,19 @@ impl ReplayEngine {
         let mut inner = self.lock();
         if inner.recording || inner.stats.state == REPLAY_STATE_RECORDING {
             inner.recording = false;
+            inner.targets_cache = None;
             inner.stats.state = REPLAY_STATE_STOPPED;
             inner.stats.stop_reason = reason;
         }
         // The waveform keeps what was recorded, including the last partial bucket.
         for accumulator in inner.peaks.values_mut() {
             accumulator.flush();
+        }
+        drop(inner);
+        // Playback usually starts after the recorder stops. Warm the GPU decoders
+        // now so the first clip does not pay for shader pipeline creation.
+        if !self.stop_workers.load(Ordering::Relaxed) {
+            self.warm_decoders();
         }
     }
 
@@ -942,12 +1182,15 @@ impl ReplayEngine {
         inner.fps_den = fps_den;
     }
 
-    pub fn record_targets(&self) -> Vec<RecordTarget> {
-        let inner = self.lock();
+    pub fn record_targets(&self) -> Arc<[RecordTarget]> {
+        let mut inner = self.lock();
         if !inner.recording {
-            return Vec::new();
+            return empty_targets();
         }
-        inner
+        if let Some(cache) = &inner.targets_cache {
+            return Arc::clone(cache);
+        }
+        let targets: Vec<RecordTarget> = inner
             .config
             .angles
             .iter()
@@ -966,15 +1209,25 @@ impl ReplayEngine {
                 height: inner.height,
                 angle_id: angle.id,
                 gpu_encode: angle.encoder == eiviz_control::session::replay::AngleEncoder::Gpu,
+                layout: if angle.encoder == eiviz_control::session::replay::AngleEncoder::Gpu {
+                    PixelLayout::Bgra
+                } else {
+                    // The CPU encoder needs 4:2:2. Packing on the GPU keeps the
+                    // readback at half the bytes and skips the scalar conversion.
+                    PixelLayout::Uyvy
+                },
                 profile: profile_code(inner.config.format.profile) as u32,
             })
-            .collect()
+            .collect();
+        let cache: Arc<[RecordTarget]> = Arc::from(targets);
+        inner.targets_cache = Some(Arc::clone(&cache));
+        cache
     }
 
     /// Scenes the recorder reads. Only scene angles need them drawn.
     pub fn replay_scene_ids(&self) -> Vec<u64> {
         self.record_targets()
-            .into_iter()
+            .iter()
             .filter_map(|target| match target.source {
                 RecordSource::Scene(gpu_id) => Some(gpu_id),
                 RecordSource::Input(_) => None,
@@ -1116,7 +1369,7 @@ impl ReplayEngine {
             (inner.width, inner.height, inner.fps_num, inner.fps_den)
         };
         let frame = EncodedFrame {
-            payload: payload.to_vec(),
+            payload: Arc::new(payload.to_vec()),
             width,
             height,
             pts_100ns: pts,
@@ -1175,12 +1428,14 @@ impl ReplayEngine {
         pts: i64,
         data: Vec<u8>,
         stride: usize,
+        layout: PixelLayout,
     ) {
         let accepted = self.inbox.offer(RecordFrame {
             angle_id,
             frame_index,
             pts,
             stride,
+            layout,
             data,
         });
         if !accepted {
@@ -1225,6 +1480,13 @@ impl ReplayEngine {
         *inner.dropped_readback.entry(angle_id).or_default() += count;
         let capped = count.min(u64::from(u32::MAX)) as u32;
         inner.recent_drops = inner.recent_drops.saturating_add(capped);
+    }
+
+    /// Records a GPU angle that had no free encode ring texture. This is not a
+    /// readback drop: the picture never left the GPU, the encoder was still busy.
+    pub fn note_encode_dropped(&self, angle_id: u32) {
+        let mut inner = self.lock();
+        *inner.angle_gpu_dropped.entry(angle_id).or_default() += 1;
     }
 
     /// Feeds the audio the scheduler just mixed into the waveform buckets of every
@@ -1390,6 +1652,7 @@ impl ReplayEngine {
             in_frame,
             out_frame,
         });
+        slot.touch_transport();
         Ok(())
     }
 
@@ -1406,12 +1669,27 @@ impl ReplayEngine {
             .iter_mut()
             .find(|slot| slot.index == channel)
             .ok_or(ERR_INVALID_ARGUMENT)?;
-        slot.transport.set_playing(playing);
+        let mut changed = false;
+        if slot.transport.playing != playing {
+            slot.transport.set_playing(playing);
+            changed = true;
+        }
         if speed_milli != 0 {
-            slot.transport.set_rate(f64::from(speed_milli) / 1000.0);
+            let rate = f64::from(speed_milli) / 1000.0;
+            if (slot.transport.rate() - rate).abs() > 1e-6 {
+                slot.transport.set_rate(rate);
+                changed = true;
+            }
         }
         if seek_frame >= 0 {
-            slot.transport.seek_source(seek_frame as u64);
+            let target = seek_frame as u64;
+            if slot.transport.source_frame() != target {
+                slot.transport.seek_source(target);
+                changed = true;
+            }
+        }
+        if changed {
+            slot.touch_transport();
         }
         Ok(())
     }
@@ -1424,7 +1702,10 @@ impl ReplayEngine {
             .iter_mut()
             .find(|slot| slot.index == channel)
             .ok_or(ERR_INVALID_ARGUMENT)?;
-        slot.transport.set_looping(looping);
+        if slot.transport.is_looping() != looping {
+            slot.transport.set_looping(looping);
+            slot.touch_transport();
+        }
         Ok(())
     }
 
@@ -1447,6 +1728,7 @@ impl ReplayEngine {
             (current + i64::from(delta)).clamp(clip.in_frame as i64, clip.out_frame as i64);
         slot.transport.seek_source(target as u64);
         slot.transport.set_playing(false);
+        slot.touch_transport();
         Ok(())
     }
 
@@ -1468,6 +1750,7 @@ impl ReplayEngine {
         // motion without leaving the live feed.
         slot.transport.jump_to_now(frame, angle);
         slot.transport.set_playing(true);
+        slot.touch_transport();
         Ok(())
     }
 
@@ -1542,6 +1825,7 @@ impl ReplayEngine {
             index: channel,
             source_id,
             transport,
+            transport_revision: 0,
             audio: Arc::new(Mutex::new(audio::PlaybackAudio::new(AUDIO_CHANNELS))),
         });
     }
@@ -1587,6 +1871,7 @@ impl ReplayEngine {
         let clip = slot.transport.clips()[index].clone();
         slot.transport.set_clip(clip, index);
         slot.transport.set_playing(play);
+        slot.touch_transport();
         Ok(())
     }
 
@@ -1828,6 +2113,41 @@ impl ReplayEngine {
         );
     }
 
+    /// The channels that should be playing, and the frame timing they share.
+    ///
+    /// Read together under one lock so a worker set is built from one configuration
+    /// rather than from two halves of two.
+    fn playout_setup(
+        &self,
+    ) -> (
+        Vec<(u32, u64, Arc<Mutex<audio::PlaybackAudio>>)>,
+        PlayoutContext,
+    ) {
+        let inner = self.lock();
+        let period = Duration::from_secs_f64(
+            f64::from(inner.fps_den.max(1)) / f64::from(inner.fps_num.max(1)),
+        );
+        let channels = inner
+            .channels
+            .iter()
+            .map(|slot| (slot.index, slot.source_id, Arc::clone(&slot.audio)))
+            .collect();
+        let context = PlayoutContext {
+            width: inner.width,
+            height: inner.height,
+            profile: profile_code(inner.config.format.profile),
+            fps: (inner.fps_num, inner.fps_den),
+            decode_ahead: inner.decode_ahead,
+            // A zero frame rate would otherwise turn the sleeper into a busy loop.
+            period: if period.is_zero() {
+                Duration::from_millis(16)
+            } else {
+                period
+            },
+        };
+        (channels, context)
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|error| error.into_inner())
     }
@@ -1956,11 +2276,24 @@ fn angle_stats(
             .get(&angle.angle_id)
             .copied()
             .unwrap_or(0),
-        dropped_encode: angle.dropped_encode,
+        dropped_encode: angle.dropped_encode.saturating_add(
+            inner
+                .angle_gpu_dropped
+                .get(&angle.angle_id)
+                .copied()
+                .unwrap_or(0),
+        ),
         dropped_write: angle.dropped_write,
         bytes_written: angle.bytes_written,
         segments: angle.segments,
     }
+}
+
+/// The empty target list. A stopped recorder is asked for its targets several times
+/// per rendered frame, and allocating a fresh empty Arc each time was pointless.
+fn empty_targets() -> Arc<[RecordTarget]> {
+    static EMPTY: OnceLock<Arc<[RecordTarget]>> = OnceLock::new();
+    Arc::clone(EMPTY.get_or_init(|| Arc::from(Vec::<RecordTarget>::new())))
 }
 
 fn record_loop(inbox: Arc<Inbox>, stop_record: Arc<AtomicBool>, stop_workers: Arc<AtomicBool>) {
@@ -1991,11 +2324,11 @@ fn record_loop(inbox: Arc<Inbox>, stop_record: Arc<AtomicBool>, stop_workers: Ar
             width,
             height,
             stride: frame.stride as u32,
-            layout: PixelLayout::Bgra,
+            layout: frame.layout,
             pts_100ns: frame.pts,
             fps_num,
             fps_den,
-            data: frame.data.into(),
+            data: Arc::new(frame.data),
         };
         let outcome = store
             .lock()
@@ -2148,116 +2481,855 @@ fn health_loop(stop: Arc<AtomicBool>) {
     }
 }
 
-fn channel_loop(stop: Arc<AtomicBool>) {
-    let engine = engine();
-    while !stop.load(Ordering::Relaxed) {
-        let (slots, period, last_frame, fps) = {
-            let inner = engine.lock();
-            let period = Duration::from_secs_f64(
-                f64::from(inner.fps_den.max(1)) / f64::from(inner.fps_num.max(1)),
+/// One channel's GPU decoder. It keeps the codec and packet buffer alive across
+/// frames, and remembers when the store cannot hand out packets so a test store
+/// does not pay for a failed FFI call every frame.
+struct ChannelDecoder {
+    store_id: usize,
+    width: u32,
+    height: u32,
+    profile: u32,
+    packet_available: bool,
+    codec: Option<vmx::Codec>,
+    /// The incoming side of a transition. One codec cannot decode two packets in
+    /// a row, because both decodes use its coefficient buffer.
+    incoming_codec: Option<vmx::Codec>,
+    packet: Vec<u8>,
+    incoming_packet: Vec<u8>,
+    /// Built on first use when the channel was not warmed; a channel that never
+    /// runs a transition never builds one.
+    transition: Option<TransitionPass>,
+    first_decode: bool,
+}
+
+enum DecodedGpu {
+    Frame(crate::upload::GpuVideoFrame, bool),
+    /// The store cannot hand out packets. The caller keeps using CPU decode.
+    Unsupported,
+    /// A packet was available but decoding it failed. Hold the last picture.
+    Failed,
+}
+
+impl ChannelDecoder {
+    fn new(width: u32, height: u32, profile: u32) -> Self {
+        Self {
+            store_id: 0,
+            width,
+            height,
+            profile,
+            packet_available: true,
+            codec: None,
+            incoming_codec: None,
+            packet: Vec::new(),
+            incoming_packet: Vec::new(),
+            transition: None,
+            first_decode: true,
+        }
+    }
+
+    fn has_codec(&self) -> bool {
+        self.codec.is_some()
+    }
+
+    fn adopt(&mut self, prepared: PreparedDecoder) {
+        self.codec = Some(prepared.codec);
+        self.incoming_codec = prepared.secondary;
+        // Only replaces a pass this decoder built itself, which cannot happen yet:
+        // adoption is the first thing that runs for a channel.
+        self.transition = prepared.transition;
+        self.first_decode = false;
+    }
+
+    /// Decodes everything a plan asks for and returns a single picture.
+    ///
+    /// A transition needs two decodes and one blend. Both frames stay on the
+    /// device: the outgoing and incoming textures go into the transition pass and
+    /// the compositor receives the blended result, with no CPU frame in between.
+    fn decode(
+        &mut self,
+        store: &Arc<Mutex<Box<dyn ReplayStore>>>,
+        plan: &channel::FramePlan,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> DecodedGpu {
+        let Some((angle, frame)) = plan.primary else {
+            return DecodedGpu::Failed;
+        };
+        let (outgoing, outgoing_substituted) =
+            match self.decode_one(store, angle, frame, device, queue, false) {
+                DecodedGpu::Frame(frame, substituted) => (frame, substituted),
+                other => return other,
+            };
+        let Some((second_angle, second_frame)) = plan.secondary else {
+            return DecodedGpu::Frame(outgoing, outgoing_substituted);
+        };
+        if !wants_secondary(plan) {
+            return DecodedGpu::Frame(outgoing, outgoing_substituted);
+        }
+        let (incoming, incoming_substituted) =
+            match self.decode_one(store, second_angle, second_frame, device, queue, true) {
+                DecodedGpu::Frame(frame, substituted) => (frame, substituted),
+                // No packet source at all: the CPU path owns this channel.
+                DecodedGpu::Unsupported => return DecodedGpu::Unsupported,
+                // The incoming frame did not decode. Showing the outgoing one is
+                // what the CPU path does, so a bad clip boundary is not black.
+                DecodedGpu::Failed => return DecodedGpu::Frame(outgoing, outgoing_substituted),
+            };
+        let crate::upload::GpuVideoFrame {
+            pts: outgoing_pts,
+            texture: _outgoing_texture,
+            view: outgoing_view,
+            ..
+        } = outgoing;
+        let crate::upload::GpuVideoFrame {
+            pts: incoming_pts,
+            texture: _incoming_texture,
+            view: incoming_view,
+            ..
+        } = incoming;
+        let width = _outgoing_texture.width();
+        let height = _outgoing_texture.height();
+        // A fresh target per frame, like the decoders' own textures: the
+        // compositor samples this one on a later frame, so a reused texture would
+        // be overwritten while the previous picture is still on screen.
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("replay-transition-target"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let pass = self
+            .transition
+            .get_or_insert_with(|| TransitionPass::new(device, wgpu::TextureFormat::Bgra8Unorm));
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("replay-transition"),
+        });
+        {
+            let _guard = crate::device::lock_gpu_queue();
+            pass.run(
+                device,
+                queue,
+                &mut encoder,
+                &outgoing_view,
+                &incoming_view,
+                &target_view,
+                plan.kind,
+                plan.direction,
+                plan.mix as f32,
             );
-            let revision = inner.playlist_revision;
-            let slots = inner
-                .channels
-                .iter()
-                .map(|slot| {
-                    (
-                        slot.index,
-                        slot.source_id,
-                        slot.transport.clone(),
-                        Arc::clone(&slot.audio),
-                        revision,
-                    )
-                })
-                .collect::<Vec<_>>();
+            queue.submit(Some(encoder.finish()));
+        }
+        // A transition picture is its own picture, so it carries its own timestamp;
+        // otherwise the compositor would see one timestamp for the whole blend.
+        let pts = blend_pts(outgoing_pts, incoming_pts, plan.mix);
+        DecodedGpu::Frame(
+            crate::upload::GpuVideoFrame {
+                pts,
+                width,
+                height,
+                packed: false,
+                bgra: true,
+                texture: target,
+                view: target_view,
+                lease: None,
+            },
+            outgoing_substituted || incoming_substituted,
+        )
+    }
+
+    /// Decodes one packet into its own texture. `incoming` selects the second codec
+    /// and packet buffer that a transition's incoming frame needs.
+    fn decode_one(
+        &mut self,
+        store: &Arc<Mutex<Box<dyn ReplayStore>>>,
+        angle_id: u32,
+        frame_index: u64,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        incoming: bool,
+    ) -> DecodedGpu {
+        let store_id = Arc::as_ptr(store) as usize;
+        if store_id != self.store_id {
+            // A new recording may be a different store (or a test double that has
+            // no packet source), so the capability is re-checked once.
+            self.store_id = store_id;
+            self.packet_available = true;
+            self.codec = None;
+            self.incoming_codec = None;
+            self.first_decode = true;
+        }
+        if !self.packet_available {
+            return DecodedGpu::Unsupported;
+        }
+        let info = {
+            let packet = if incoming {
+                &mut self.incoming_packet
+            } else {
+                &mut self.packet
+            };
+            let mut guard = store.lock().unwrap_or_else(|error| error.into_inner());
+            match guard.read_packet(angle_id, frame_index, packet) {
+                Ok(info) => info,
+                Err(error) => {
+                    return if error.kind == eiviz_pro_api::ProErrorKind::Unavailable {
+                        self.packet_available = false;
+                        DecodedGpu::Unsupported
+                    } else {
+                        DecodedGpu::Failed
+                    };
+                }
+            }
+        };
+        if info.codec != eiviz_pro_api::REPLAY_CODEC_VMX1 {
+            self.packet_available = false;
+            return DecodedGpu::Unsupported;
+        }
+        let codec_slot = if incoming {
+            &mut self.incoming_codec
+        } else {
+            &mut self.codec
+        };
+        if codec_slot.is_none() {
+            let profile = match self.profile {
+                0 => vmx::Profile::Hq,
+                2 => vmx::Profile::Lq,
+                _ => vmx::Profile::Sq,
+            };
+            let started = Instant::now();
+            match vmx::Codec::new(vmx::Config {
+                width: self.width as i32,
+                height: self.height as i32,
+                profile,
+                color_space: vmx::ColorSpace::Bt709,
+            }) {
+                Ok(codec) => {
+                    *codec_slot = Some(codec);
+                    crate::diag::info(&format!(
+                        "replay GPU decoder built {}x{}{} in {}ms",
+                        self.width,
+                        self.height,
+                        if incoming { " (incoming)" } else { "" },
+                        started.elapsed().as_millis()
+                    ));
+                }
+                Err(error) => {
+                    crate::diag::error(&format!(
+                        "replay GPU decode codec could not be built {}x{}: {error}",
+                        self.width, self.height
+                    ));
+                    return DecodedGpu::Failed;
+                }
+            }
+        }
+        let Some(codec) = codec_slot.as_mut() else {
+            return DecodedGpu::Failed;
+        };
+        let packet = if incoming {
+            &self.incoming_packet
+        } else {
+            &self.packet
+        };
+        if let Err(error) = codec.load_from(packet) {
+            crate::diag::error(&format!(
+                "replay GPU packet load failed angle={angle_id} frame={frame_index} bytes={}: {error}",
+                packet.len()
+            ));
+            return DecodedGpu::Failed;
+        }
+        // The surface configure may wait for the device; a submit during that
+        // wait is a validation error. Share the renderer's queue lock.
+        let first = self.first_decode && !incoming;
+        let submit_started = Instant::now();
+        let submitted = {
+            let _guard = crate::device::lock_gpu_queue();
+            codec.decode_to_texture(device, queue)
+        };
+        if first {
+            self.first_decode = false;
+            crate::diag::info(&format!(
+                "replay GPU decode first submit in {}ms",
+                submit_started.elapsed().as_millis()
+            ));
+        }
+        match submitted {
+            Ok(frame) => {
+                let view = frame
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+                DecodedGpu::Frame(
+                    crate::upload::GpuVideoFrame {
+                        pts: info.pts_100ns,
+                        width: frame.width,
+                        height: frame.height,
+                        packed: false,
+                        bgra: true,
+                        texture: frame.texture,
+                        view,
+                        lease: None,
+                    },
+                    info.substituted,
+                )
+            }
+            Err(error) => {
+                crate::diag::error(&format!("replay GPU decode failed: {error}"));
+                DecodedGpu::Failed
+            }
+        }
+    }
+}
+
+/// What a channel's playout needs that stays the same for the whole run. A configure
+/// that changes any of it stops the workers and starts them again.
+#[derive(Clone, PartialEq, Eq)]
+struct PlayoutContext {
+    width: u32,
+    height: u32,
+    profile: u32,
+    fps: (u32, u32),
+    period: Duration,
+    /// Decode ahead of the picture (Replay Setup). Off means the synchronous path.
+    decode_ahead: bool,
+}
+
+/// One decoded picture waiting to be shown, with the transport it was decoded at so
+/// its block of sound is the one that belongs to that picture.
+struct AheadFrame {
+    frame: crate::upload::GpuVideoFrame,
+    transport: channel::Transport,
+}
+
+/// How many decoded frames a channel keeps ready.
+///
+/// One frame is what takes the decode off the publish path: the picture for a tick is
+/// already there when the tick starts, so a decode that runs long delays the next
+/// picture instead of this one. Two leaves a frame of slack for a tick that overran.
+/// The cost is picture memory (a 1080p BGRA frame is 8 MiB), so 4K keeps one.
+///
+/// A depth of zero is the operator turning the queue off in Replay Setup, which is
+/// the first thing to try if a playback problem is ever blamed on it: the
+/// synchronous path is then exactly the one that shipped before.
+fn ahead_depth(width: u32, height: u32, enabled: bool) -> usize {
+    const BUDGET_BYTES: u64 = 32 * 1024 * 1024;
+    if !enabled {
+        return 0;
+    }
+    let frame_bytes = u64::from(width.max(1)) * u64::from(height.max(1)) * 4;
+    ((BUDGET_BYTES / frame_bytes.max(1)).clamp(1, 2)) as usize
+}
+
+/// One channel's playout, owned by that channel's thread.
+///
+/// Each channel keeps its own transport, decoder and deadline, so a decode that runs
+/// long falls behind on its own instead of moving every other channel's frame time.
+/// The shared state is the engine's slots (short lock), the store (short lock) and
+/// the GPU queue, which the renderer shares the same way.
+struct ChannelPlayout {
+    index: u32,
+    source_id: u64,
+    audio: Arc<Mutex<audio::PlaybackAudio>>,
+    decoder: ChannelDecoder,
+    next: Instant,
+    /// Decoded pictures waiting their turn, oldest first.
+    ahead: std::collections::VecDeque<AheadFrame>,
+    /// Revisions the queued pictures belong to. A cue, a speed change or a new
+    /// playlist makes them wrong, and showing one would put the old transport on air.
+    seen: (u64, u64),
+    depth: usize,
+}
+
+impl ChannelPlayout {
+    fn new(
+        index: u32,
+        source_id: u64,
+        audio: Arc<Mutex<audio::PlaybackAudio>>,
+        context: &PlayoutContext,
+    ) -> Self {
+        Self {
+            index,
+            source_id,
+            audio,
+            decoder: ChannelDecoder::new(context.width, context.height, context.profile),
+            next: Instant::now(),
+            ahead: std::collections::VecDeque::with_capacity(4),
+            seen: (0, 0),
+            depth: ahead_depth(context.width, context.height, context.decode_ahead),
+        }
+    }
+
+    /// Runs this channel until `stop` is set, once per output frame.
+    fn run(mut self, engine: &ReplayEngine, context: &PlayoutContext, stop: &AtomicBool) {
+        while !stop.load(Ordering::Relaxed) {
+            let due = self.next;
+            if let Some(wait) = due.checked_duration_since(Instant::now()) {
+                thread::sleep(wait);
+            }
+            let now = Instant::now();
+            // A tick that overran covers more than one output frame. Advancing the
+            // transport by only one frame turned playback into slow motion whenever a
+            // decode took longer than the period. A long stall resyncs instead of
+            // replaying every missed frame at once.
+            let late = if now > due + context.period {
+                let frames =
+                    ((now - due).as_secs_f64() / context.period.as_secs_f64()).floor() as u32 + 1;
+                frames.clamp(1, 6)
+            } else {
+                1
+            };
+            if late > 1 {
+                profile::late(late);
+            }
+            self.tick(engine, context, late);
+            self.next = due + context.period * late;
+            if self.next <= Instant::now() {
+                // Still behind after the catch-up cap. Resync instead of accumulating
+                // lateness, which would turn every later tick into a catch-up tick.
+                self.next = Instant::now() + context.period;
+            }
+            profile::log_if_due();
+        }
+    }
+
+    /// Advances this channel by one output frame: one tick of the transport, one
+    /// picture, and one block of sound.
+    fn tick(&mut self, engine: &ReplayEngine, context: &PlayoutContext, late: u32) {
+        let index = self.index;
+        let source_id = self.source_id;
+        let audio = Arc::clone(&self.audio);
+        // A configure that dropped this channel stops the loop, but one stale tick can
+        // still land before that thread sees the flag.
+        let (mut transport, transport_revision, revision, last_frame) = {
+            let inner = engine.lock();
+            let Some(slot) = inner.channels.iter().find(|slot| slot.index == index) else {
+                return;
+            };
             (
-                slots,
-                period,
+                slot.transport.clone(),
+                slot.transport_revision,
+                inner.playlist_revision,
                 inner.last_frame,
-                (inner.fps_num, inner.fps_den),
             )
         };
+        let gpu = engine.gpu_device();
         let store = engine
             .store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
-        let (width, height) = {
-            let inner = engine.lock();
-            (inner.width, inner.height)
+        let width = context.width;
+        let height = context.height;
+        let profile = context.profile;
+        let fps = context.fps;
+        // A cue, a speed change or a reconfigure makes every queued picture wrong, and
+        // the ones already decoded belong to the transport that was on air before it.
+        if self.seen != (transport_revision, revision) {
+            self.ahead.clear();
+            self.seen = (transport_revision, revision);
+        }
+        transport.note_recorded_frame(last_frame);
+        // A picture decoded during an earlier tick's spare time is shown straight away:
+        // that is what keeps it on time when a decode runs long.
+        if let Some(pending) = self.ahead.pop_front() {
+            profile::queued();
+            let pushed = matches!(
+                crate::with_uploads(|uploads| uploads.push_playout_gpu(source_id, pending.frame)),
+                Ok(Ok(()))
+            );
+            if pushed {
+                if let (Some(store), Some((device, queue))) = (store.as_ref(), gpu.as_ref()) {
+                    // The sound belongs to the picture that was just shown, not to the
+                    // decode cursor, which is already a frame or two further on.
+                    push_channel_audio(source_id, &pending.transport, store, &audio, fps);
+                    self.pump(engine, context, &mut transport, store, device, queue, late);
+                }
+            } else {
+                transport.substituted = transport.substituted.saturating_add(1);
+            }
+            write_back_transport(engine, index, revision, transport_revision, transport);
+            return;
+        }
+        // `step` advances even when it decides to hold the picture, so the transport
+        // must be written back on every path. Stepping every missed frame and keeping
+        // the last plan catches up without showing each intermediate picture.
+        let mut plan = None;
+        for _ in 0..late {
+            if let Some(next_plan) = transport.step(1.0) {
+                plan = Some(next_plan);
+            }
+        }
+        let Some(plan) = plan else {
+            // Holding the last picture is the correct answer for pause, jog and a
+            // repeated frame. Only clear when there is nothing at all.
+            if transport.clip().is_none() && !transport.is_live() {
+                paint_black(source_id);
+            } else if let Some(store) = store.as_ref() {
+                // A held picture still needs its sound. Slow motion shows one source
+                // frame for several output frames, so the audio has to be produced
+                // every tick or the channel runs at the wrong rate; a pause publishes
+                // silence instead of letting the last block repeat.
+                push_channel_audio(source_id, &transport, store, &audio, fps);
+            }
+            write_back_transport(engine, index, revision, transport_revision, transport);
+            return;
         };
-        for (index, source_id, mut transport, audio, revision) in slots {
-            transport.note_recorded_frame(last_frame);
-            // `step` advances the transport even when it decides to hold the picture, so
-            // its result is not the only thing to keep: the advanced copy goes back
-            // below on every path. Dropping it on an early `continue` is what pinned the
-            // channel to one frame and stopped a playlist from reaching its next clip.
-            match transport.step(1.0) {
-                Some(plan) => {
-                    if let Some(store) = store.as_ref() {
-                        let started = Instant::now();
-                        let decoded = render_plan(store, &plan, width, height);
+        let Some(store) = store.as_ref() else {
+            write_back_transport(engine, index, revision, transport_revision, transport);
+            return;
+        };
+        // A plain frame and a transition are both decoded on the device. The
+        // transition pass blends the two textures, where the CPU path would have
+        // copied both frames back for a blend and an upload.
+        let transitioning = wants_secondary(&plan);
+        if let Some((device, queue)) = gpu.as_ref() {
+            let decoder = &mut self.decoder;
+            let ready = if decoder.has_codec() {
+                true
+            } else if let Some(prepared) = engine.take_prepared(index, width, height, profile) {
+                decoder.adopt(prepared);
+                true
+            } else {
+                // Pipelines are still being built in the background. The CPU path
+                // keeps the first clip playing in the meantime.
+                !engine.is_warming()
+            };
+
+            if ready {
+                let started = Instant::now();
+                match decoder.decode(store, &plan, device, queue) {
+                    DecodedGpu::Frame(frame, substituted) => {
                         let elapsed = started.elapsed().as_micros() as u64;
-                        if let Some(decoded) = decoded {
-                            // A transition travels as two pictures and is blended on the
-                            // device that samples it; a single frame is uploaded as before.
-                            match (decoded.secondary, decoded.transition) {
-                                (Some(incoming), Some((kind, direction, mix))) => {
-                                    paint_transition(
-                                        source_id,
-                                        decoded.pixels,
-                                        incoming,
-                                        decoded.width,
-                                        decoded.height,
-                                        decoded.stride,
-                                        kind,
-                                        direction,
-                                        mix,
-                                        decoded.pts,
-                                    );
-                                }
-                                _ => paint(
-                                    source_id,
-                                    &decoded.pixels,
-                                    decoded.width,
-                                    decoded.height,
-                                    decoded.stride,
-                                    decoded.pts,
-                                ),
-                            }
-                            transport.substituted = transport
-                                .substituted
-                                .saturating_add(u64::from(decoded.substituted));
+                        profile::decode(started.elapsed());
+                        let pushed = matches!(
+                            crate::with_uploads(|uploads| {
+                                uploads.push_playout_gpu(source_id, frame)
+                            }),
+                            Ok(Ok(()))
+                        );
+                        if pushed {
+                            transport.substituted =
+                                transport.substituted.saturating_add(u64::from(substituted));
+                            transport.decode_samples = transport.decode_samples.saturating_add(1);
+                            transport.decode_us_sum =
+                                transport.decode_us_sum.saturating_add(elapsed);
+                            push_channel_audio(source_id, &transport, store, &audio, fps);
                         } else {
-                            // A missing or corrupt frame must not pin the channel: keep
-                            // the previous picture, advance, and surface the miss.
                             transport.substituted = transport.substituted.saturating_add(1);
                         }
+                        // Fill the queue from the time left in this tick: those
+                        // pictures then cost the next ticks nothing to show.
+                        self.pump(engine, context, &mut transport, store, device, queue, late);
+                        write_back_transport(
+                            &engine,
+                            index,
+                            revision,
+                            transport_revision,
+                            transport,
+                        );
+                        return;
+                    }
+                    DecodedGpu::Unsupported => {
+                        // The store has no packet source; use the CPU path below.
+                    }
+                    DecodedGpu::Failed => {
+                        transport.substituted = transport.substituted.saturating_add(1);
                         transport.decode_samples = transport.decode_samples.saturating_add(1);
-                        transport.decode_us_sum = transport.decode_us_sum.saturating_add(elapsed);
-                        // Sound follows picture: one frame of audio per frame of video.
-                        push_channel_audio(source_id, &transport, store, &audio, fps);
+                        write_back_transport(
+                            &engine,
+                            index,
+                            revision,
+                            transport_revision,
+                            transport,
+                        );
+                        return;
                     }
-                }
-                None => {
-                    // Holding the last picture is the correct answer for pause, jog
-                    // and a repeated frame. Only clear when there is nothing at all.
-                    if transport.clip().is_none() && !transport.is_live() {
-                        paint_black(source_id);
-                    }
-                }
-            }
-            let mut inner = engine.lock();
-            // A configure that landed while this frame was in flight wins; the
-            // stale snapshot must not overwrite its playlist.
-            if inner.playlist_revision == revision {
-                if let Some(slot) = inner.channels.iter_mut().find(|slot| slot.index == index) {
-                    slot.transport = transport;
                 }
             }
         }
-        thread::sleep(period);
+        let Some(mut primary) = take_playout_buffer(source_id, width, height) else {
+            transport.substituted = transport.substituted.saturating_add(1);
+            write_back_transport(&engine, index, revision, transport_revision, transport);
+            return;
+        };
+        let mut secondary = if transitioning {
+            match take_playout_buffer(source_id, width, height) {
+                Some(buffer) => Some(buffer),
+                None => {
+                    recycle_playout_buffer(source_id, primary);
+                    transport.substituted = transport.substituted.saturating_add(1);
+                    write_back_transport(&engine, index, revision, transport_revision, transport);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let started = Instant::now();
+        let decoded = render_plan_into(
+            store,
+            &plan,
+            width,
+            height,
+            &mut primary,
+            secondary.as_mut(),
+        );
+        let elapsed = started.elapsed().as_micros() as u64;
+        profile::decode(started.elapsed());
+        if let Some(meta) = decoded {
+            let publish_started = Instant::now();
+            match (meta.secondary, secondary, meta.transition) {
+                (true, Some(incoming), Some((kind, direction, mix))) => {
+                    let _ = crate::with_uploads(|uploads| {
+                        uploads.finish_playout_transition(
+                            source_id, primary, incoming, meta.pts, kind, direction, mix,
+                        );
+                    });
+                }
+                (_, Some(incoming), _) => {
+                    // The incoming frame did not decode. Show the outgoing one
+                    // rather than holding a picture older than either.
+                    recycle_playout_buffer(source_id, incoming);
+                    let _ = crate::with_uploads(|uploads| {
+                        uploads.finish_playout_cpu(source_id, primary, meta.pts);
+                    });
+                }
+                _ => {
+                    let _ = crate::with_uploads(|uploads| {
+                        uploads.finish_playout_cpu(source_id, primary, meta.pts);
+                    });
+                }
+            }
+            profile::publish(publish_started.elapsed());
+            transport.substituted = transport
+                .substituted
+                .saturating_add(u64::from(meta.substituted));
+        } else {
+            // A missing or corrupt frame must not pin the channel: keep the
+            // previous picture, advance, and surface the miss.
+            recycle_playout_buffer(source_id, primary);
+            if let Some(incoming) = secondary {
+                recycle_playout_buffer(source_id, incoming);
+            }
+            transport.substituted = transport.substituted.saturating_add(1);
+        }
+        transport.decode_samples = transport.decode_samples.saturating_add(1);
+        transport.decode_us_sum = transport.decode_us_sum.saturating_add(elapsed);
+        // Sound follows picture: one frame of audio per frame of video.
+        push_channel_audio(source_id, &transport, store, &audio, fps);
+        write_back_transport(engine, index, revision, transport_revision, transport);
     }
+
+    /// Decodes pictures into the queue while this tick has time to spare.
+    ///
+    /// The queue is what absorbs a decode that runs long: the tick that shows the
+    /// picture never waits for it. The decode is time boxed so the queue can never
+    /// become the reason a tick is late, and the newest pictures win when a tick
+    /// overran, so the channel catches up instead of replaying stale frames.
+    #[allow(clippy::too_many_arguments)]
+    fn pump(
+        &mut self,
+        engine: &ReplayEngine,
+        context: &PlayoutContext,
+        transport: &mut channel::Transport,
+        store: &Arc<Mutex<Box<dyn ReplayStore>>>,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        late: u32,
+    ) {
+        if self.depth == 0 {
+            return;
+        }
+        // A tick that is already late catches up first: queueing more pictures for
+        // later would only move the lateness on to the next tick.
+        if late > 1 {
+            return;
+        }
+        let deadline = Instant::now() + context.period.mul_f64(0.7);
+        let mut steps = late;
+        while self.ahead.len() < self.depth && Instant::now() < deadline {
+            let mut plan = None;
+            for _ in 0..steps {
+                if let Some(next) = transport.step(1.0) {
+                    plan = Some(next);
+                }
+            }
+            steps = 1;
+            let Some(plan) = plan else {
+                return;
+            };
+            let decoder = &mut self.decoder;
+            let ready = if decoder.has_codec() {
+                true
+            } else if let Some(prepared) =
+                engine.take_prepared(self.index, context.width, context.height, context.profile)
+            {
+                decoder.adopt(prepared);
+                true
+            } else {
+                // The pipelines are still being built in the background; the
+                // synchronous path keeps the channel playing until they are ready.
+                !engine.is_warming()
+            };
+            if !ready {
+                return;
+            }
+            let started = Instant::now();
+            let decoded = decoder.decode(store, &plan, device, queue);
+            let spent = started.elapsed();
+            // A decode that already costs a quarter of the frame is a machine that
+            // cannot afford to run ahead: queue the one picture, then stop. The
+            // queue then degrades to one frame on a busy machine instead of turning
+            // the spare time it does not have into lateness.
+            let affordable = spent < context.period.mul_f64(0.25);
+            match decoded {
+                DecodedGpu::Frame(frame, substituted) => {
+                    profile::decode(spent);
+                    transport.substituted =
+                        transport.substituted.saturating_add(u64::from(substituted));
+                    transport.decode_samples = transport.decode_samples.saturating_add(1);
+                    transport.decode_us_sum = transport
+                        .decode_us_sum
+                        .saturating_add(spent.as_micros() as u64);
+                    if self.ahead.is_empty() {
+                        // Say it once: whether the queue is in use is otherwise
+                        // invisible, and it is the first thing to check when a
+                        // playback problem is reported.
+                        static ANNOUNCED: AtomicBool = AtomicBool::new(false);
+                        if !ANNOUNCED.swap(true, Ordering::Relaxed) {
+                            crate::diag::info(&format!(
+                                "replay decode-ahead active depth={}",
+                                self.depth
+                            ));
+                        }
+                    }
+                    self.ahead.push_back(AheadFrame {
+                        frame,
+                        transport: transport.clone(),
+                    });
+                    if !affordable {
+                        return;
+                    }
+                }
+                // The synchronous path reports what went wrong; queue nothing.
+                DecodedGpu::Unsupported | DecodedGpu::Failed => return,
+            }
+        }
+        while self.ahead.len() > self.depth {
+            self.ahead.pop_front();
+        }
+    }
+}
+
+/// One playout thread per channel.
+///
+/// The channel set can change while the mixer runs: adding a second Replay input
+/// reconfigures the engine with one more channel. The set is watched here once per
+/// hundred milliseconds, and a change stops the current workers and starts a new
+/// set, so a channel that was added starts playing without a restart. Transports
+/// live on the engine and survive the swap, so a channel keeps its position and
+/// speed across it.
+fn channel_loop(stop: Arc<AtomicBool>) {
+    let engine = engine();
+    let mut workers: Vec<JoinHandle<()>> = Vec::new();
+    let mut running: Option<(Vec<u32>, PlayoutContext)> = None;
+    let mut generation_stop = Arc::new(AtomicBool::new(false));
+    while !stop.load(Ordering::Relaxed) {
+        let (channels, context) = engine.playout_setup();
+        let mut indices = channels
+            .iter()
+            .map(|(index, _, _)| *index)
+            .collect::<Vec<_>>();
+        indices.sort_unstable();
+        // A setting or a format change lands here too: the workers hold the context
+        // they were started with, so they are replaced when it differs, not only when
+        // the set of channels does.
+        let current = (indices, context.clone());
+        if running.as_ref() != Some(&current) {
+            generation_stop.store(true, Ordering::Release);
+            for worker in workers.drain(..) {
+                let _ = worker.join();
+            }
+            generation_stop = Arc::new(AtomicBool::new(false));
+            running = Some(current);
+            if !channels.is_empty() {
+                let context = Arc::new(context);
+                for (index, source_id, audio) in channels {
+                    let worker_stop = Arc::clone(&generation_stop);
+                    let worker_context = Arc::clone(&context);
+                    let handle = thread::Builder::new()
+                        .name(format!("eiviz-replay-ch{index}"))
+                        .spawn(move || {
+                            ChannelPlayout::new(index, source_id, audio, &worker_context).run(
+                                engine,
+                                &worker_context,
+                                &worker_stop,
+                            )
+                        })
+                        .expect("replay channel thread");
+                    workers.push(handle);
+                }
+            }
+        }
+        // Short enough that a channel added from the host starts at once, long enough
+        // that watching for one costs nothing.
+        thread::sleep(Duration::from_millis(100));
+    }
+    generation_stop.store(true, Ordering::Release);
+    for worker in workers {
+        let _ = worker.join();
+    }
+}
+
+/// Writes a channel's advanced transport back unless a control change or configure
+/// landed while the frame was in flight.
+fn write_back_transport(
+    engine: &ReplayEngine,
+    index: u32,
+    revision: u64,
+    transport_revision: u64,
+    transport: channel::Transport,
+) {
+    let mut inner = engine.lock();
+    // A configure that landed while this frame was in flight wins; the stale
+    // snapshot must not overwrite its playlist.
+    if inner.playlist_revision != revision {
+        return;
+    }
+    if let Some(slot) = inner.channels.iter_mut().find(|slot| slot.index == index) {
+        // A cue or speed change that landed while this frame was in flight wins
+        // over the snapshot the decoder advanced.
+        if slot.transport_revision == transport_revision {
+            slot.transport = transport;
+        }
+    }
+}
+
+/// Takes a playout buffer for a channel. The buffer belongs to the upload ring, so
+/// the decoder can fill it and publish it without a second full-frame copy.
+fn take_playout_buffer(id: u64, width: u32, height: u32) -> Option<Vec<u8>> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    crate::with_uploads(|uploads| {
+        uploads
+            .take_playout_buf(id, width, height, CpuFormat::Uyvy, 2)
+            .map(|(buffer, ..)| buffer)
+    })
+    .ok()
+    .flatten()
+}
+
+fn recycle_playout_buffer(id: u64, buffer: Vec<u8>) {
+    let _ = crate::with_uploads(|uploads| uploads.recycle_playout_buf(id, buffer));
 }
 
 /// How many frames may wait per angle before the render thread drops one.
@@ -2446,30 +3518,36 @@ fn channel_audio_block(
     planar
 }
 
-/// One channel picture, ready to paint.
-struct Decoded {
-    pixels: Vec<u8>,
-    /// The incoming frame while a transition is in progress. Two pictures travel to the
-    /// device, which blends them; nothing is blended here.
-    secondary: Option<Vec<u8>>,
-    /// `(kind, direction, mix)` while a transition is in progress.
-    transition: Option<(u8, u8, f32)>,
-    width: u32,
-    height: u32,
-    stride: usize,
+/// One channel picture, described without owning it. The buffers live in the playout
+/// ring, so a decoded frame is published by moving the buffer it was decoded into
+/// rather than copying it a second time.
+struct DecodedMeta {
     pts: i64,
     substituted: bool,
+    /// True when the incoming frame decoded and is waiting in the secondary buffer.
+    secondary: bool,
+    /// `(kind, direction, mix)` while a transition is in progress.
+    transition: Option<(u8, u8, f32)>,
 }
 
-/// Decodes the frames a plan asks for. A transition in progress keeps both frames
-/// separate: the GPU composites them, so blending here would be work done twice — once
-/// on the CPU and again on the device that samples the result.
-fn render_plan(
+/// True while a plan is mid-transition and both clips are on screen.
+fn wants_secondary(plan: &channel::FramePlan) -> bool {
+    plan.secondary.is_some() && plan.mix > 0.0 && plan.mix < 1.0
+}
+
+/// Decodes the frames a plan asks for directly into the caller's playout buffers.
+///
+/// A transition in progress keeps both frames separate: the GPU composites them, so
+/// blending here would be work done twice — once on the CPU and again on the device
+/// that samples the result.
+fn render_plan_into(
     store: &Mutex<Box<dyn ReplayStore>>,
     plan: &channel::FramePlan,
     width: u32,
     height: u32,
-) -> Option<Decoded> {
+    primary: &mut Vec<u8>,
+    secondary: Option<&mut Vec<u8>>,
+) -> Option<DecodedMeta> {
     let (angle, frame) = plan.primary?;
     if width == 0 || height == 0 {
         return None;
@@ -2477,58 +3555,48 @@ fn render_plan(
     let bytes = (width as usize)
         .saturating_mul(height as usize)
         .saturating_mul(2);
-    let mut primary = vec![0u8; bytes];
-    let mut secondary = vec![0u8; bytes];
+    if bytes == 0 {
+        return None;
+    }
+    if primary.len() < bytes {
+        primary.resize(bytes, 0);
+    }
     let mut guard = store.lock().unwrap_or_else(|error| error.into_inner());
-    let first = guard.decode(angle, frame, &mut primary).ok()?;
+    let first = guard.decode(angle, frame, &mut primary[..bytes]).ok()?;
     let stride = first.stride as usize;
-    let len = stride
-        .saturating_mul(first.height as usize)
-        .min(primary.len());
-    primary.truncate(len);
-    let mut substituted = first.substituted;
+    if stride == 0 || stride.saturating_mul(first.height as usize) > primary.len() {
+        return None;
+    }
     let mut pts = first.pts_100ns;
-    let mut incoming = None;
+    let mut substituted = first.substituted;
+    let mut secondary_decoded = false;
     let mut transition = None;
-    if let Some((angle, frame)) = plan.secondary {
-        if plan.mix > 0.0 && plan.mix < 1.0 {
-            crate::diag::warn_throttled(
-                "replay-transition-plan",
-                &format!(
-                    "replay transition plan kind={:?} mix={:.2} incoming={angle}/{frame}",
-                    plan.kind, plan.mix
-                ),
-            );
-            if let Ok(second) = guard.decode(angle, frame, &mut secondary) {
-                substituted |= second.substituted;
-                let second_len = (second.stride as usize)
-                    .saturating_mul(second.height as usize)
-                    .min(secondary.len());
-                secondary.truncate(second_len);
-                // A transition is a picture of its own, so it carries its own
-                // timestamp. Without this the compositor would see the same timestamp
-                // for every frame of an inserted transition and never upload the
-                // dissolve: the picture would hold and then cut.
-                pts = blend_pts(first.pts_100ns, second.pts_100ns, plan.mix);
-                transition = Some((
-                    transition_kind_code(plan.kind),
-                    transition_direction_code(plan.direction),
-                    plan.mix as f32,
-                ));
-                incoming = Some(secondary);
-            }
+    if wants_secondary(plan) {
+        let second_buf = secondary?;
+        if second_buf.len() < bytes {
+            second_buf.resize(bytes, 0);
+        }
+        let (second_angle, second_frame) = plan.secondary?;
+        if let Ok(second) = guard.decode(second_angle, second_frame, &mut second_buf[..bytes]) {
+            substituted |= second.substituted;
+            // A transition is a picture of its own, so it carries its own timestamp.
+            // Without this the compositor would see the same timestamp for every
+            // frame of an inserted transition and never upload the dissolve.
+            pts = blend_pts(first.pts_100ns, second.pts_100ns, plan.mix);
+            transition = Some((
+                transition_kind_code(plan.kind),
+                transition_direction_code(plan.direction),
+                plan.mix as f32,
+            ));
+            secondary_decoded = true;
         }
     }
     drop(guard);
-    Some(Decoded {
-        pixels: primary,
-        secondary: incoming,
-        transition,
-        width: first.width,
-        height: first.height,
-        stride,
+    Some(DecodedMeta {
         pts,
         substituted,
+        secondary: secondary_decoded,
+        transition,
     })
 }
 
@@ -2642,45 +3710,6 @@ fn playlist_clips(config: &ReplayDto, playlist_id: Option<u64>) -> Vec<channel::
             }
         })
         .collect()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn paint_transition(
-    id: u64,
-    pixels: Vec<u8>,
-    incoming: Vec<u8>,
-    width: u32,
-    height: u32,
-    stride: usize,
-    kind: u8,
-    direction: u8,
-    mix: f32,
-    pts: i64,
-) {
-    if width == 0 || height == 0 || stride < width as usize * 2 {
-        return;
-    }
-    let _ = crate::with_uploads(|uploads| {
-        uploads.finish_playout_transition(id, pixels, incoming, pts, kind, direction, mix);
-    });
-}
-
-fn paint(id: u64, pixels: &[u8], width: u32, height: u32, stride: usize, pts: i64) {
-    if width == 0 || height == 0 || stride < width as usize * 2 {
-        return;
-    }
-    let _ = crate::with_uploads(|uploads| {
-        if let Some((mut buf, _format, _w, _h)) =
-            uploads.take_playout_buf(id, width, height, CpuFormat::Uyvy, 2)
-        {
-            if buf.len() < pixels.len() {
-                buf.resize(pixels.len(), 0);
-            }
-            let n = pixels.len().min(buf.len());
-            buf[..n].copy_from_slice(&pixels[..n]);
-            uploads.finish_playout_cpu(id, buf, pts);
-        }
-    });
 }
 
 /// Studio-range black in UYVY. Two luma samples share one chroma pair, and an
@@ -2837,6 +3866,59 @@ impl ReplayStore for FfiReplayStore {
             pts_100ns: out.pts_100ns,
             substituted: out.substituted != 0,
         })
+    }
+
+    fn read_packet(
+        &mut self,
+        angle_id: u32,
+        frame_index: u64,
+        out: &mut Vec<u8>,
+    ) -> eiviz_pro_api::ProResult<ReplayPacket> {
+        let Some(read) = self.api.replay_read_packet else {
+            return Err(eiviz_pro_api::ProError::unavailable(
+                "this replay module cannot hand out packets",
+            ));
+        };
+        // The module writes into the caller's buffer. Keep the buffer with the
+        // caller so the channel worker can reuse it for the next frame.
+        let mut buffer = std::mem::take(out);
+        loop {
+            let mut required = 0usize;
+            let mut meta = ProReplayPacket {
+                struct_size: std::mem::size_of::<ProReplayPacket>() as u32,
+                ..ProReplayPacket::default()
+            };
+            let status = unsafe {
+                read(
+                    self.handle,
+                    angle_id,
+                    frame_index,
+                    buffer.as_mut_ptr(),
+                    buffer.len(),
+                    &mut required,
+                    &mut meta,
+                )
+            };
+            if status.code == 0 {
+                let used = meta.required_len.min(buffer.len());
+                buffer.truncate(used);
+                *out = buffer;
+                return Ok(ReplayPacket {
+                    actual_frame_index: meta.actual_frame_index,
+                    width: meta.width,
+                    height: meta.height,
+                    pts_100ns: meta.pts_100ns,
+                    substituted: meta.substituted != 0,
+                    codec: meta.codec,
+                });
+            }
+            if status.code == PRO_BUSY && required > buffer.len() {
+                buffer.resize(required, 0);
+                continue;
+            }
+            *out = buffer;
+            return Err(eiviz_pro_api::ProError::io("replay packet is not recorded"));
+        }
     }
 
     fn range(&self, angle_id: u32) -> eiviz_pro_api::ProResult<Option<(u64, u64)>> {
@@ -3371,6 +4453,7 @@ mod queue_tests {
             frame_index: index,
             pts: 0,
             stride: 4,
+            layout: PixelLayout::Bgra,
             data: vec![0u8; 4],
         }
     }
@@ -3400,6 +4483,35 @@ mod queue_tests {
         assert_eq!(inbox_capacity(60, 3840, 2160), 4);
         // Tiny frames stop at the hard limit.
         assert_eq!(inbox_capacity(1000, 16, 16), 64);
+    }
+
+    #[test]
+    fn the_playout_context_carries_the_decode_ahead_setting() {
+        // The setting comes from the replay document and the workers read it from
+        // here, so this is the join between the operator's checkbox and the queue.
+        let engine = engine();
+        let previous = engine.lock().decode_ahead;
+        engine.lock().decode_ahead = false;
+        let (_, context) = engine.playout_setup();
+        assert!(!context.decode_ahead, "off must reach the workers");
+        engine.lock().decode_ahead = true;
+        let (_, context) = engine.playout_setup();
+        assert!(context.decode_ahead, "on must reach the workers");
+        engine.lock().decode_ahead = previous;
+    }
+
+    #[test]
+    fn decode_ahead_stays_inside_the_picture_memory_budget() {
+        // Two frames of slack is what the queue is for: one takes the decode off the
+        // publish path, the second absorbs a tick that overran.
+        assert_eq!(ahead_depth(1920, 1080, true), 2);
+        assert_eq!(ahead_depth(1280, 720, true), 2);
+        // A 4K BGRA frame is 33 MiB, so the queue keeps one rather than doubling that.
+        assert_eq!(ahead_depth(3840, 2160, true), 1);
+        // A zero-sized configuration is not a reason to queue nothing.
+        assert_eq!(ahead_depth(0, 0, true), 2);
+        // The operator turned it off in Replay Setup.
+        assert_eq!(ahead_depth(1920, 1080, false), 0);
     }
 
     #[test]

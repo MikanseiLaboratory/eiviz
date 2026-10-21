@@ -6,7 +6,7 @@
 
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ed25519_dalek::Verifier;
 use eiviz_pro_api::{
@@ -799,7 +799,7 @@ unsafe extern "C" fn on_video(user: *mut c_void, view: *const ProVideoView) {
             pts_100ns: view.pts_100ns,
             fps_num: view.fps_num,
             fps_den: view.fps_den,
-            data: data.into(),
+            data: Arc::new(data),
         });
     }));
 }

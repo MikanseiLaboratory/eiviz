@@ -672,6 +672,25 @@ mod tests {
         );
     }
     #[test]
+    fn slow_motion_shows_a_new_picture_only_every_fourth_tick() {
+        // The playout loop produces one block of audio per output tick, so this is what
+        // makes slow motion sound right: the picture holds for four ticks while the
+        // sound keeps running, time-stretched. A plan on every tick would mean the
+        // position never advanced.
+        let mut transport = Transport::new();
+        transport.set_playlist(vec![clip("a", 0, 1_000, ClipTransition::CUT)]);
+        transport.set_clip(clip("a", 0, 1_000, ClipTransition::CUT), 0);
+        transport.set_playing(true);
+        transport.set_rate(0.25);
+        // The first tick shows the clip's first frame.
+        assert!(transport.step(1.0).is_some());
+        let plans = (0..12).filter(|_| transport.step(1.0).is_some()).count();
+        assert_eq!(
+            plans, 3,
+            "a quarter-speed clip must show one new picture per four ticks"
+        );
+    }
+    #[test]
     fn cueing_a_clip_that_is_in_the_playlist_keeps_its_transition() {
         // The deck cues a clip by its frame range, not by constructing it: the transport
         // has to find it in the playlist and keep the transition the operator set. A

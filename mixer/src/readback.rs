@@ -197,6 +197,7 @@ impl UnitReadback {
             if result.is_ok() {
                 let slice = self.slots[i].buffer.slice(..);
                 if let Ok(view) = slice.get_mapped_range() {
+                    let copy_started = std::time::Instant::now();
                     let row = self.width as usize * self.bytes_per_pixel as usize;
                     let mut packed = vec![0u8; row * self.height as usize];
                     for y in 0..self.height as usize {
@@ -212,6 +213,7 @@ impl UnitReadback {
                         }
                     }
                     drop(view);
+                    crate::replay::profile::readback(copy_started.elapsed());
                     // Finished frames wait in order. Pushing on the back and
                     // taking from the front keeps the outputs chronological; only
                     // a queue that overflows loses one, and that is counted.

@@ -511,7 +511,7 @@ impl OutputHandle {
         height: u32,
         stride: u32,
         pts: i64,
-        data: Arc<[u8]>,
+        data: Arc<Vec<u8>>,
         fps_n: u32,
         fps_d: u32,
     ) -> Result<(), String> {
@@ -624,7 +624,7 @@ pub(crate) enum SendCmd {
         height: u32,
         stride: u32,
         pts: i64,
-        data: Arc<[u8]>,
+        data: Arc<Vec<u8>>,
         fps_n: u32,
         fps_d: u32,
     },
@@ -7472,7 +7472,7 @@ unsafe fn mixer_thumb_read_ffi(
 
 #[derive(Clone)]
 pub(crate) struct Acquired {
-    data: Arc<[u8]>,
+    data: Arc<Vec<u8>>,
     stride: u32,
     pts: i64,
 }
@@ -8115,7 +8115,7 @@ mod tests {
             height: 2,
             stride: 4,
             pts: 0,
-            data: Arc::from([0u8; 8]),
+            data: Arc::new(vec![0u8; 8]),
             fps_n: 60,
             fps_d: 1,
         }

@@ -150,7 +150,7 @@ impl OmtReceiver {
                                         dropped_now.saturating_sub(encoded_dropped_seen);
                                     encoded_dropped_seen = dropped_now;
                                     let encoded = eiviz_pro_api::EncodedFrame {
-                                        payload: frame.payload,
+                                        payload: Arc::new(frame.payload),
                                         width: frame.width,
                                         height: frame.height,
                                         pts_100ns: frame.pts_100ns,
@@ -475,7 +475,7 @@ impl ProgramSender {
         height: u32,
         stride: u32,
         pts: i64,
-        pixels: Arc<[u8]>,
+        pixels: Arc<Vec<u8>>,
         fps_num: u32,
         fps_den: u32,
     ) -> Result<(), String> {

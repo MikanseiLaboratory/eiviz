@@ -468,6 +468,10 @@ impl SourceRing {
         self.last_pts = frame.pts;
         self.has_frame = true;
         self.gpu = Some(frame);
+        // A GPU frame is a whole picture of its own. A transition left armed from
+        // an earlier CPU frame would be blended with it again, at a stale mix.
+        self.secondary = None;
+        self.transition = None;
     }
 
     pub fn set_playout_depth(&mut self, depth: u32) {
@@ -525,6 +529,12 @@ impl SourceRing {
     pub fn take_playout_buf(&mut self) -> Vec<u8> {
         let bytes = slot_bytes(self.width, self.height, self.format);
         self.take_free(bytes)
+    }
+
+    /// Returns a buffer taken for a playout fill that never reached the ring, so a
+    /// decoder that refused a frame does not turn every failure into an allocation.
+    pub fn recycle_playout_buf(&mut self, buf: Vec<u8>) {
+        self.recycle(buf);
     }
 
     pub fn finish_playout_cpu(&mut self, pixels: Vec<u8>, pts: i64) {
@@ -986,6 +996,14 @@ impl UploadStore {
     pub fn finish_playout_cpu(&mut self, id: u64, pixels: Vec<u8>, pts: i64) {
         if let Some(ring) = self.sources.get_mut(&id) {
             ring.finish_playout_cpu(pixels, pts);
+        }
+    }
+
+    /// Returns a playout buffer that was taken but never filled. Keeps a failed
+    /// decode from allocating a fresh frame on the next tick.
+    pub fn recycle_playout_buf(&mut self, id: u64, pixels: Vec<u8>) {
+        if let Some(ring) = self.sources.get_mut(&id) {
+            ring.recycle_playout_buf(pixels);
         }
     }
 

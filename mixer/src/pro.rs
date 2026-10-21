@@ -208,7 +208,7 @@ pub fn video_frame(
     height: u32,
     stride: u32,
     pts: i64,
-    data: std::sync::Arc<[u8]>,
+    data: std::sync::Arc<Vec<u8>>,
     fps_n: u32,
     fps_d: u32,
 ) -> VideoFrame {

@@ -13,6 +13,9 @@ pub(crate) fn render_loop(
 ) {
     // The capacity measurement needs the device, and this is where it becomes known.
     crate::bench::remember(&device.device, &device.queue);
+    // Replay playback decodes packets on this same device, so a decoded picture can
+    // go straight to the compositor instead of through a CPU frame.
+    crate::replay::engine().set_gpu(&device.device, &device.queue);
     let mut composer = match Composer::new(&device) {
         Ok(composer) => composer,
         Err(error) => {
@@ -405,7 +408,7 @@ pub(crate) fn render_loop(
                 live_outputs.extend(
                     crate::replay::engine()
                         .record_targets()
-                        .into_iter()
+                        .iter()
                         .map(|target| target.readback_key),
                 );
                 let live_sources: HashSet<u64> = uploads.lock_or_recover().ids().collect();
@@ -809,7 +812,7 @@ pub(crate) fn render_loop(
                                     target.angle_id, target.width, target.height, target.profile
                                 ),
                             );
-                            crate::replay::engine().note_replaced(target.angle_id, 1);
+                            crate::replay::engine().note_encode_dropped(target.angle_id);
                         }
                     }
                     continue;
@@ -824,6 +827,7 @@ pub(crate) fn render_loop(
                     target.width,
                     target.height,
                     &picture,
+                    target.layout,
                     pts,
                     frame_i,
                 );
@@ -994,7 +998,7 @@ pub(crate) fn emit_packed(
                     .find(|output| output.output_id == *key)
                     .map(|output| output.bytes_per_pixel.max(2))
                     .unwrap_or(2);
-                let data: Arc<[u8]> = packed.to_vec().into();
+                let data: Arc<Vec<u8>> = Arc::new(packed.to_vec());
                 last_frames().lock_or_recover().insert(
                     *key,
                     Acquired {
@@ -1159,6 +1163,7 @@ fn push_replay_packed(
     width: u32,
     height: u32,
     src: &wgpu::Texture,
+    layout: eiviz_pro_api::PixelLayout,
     pts: i64,
     frame_index: u64,
 ) {
@@ -1180,6 +1185,32 @@ fn push_replay_packed(
     // The recorder gets a deeper ring: a map takes a few frames to come back, and
     // with a preview-sized ring those frames are lost.
     crate::replay::engine().note_pushed();
+    if layout == eiviz_pro_api::PixelLayout::Uyvy {
+        // A CPU encoder wants 4:2:2. Packing on the GPU halves the readback and
+        // removes the scalar BGRA→UYVY conversion the store used to do.
+        let view = picture.create_view(&wgpu::TextureViewDescriptor::default());
+        let Some(packed) = composer
+            .pack_rgba_sized(device, encoder, key, &view, width, height)
+            .cloned()
+        else {
+            crate::replay::engine().note_replaced(angle_id, 1);
+            return;
+        };
+        let rb = readbacks.ensure(
+            device,
+            key,
+            width,
+            height,
+            2,
+            crate::readback::READBACK_RECORD_SLOTS,
+        );
+        if rb.matches(width, height) {
+            rb.copy_from_frame(encoder, &packed, pts, frame_index);
+        } else {
+            crate::replay::engine().note_replaced(angle_id, 1);
+        }
+        return;
+    }
     let rb = readbacks.ensure(
         device,
         key,
@@ -1212,12 +1243,22 @@ fn emit_replay(
         // Every frame that finished goes to the recorder, in order. Taking one
         // per tick made the recording follow the readback latency instead of the
         // render rate, which lost frames even when nothing was overloaded.
-        let stride = (target.width.max(1) * 4) as usize;
+        let stride = match target.layout {
+            eiviz_pro_api::PixelLayout::Bgra => (target.width.max(1) * 4) as usize,
+            eiviz_pro_api::PixelLayout::Uyvy => (target.width.max(1) * 2) as usize,
+        };
         while let Some((data, pts, captured)) = rb.take_latest() {
             // Stamp the frame the picture actually came from. Labelling it with
             // the frame that happened to be rendering when the readback completed
             // biased every Mark In/Out by the readback latency.
-            crate::replay::engine().offer_frame(target.angle_id, captured, pts, data, stride);
+            crate::replay::engine().offer_frame(
+                target.angle_id,
+                captured,
+                pts,
+                data,
+                stride,
+                target.layout,
+            );
         }
     }
 }

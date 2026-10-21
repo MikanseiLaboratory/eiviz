@@ -49,17 +49,12 @@ fn queue_for(angles: usize) -> usize {
 /// serialised the waits). Measured on a 24-core machine in a release build, total
 /// throughput at 16 and 24 angles was 510/518 frames a second with two threads,
 /// 902/893 with four, 904/886 with eight and 917/902 with sixteen: four saturates the
-/// encoder, and more threads only add contention. `EIVIZ_REPLAY_ENCODE_THREADS` overrides
-/// it so the pool can be swept again on other hardware without a rebuild.
+/// encoder, and more threads only add contention.
 const THREADS: usize = 4;
 
-/// The number of encoder threads to use, honouring the override.
+/// The number of encoder threads to use.
 fn thread_count() -> usize {
-    std::env::var("EIVIZ_REPLAY_ENCODE_THREADS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(THREADS)
-        .clamp(1, 32)
+    THREADS
 }
 
 /// One frame waiting to be encoded.
@@ -158,13 +153,13 @@ pub fn prepare(
         profile,
         dropped: Arc::new(AtomicU32::new(0)),
     });
-    // Reuse a returned texture; make one when the whole ring is still out being encoded.
-    Some(
-        angle
-            .free
-            .pop()
-            .unwrap_or_else(|| make_texture(device, width, height)),
-    )
+    // Reuse a returned texture. Allocating a new one when the ring is busy made
+    // VRAM grow with the backlog and hid the fact that the encoder was behind.
+    let Some(texture) = angle.free.pop() else {
+        angle.dropped.fetch_add(1, Ordering::Relaxed);
+        return None;
+    };
+    Some(texture)
 }
 
 /// Hands a copied texture to the encoder that owns this angle.
@@ -312,7 +307,16 @@ fn build_codec(angle_id: u32) -> Option<Codec> {
         profile: profile_of(profile),
         color_space: ColorSpace::Bt709,
     }) {
-        Ok(codec) => Some(codec),
+        Ok(mut codec) => {
+            // The encoder thread owns this codec. Give it a share of the machine
+            // rather than the default pool, so four encoders do not each ask for
+            // every core.
+            let cpus = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(2);
+            codec.set_threads((cpus / thread_count().max(1)).clamp(1, 6));
+            Some(codec)
+        }
         Err(error) => {
             crate::diag::error(&format!(
                 "replay GPU encoder could not be built angle={angle_id} {width}x{height} profile={profile}: {error}"

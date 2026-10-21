@@ -52,6 +52,12 @@ fn encode_frames(
     }
     let pixels = uyvy_frame();
     let mut packet = vec![0u8; 8 * 1024 * 1024];
+    // One warm-up frame: the first save builds slice state and is not what the
+    // recorder pays per frame.
+    codec
+        .encode_uyvy(&pixels, (WIDTH * 2) as usize)
+        .expect("encode");
+    let _ = codec.save_to(&mut packet);
     let started = Instant::now();
     let mut bytes = 0u64;
     for _ in 0..frames {
@@ -168,10 +174,17 @@ fn replay_stage0() {
             color_space: ColorSpace::Bt709,
         })
         .expect("gpu codec");
-        let started = Instant::now();
-        let gpu_frames = 4u32;
         let mut packet = vec![0u8; 8 * 1024 * 1024];
+        // The first GPU encode builds the compute pipelines. Measuring it as part
+        // of four frames reported hundreds of milliseconds per frame.
+        codec
+            .encode_from_texture_opaque(&device, &queue, &texture)
+            .expect("gpu warm-up");
+        let _ = codec.save_to(&mut packet);
+        let started = Instant::now();
+        let gpu_frames = 16u32;
         let mut bytes = 0u64;
+        let mut last_packet = 0usize;
         for _ in 0..gpu_frames {
             codec
                 .encode_from_texture_opaque(&device, &queue, &texture)
@@ -180,6 +193,7 @@ fn replay_stage0() {
                 match codec.save_to(&mut packet) {
                     Ok(n) => {
                         bytes += n as u64;
+                        last_packet = n;
                         break;
                     }
                     Err(_) => packet.resize(packet.len() * 2, 0),
@@ -190,6 +204,34 @@ fn replay_stage0() {
             "gpu encode SQ 1080p opaque",
             gpu_frames,
             bytes,
+            started.elapsed(),
+        );
+        // Playback pays for this: the entropy decode runs on the CPU, the picture
+        // is produced on the device and never comes back. One number says how many
+        // channels one playout thread can carry at 60 fps.
+        let mut decoder = Codec::new(Config {
+            width: WIDTH as i32,
+            height: HEIGHT as i32,
+            profile: Profile::Sq,
+            color_space: ColorSpace::Bt709,
+        })
+        .expect("gpu decoder");
+        decoder.load_from(&packet[..last_packet]).expect("gpu load");
+        let _ = decoder
+            .decode_to_texture(&device, &queue)
+            .expect("gpu decode warm-up");
+        let decode_frames = 24u32;
+        let started = Instant::now();
+        for _ in 0..decode_frames {
+            decoder.load_from(&packet[..last_packet]).expect("gpu load");
+            let _ = decoder
+                .decode_to_texture(&device, &queue)
+                .expect("gpu decode");
+        }
+        report(
+            "gpu decode SQ 1080p",
+            decode_frames,
+            last_packet as u64 * u64::from(decode_frames),
             started.elapsed(),
         );
     } else {
