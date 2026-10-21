@@ -126,12 +126,12 @@ internal sealed record ReplayAngleInfo(
     string Source = "Scene",
     ulong InputId = 0,
     string RecordMode = "Composite",
-    string Encoder = "Gpu",
+    string Encoder = "Cpu",
     JsonObject? Json = null)
 {
     /// <summary>`Gpu` encodes from the scene texture; `Cpu` reads it back first.</summary>
     public static string EncoderOf(JsonObject? angle) =>
-        angle?["encoder"]?.GetValue<string>() ?? "Gpu";
+        angle?["encoder"]?.GetValue<string>() ?? "Cpu";
 
     public ulong SceneGpuId => MixerNative.SceneGpuId(SceneId);
     /// <summary>
@@ -428,6 +428,17 @@ internal static class ReplayModel
 
     public static bool AutoAddToPlaylist(JsonObject root) =>
         root["autoAddToPlaylist"]?.GetValue<bool>() ?? false;
+
+    /// <summary>
+    /// Whether playout decodes ahead of the picture. On unless the document says
+    /// otherwise; a document written before the setting existed plays with it on.
+    /// </summary>
+    public static bool DecodeAhead(JsonObject root) =>
+        root["decodeAhead"]?.GetValue<bool>() ?? true;
+
+    /// <summary>Whether the mixer writes per-stage playout timings to its log.</summary>
+    public static bool Profiling(JsonObject root) =>
+        root["profiling"]?.GetValue<bool>() ?? false;
 
     /// <summary>
     /// Whether the document is a recording setup. The control layer requires a drive

@@ -314,6 +314,14 @@
                           Content="{Binding [replay.autoAdd], Source={x:Static i18n:Loc.Source}}"/>
                 <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
                            Text="{Binding [replay.autoAddHelp], Source={x:Static i18n:Loc.Source}}"/>
+                <CheckBox x:Name="DecodeAheadBox" Margin="0,20,0,0"
+                          Content="{Binding [replay.decodeAhead], Source={x:Static i18n:Loc.Source}}"/>
+                <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
+                           Text="{Binding [replay.decodeAheadHelp], Source={x:Static i18n:Loc.Source}}"/>
+                <CheckBox x:Name="ProfilingBox" Margin="0,12,0,0"
+                          Content="{Binding [replay.profiling], Source={x:Static i18n:Loc.Source}}"/>
+                <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
+                           Text="{Binding [replay.profilingHelp], Source={x:Static i18n:Loc.Source}}"/>
                 <TextBlock x:Name="ActiveAngleText" Margin="0,8,0,0"/>
             </StackPanel>
         </ScrollViewer>

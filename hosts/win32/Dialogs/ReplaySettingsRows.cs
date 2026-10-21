@@ -76,7 +76,7 @@ internal sealed class AngleRow : INotifyPropertyChanged
     private string _sourceKind = "Scene";
     private ulong _sourceId;
     private string _recordMode = "Composite";
-    private string _encoder = "Gpu";
+    private string _encoder = "Cpu";
     private ulong _audioUnitId;
     private int _driveIndex = -1;
 

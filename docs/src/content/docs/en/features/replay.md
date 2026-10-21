@@ -28,9 +28,16 @@ Replay Setup is a dedicated window, opened from the main window. It holds everyt
 - **When the disk is full**: stop recording and report, overwrite the oldest segments, or overwrite everything except the clips and protected events still in use.
 - **New clips**: the transition clips get when they are added later.
 - **Angles**: each angle records either a scene's composited output or an input's own picture, and can take its audio from a mixing unit's program mix or record silence. An input angle needs no scene, which is what makes recording one camera cheap. An **OMT input** angle can also use **passthrough**: the frames the sender already encoded are stored as they arrive, with no GPU readback and no second encoder, so the recording costs neither picture quality nor CPU. The recording format (resolution and frame rate) comes from the first mixing unit, and every angle shares it.
+- **Encoder**: per angle, either **CPU** (the default) or **GPU**. CPU encodes the frame after reading it back; GPU encodes straight from the scene texture and never copies the frame back. At 1080p the CPU encoder is faster per frame, and the GPU one pays off when the CPU has to be freed for many angles. **Measure this PC** says which one is faster here.
 - **Add every new event to the playlist automatically**: uses the angle selected in the Replay window. Clips are never filed against a guessed camera.
+- **Decode ahead**: on by default. A frame or two is decoded ahead of the picture, so a decode that runs long cannot make the picture late. It costs about 8 MB of video memory per frame, and 4K keeps one frame rather than two. Turn it off only when a playback problem is being narrowed down.
+- **Performance log**: off by default. While on, playout stage timings (decode, publish, readback, frames taken from the queue, late frames) are written to the mixer log every two seconds.
 
 The angle set is fixed while recording: stop the recording before adding or removing angles.
+
+## How many angles this PC can record
+
+**Measure this PC** runs the GPU encoder, the CPU encoder, and the targets' read and write speed, then reports how many angles hold 60 fps (about ten seconds; recording keeps running throughout). Recording more angles than it reports means frames are dropped, or the recording stops, following the overflow setting. If the CPU encoder turns out to be the faster one, the result says so, and you can switch encoders.
 
 ## The Replay window
 
@@ -53,6 +60,8 @@ A clip's transition comes from the playlist's **New clips** setting unless the c
 - **Additive** inserts the duration between the clips, so the playlist becomes `A + duration + B` long. The outgoing clip's last frame and the incoming clip's first frame are held for the insertion and dissolve across it.
 
 A Dissolve with a duration of zero, and a Cut, occupy no time at all.
+
+Decoding and those transitions are both done on the GPU during playback. Switching between two clips never sends a frame back to the CPU, so playing several channels at once hardly adds CPU load.
 
 ## Driving Replay from an automation panel
 

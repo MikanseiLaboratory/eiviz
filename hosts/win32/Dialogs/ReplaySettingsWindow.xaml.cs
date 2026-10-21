@@ -57,6 +57,8 @@ public partial class ReplaySettingsWindow : Window
         OverflowBox.SelectionChanged += MarkDirty;
         RetentionBox.SelectionChanged += MarkDirty;
         AutoAddBox.Click += MarkDirty;
+        DecodeAheadBox.Click += MarkDirty;
+        ProfilingBox.Click += MarkDirty;
         Load();
     }
 
@@ -93,6 +95,8 @@ public partial class ReplaySettingsWindow : Window
         SelectTag(RetentionBox, _replay["retention"]?.GetValue<string>() ?? "StopWhenFull");
         SelectTag(DeckPresentBox, _session.Settings.ReplayPresentInterval.ToString());
         AutoAddBox.IsChecked = ReplayModel.AutoAddToPlaylist(_replay);
+        DecodeAheadBox.IsChecked = ReplayModel.DecodeAhead(_replay);
+        ProfilingBox.IsChecked = ReplayModel.Profiling(_replay);
         SegmentFramesBox.Text = (_replay["format"]?["segmentFrames"]?.GetValue<uint>() ?? 120).ToString();
 
         // Which drive each angle records to is read from the drives the document lists.
@@ -701,6 +705,8 @@ public partial class ReplaySettingsWindow : Window
         if (uint.TryParse(ComboTag(DeckPresentBox, "0"), out var deckInterval))
             _session.Settings.ReplayPresentInterval = MultiviewLayout.ClampPresentInterval(deckInterval);
         _replay["autoAddToPlaylist"] = AutoAddBox.IsChecked == true;
+        _replay["decodeAhead"] = DecodeAheadBox.IsChecked == true;
+        _replay["profiling"] = ProfilingBox.IsChecked == true;
 
         var angles = new JsonArray();
         foreach (var angle in _angles.OrderBy(angle => angle.Id))
@@ -720,11 +726,16 @@ public partial class ReplaySettingsWindow : Window
         }
         _replay["angles"] = angles;
 
-        // This window owns the storage, the angles, the format and the buffering. The
-        // events, the playlists and which playlist each channel plays belong to the
-        // deck: an operator who marked a clip while this window was open must not lose
-        // it to an Apply. Sending the snapshot back whole did exactly that, and the
-        // mixer then played a playlist whose clip transitions had been reverted.
+        // This window owns the storage, the angles, the format, the buffering and whether
+        // replay is on. The events, the playlists and which playlist each channel plays
+        // belong to the deck: an operator who marked a clip while this window was open
+        // must not lose it to an Apply. Sending the snapshot back whole did exactly that,
+        // and the mixer then played a playlist whose clip transitions had been reverted.
+        //
+        // `enabled` is this window's to set, not the deck's. A fresh project starts with
+        // replay disabled, and Apply is what turns it on; copying the old value back made
+        // the first Apply fail with "replay has a drive and an angle, so it must be
+        // enabled", so a new project could never start recording at all.
         if (JsonNode.Parse(_session.ReplayJson) is JsonObject current)
         {
             foreach (var ownedByDeck in new[] { "events", "playlists", "channels", "activeAngleId" })
@@ -732,8 +743,6 @@ public partial class ReplaySettingsWindow : Window
                 if (current[ownedByDeck] is { } value)
                     _replay[ownedByDeck] = value.DeepClone();
             }
-            if (current["enabled"] is { } enabled)
-                _replay["enabled"] = enabled.DeepClone();
         }
 
         // Removing an angle strands every clip that plays it, and the control layer
