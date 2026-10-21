@@ -107,6 +107,16 @@ pub struct ReplayDto {
     pub channels: Vec<ChannelDto>,
     #[serde(default)]
     pub auto_add_to_playlist: bool,
+    /// Decode a frame or two ahead of the picture, so a decode that runs long does
+    /// not push the picture past its frame time. On unless the operator turned it
+    /// off, which is the first thing to try when a playback problem is blamed on it.
+    #[serde(default = "yes")]
+    pub decode_ahead: bool,
+    /// Write per-stage playout timings to the mixer log (decode, publish, readback,
+    /// how many frames came from the queue, late ticks). Meant for measuring a
+    /// machine, not for everyday use.
+    #[serde(default)]
+    pub profiling: bool,
     /// Angle the operator is watching. Event creation and playlist auto-add use
     /// it, so the control layer never guesses which camera a clip came from.
     #[serde(default)]
@@ -121,6 +131,10 @@ pub struct ReplayDto {
 
 fn one_u32() -> u32 {
     1
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn one_u64() -> u64 {
@@ -141,6 +155,8 @@ impl Default for ReplayDto {
             playlists: Vec::new(),
             channels: Vec::new(),
             auto_add_to_playlist: false,
+            decode_ahead: true,
+            profiling: false,
             active_angle_id: None,
             next_angle_id: 1,
             next_event_id: 1,
@@ -307,6 +323,16 @@ pub struct ReplaySettingsDto {
     pub angles: Vec<AngleDto>,
     #[serde(default)]
     pub auto_add_to_playlist: bool,
+    /// Decode a frame or two ahead of the picture, so a decode that runs long does
+    /// not push the picture past its frame time. On unless the operator turned it
+    /// off, which is the first thing to try when a playback problem is blamed on it.
+    #[serde(default = "yes")]
+    pub decode_ahead: bool,
+    /// Write per-stage playout timings to the mixer log (decode, publish, readback,
+    /// how many frames came from the queue, late ticks). Meant for measuring a
+    /// machine, not for everyday use.
+    #[serde(default)]
+    pub profiling: bool,
 }
 
 impl ReplaySettingsDto {
@@ -321,6 +347,8 @@ impl ReplaySettingsDto {
             retention: replay.retention,
             angles: replay.angles.clone(),
             auto_add_to_playlist: replay.auto_add_to_playlist,
+            decode_ahead: replay.decode_ahead,
+            profiling: replay.profiling,
         }
     }
 
@@ -333,6 +361,8 @@ impl ReplaySettingsDto {
         replay.retention = self.retention;
         replay.angles = self.angles;
         replay.auto_add_to_playlist = self.auto_add_to_playlist;
+        replay.decode_ahead = self.decode_ahead;
+        replay.profiling = self.profiling;
     }
 }
 

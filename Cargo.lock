@@ -797,6 +797,7 @@ name = "eiviz_pro_test_plugin"
 version = "0.3.0"
 dependencies = [
  "eiviz-pro-api",
+ "vmx 0.1.0 (git+https://github.com/MikanseiLaboratory/vmx-rs?rev=b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3)",
 ]
 
 [[package]]

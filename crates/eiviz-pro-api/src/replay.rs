@@ -1,12 +1,19 @@
 //! Replay store boundary. The Pro module encodes on the GPU, stores, and decodes.
 //! The mixer owns transport, health, and playout upload.
 
+use std::sync::Arc;
+
 use crate::error::{ProError, ProResult};
 use crate::media::VideoFrame;
 
 pub const PROFILE_HQ: u32 = 0;
 pub const PROFILE_SQ: u32 = 1;
 pub const PROFILE_LQ: u32 = 2;
+
+/// A stored packet the mixer can decode on its own device.
+pub const REPLAY_CODEC_VMX1: u32 = 0;
+/// A sender's original bitstream (passthrough). The replay decoder cannot decode it.
+pub const REPLAY_CODEC_PASSTHROUGH: u32 = 1;
 
 pub const OVERFLOW_DROP: u32 = 0;
 pub const OVERFLOW_STOP: u32 = 1;
@@ -190,7 +197,7 @@ pub struct ReplayStats {
 #[derive(Clone, Debug, Default)]
 pub struct EncodedFrame {
     /// The bitstream, exactly as it arrived.
-    pub payload: Vec<u8>,
+    pub payload: Arc<Vec<u8>>,
     /// Picture width the sender declared.
     pub width: u32,
     /// Picture height the sender declared.
@@ -231,6 +238,18 @@ pub struct DecodedFrame {
     pub stride: u32,
     pub pts_100ns: i64,
     pub substituted: bool,
+}
+
+/// One encoded replay frame handed to the mixer for GPU decode.
+#[derive(Clone, Debug, Default)]
+pub struct ReplayPacket {
+    pub actual_frame_index: u64,
+    pub width: u32,
+    pub height: u32,
+    pub pts_100ns: i64,
+    pub substituted: bool,
+    /// [`REPLAY_CODEC_VMX1`] or [`REPLAY_CODEC_PASSTHROUGH`].
+    pub codec: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -290,6 +309,23 @@ pub trait ReplayStore: Send {
         frame: &VideoFrame,
     ) -> ProResult<WriteOutcome>;
     fn decode(&mut self, angle_id: u32, frame_index: u64, dst: &mut [u8]) -> ProResult<DecodedFrame>;
+
+    /// Reads the stored packet without decoding it, so the mixer can decode on its
+    /// own GPU and never copy a decoded picture back to the CPU.
+    ///
+    /// A store that cannot hand out packets says so; the caller then keeps using
+    /// [`Self::decode`]. The buffer is reused by the caller and may be swapped with
+    /// the store's own scratch buffer.
+    fn read_packet(
+        &mut self,
+        _angle_id: u32,
+        _frame_index: u64,
+        _out: &mut Vec<u8>,
+    ) -> ProResult<ReplayPacket> {
+        Err(ProError::unavailable(
+            "this store cannot hand out replay packets",
+        ))
+    }
     fn range(&self, angle_id: u32) -> ProResult<Option<(u64, u64)>>;
     fn stats(&self) -> ReplayStats;
     fn close(&mut self) -> ProResult<()>;
@@ -529,4 +565,3 @@ mod tests {
         assert_eq!(estimate_bitrate_mbps(PROFILE_LQ, 1080), 86);
     }
 }
-

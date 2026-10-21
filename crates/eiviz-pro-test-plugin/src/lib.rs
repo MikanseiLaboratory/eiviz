@@ -9,11 +9,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use eiviz_pro_api::{
-    ABI_MAJOR, Entitlements, FEATURE_DECKLINK, FEATURE_LICENSE, FEATURE_RTMP, LAYOUT_BGRA, LAYOUT_UYVY,
-    PRO_BUSY, PRO_DEVICE, PRO_INVALID, PRO_OK, PRO_UNAVAILABLE, ProApi, ProAudioView,
+    ABI_MAJOR, Entitlements, FEATURE_DECKLINK, FEATURE_LICENSE, FEATURE_RTMP, LAYOUT_BGRA,
+    LAYOUT_UYVY, PRO_BUSY, PRO_DEVICE, PRO_INVALID, PRO_OK, PRO_UNAVAILABLE, ProApi, ProAudioView,
     ProCaptureCallbacks, ProCaptureStatsAbi, ProEntitlementsAbi, ProLicenseStatusAbi,
     ProOutputStatsAbi, ProPlayoutConfig, ProReplayConfig, ProReplayDecoded, ProReplayEstimateAbi,
-    ProReplayStatsAbi, ProStatus, ProStreamConfig, ProVideoView, abi_hash, copy_to_buffer,
+    ProReplayPacket, ProReplayStatsAbi, ProStatus, ProStreamConfig, ProVideoView,
+    REPLAY_CODEC_VMX1, abi_hash, copy_to_buffer,
 };
 
 const VERSION: &str = "0.3.0";
@@ -488,20 +489,23 @@ fn base_api() -> ProApi {
         license_email: Some(license_email),
         replay_open: Some(replay_open),
         // The test plugin has no recording to attach to.
-    replay_attach: None,
-    replay_close: Some(replay_close),
+        replay_attach: None,
+        replay_close: Some(replay_close),
         replay_write_video: Some(replay_write_video),
         replay_decode: Some(replay_decode),
         replay_range: Some(replay_range),
         replay_stats: Some(replay_stats),
         replay_estimate: Some(replay_estimate),
         replay_write_audio: Some(replay_write_audio),
-    replay_write_encoded: Some(replay_write_encoded),
+        replay_write_encoded: Some(replay_write_encoded),
         replay_read_audio: Some(replay_read_audio),
         replay_copy_peaks: Some(replay_copy_peaks),
         replay_export_start: Some(replay_export_start),
         replay_export_progress: Some(replay_export_progress),
         replay_export_cancel: Some(replay_export_cancel),
+        // The test store stores raw pictures; it encodes one into a VMX1 packet
+        // on demand so the mixer's GPU playback path is exercised too.
+        replay_read_packet: Some(replay_read_packet),
     }
 }
 
@@ -567,7 +571,9 @@ unsafe extern "C" fn replay_write_audio(
             std::slice::from_raw_parts(view.data, view.data_len / std::mem::size_of::<f32>())
         };
         let channels = view.channels as usize;
-        let mut store = REPLAY_AUDIO.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut store = REPLAY_AUDIO
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         let Some(store) = store.as_mut() else {
             return ProStatus::new(PRO_UNAVAILABLE);
         };
@@ -599,7 +605,9 @@ unsafe extern "C" fn replay_read_audio(
         if !written.is_null() {
             unsafe { *written = 0 };
         }
-        let store = REPLAY_AUDIO.lock().unwrap_or_else(|poison| poison.into_inner());
+        let store = REPLAY_AUDIO
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         let Some(track) = store.as_ref().and_then(|store| store.get(&angle_id)) else {
             return ProStatus::ok();
         };
@@ -656,6 +664,11 @@ struct ReplayFrame {
 
 static REPLAY: Mutex<Option<std::collections::HashMap<(u32, u64), ReplayFrame>>> = Mutex::new(None);
 
+/// One codec per angle, used only to turn a stored raw picture into a VMX1 packet
+/// for the mixer's GPU playback path.
+static REPLAY_ENCODERS: Mutex<Option<std::collections::HashMap<u32, vmx::Codec>>> =
+    Mutex::new(None);
+
 /// Recorded replay audio, interleaved stereo at 48 kHz, indexed by frame.
 static REPLAY_AUDIO: Mutex<Option<std::collections::HashMap<u32, Vec<f32>>>> = Mutex::new(None);
 
@@ -668,9 +681,14 @@ unsafe extern "C" fn replay_open(
         if module != module_ptr() || out.is_null() {
             return error("bad replay open");
         }
-        *REPLAY.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(std::collections::HashMap::new());
-        *REPLAY_AUDIO.lock().unwrap_or_else(|poison| poison.into_inner()) =
+        *REPLAY.lock().unwrap_or_else(|poison| poison.into_inner()) =
             Some(std::collections::HashMap::new());
+        *REPLAY_AUDIO
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(std::collections::HashMap::new());
+        *REPLAY_ENCODERS
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(std::collections::HashMap::new());
         HANDLES.fetch_add(1, Ordering::SeqCst);
         unsafe { *out = 9 as *mut c_void };
         ProStatus::ok()
@@ -683,7 +701,12 @@ unsafe extern "C" fn replay_close(handle: *mut c_void) -> ProStatus {
             return error("bad replay handle");
         }
         *REPLAY.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
-        *REPLAY_AUDIO.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
+        *REPLAY_AUDIO
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = None;
+        *REPLAY_ENCODERS
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = None;
         HANDLES.fetch_sub(1, Ordering::SeqCst);
         ProStatus::ok()
     })
@@ -710,14 +733,17 @@ unsafe extern "C" fn replay_write_video(
             .as_mut()
             .ok_or(())
             .map(|map| {
-                map.insert((angle_id, frame_index), ReplayFrame {
-                    bytes,
-                    width: view.width,
-                    height: view.height,
-                    stride: view.stride,
-                    layout: view.layout,
-                    pts_100ns: view.pts_100ns,
-                });
+                map.insert(
+                    (angle_id, frame_index),
+                    ReplayFrame {
+                        bytes,
+                        width: view.width,
+                        height: view.height,
+                        stride: view.stride,
+                        layout: view.layout,
+                        pts_100ns: view.pts_100ns,
+                    },
+                );
             })
             .map_err(|_| ())
             .ok();
@@ -772,7 +798,11 @@ unsafe extern "C" fn replay_decode(
         }
         unsafe {
             if frame.layout == LAYOUT_UYVY {
-                std::ptr::copy_nonoverlapping(frame.bytes.as_ptr(), dst, uyvy_len.min(frame.bytes.len()));
+                std::ptr::copy_nonoverlapping(
+                    frame.bytes.as_ptr(),
+                    dst,
+                    uyvy_len.min(frame.bytes.len()),
+                );
             } else if frame.layout == LAYOUT_BGRA {
                 for y in 0..frame.height as usize {
                     for x in (0..frame.width as usize).step_by(2) {
@@ -803,6 +833,93 @@ unsafe extern "C" fn replay_decode(
                 stride: frame.width * 2,
                 pts_100ns: frame.pts_100ns,
                 substituted: 0,
+            };
+        }
+        ProStatus::ok()
+    })
+}
+
+fn encode_replay_packet(angle_id: u32, frame: &ReplayFrame) -> Option<Vec<u8>> {
+    let mut guard = REPLAY_ENCODERS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let cache = guard.as_mut()?;
+    if !cache.contains_key(&angle_id) {
+        let codec = vmx::Codec::new(vmx::Config {
+            width: frame.width as i32,
+            height: frame.height as i32,
+            profile: vmx::Profile::Sq,
+            color_space: vmx::ColorSpace::Bt709,
+        })
+        .ok()?;
+        cache.insert(angle_id, codec);
+    }
+    let codec = cache.get_mut(&angle_id)?;
+    let encoded = match frame.layout {
+        LAYOUT_UYVY => codec
+            .encode_uyvy(&frame.bytes, frame.stride as usize)
+            .is_ok(),
+        LAYOUT_BGRA => codec
+            .encode_bgrx(&frame.bytes, frame.stride as usize)
+            .is_ok(),
+        _ => false,
+    };
+    if !encoded {
+        return None;
+    }
+    let mut packet = vec![0u8; 1024 * 1024];
+    loop {
+        match codec.save_to(&mut packet) {
+            Ok(size) => {
+                packet.truncate(size);
+                return Some(packet);
+            }
+            Err(_) => packet.resize(packet.len().saturating_mul(2).max(1024), 0),
+        }
+    }
+}
+
+unsafe extern "C" fn replay_read_packet(
+    handle: *mut c_void,
+    angle_id: u32,
+    frame_index: u64,
+    data: *mut u8,
+    data_cap: usize,
+    required: *mut usize,
+    out: *mut ProReplayPacket,
+) -> ProStatus {
+    guard(|| {
+        if handle != 9 as *mut c_void || required.is_null() || out.is_null() {
+            return error("bad replay packet");
+        }
+        let (width, height, pts, packet) = {
+            let map = REPLAY.lock().unwrap_or_else(|poison| poison.into_inner());
+            let Some(map) = map.as_ref() else {
+                return ProStatus::new(PRO_UNAVAILABLE);
+            };
+            let Some(frame) = map.get(&(angle_id, frame_index)) else {
+                return ProStatus::new(PRO_UNAVAILABLE);
+            };
+            let Some(packet) = encode_replay_packet(angle_id, frame) else {
+                return error("replay packet encode failed");
+            };
+            (frame.width, frame.height, frame.pts_100ns, packet)
+        };
+        unsafe { *required = packet.len() };
+        if data.is_null() || data_cap < packet.len() {
+            return ProStatus::new(PRO_BUSY);
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(packet.as_ptr(), data, packet.len());
+            *out = ProReplayPacket {
+                struct_size: std::mem::size_of::<ProReplayPacket>() as u32,
+                actual_frame_index: frame_index,
+                width,
+                height,
+                pts_100ns: pts,
+                substituted: 0,
+                codec: REPLAY_CODEC_VMX1,
+                required_len: packet.len(),
             };
         }
         ProStatus::ok()
@@ -1064,4 +1181,3 @@ mod contract {
         assert!(unsafe { shutdown(module_ptr()) }.is_ok());
     }
 }
-

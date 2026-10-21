@@ -1749,6 +1749,10 @@ fn replay_from_pb(replay: pb::Replay) -> Result<crate::session::replay::ReplayDt
             })
             .collect(),
         auto_add_to_playlist: replay.auto_add_to_playlist,
+        // The protobuf form predates these two; a document that came through it
+        // plays with the defaults rather than losing the queue and the profiling flag.
+        decode_ahead: true,
+        profiling: false,
         active_angle_id: replay.has_active_angle.then_some(replay.active_angle_id),
         next_angle_id: replay.next_angle_id.max(1),
         next_event_id: replay.next_event_id.max(1),

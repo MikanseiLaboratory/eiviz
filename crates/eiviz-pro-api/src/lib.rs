@@ -39,7 +39,7 @@ pub use ffi::{
     ProReplayExportSegment,
     ProEntitlementsAbi, ProLicenseStatusAbi, ProOutputStatsAbi, ProPlayoutConfig, ProReplayAngle,
     ProReplayAngleStatsAbi, ProReplayConfig, ProReplayDecoded, ProReplayEncodedView,
-    ProReplayEstimateAbi,
+    ProReplayEstimateAbi, ProReplayPacket,
     ProReplayStatsAbi, ProReplayStorage, ProStatus, ProStreamConfig, ProVideoView, SIGNAL_NONE,
     SIGNAL_PRESENT, abi_hash, copy_to_buffer, module_target,
 };
@@ -48,7 +48,8 @@ pub use replay::{
     ISSUE_STOPPED_BY_POLICY, ISSUE_STORAGE_FULL, ISSUE_STORAGE_LOW, ISSUE_STORAGE_WRITE,
     OVERFLOW_DROP, OVERFLOW_STOP, PROFILE_HQ, PROFILE_LQ, PROFILE_SQ, RETENTION_OVERWRITE,
     EXPORT_CANCELLED, EXPORT_DONE, EXPORT_FAILED, EXPORT_IDLE, EXPORT_RUNNING, RETENTION_PROTECT,
-    RETENTION_STOP, ReplayAngleStats, ReplayAngleTarget, ReplayBackend,
+    RETENTION_STOP, REPLAY_CODEC_PASSTHROUGH, REPLAY_CODEC_VMX1, ReplayAngleStats, ReplayAngleTarget,
+    ReplayBackend, ReplayPacket,
     EncodedFrame,
     ReplayEstimate, ReplayExportProgress, ReplayExportSegment, ReplayExportSpec, ReplayStats,
     ReplayStorageTarget, ReplayStore, ReplayStoreConfig, SEVERITY_CRITICAL,

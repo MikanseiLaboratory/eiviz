@@ -380,6 +380,19 @@ pub struct ProApi {
         ) -> ProStatus,
     >,
     pub replay_export_cancel: Option<unsafe extern "C" fn(*mut c_void) -> ProStatus>,
+    /// Reads a stored packet for GPU decode. The caller supplies a buffer; when it
+    /// is too small the module reports the needed length and `PRO_BUSY`.
+    pub replay_read_packet: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            u32,
+            u64,
+            *mut u8,
+            usize,
+            *mut usize,
+            *mut ProReplayPacket,
+        ) -> ProStatus,
+    >,
 }
 
 /// One run of the recording timeline that goes into the exported file.
@@ -548,6 +561,22 @@ pub struct ProReplayDecoded {
     pub substituted: u32,
 }
 
+/// Metadata for a packet read for GPU decode.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProReplayPacket {
+    pub struct_size: u32,
+    pub actual_frame_index: u64,
+    pub width: u32,
+    pub height: u32,
+    pub pts_100ns: i64,
+    pub substituted: u32,
+    /// `REPLAY_CODEC_*`.
+    pub codec: u32,
+    /// Bytes the caller must provide. Set even when `PRO_BUSY` is returned.
+    pub required_len: usize,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ProReplayEstimateAbi {
@@ -578,6 +607,7 @@ pub fn abi_hash() -> u64 {
         std::mem::size_of::<ProReplayStatsAbi>(),
         std::mem::size_of::<ProReplayAngleStatsAbi>(),
         std::mem::size_of::<ProReplayDecoded>(),
+        std::mem::size_of::<ProReplayPacket>(),
         std::mem::size_of::<ProReplayEstimateAbi>(),
         ABI_MAJOR as usize,
     ];
