@@ -2828,6 +2828,15 @@ fn ahead_depth(width: u32, height: u32, enabled: bool) -> usize {
     ((BUDGET_BYTES / frame_bytes.max(1)).clamp(1, 2)) as usize
 }
 
+/// Whether the queue may run ahead of the picture.
+///
+/// A decode has to fit in half a frame for that to pay off. On a software adapter or a
+/// CPU that is already busy one decode takes most of the frame, and decoding one more
+/// would cost more than the queue saves, so the channel stays on the synchronous path.
+fn may_run_ahead(last_decode: Duration, period: Duration) -> bool {
+    last_decode.max(Duration::from_micros(200)) <= period.mul_f64(0.5)
+}
+
 /// One channel's playout, owned by that channel's thread.
 ///
 /// Each channel keeps its own transport, decoder and deadline, so a decode that runs
@@ -2846,6 +2855,10 @@ struct ChannelPlayout {
     /// playlist makes them wrong, and showing one would put the old transport on air.
     seen: (u64, u64),
     depth: usize,
+    /// How long the last decode took. A machine where that is already a large part
+    /// of a frame (a software adapter, a busy CPU) must not try to run ahead: the
+    /// extra decode would cost more time than the queue saves.
+    last_decode: Duration,
 }
 
 impl ChannelPlayout {
@@ -2864,6 +2877,7 @@ impl ChannelPlayout {
             ahead: std::collections::VecDeque::with_capacity(4),
             seen: (0, 0),
             depth: ahead_depth(context.width, context.height, context.decode_ahead),
+            last_decode: Duration::ZERO,
         }
     }
 
@@ -3007,8 +3021,10 @@ impl ChannelPlayout {
                 let started = Instant::now();
                 match decoder.decode(store, &plan, device, queue) {
                     DecodedGpu::Frame(frame, substituted) => {
-                        let elapsed = started.elapsed().as_micros() as u64;
-                        profile::decode(started.elapsed());
+                        let spent = started.elapsed();
+                        let elapsed = spent.as_micros() as u64;
+                        profile::decode(spent);
+                        self.last_decode = spent;
                         let pushed = matches!(
                             crate::with_uploads(|uploads| {
                                 uploads.push_playout_gpu(source_id, frame)
@@ -3153,9 +3169,17 @@ impl ChannelPlayout {
         if late > 1 {
             return;
         }
+        // The queue only pays off when a decode fits inside the frame with room to
+        // spare. A software adapter or a CPU that is already full spends more than
+        // half the frame on one decode, and running ahead there loses frames instead
+        // of saving them.
+        if !may_run_ahead(self.last_decode, context.period) {
+            return;
+        }
+        let estimate = self.last_decode.max(Duration::from_micros(200));
         let deadline = Instant::now() + context.period.mul_f64(0.7);
         let mut steps = late;
-        while self.ahead.len() < self.depth && Instant::now() < deadline {
+        while self.ahead.len() < self.depth && Instant::now() + estimate <= deadline {
             let mut plan = None;
             for _ in 0..steps {
                 if let Some(next) = transport.step(1.0) {
@@ -3215,6 +3239,7 @@ impl ChannelPlayout {
                         frame,
                         transport: transport.clone(),
                     });
+                    self.last_decode = spent;
                     if !affordable {
                         return;
                     }
@@ -4498,6 +4523,19 @@ mod queue_tests {
         let (_, context) = engine.playout_setup();
         assert!(context.decode_ahead, "on must reach the workers");
         engine.lock().decode_ahead = previous;
+    }
+
+    #[test]
+    fn running_ahead_needs_a_decode_that_fits_in_half_a_frame() {
+        let frame = Duration::from_nanos(16_666_667);
+        // A real GPU decodes a 1080p frame in about a millisecond.
+        assert!(may_run_ahead(Duration::from_millis(1), frame));
+        // Half a frame is the limit.
+        assert!(may_run_ahead(Duration::from_millis(8), frame));
+        // A software adapter (CI) and a CPU that is already full take much longer,
+        // and there the extra decode would lose frames rather than save them.
+        assert!(!may_run_ahead(Duration::from_millis(20), frame));
+        assert!(!may_run_ahead(Duration::from_millis(90), frame));
     }
 
     #[test]
