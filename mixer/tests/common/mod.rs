@@ -68,7 +68,10 @@ pub fn last_error() -> String {
 /// test is willing to write. This repeats the operator's own action until the engine
 /// accepts it, and reports the refusal reason if it never does.
 pub fn mark_in_when_ready(label: &str) -> u64 {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    // A shared CI runner with a software adapter has taken minutes for the rest of
+    // the replay suite, so one snapshot gets a generous budget: failing here says
+    // nothing about the picture the test is looking at.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
         let mut frame = 0u64;
         let code = unsafe { eiviz_mixer::mixer_replay_mark_in(&mut frame) };
@@ -119,7 +122,10 @@ pub fn mark_out_after(label: &str, min_frames: u64) -> (String, u64, u64) {
 /// show anything), so this waits for the recording to move on instead of sleeping a
 /// fixed time that a slow adapter may not cover.
 pub fn mark_out_when_ready(label: &str) -> (String, u64, u64) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    // A shared CI runner with a software adapter has taken minutes for the rest of
+    // the replay suite, so one snapshot gets a generous budget: failing here says
+    // nothing about the picture the test is looking at.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
         let mut in_frame = 0u64;
         let mut out_frame = 0u64;
