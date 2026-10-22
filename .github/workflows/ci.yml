@@ -147,12 +147,18 @@ jobs:
         # The replay integration tests are `#![cfg(debug_assertions)]` because they
         # load a Pro module, which is process-wide and permanent. A release run skips
         # them, so this job is the one that exercises recording, marking and playout.
+        #
+        # `replay_transition` is left out: it judges the dissolve from the composed
+        # program picture, and this runner renders through a software adapter that
+        # returns the picture in jumps coarse enough to miss a half-second blend
+        # entirely (measured: 75 samples inside the window, none of them a blend). It
+        # runs on the macOS job, where the picture comes from Metal, and locally.
         run: >
           cargo test -p eiviz_mixer --locked
           --test replay_record --test replay_record_nomodule --test replay_input
           --test replay_passthrough
           --test replay_flow --test replay_playout --test replay_offair
-          --test replay_animation --test replay_transition --test replay_audio
+          --test replay_animation --test replay_audio
           --test vmix_replay
           -- --test-threads=1
 
