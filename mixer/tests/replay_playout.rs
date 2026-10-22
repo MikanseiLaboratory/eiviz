@@ -172,8 +172,8 @@ fn the_replay_picture_reaches_the_program_scene() {
 
     // And it stops at the end of the clip instead of running past it. The budget is
     // generous: a clip of a second is several seconds of wall clock on a software
-    // decoder under load.
-    let deadline = Instant::now() + Duration::from_secs(60);
+    // decoder under load, and a shared runner has taken minutes for this suite.
+    let deadline = Instant::now() + Duration::from_secs(240);
     let mut ended = channel_state();
     while Instant::now() < deadline {
         ended = channel_state();
