@@ -169,6 +169,17 @@ impl ReplayDto {
     /// Keep explicitly created channels well-formed. Replay channels are never
     /// invented while loading a session.
     pub fn normalize(&mut self) {
+        // One camera is not a choice, so a document with exactly one angle selects
+        // it. Automation (the vMix API, an animation step) marks clips without ever
+        // pressing a tile, and without this the mark would be refused for want of a
+        // selection nobody could make. A missing or dangling id is repaired the same
+        // way; with two or more cameras nothing is guessed.
+        let known = self
+            .active_angle_id
+            .is_some_and(|id| self.angles.iter().any(|angle| angle.id == id));
+        if !known && let [only] = self.angles.as_slice() {
+            self.active_angle_id = Some(only.id);
+        }
         self.buffering.encode_queue_frames = self.buffering.encode_queue_frames.clamp(0, 60);
         if self.buffering.encode_queue_frames != 0 && self.buffering.encode_queue_frames < 2 {
             self.buffering.encode_queue_frames = 2;
@@ -236,20 +247,29 @@ impl ReplayDto {
         name: &str,
     ) -> Result<u64, String> {
         let id = self.reserve_event_id();
+        // A mark taken from the API or an automation panel often carries no name. An
+        // unnamed row in the event list says nothing, so it gets the same shape of
+        // name the deck gives one, without the locale.
+        let name = if name.trim().is_empty() {
+            format!("Replay {id}")
+        } else {
+            name.trim().to_string()
+        };
         self.events.push(ReplayEventDto {
             id,
             recording_uuid: uuid.to_string(),
             in_frame,
             out_frame,
-            name: name.to_string(),
+            name,
             tags: Vec::new(),
             protected: false,
         });
         if !self.auto_add_to_playlist {
             return Ok(id);
         }
-        // The operator's current angle is explicit state. Guessing the first angle
-        // would silently file the clip against the wrong camera.
+        // The operator's current angle is explicit state. Guessing between cameras
+        // would silently file the clip against the wrong one; a document with one
+        // camera has that selection made for it by `normalize`.
         let angle_id = self.active_angle_id.ok_or_else(|| {
             "Select a Replay angle before adding events to a playlist".to_string()
         })?;
@@ -1198,6 +1218,65 @@ mod tests {
         assert_eq!(replay.events.len(), 1);
         assert!(replay.playlists[0].clips.is_empty());
         assert_eq!(replay.playlists[0].revision, 1);
+    }
+
+    /// A mark taken without a name, as the API and an animation step do, still reads
+    /// as an event: the deck shows the name it was given.
+    #[test]
+    fn a_marked_out_event_without_a_name_is_named_after_its_id() {
+        let mut replay = ReplayDto::default();
+        replay.auto_add_to_playlist = false;
+        let id = replay.note_mark_out("rec", 0, 30, "   ").unwrap();
+        assert_eq!(replay.events[0].name, format!("Replay {id}"));
+        let id = replay.note_mark_out("rec", 40, 70, " Goal ").unwrap();
+        assert_eq!(
+            replay.events[1].name, "Goal",
+            "a given name is kept, trimmed"
+        );
+        assert_ne!(replay.events[0].id, id);
+    }
+
+    /// One camera is not a choice: a document with a single angle adopts it, so
+    /// automation that never presses a tile can still file clips. Two cameras stay
+    /// unselected until the operator says which one.
+    #[test]
+    fn a_single_angle_becomes_the_selection() {
+        let mut replay = ReplayDto::default();
+        replay.angles.push(AngleDto {
+            id: 4,
+            name: "Cam".into(),
+            source: crate::session::replay::AngleSourceKind::Scene,
+            input_id: 0,
+            scene_id: 1,
+            audio: AngleAudio::Silent,
+            audio_unit_id: 0,
+            record_mode: AngleRecordMode::Composite,
+            encoder: crate::session::replay::AngleEncoder::Cpu,
+        });
+        replay.normalize();
+        assert_eq!(replay.active_angle_id, Some(4));
+        // A stored selection that points at a deleted angle is repaired the same way.
+        replay.active_angle_id = Some(9);
+        replay.normalize();
+        assert_eq!(replay.active_angle_id, Some(4));
+        // Two cameras are a real choice.
+        replay.angles.push(AngleDto {
+            id: 5,
+            name: "Cam 2".into(),
+            source: crate::session::replay::AngleSourceKind::Scene,
+            input_id: 0,
+            scene_id: 2,
+            audio: AngleAudio::Silent,
+            audio_unit_id: 0,
+            record_mode: AngleRecordMode::Composite,
+            encoder: crate::session::replay::AngleEncoder::Cpu,
+        });
+        replay.active_angle_id = None;
+        replay.normalize();
+        assert_eq!(
+            replay.active_angle_id, None,
+            "two cameras must not be guessed"
+        );
     }
 
     /// The clip's camera is the operator's selection. A document that never said

@@ -4785,7 +4785,7 @@ unsafe fn mixer_capabilities_ffi(out: *mut MixerCapabilities) -> i32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_replay_configure(json: *const c_char) -> i32 {
-    ffi_guard("mixer_replay_configure", ERR_IO, || unsafe {
+    ffi_guard("mixer_replay_configure", ERR_IO, || {
         let Some(json) = crate::pro::cstr(json) else {
             report_session_error("replay settings pointer is null");
             return ERR_INVALID_ARGUMENT;
@@ -4867,7 +4867,7 @@ pub unsafe extern "C" fn mixer_bench_capacity(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_replay_export_start(json: *const c_char) -> i32 {
-    ffi_guard("mixer_replay_export_start", ERR_IO, || unsafe {
+    ffi_guard("mixer_replay_export_start", ERR_IO, || {
         let Some(json) = crate::pro::cstr(json) else {
             return ERR_INVALID_ARGUMENT;
         };
@@ -5022,7 +5022,7 @@ pub unsafe extern "C" fn mixer_replay_channel_cue(
     out_frame: u64,
     recording_uuid: *const c_char,
 ) -> i32 {
-    ffi_guard("mixer_replay_channel_cue", ERR_IO, || unsafe {
+    ffi_guard("mixer_replay_channel_cue", ERR_IO, || {
         let Some(uuid) = crate::pro::cstr(recording_uuid) else {
             return ERR_INVALID_ARGUMENT;
         };

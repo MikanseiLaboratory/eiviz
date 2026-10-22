@@ -307,10 +307,6 @@ struct Inner {
     /// zeros next to files that were plainly written; the larger of the two is shown,
     /// since both only grow.
     angle_written: std::collections::HashMap<u32, u64>,
-    /// Latest readback figures per angle: frames that reached the recorder, and copies
-    /// refused because every slot was still busy. The second number is what says whether
-    /// the ring is deep enough.
-    angle_readback: std::collections::HashMap<u32, (u64, u64)>,
     /// Frames a GPU angle lost because its encode ring had no free texture. Kept
     /// apart from readback drops because the two say different things: one is a
     /// shallow readback ring, the other an encoder that is behind.
@@ -418,8 +414,7 @@ impl ReplayEngine {
                 config: ReplayDto::default(),
                 decode_ahead: true,
                 angle_written: std::collections::HashMap::new(),
-                angle_readback: std::collections::HashMap::new(),
-                angle_gpu_dropped: std::collections::HashMap::new(),
+                    angle_gpu_dropped: std::collections::HashMap::new(),
                 playlist_revision: 1,
                 recording: false,
                 uuid: String::new(),
@@ -1897,20 +1892,6 @@ impl ReplayEngine {
         result.map_err(|_| ERR_IO)
     }
 
-    /// Latest readback figures for an angle: (frames delivered, copies refused).
-    pub fn readback_state(&self, angle_id: u32) -> (u64, u64) {
-        self.lock()
-            .angle_readback
-            .get(&angle_id)
-            .copied()
-            .unwrap_or((0, 0))
-    }
-
-    /// Records what the readback path did for an angle, for the state report.
-    pub fn note_readback(&self, angle_id: u32, mapped: u64, exhausted: u64) {
-        let mut inner = self.lock();
-        inner.angle_readback.insert(angle_id, (mapped, exhausted));
-    }
 
     /// Progress of the running export, or an idle snapshot when none is running.
     pub fn export_progress(&self) -> eiviz_pro_api::ReplayExportProgress {
@@ -1946,20 +1927,17 @@ impl ReplayEngine {
     /// Live Replay state as JSON. `GetReplayState` needs this because the session
     /// document alone cannot tell a client what is playing.
     pub fn state_json(&self) -> String {
-        // The readback totals belong in the state report: whether the ring is deep enough
-        // is a measured question, not one to guess at.
-        let (readback_mapped, readback_exhausted) = {
-            let inner = self.lock();
-            inner
-                .angle_readback
-                .values()
-                .fold((0u64, 0u64), |(mapped, exhausted), pair| {
-                    (mapped + pair.0, exhausted + pair.1)
-                })
-        };
         let mut stats = MixerReplayStats::default();
         let mut angle_stats = [MixerReplayAngleStats::default(); 32];
         let angle_count = self.copy_stats(&mut stats, &mut angle_stats) as usize;
+        // The readback totals belong in the state report: whether the ring is deep enough
+        // is a measured question, not one to guess at. They come from the counters the
+        // readback path itself fills, so the two can never disagree.
+        let readback_mapped = stats.frames_offered;
+        let readback_exhausted: u64 = angle_stats[..angle_count]
+            .iter()
+            .map(|angle| angle.dropped_readback)
+            .sum();
         let mut channel_states = [MixerReplayChannelState::default(); 26];
         let running_order: Vec<usize> = self
             .lock()
@@ -2027,8 +2005,8 @@ impl ReplayEngine {
             "markInValid": stats.mark_in_valid != 0,
             "recordingUuid": self.recording_uuid(),
             "audioBlocksDropped": self.audio_drops(),
-            // Readback totals across angles: frames the recorder received, and copies it
-            // could not take because every ring slot was still busy.
+            // Readback totals across angles: frames the recorder received, and frames it
+            // could not take (every ring slot busy, or replaced before the writer).
             "readbackMapped": readback_mapped,
             "readbackExhausted": readback_exhausted,
             "angles": angles,

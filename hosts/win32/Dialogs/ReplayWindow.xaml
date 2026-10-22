@@ -217,6 +217,9 @@
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <StackPanel Orientation="Horizontal">
+                                            <Button Style="{StaticResource SmallIconButton}" Content="&#xE710;"
+                                                    Click="EventAddToPlaylist_Click" Tag="{Binding}"
+                                                    ToolTip="{Binding [replay.addToPlaylist], Source={x:Static i18n:Loc.Source}}"/>
                                             <Button Style="{StaticResource SmallIconButton}" Content="&#xE768;"
                                                     Click="EventCue_Click" Tag="{Binding}"
                                                     ToolTip="{Binding [replay.cueHint], Source={x:Static i18n:Loc.Source}}"/>

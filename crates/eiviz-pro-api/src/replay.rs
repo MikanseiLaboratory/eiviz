@@ -404,6 +404,9 @@ pub trait ReplayStore: Send {
 
 pub trait ReplayBackend: Send + Sync {
     fn open(&self, config: &ReplayStoreConfig) -> ProResult<Box<dyn ReplayStore>>;
+    /// Free space and a bitrate model for a plan of `angles` streams. The argument
+    /// list is the module ABI: it travels through `ProApi` field for field.
+    #[allow(clippy::too_many_arguments)]
     fn estimate(
         &self,
         path: &str,
@@ -429,18 +432,15 @@ pub fn free_bytes_at(path: &std::path::Path) -> Option<u64> {
         path.parent()?.to_path_buf()
     };
     #[cfg(windows)]
-    {
-        return free_bytes_windows(&probe);
-    }
+    let answer = free_bytes_windows(&probe);
     #[cfg(unix)]
-    {
-        return free_bytes_unix(&probe);
-    }
+    let answer = free_bytes_unix(&probe);
     #[cfg(not(any(windows, unix)))]
-    {
+    let answer = {
         let _ = probe;
-        None
-    }
+        None::<u64>
+    };
+    answer
 }
 
 #[cfg(windows)]

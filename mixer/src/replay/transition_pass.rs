@@ -16,7 +16,6 @@ pub struct TransitionPass {
     sampler: wgpu::Sampler,
     uniforms: wgpu::Buffer,
     bind_group: Option<wgpu::BindGroup>,
-    format: wgpu::TextureFormat,
 }
 
 impl TransitionPass {
@@ -141,13 +140,9 @@ impl TransitionPass {
             sampler,
             uniforms,
             bind_group: None,
-            format,
         }
     }
 
-    pub fn format(&self) -> wgpu::TextureFormat {
-        self.format
-    }
 
     /// Draws `outgoing` and `incoming` into `target` with the given transition.
     ///

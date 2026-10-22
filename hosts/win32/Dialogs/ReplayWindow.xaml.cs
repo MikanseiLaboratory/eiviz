@@ -1416,56 +1416,53 @@ public partial class ReplayWindow : Window
             SaveDocument();
             return;
         }
-        var playlistId = ReplayModel.EnsurePlaylist(_replay);
-        var playlist = ReplayModel.Playlist(_replay, playlistId);
-        if (playlist is null)
-        {
-            SaveDocument();
-            return;
-        }
-        var clips = playlist["clips"] as JsonArray ?? new JsonArray();
-        // A new clip starts on the playlist's default transition, so an operator
-        // who sets "always dissolve" gets it without editing every clip.
-        var fallback = playlist["defaultTransition"] as JsonObject;
-        clips.Add(new JsonObject
-        {
-            ["uid"] = ReplayModel.UniqueClipUid(_replay, id),
-            ["source"] = "Angle",
-            ["angleId"] = angleId,
-            ["sourceEvent"] = id,
-            ["recordingUuid"] = uuid,
-            ["inFrame"] = inFrame,
-            ["outFrame"] = outFrame,
-            ["speed"] = 1.0,
-            ["gainDb"] = 0.0,
-            ["transition"] = fallback is null
-                ? new JsonObject { ["kind"] = "Cut", ["timing"] = "Overwrap", ["durationFrames"] = 0U }
-                : new JsonObject
-                {
-                    ["kind"] = fallback["kind"]?.GetValue<string>() ?? "Cut",
-                    ["timing"] = fallback["timing"]?.GetValue<string>() ?? "Overwrap",
-                    ["durationFrames"] = fallback["durationFrames"]?.GetValue<uint>() ?? 0
-                }
-        });
-        playlist["clips"] = clips;
-        playlist["revision"] = (playlist["revision"]?.GetValue<ulong>() ?? 0) + 1;
+        ReplayModel.AppendClip(
+            _replay,
+            ReplayModel.EnsurePlaylist(_replay),
+            id,
+            uuid,
+            inFrame,
+            outFrame,
+            angleId);
         SaveDocument();
     }
 
-    private void EventProtect_Click(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Files an event that was marked with auto-add off onto the playlist that is
+    /// open. The event list is the only place an event exists as a clip source, so
+    /// without this an operator who turned auto-add off could never use an event.
+    /// </summary>
+    private void EventAddToPlaylist_Click(object sender, RoutedEventArgs e)
     {
-        if (_replay is null || EventList.SelectedItem is not EventRow row)
+        if (sender is not Button { Tag: EventRow row } || _replay is null)
+            return;
+        var eventInfo = ReplayModel.Events(_replay).FirstOrDefault(item => item.Id == row.Id);
+        if (eventInfo is null)
+            return;
+        var angleId = ReplayModel.ActiveAngle(_replay);
+        if (angleId == 0)
         {
-            Warn(Loc.T("replay.needEvent"));
+            // Which camera the clip shows is the operator's call, exactly as it is
+            // for auto-add: guessing would file the range against the wrong one.
+            Warn(Loc.T("replay.needAngle"));
             return;
         }
-        foreach (var item in _replay["events"] as JsonArray ?? new JsonArray())
+        var uid = ReplayModel.AppendClip(
+            _replay,
+            _playlistId,
+            eventInfo.Id,
+            eventInfo.RecordingUuid,
+            eventInfo.InFrame,
+            eventInfo.OutFrame,
+            angleId);
+        if (uid is null)
         {
-            if (item is JsonObject entry && (entry["id"]?.GetValue<ulong>() ?? 0) == row.Id)
-                entry["protected"] = !row.Protected;
+            Warn(Loc.T("replay.playlistMissing"));
+            return;
         }
         SaveDocument();
-        RefreshEvents();
+        RefreshPlaylist();
+        Warn(Loc.Format("replay.addedToPlaylist", string.IsNullOrWhiteSpace(eventInfo.Name) ? row.Name : eventInfo.Name));
     }
 
     private void EventDelete_Click(object sender, RoutedEventArgs e)
@@ -1586,9 +1583,20 @@ public partial class ReplayWindow : Window
         var kind = fallback?["kind"]?.GetValue<string>() ?? "Cut";
         var timing = fallback?["timing"]?.GetValue<string>() ?? "Overwrap";
         var frames = fallback?["durationFrames"]?.GetValue<uint>() ?? 0;
-        SelectTag(DefaultKindBox, kind);
-        SelectTag(DefaultTimingBox, timing);
-        DefaultFramesBox.Text = frames.ToString();
+        // Selecting an item raises SelectionChanged, and that handler saves the
+        // document. Filling the editors from the document is not an edit, so the
+        // handler is held off while it happens.
+        _loadingTransition = true;
+        try
+        {
+            SelectTag(DefaultKindBox, kind);
+            SelectTag(DefaultTimingBox, timing);
+            DefaultFramesBox.Text = frames.ToString();
+        }
+        finally
+        {
+            _loadingTransition = false;
+        }
         DefaultFramesBox.IsEnabled = kind != "Cut";
     }
 
@@ -1963,6 +1971,8 @@ public partial class ReplayWindow : Window
     /// </summary>
     private async void Capacity_Click(object sender, RoutedEventArgs e)
     {
+        if (_replay is null)
+            return;
         CapacityButton.IsEnabled = false;
         CapacityText.Text = Loc.T("replay.capacityRunning");
         try

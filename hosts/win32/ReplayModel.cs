@@ -472,6 +472,53 @@ internal static class ReplayModel
     }
 
     /// <summary>First playlist, created on demand when the caller needs one.</summary>
+    /// <summary>
+    /// Files an event onto a playlist as a clip, on the playlist's default transition
+    /// so an operator who set "always dissolve" does not edit every clip. Both the
+    /// auto-add after a mark and the event list's own button come through here, so
+    /// the two cannot drift apart.
+    /// </summary>
+    /// <returns>The new clip's uid, or null when the playlist is not there.</returns>
+    public static string? AppendClip(
+        JsonObject root,
+        ulong playlistId,
+        ulong eventId,
+        string recordingUuid,
+        ulong inFrame,
+        ulong outFrame,
+        uint angleId)
+    {
+        var playlist = Playlist(root, playlistId);
+        if (playlist is null)
+            return null;
+        var clips = playlist["clips"] as JsonArray ?? new JsonArray();
+        var fallback = playlist["defaultTransition"] as JsonObject;
+        var uid = UniqueClipUid(root, eventId);
+        clips.Add(new JsonObject
+        {
+            ["uid"] = uid,
+            ["source"] = "Angle",
+            ["angleId"] = angleId,
+            ["sourceEvent"] = eventId,
+            ["recordingUuid"] = recordingUuid,
+            ["inFrame"] = inFrame,
+            ["outFrame"] = outFrame,
+            ["speed"] = 1.0,
+            ["gainDb"] = 0.0,
+            ["transition"] = fallback is null
+                ? new JsonObject { ["kind"] = "Cut", ["timing"] = "Overwrap", ["durationFrames"] = 0U }
+                : new JsonObject
+                {
+                    ["kind"] = fallback["kind"]?.GetValue<string>() ?? "Cut",
+                    ["timing"] = fallback["timing"]?.GetValue<string>() ?? "Overwrap",
+                    ["durationFrames"] = fallback["durationFrames"]?.GetValue<uint>() ?? 0
+                }
+        });
+        playlist["clips"] = clips;
+        playlist["revision"] = (playlist["revision"]?.GetValue<ulong>() ?? 0) + 1;
+        return uid;
+    }
+
     public static ulong EnsurePlaylist(JsonObject root)
     {
         foreach (var item in Array(root, "playlists"))

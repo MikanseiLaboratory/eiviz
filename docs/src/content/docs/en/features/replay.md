@@ -43,7 +43,7 @@ The angle set is fixed while recording: stop the recording before adding or remo
 
 The Replay window is the operator's surface.
 
-- **Angles**: every angle is shown live. Click one to make it the angle the mark and the playlist use. More than four angles are shown together in one compact view.
+- **Angles**: every angle is shown live. Click one to make it the angle the mark and the playlist use. **Multiview** gathers every angle into one compact list, which is what a machine with many cameras needs.
 - **Record / Stop**: starts and stops the recording. The state line shows the remaining time, or that the storage is full, and the health line shows written and read-back frames, frames lost at the readback, encoder and writer losses, segments, queue depth, and write latency. Problems are also spelled out in words, for example "storage low" or "encoder behind".
 - **Mark In (I)** and **Mark Out (O)**: mark the clip. The in point, out point, and duration are shown as timecode, and the marks and the recording position are drawn on the angle's waveform. Cancel mark clears the range.
 - **Event list**: every marked event with its range and duration. Events can be protected from retention, renamed, deleted, and added to the playlist. Deleting an event keeps the clips that came from it.

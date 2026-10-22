@@ -207,6 +207,22 @@ pub struct ProOutputStatsAbi {
     pub sent_fps_milli: u32,
 }
 
+/// The estimate entry point. The argument list is the module ABI: path bytes, the
+/// plan's format, how many angles are planned, the reserve, and an out struct.
+pub type ReplayEstimateFn = unsafe extern "C" fn(
+    *mut c_void,
+    *const u8,
+    usize,
+    u32,
+    u32,
+    u32,
+    u32,
+    u32,
+    u32,
+    u64,
+    *mut ProReplayEstimateAbi,
+) -> ProStatus;
+
 /// Function table. `struct_size` is the plugin's view of this struct.
 /// `abi_hash` must equal [`abi_hash`].
 #[repr(C)]
@@ -350,21 +366,8 @@ pub struct ProApi {
             *mut u32,
         ) -> ProStatus,
     >,
-    pub replay_estimate: Option<
-        unsafe extern "C" fn(
-            *mut c_void,
-            *const u8,
-            usize,
-            u32,
-            u32,
-            u32,
-            u32,
-            u32,
-            u32,
-            u64,
-            *mut ProReplayEstimateAbi,
-        ) -> ProStatus,
-    >,
+    pub replay_estimate: Option<ReplayEstimateFn>,
+
     /// Export a recording to MP4. The job runs on its own thread, so the host can
     /// show progress and cancel.
     pub replay_export_start: Option<
@@ -624,6 +627,12 @@ pub fn module_target() -> String {
     format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
 }
 
+/// Copies a slice into a caller-provided buffer.
+///
+/// Deliberately not `unsafe fn`: this is the helper modules call from their own
+/// `unsafe extern "C"` entry points, and it refuses a null pointer or a short
+/// buffer instead of trusting the caller.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn copy_to_buffer(src: &[u8], dst: *mut u8, cap: usize, written: *mut usize) -> ProStatus {
     if dst.is_null() || written.is_null() {
         return ProStatus::new(PRO_INVALID);
