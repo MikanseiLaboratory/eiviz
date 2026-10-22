@@ -10,4 +10,3 @@ description = "Plan entitlements and the Rust boundary between eiviz_mixer and t
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs", rev = "b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3" }
