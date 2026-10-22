@@ -143,7 +143,6 @@ impl TransitionPass {
         }
     }
 
-
     /// Draws `outgoing` and `incoming` into `target` with the given transition.
     ///
     /// The bind group is rebuilt when the textures change, which is once per

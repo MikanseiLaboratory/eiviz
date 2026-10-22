@@ -414,7 +414,7 @@ impl ReplayEngine {
                 config: ReplayDto::default(),
                 decode_ahead: true,
                 angle_written: std::collections::HashMap::new(),
-                    angle_gpu_dropped: std::collections::HashMap::new(),
+                angle_gpu_dropped: std::collections::HashMap::new(),
                 playlist_revision: 1,
                 recording: false,
                 uuid: String::new(),
@@ -1891,7 +1891,6 @@ impl ReplayEngine {
         }
         result.map_err(|_| ERR_IO)
     }
-
 
     /// Progress of the running export, or an idle snapshot when none is running.
     pub fn export_progress(&self) -> eiviz_pro_api::ReplayExportProgress {

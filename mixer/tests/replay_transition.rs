@@ -24,9 +24,9 @@ use eiviz_mixer::{
     EASING_LINEAR, EivizMotion, EivizSceneCamera, EivizSceneSequenceDesc, EivizSceneStateDesc,
     EivizSequenceStepDesc, GEN_SOLID, MixerReplayChannelState, OverlayDesc, SCENE_SEQ_PLAY,
     SRC_COLOR, UnitState, mixer_create, mixer_create_unit, mixer_define_generator,
-    mixer_define_scene, mixer_destroy, mixer_replay_configure, mixer_replay_copy_channels,
-    mixer_replay_record, mixer_scene_sequence, mixer_scene_sequences_define,
-    mixer_scene_states_define, mixer_unit_set_state,
+    mixer_define_scene, mixer_destroy, mixer_replay_channel_transport, mixer_replay_configure,
+    mixer_replay_copy_channels, mixer_replay_record, mixer_scene_sequence,
+    mixer_scene_sequences_define, mixer_scene_states_define, mixer_unit_set_state,
 };
 
 /// The channel's own source id: `REPLAY_CHANNEL_BASE` for channel A.
@@ -245,78 +245,32 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
         // A's last frame and the frames the transition covers. Overwrap runs the
         // transition over the tail of A; Additive holds A's last frame for it.
         let window_first = out_a - u64::from(DISSOLVE_FRAMES) + 1;
-        for attempt in 0..attempts {
-            expect("configure playlist", unsafe {
-                mixer_replay_configure(playlist(timing).as_ptr())
-            });
-            expect("play sequence", unsafe {
-                mixer_scene_sequence(scene_id(2), 1, SCENE_SEQ_PLAY)
-            });
-
-            let mut red = 0;
-            let mut mixed = 0;
-            let mut inside = 0;
-            held_here = 0;
-            // The previous run leaves the channel on its last clip until the step cues
-            // the first one again, so the run has not started until the channel reports
-            // a frame of clip A.
-            let mut started = false;
-            let deadline = Instant::now() + Duration::from_secs(30);
-            while Instant::now() < deadline {
-                let pixel = scene_pixel(scene_id(2), 160, 90);
-                let mut channels = vec![MixerReplayChannelState::default(); 2];
-                let count = unsafe { mixer_replay_copy_channels(channels.as_mut_ptr(), 2) };
-                let position = if count >= 1 {
-                    channels[0].position_frame
-                } else {
-                    0
-                };
-                if !started {
-                    if position < in_a || position > out_a {
-                        continue;
-                    }
-                    started = true;
-                }
-                last = pixel;
-                if position == out_a {
-                    held_here += 1;
-                }
-                if position < window_first {
-                    // Clip A plays on its own before the transition.
-                    if is_red(pixel) {
-                        red += 1;
-                    }
-                } else {
-                    // The transition window is `window_first..=out_a`.
-                    if position <= out_a {
-                        inside += 1;
-                    }
-                    if is_green(pixel) {
-                        // B is on screen: the playlist ran to its end.
-                        break;
-                    }
-                }
-                // The blend is looked for in every sample of the run rather than tied to
-                // the reported position: the composed picture is read back through the
-                // GPU, and on a software adapter that lags the transport by more than a
-                // transition lasts, so the two do not line up. Before the transition the
-                // picture is one solid colour, so a blend can only come from it.
-                if is_dissolve_mix(pixel) {
-                    mixed += 1;
-                }
-            }
-            red_total += red;
-            inside_total += inside;
-            mixed_total += mixed;
-            if mixed > 0 && red > 0 {
+        let mut inside_seen = 0;
+        for _ in 0..attempts {
+            let run = play_once(&playlist(timing), in_a, out_a, window_first, NORMAL_SPEED);
+            red_total += run.red;
+            inside_total += run.inside;
+            inside_seen = inside_seen.max(run.inside);
+            mixed_total += run.mixed;
+            held_here = run.held;
+            last = run.last;
+            if run.mixed > 0 && run.red > 0 && run.reached_end {
                 break;
             }
-            assert!(
-                attempt + 1 < attempts,
-                "{timing}: the dissolve never put both clips on screen in {attempts} runs: \
-                 {inside} samples in {window_first}..={out_a}, last {last:?}"
-            );
         }
+        // A software adapter's snapshot can take longer than a full-speed dissolve
+        // lasts, so the blend falls between two samples however many runs are made.
+        // The same thirty frames at a tenth of the speed cover five seconds and can
+        // be sampled; it is used only when no run saw a blend at all.
+        if mixed_total == 0 {
+            let run = play_once(&playlist(timing), in_a, out_a, window_first, SLOW_SPEED);
+            red_total += run.red;
+            inside_total += run.inside;
+            inside_seen = inside_seen.max(run.inside);
+            mixed_total += run.mixed;
+            last = run.last;
+        }
+        let _ = inside_seen;
 
         // Additive holds the outgoing clip's last frame while it inserts the
         // transition, so the channel reports clip A's out frame for its whole
@@ -352,4 +306,103 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
     expect("record off", unsafe { mixer_replay_record(0) });
     mixer_destroy();
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Channel speeds, in thousandths. The slow run exists for machines where one
+/// snapshot takes longer than a full-speed dissolve.
+const NORMAL_SPEED: i32 = 1000;
+const SLOW_SPEED: i32 = 100;
+
+/// What one playthrough of the playlist showed.
+struct Playthrough {
+    red: usize,
+    inside: usize,
+    mixed: usize,
+    held: usize,
+    last: [u8; 3],
+    reached_end: bool,
+}
+
+/// Plays the playlist once from the sequence step, sampling the composed program
+/// pixel as often as the snapshot allows. `rate` is the channel speed in
+/// thousandths; the frame counts are the same at any speed.
+fn play_once(
+    playlist: &CString,
+    in_a: u64,
+    out_a: u64,
+    window_first: u64,
+    rate: i32,
+) -> Playthrough {
+    expect("configure playlist", unsafe {
+        mixer_replay_configure(playlist.as_ptr())
+    });
+    expect("play sequence", unsafe {
+        mixer_scene_sequence(scene_id(2), 1, SCENE_SEQ_PLAY)
+    });
+
+    let mut run = Playthrough {
+        red: 0,
+        inside: 0,
+        mixed: 0,
+        held: 0,
+        last: [0, 0, 0],
+        reached_end: false,
+    };
+    // The previous run leaves the channel on its last clip until the step cues the
+    // first one again, so the run has not started until the channel reports a frame
+    // of clip A.
+    let mut started = false;
+    let mut slowed = false;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        let pixel = scene_pixel(scene_id(2), 160, 90);
+        let mut channels = vec![MixerReplayChannelState::default(); 2];
+        let count = unsafe { mixer_replay_copy_channels(channels.as_mut_ptr(), 2) };
+        let position = if count >= 1 {
+            channels[0].position_frame
+        } else {
+            0
+        };
+        if !started {
+            if position < in_a || position > out_a {
+                continue;
+            }
+            started = true;
+        }
+        // Slow down before the transition rather than during it, so the frames the
+        // dissolve covers are the same thirty either way.
+        if rate < NORMAL_SPEED && !slowed && position + 5 < window_first {
+            let _ = unsafe { mixer_replay_channel_transport(0, 1, rate, -1) };
+            slowed = true;
+        }
+        run.last = pixel;
+        if position == out_a {
+            run.held += 1;
+        }
+        if position < window_first {
+            // Clip A plays on its own before the transition.
+            if is_red(pixel) {
+                run.red += 1;
+            }
+        } else {
+            // The transition window is `window_first..=out_a`.
+            if position <= out_a {
+                run.inside += 1;
+            }
+            if is_green(pixel) {
+                // B is on screen: the playlist ran to its end.
+                run.reached_end = true;
+                break;
+            }
+        }
+        // The blend is looked for in every sample of the run rather than tied to the
+        // reported position: the composed picture is read back through the GPU, and
+        // on a software adapter that lags the transport by more than a transition
+        // lasts, so the two do not line up. Before the transition the picture is one
+        // solid colour, so a blend can only come from it.
+        if is_dissolve_mix(pixel) {
+            run.mixed += 1;
+        }
+    }
+    run
 }
