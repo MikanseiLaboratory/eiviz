@@ -229,7 +229,10 @@ pub fn scene_pixel(scene: u64, x: u32, y: u32) -> [u8; 3] {
     let _ = std::fs::remove_file(&path);
     let cpath = CString::new(path.to_string_lossy().as_bytes()).unwrap();
     let mut code = unsafe { mixer_snapshot(scene, 0, cpath.as_ptr()) };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    // A shared CI runner with a software adapter has taken minutes for the rest of
+    // the replay suite, so one snapshot gets a generous budget: failing here says
+    // nothing about the picture the test is looking at.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     while code != OK && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(250));
         code = unsafe { mixer_snapshot(scene, 0, cpath.as_ptr()) };
