@@ -54,24 +54,27 @@ fn replay_refuses_with_a_reason_without_a_pro_module() {
     ))
     .unwrap();
 
+    // The document is accepted so the operator can open the deck and read why it
+    // will not record; the refusal moves to the operations themselves.
     let code = unsafe { mixer_replay_configure(config.as_ptr()) };
     let message = last_error();
-    assert_ne!(code, 0, "a plan without Replay must refuse the settings");
-    assert!(
-        message.contains("plan") || message.contains("Pro module"),
-        "the refusal names the plan or the module: {message}"
-    );
-    assert!(
-        !message.contains("replay command was rejected"),
-        "the refusal keeps its reason: {message}"
+    assert_eq!(
+        code, 0,
+        "a plan without Replay keeps the document: {message}"
     );
 
-    // Recording is refused for the same reason, and says so.
+    // Recording is refused, and the reason names the plan or the module.
     let record_code = unsafe { mixer_replay_record(1) };
     let record_message = last_error();
     assert_ne!(record_code, 0, "recording must not start");
     assert!(
-        !record_message.is_empty() && !record_message.contains("replay command was rejected"),
+        record_message.contains("plan")
+            || record_message.contains("Pro module")
+            || record_message.contains("Professional"),
+        "the refusal names the plan or the module: {record_message}"
+    );
+    assert!(
+        !record_message.contains("replay command was rejected"),
         "the recording refusal keeps its reason: {record_message}"
     );
     mixer_destroy();

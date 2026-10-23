@@ -66,16 +66,31 @@ fn an_angle_that_is_not_on_air_still_records() {
         mixer_replay_configure(config.as_ptr())
     });
     expect("record on", unsafe { mixer_replay_record(1) });
-    thread::sleep(Duration::from_millis(1500));
 
+    // The first frames can take a while on a software adapter in a debug build,
+    // and a fixed sleep turned "slow to start" into "records nothing". Wait for
+    // the recorder to actually receive a frame, then measure progress from there.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let mut first = MixerReplayStats::default();
     let mut first_angles = vec![MixerReplayAngleStats::default(); 4];
-    unsafe { mixer_replay_copy_stats(&mut first, first_angles.as_mut_ptr(), 4) };
+    while std::time::Instant::now() < deadline {
+        unsafe { mixer_replay_copy_stats(&mut first, first_angles.as_mut_ptr(), 4) };
+        if first.frames_pushed > 0 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
 
-    thread::sleep(Duration::from_millis(1500));
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let mut stats = MixerReplayStats::default();
     let mut angles = vec![MixerReplayAngleStats::default(); 4];
-    unsafe { mixer_replay_copy_stats(&mut stats, angles.as_mut_ptr(), 4) };
+    while std::time::Instant::now() < deadline {
+        unsafe { mixer_replay_copy_stats(&mut stats, angles.as_mut_ptr(), 4) };
+        if stats.frames_offered > first.frames_offered {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
     expect("record off", unsafe { mixer_replay_record(0) });
     mixer_destroy();
 
