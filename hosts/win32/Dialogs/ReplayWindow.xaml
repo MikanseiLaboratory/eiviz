@@ -289,6 +289,17 @@
                           ScrollViewer.HorizontalScrollBarVisibility="Auto">
                     <ListView.View>
                         <GridView>
+                            <!-- Which clip the channel is playing. Empty for the rest, so
+                                 the operator can see at a glance what is on air. -->
+                            <GridViewColumn Width="26">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Marker}" FontFamily="Segoe MDL2 Assets"
+                                                   FontSize="10" Foreground="#7FD14B"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
                             <GridViewColumn Header="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" Width="96">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>

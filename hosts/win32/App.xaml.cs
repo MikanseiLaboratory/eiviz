@@ -383,10 +383,13 @@ public partial class App : Application
 
     private static void ShowHttpListenMoved(uint port, uint next, string? owner)
     {
+        // A moved port is not a problem to solve: the server is running, the port is
+        // remembered, and the log already says so. A dialog here would greet every
+        // start on a machine where vMix owns 8088.
         var text = string.IsNullOrEmpty(owner)
             ? Loc.Format("msg.httpListenMoved", port, next)
             : Loc.Format("msg.httpListenMovedOwner", port, owner, next);
-        ShowApiWarning(text);
+        HostLog.Write("WARN", text);
     }
 
     private static void ShowHttpListenFailed(uint port, string? owner)
@@ -402,6 +405,14 @@ public partial class App : Application
         var text = string.IsNullOrEmpty(owner)
             ? Loc.T("msg.tcpListenFailed")
             : Loc.Format("msg.tcpListenFailedOwner", owner);
+        // Another application owning 8099 (vMix) is a normal setup, not something the
+        // operator can fix by reading a dialog: the TCP API is off and the log says
+        // why. Only an unclaimed port that still refuses to open is worth a dialog.
+        if (!string.IsNullOrEmpty(owner))
+        {
+            HostLog.Write("WARN", text);
+            return;
+        }
         ShowApiWarning(text);
     }
 

@@ -48,6 +48,7 @@ The Replay window is the operator's surface.
 - **Mark In (I)** and **Mark Out (O)**: mark the clip. The in point, out point, and duration are shown as timecode, and the marks and the recording position are drawn on the angle's waveform. Cancel mark clears the range.
 - **Event list**: every marked event with its range and duration. Events can be protected from retention, renamed, deleted, and added to the playlist. Deleting an event keeps the clips that came from it.
 - **Playlist**: the clips a channel plays, in order. A clip can be cued, removed, tagged, and edited: transition (Cut or Dissolve), transition timing (Overwrap or Additive), transition length, gain (−60 to +12 dB), keep pitch, playback speed, and where its audio comes from (its own angle, another angle, or silence).
+- While the channel plays, the clip on air is marked ▶. With playlist looping on, playback returns to the first clip after the last one; with it off the playlist ends and the transport reads stopped.
 - **Transport**: play, pause, step one frame, jog, 25 %, 50 %, 100 %, and Live to jump back to the recording edge. Stepping and jogging stay inside the mark.
 - **Keyboard**: `I` and `O` mark, `Space` plays or pauses, `←` and `→` step one frame, and `L` returns to the recording edge.
 - **Export**: write the selected clip, the whole playlist, one angle, or every angle to an MP4. Export runs on the machine that owns the recording.

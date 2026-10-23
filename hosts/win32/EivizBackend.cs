@@ -513,12 +513,15 @@ internal sealed class LocalEivizBackend : IEivizBackend
     public MixerReplayChannelState? ReplayChannelState(uint channel)
     {
         var states = new MixerReplayChannelState[4];
-        if (MixerNative.ReplayCopyChannels(states, (uint)states.Length) != 0)
+        // The call answers with how many channels it filled, so a count of one is a
+        // success. Only a negative code is a failure.
+        var count = MixerNative.ReplayCopyChannels(states, (uint)states.Length);
+        if (count < 0)
             return null;
-        foreach (var state in states)
+        for (var index = 0; index < count && index < states.Length; index++)
         {
-            if (state.ChannelIndex == channel)
-                return state;
+            if (states[index].ChannelIndex == channel)
+                return states[index];
         }
         return null;
     }

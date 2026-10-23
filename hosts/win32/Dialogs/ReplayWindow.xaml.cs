@@ -149,6 +149,39 @@ public partial class ReplayWindow : Window
     }
 
     /// <summary>
+    /// Marks the clip the channel is playing and keeps the transport label honest.
+    /// Playback is the mixer's state, not the window's: a playlist that is not
+    /// looping stops on its own, and the deck must say so the moment it happens.
+    /// </summary>
+    private void RefreshOnAir()
+    {
+        if (_replay is null)
+            return;
+        var state = Backend?.ReplayChannelState(_channel);
+        if (state is { } mixer)
+        {
+            _playing = mixer.Playing != 0;
+        }
+        var rows = PlaylistList.ItemsSource as List<ClipRow> ?? [];
+        var playing = state is { Playing: > 0 };
+        foreach (var row in rows)
+        {
+            var onAir = playing
+                && state is { } now
+                && now.InFrame == row.InFrame
+                && now.OutFrame == row.OutFrame
+                && now.AngleId == row.AngleId;
+            var marker = onAir ? "▶" : "";
+            if (row.Marker != marker)
+            {
+                row.IsLoading = true;
+                row.Marker = marker;
+                row.IsLoading = false;
+            }
+        }
+    }
+
+    /// <summary>
     /// Points the deck monitors at the channel's output and the selected angle's
     /// live picture. Called on load and whenever either source changes.
     /// </summary>
@@ -361,6 +394,7 @@ public partial class ReplayWindow : Window
             }
         }
         RefreshStatus();
+        RefreshOnAir();
         RetargetMonitors();
         RefreshExport();
     }
@@ -965,7 +999,8 @@ public partial class ReplayWindow : Window
         var rows = new List<ClipRow>();
         foreach (var clip in ReplayModel.Clips(_replay, _playlistId))
         {
-            var row = existing.FirstOrDefault(candidate => candidate.Uid == clip.Uid) ?? new ClipRow { Uid = clip.Uid };
+            var row = existing.FirstOrDefault(candidate => candidate.Uid == clip.Uid)
+                ?? new ClipRow { Uid = clip.Uid, InFrame = clip.InFrame, OutFrame = clip.OutFrame, AngleId = clip.AngleId };
             row.IsLoading = true;
             row.InText = ReplayModel.Timecode(clip.InFrame, fps);
             row.OutText = ReplayModel.Timecode(clip.OutFrame, fps);
@@ -2225,8 +2260,23 @@ public partial class ReplayWindow : Window
         private string _gainDb = "0";
         private bool _preservePitch;
         private bool _loading = true;
+        private string _marker = "";
 
         public string Uid { get; init; } = "";
+
+        /// <summary>The clip's own range, so the row can be matched with the channel.</summary>
+        public ulong InFrame { get; init; }
+
+        public ulong OutFrame { get; init; }
+
+        public uint AngleId { get; init; }
+
+        /// <summary>Marker shown while the channel is playing this clip.</summary>
+        public string Marker
+        {
+            get => _marker;
+            set => Set(ref _marker, value);
+        }
 
         /// <summary>In, out and length, read-only: they come from the mark.</summary>
         public string InText { get; set; } = "";
