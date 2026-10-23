@@ -1221,6 +1221,9 @@ public sealed class SessionSettings
     public uint MasterFpsNum { get; set; } = 60_000;
     public uint MasterFpsDen { get; set; } = 1_001;
 
+    /// <summary>A copy, so a dialog can tell what the operator changed.</summary>
+    public SessionSettings Clone() => (SessionSettings)MemberwiseClone();
+
     public uint FramesFor(uint value, uint unit) =>
         unit == MixerNative.DurationMs
             ? (uint)Math.Max(1, Math.Round(value * (double)MasterFpsNum / Math.Max(1, MasterFpsDen) / 1000.0))

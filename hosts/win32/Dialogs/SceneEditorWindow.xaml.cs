@@ -614,6 +614,7 @@ public partial class SceneEditorWindow : Window
         }
         MixerApply.DefineScene(_scene, _width, _height);
         MixerApply.DefineSceneAnim(_scene);
+        SessionStore.AdoptScene(_session, _scene);
         SessionStore.Publish(_session);
     }
 
@@ -643,6 +644,7 @@ public partial class SceneEditorWindow : Window
             return;
         MixerApply.DefineScene(_scene, _width, _height);
         MixerApply.DefineSceneAnim(_scene);
+        SessionStore.AdoptScene(_session, _scene);
         SessionStore.Publish(_session);
     }
 

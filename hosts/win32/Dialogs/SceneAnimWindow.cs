@@ -923,7 +923,10 @@ internal sealed class SceneAnimWindow : Window
         {
             MixerApply.DefineSceneAnim(_scene);
             if (_persist && Application.Current is App app)
+            {
+                SessionStore.AdoptScene(app.Session, _scene);
                 SessionStore.Publish(app.Session);
+            }
             _status.Text = "";
         }
         catch (Exception ex)
@@ -950,7 +953,10 @@ internal sealed class SceneAnimWindow : Window
         {
             MixerApply.DefineSceneAnim(_scene);
             if (publish)
+            {
+                SessionStore.AdoptScene(app.Session, _scene);
                 SessionStore.Publish(app.Session);
+            }
             _status.Text = "";
             return true;
         }

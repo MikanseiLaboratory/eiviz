@@ -1316,31 +1316,48 @@ public partial class MainWindow
         }
         var restartMedia = _session.Settings.InternalColorFormat != dialog.Settings.InternalColorFormat
             || _session.Settings.FrameBufferFrames != dialog.Settings.FrameBufferFrames;
-        _session.Settings.MasterFpsNum = dialog.Settings.MasterFpsNum;
-        _session.Settings.MasterFpsDen = dialog.Settings.MasterFpsDen;
-        _session.Settings.DefaultWidth = dialog.Settings.DefaultWidth;
-        _session.Settings.DefaultHeight = dialog.Settings.DefaultHeight;
-        _session.Settings.DefaultMultiviewUnitId = dialog.Settings.DefaultMultiviewUnitId;
-        _session.Settings.FrameBufferFrames = dialog.Settings.FrameBufferFrames;
-        _session.Settings.DefaultPresentInterval = dialog.Settings.DefaultPresentInterval;
-        _session.Settings.FlipSwapchainLimit = dialog.Settings.FlipSwapchainLimit;
-        FlipBudget.Configure(_session.Settings.FlipSwapchainLimit);
-        _session.Settings.InternalColorFormat = dialog.Settings.InternalColorFormat;
-        _session.Settings.RebarOptimization = dialog.Settings.RebarOptimizationEnabled;
-        _session.Settings.NdiGpuUpload = dialog.Settings.NdiGpuUploadEnabled;
-        _session.Settings.PreviewColor = RgbColor.FromOrDefault(dialog.Settings.PreviewColor, RgbColor.PreviewDefault);
-        _session.Settings.ProgramColor = RgbColor.FromOrDefault(dialog.Settings.ProgramColor, RgbColor.ProgramDefault);
-        _session.Settings.InactiveColor = RgbColor.FromOrDefault(dialog.Settings.InactiveColor, RgbColor.InactiveDefault);
-        _session.Settings.MultiviewLabelSize = dialog.Settings.MultiviewLabelSize;
-        _session.Settings.MultiviewLabelUnit = dialog.Settings.MultiviewLabelUnit;
-        _session.Settings.MultiviewLabelAnchor = dialog.Settings.MultiviewLabelAnchor;
-        _session.Settings.VmixApiEnabled = dialog.Settings.VmixApiEnabledValue;
-        _session.Settings.VmixApiPort = dialog.Settings.VmixApiPort == 0 ? 8088 : dialog.Settings.VmixApiPort;
-        _session.Settings.VmixApiUser = dialog.Settings.VmixApiUser ?? "";
-        _session.Settings.VmixApiPassword = dialog.Settings.VmixApiPassword ?? "";
-        _session.Settings.VmixTcpEnabled = dialog.Settings.VmixTcpEnabledValue;
-        _session.Settings.NativeApiEnabled = dialog.Settings.NativeApiEnabledValue;
-        _session.Settings.NativeApiPort = dialog.Settings.NativeApiPort == 0 ? 9400 : dialog.Settings.NativeApiPort;
+        // Write only what this dialog changed. Copying every field put back values the
+        // operator never touched, undoing settings that were changed elsewhere (the replay
+        // deck sets the deck present interval, the API can change the ports) while the
+        // dialog was open.
+        var edited = dialog.Settings;
+        var opened = dialog.OpenedWith;
+        var live = _session.Settings;
+        static void Apply<T>(T was, T now, Action<T> set)
+        {
+            if (!EqualityComparer<T>.Default.Equals(was, now))
+                set(now);
+        }
+        Apply(opened.MasterFpsNum, edited.MasterFpsNum, value => live.MasterFpsNum = value);
+        Apply(opened.MasterFpsDen, edited.MasterFpsDen, value => live.MasterFpsDen = value);
+        Apply(opened.DefaultWidth, edited.DefaultWidth, value => live.DefaultWidth = value);
+        Apply(opened.DefaultHeight, edited.DefaultHeight, value => live.DefaultHeight = value);
+        Apply(opened.DefaultMultiviewUnitId, edited.DefaultMultiviewUnitId, value => live.DefaultMultiviewUnitId = value);
+        Apply(opened.FrameBufferFrames, edited.FrameBufferFrames, value => live.FrameBufferFrames = value);
+        Apply(opened.DefaultPresentInterval, edited.DefaultPresentInterval, value => live.DefaultPresentInterval = value);
+        Apply(opened.FlipSwapchainLimit, edited.FlipSwapchainLimit, value => live.FlipSwapchainLimit = value);
+        FlipBudget.Configure(live.FlipSwapchainLimit);
+        Apply(opened.InternalColorFormat, edited.InternalColorFormat, value => live.InternalColorFormat = value);
+        Apply(opened.RebarOptimization, edited.RebarOptimization, value => live.RebarOptimization = value);
+        Apply(opened.NdiGpuUpload, edited.NdiGpuUpload, value => live.NdiGpuUpload = value);
+        if (!EqualityComparer<RgbColor>.Default.Equals(opened.PreviewColor!, edited.PreviewColor!))
+            live.PreviewColor = RgbColor.FromOrDefault(edited.PreviewColor, RgbColor.PreviewDefault);
+        if (!EqualityComparer<RgbColor>.Default.Equals(opened.ProgramColor!, edited.ProgramColor!))
+            live.ProgramColor = RgbColor.FromOrDefault(edited.ProgramColor, RgbColor.ProgramDefault);
+        if (!EqualityComparer<RgbColor>.Default.Equals(opened.InactiveColor!, edited.InactiveColor!))
+            live.InactiveColor = RgbColor.FromOrDefault(edited.InactiveColor, RgbColor.InactiveDefault);
+        Apply(opened.MultiviewLabelSize, edited.MultiviewLabelSize, value => live.MultiviewLabelSize = value);
+        Apply(opened.MultiviewLabelUnit, edited.MultiviewLabelUnit, value => live.MultiviewLabelUnit = value);
+        Apply(opened.MultiviewLabelAnchor, edited.MultiviewLabelAnchor, value => live.MultiviewLabelAnchor = value);
+        Apply(opened.VmixApiEnabled, edited.VmixApiEnabled, value => live.VmixApiEnabled = value);
+        if (opened.VmixApiPort != edited.VmixApiPort)
+            live.VmixApiPort = edited.VmixApiPort == 0 ? 8088 : edited.VmixApiPort;
+        Apply(opened.VmixApiUser, edited.VmixApiUser, value => live.VmixApiUser = value ?? "");
+        Apply(opened.VmixApiPassword, edited.VmixApiPassword, value => live.VmixApiPassword = value ?? "");
+        Apply(opened.VmixTcpEnabled, edited.VmixTcpEnabled, value => live.VmixTcpEnabled = value);
+        Apply(opened.NativeApiEnabled, edited.NativeApiEnabled, value => live.NativeApiEnabled = value);
+        if (opened.NativeApiPort != edited.NativeApiPort)
+            live.NativeApiPort = edited.NativeApiPort == 0 ? 9400 : edited.NativeApiPort;
         AppPrefs.Current.NativeApiEnabled = _session.Settings.NativeApiEnabledValue;
         AppPrefs.Current.NativeApiPort = _session.Settings.NativeApiPort;
         AppPrefs.Current.Save();

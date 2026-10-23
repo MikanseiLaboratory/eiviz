@@ -17,6 +17,27 @@ internal static class SessionStore
         Converters = { new InputKindJsonConverter(), new JsonStringEnumConverter() }
     };
 
+    /// <summary>
+    /// Puts an edited scene back into the live document before it is published.
+    ///
+    /// A window keeps the object it opened. The document itself is replaced whenever
+    /// the mixer reports a change, so publishing without this wrote the version from
+    /// before the edit: the picture changed (the mixer was told directly) while the
+    /// saved document did not.
+    /// </summary>
+    public static void AdoptScene(Session session, SceneEntry scene)
+    {
+        var index = session.Scenes.FindIndex(item => item.Id == scene.Id);
+        if (index < 0)
+        {
+            session.Scenes.Add(scene);
+            return;
+        }
+        if (ReferenceEquals(session.Scenes[index], scene))
+            return;
+        session.Scenes[index] = scene;
+    }
+
     public static void Save(Session session, string path)
     {
         MixerApply.CaptureSceneBuses(session);
