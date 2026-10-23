@@ -496,6 +496,7 @@ int32_t mixer_capabilities(EivizCapabilities *out);
 int32_t mixer_replay_copy_stats(EivizReplayStats *stats, void *angles, uint32_t cap);
 int32_t mixer_replay_record(uint32_t on);
 int32_t mixer_replay_mark_in(uint64_t *out_frame);
+int32_t mixer_replay_copy_recording_uuid(uint8_t *out, size_t cap);
 int32_t mixer_replay_mark_out(uint64_t *out_in, uint64_t *out_out, uint8_t *uuid, size_t cap);
 int32_t mixer_replay_configure(const char *json);
 int32_t mixer_replay_channel_cue(uint32_t channel, uint32_t angle_id, uint64_t in_frame, uint64_t out_frame, const char *recording_uuid);
@@ -507,6 +508,7 @@ uint32_t mixer_replay_peak_count(uint32_t angle_id, uint32_t *dropped);
 int32_t mixer_replay_copy_peaks(uint32_t angle_id, uint32_t from, float *min_out, float *max_out, uint32_t cap);
 /* Export. Range reports the recorded frames of one angle; progress is JSON. */
 int32_t mixer_replay_angle_range(uint32_t angle_id, uint64_t *first, uint64_t *last);
+int32_t mixer_replay_copy_proxy(uint32_t angle_id, uint64_t frame, uint8_t *pixels, size_t cap, uint32_t *width, uint32_t *height);
 int32_t mixer_replay_export_start(const char *json);
 int32_t mixer_replay_export_progress(uint8_t *out, size_t cap, size_t *written);
 int32_t mixer_replay_export_cancel(void);

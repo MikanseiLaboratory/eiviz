@@ -4802,6 +4802,33 @@ pub unsafe extern "C" fn mixer_replay_configure(json: *const c_char) -> i32 {
     })
 }
 
+/// Copies one jog-proxy picture as UYVY. Returns 1 when the proxy exists.
+/// A missing proxy returns 0 and does not decode the full-size picture.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_copy_proxy(
+    angle_id: u32,
+    frame: u64,
+    out: *mut u8,
+    cap: usize,
+    width: *mut u32,
+    height: *mut u32,
+) -> i32 {
+    ffi_guard("mixer_replay_copy_proxy", 0, || unsafe {
+        if out.is_null() || width.is_null() || height.is_null() || cap == 0 {
+            return 0;
+        }
+        let dst = std::slice::from_raw_parts_mut(out, cap);
+        match crate::replay::engine().copy_proxy(angle_id, frame, dst) {
+            Ok((w, h)) => {
+                *width = w;
+                *height = h;
+                1
+            }
+            Err(_) => 0,
+        }
+    })
+}
+
 /// Recorded frame range of one angle. Returns nonzero when the angle has frames.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_replay_angle_range(
@@ -5028,7 +5055,10 @@ pub unsafe extern "C" fn mixer_replay_channel_cue(
         };
         match crate::replay::engine().cue(channel, angle_id, in_frame, out_frame, uuid) {
             Ok(()) => OK,
-            Err(code) => code,
+            Err(failure) => {
+                report_session_error(&failure.message);
+                failure.code
+            }
         }
     })
 }
@@ -5045,7 +5075,10 @@ pub unsafe extern "C" fn mixer_replay_channel_transport(
         ERR_IO,
         || match crate::replay::engine().transport(channel, playing != 0, speed_milli, seek_frame) {
             Ok(()) => OK,
-            Err(code) => code,
+            Err(failure) => {
+                report_session_error(&failure.message);
+                failure.code
+            }
         },
     )
 }

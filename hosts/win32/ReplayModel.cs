@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Eiviz.Host.Interop;
@@ -231,14 +232,102 @@ internal static class ReplayModel
         var settings = new JsonObject();
         foreach (var name in new[]
                  {
-                     "enabled", "storage", "format", "buffering", "retention",
-                     "angles", "autoAddToPlaylist"
+                     "enabled", "storage", "format", "buffering", "retention", "warnings",
+                     "angles", "autoAddToPlaylist", "decodeAhead", "profiling"
                  })
         {
             if (root[name] is { } value)
                 settings[name] = value.DeepClone();
         }
         return settings.ToJsonString();
+    }
+
+    /// <summary>
+    /// The document to publish from the deck.
+    ///
+    /// Replay Setup owns the drives, the angles, the format and the flags. The deck
+    /// owns events, playlists and which playlist a channel plays. Publishing the
+    /// deck's whole snapshot put a Replay Setup apply back to whatever the deck had
+    /// loaded.
+    /// </summary>
+    public static JsonObject WithDeckEdits(Session session, JsonObject deck, bool angleEdited = true)
+    {
+        var current = Parse(session);
+        if (current is null)
+            return deck;
+        // The camera is only written when the operator picked one here: a window that
+        // still holds the snapshot it loaded must not put back the angle another
+        // operator (or the API) has since chosen.
+        var names = angleEdited
+            ? new[] { "events", "playlists", "activeAngleId", "nextEventId", "nextPlaylistId" }
+            : new[] { "events", "playlists", "nextEventId", "nextPlaylistId" };
+        foreach (var name in names)
+        {
+            if (deck[name] is { } value)
+                current[name] = value.DeepClone();
+        }
+        CopyChannelPlaylists(deck, current);
+        return current;
+    }
+
+    /// <summary>
+    /// Events, playlists, the selected angle and channel playlist ids. Settings
+    /// stay on the core, so this is what a remote deck sends.
+    /// </summary>
+    public static string SerializeDeck(JsonObject root)
+    {
+        var deck = new JsonObject();
+        foreach (var name in new[]
+                 {
+                     "events", "playlists", "activeAngleId", "nextEventId", "nextPlaylistId",
+                     "channels", "timelineCues"
+                 })
+        {
+            if (root[name] is { } value)
+                deck[name] = value.DeepClone();
+        }
+        return deck.ToJsonString();
+    }
+
+    /// <summary>
+    /// Points each existing channel at the playlist the deck has for that index.
+    /// Channels themselves belong to the Replay inputs, so a deck snapshot must not
+    /// add or remove them.
+    /// </summary>
+    private static void CopyChannelPlaylists(JsonObject deck, JsonObject current)
+    {
+        if (current["channels"] is not JsonArray channels)
+            return;
+        foreach (var item in channels)
+        {
+            if (item is not JsonObject channel)
+                continue;
+            if (channel["index"] is not JsonValue indexValue || !indexValue.TryGetValue<uint>(out var index))
+                continue;
+            var source = ChannelObject(deck, index);
+            if (source is null)
+                continue;
+            if (source["playlistId"] is { } playlist)
+                channel["playlistId"] = playlist.DeepClone();
+            else
+                channel.Remove("playlistId");
+        }
+    }
+
+    private static JsonObject? ChannelObject(JsonObject root, uint index)
+    {
+        if (root["channels"] is not JsonArray channels)
+            return null;
+        foreach (var item in channels)
+        {
+            if (item is not JsonObject channel)
+                continue;
+            if (channel["index"] is JsonValue indexValue
+                && indexValue.TryGetValue<uint>(out var found)
+                && found == index)
+                return channel;
+        }
+        return null;
     }
 
     private static JsonArray Array(JsonObject root, string name) =>
@@ -333,7 +422,7 @@ internal static class ReplayModel
                         .Select(tag => tag?.GetValue<string>() ?? "")
                         .Where(tag => tag.Length > 0)
                         .ToList(),
-                    clip["preservePitch"]?.GetValue<bool>() ?? false,
+                    clip["preservePitch"]?.GetValue<bool>() ?? true,
                     clip["audio"]?.GetValue<string>() ?? "FollowAngle",
                     clip["audioAngleId"]?.GetValue<uint>() ?? 0));
             }
@@ -448,6 +537,38 @@ internal static class ReplayModel
         root["enabled"]?.GetValue<bool>() ?? false;
 
     /// <summary>
+    /// How many recordings the events and clips name that are not on any drive.
+    /// The timecodes stay in the session either way; this is what the deck says
+    /// when the files themselves are gone.
+    /// </summary>
+    public static int MissingRecordingCount(JsonObject root, string? recordingNow = null)
+    {
+        var drives = Storages(root);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var missing = 0;
+        void Consider(string? uuid)
+        {
+            if (string.IsNullOrWhiteSpace(uuid) || !seen.Add(uuid))
+                return;
+            if (!string.IsNullOrEmpty(recordingNow)
+                && string.Equals(uuid, recordingNow, StringComparison.OrdinalIgnoreCase))
+                return;
+            var present = drives.Any(drive =>
+                Directory.Exists(Path.Combine(drive, uuid)));
+            if (!present)
+                missing++;
+        }
+        foreach (var entry in Events(root))
+            Consider(entry.RecordingUuid);
+        foreach (var list in Playlists(root))
+        {
+            foreach (var clip in Clips(root, list.Id))
+                Consider(clip.RecordingUuid);
+        }
+        return missing;
+    }
+
+    /// <summary>
     /// Allocates an event id that no existing event uses. The win32 window builds
     /// the document without the counters, so the highest id wins.
     /// </summary>
@@ -505,6 +626,7 @@ internal static class ReplayModel
             ["outFrame"] = outFrame,
             ["speed"] = 1.0,
             ["gainDb"] = 0.0,
+            ["preservePitch"] = true,
             ["transition"] = fallback is null
                 ? new JsonObject { ["kind"] = "Cut", ["timing"] = "Overwrap", ["durationFrames"] = 0U }
                 : new JsonObject

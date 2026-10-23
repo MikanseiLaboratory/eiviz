@@ -49,21 +49,45 @@
             <Setter Property="Width" Value="44"/>
             <Setter Property="Height" Value="44"/>
             <Setter Property="Margin" Value="0,0,6,0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="TransportButton" TargetType="Button">
+            <Setter Property="Height" Value="44"/>
+            <Setter Property="MinWidth" Value="96"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="Padding" Value="12,0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="SpeedButton" TargetType="Button">
+            <Setter Property="Width" Value="72"/>
+            <Setter Property="Height" Value="44"/>
+            <Setter Property="Margin" Value="0,0,6,0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
         </Style>
         <Style x:Key="SmallIconButton" TargetType="Button">
             <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
             <Setter Property="FontSize" Value="13"/>
-            <Setter Property="Width" Value="30"/>
-            <Setter Property="Height" Value="24"/>
+            <Setter Property="Width" Value="32"/>
+            <Setter Property="Height" Value="32"/>
             <Setter Property="Margin" Value="0,0,4,0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
         </Style>
         <!-- A camera angle: a number, the way a replay controller labels its cameras. -->
         <Style x:Key="AngleButton" TargetType="Button">
-            <Setter Property="Width" Value="54"/>
-            <Setter Property="Height" Value="46"/>
-            <Setter Property="FontSize" Value="18"/>
-            <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="Margin" Value="0,0,6,0"/>
+            <Setter Property="Width" Value="48"/>
+            <Setter Property="Height" Value="44"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
         </Style>
     </Window.Resources>
     <Grid Margin="12">
@@ -121,8 +145,8 @@
                                Text="{Binding [replay.liveInput], Source={x:Static i18n:Loc.Source}}"/>
                     <!-- The same shape of view the main window calls a multiview: every
                          angle at once, so an operator sees what each camera has. -->
-                    <Button x:Name="MultiviewButton" DockPanel.Dock="Right" Height="26" MinWidth="120"
-                            HorizontalAlignment="Right" Margin="8,0,0,0" Click="Multiview_Click"
+                    <Button x:Name="MultiviewButton" DockPanel.Dock="Right" Height="32" MinWidth="120"
+                            HorizontalAlignment="Right" VerticalAlignment="Center" Padding="12,0" Margin="8,0,0,0" Click="Multiview_Click"
                             ToolTip="{Binding [replay.multiviewHint], Source={x:Static i18n:Loc.Source}}"
                             Content="{Binding [replay.multiview], Source={x:Static i18n:Loc.Source}}"/>
                 </DockPanel>
@@ -243,45 +267,49 @@
                     <TextBlock FontWeight="Bold" VerticalAlignment="Center"
                                Text="{Binding [replay.playlist], Source={x:Static i18n:Loc.Source}}"/>
                     <StackPanel Orientation="Horizontal" Margin="8,0,0,0">
-                        <ComboBox x:Name="PlaylistBox" Width="190" Height="28" DisplayMemberPath="Name"
+                        <ComboBox x:Name="PlaylistBox" Width="190" Height="32" VerticalContentAlignment="Center" DisplayMemberPath="Name"
                                   SelectionChanged="Playlist_Changed"
                                   ToolTip="{Binding [replay.playlistPickHelp], Source={x:Static i18n:Loc.Source}}"/>
-                        <TextBox x:Name="PlaylistNameBox" Width="150" Height="28" Margin="6,0,0,0"
+                        <TextBox x:Name="PlaylistNameBox" Width="150" Height="32" Margin="6,0,0,0" VerticalContentAlignment="Center"
                                  LostFocus="PlaylistName_Changed"
                                  ToolTip="{Binding [replay.playlistNameHelp], Source={x:Static i18n:Loc.Source}}"/>
-                        <Button x:Name="PlaylistAddButton" Width="40" Height="28" Margin="6,0,0,0" Click="PlaylistAdd_Click"
-                                FontFamily="Segoe MDL2 Assets" Content="&#xE710;"
-                                ToolTip="{Binding [replay.playlistAddHint], Source={x:Static i18n:Loc.Source}}"/>
-                        <Button x:Name="PlaylistRemoveButton" Width="40" Height="28" Margin="6,0,0,0"
-                                Click="PlaylistRemove_Click" FontFamily="Segoe MDL2 Assets" Content="&#xE74D;"
-                                ToolTip="{Binding [replay.playlistRemove], Source={x:Static i18n:Loc.Source}}"/>
+                        <Button x:Name="PlaylistAddButton" Height="32" MinWidth="88" Margin="6,0,0,0" Padding="10,0"
+                                VerticalContentAlignment="Center" Click="PlaylistAdd_Click"
+                                ToolTip="{Binding [replay.playlistAddHint], Source={x:Static i18n:Loc.Source}}"
+                                Content="{Binding [replay.playlistAdd], Source={x:Static i18n:Loc.Source}}"/>
+                        <Button x:Name="PlaylistRemoveButton" Height="32" MinWidth="72" Margin="6,0,0,0" Padding="10,0"
+                                VerticalContentAlignment="Center" Click="PlaylistRemove_Click"
+                                ToolTip="{Binding [replay.playlistRemove], Source={x:Static i18n:Loc.Source}}"
+                                Content="{Binding [replay.playlistRemove], Source={x:Static i18n:Loc.Source}}"/>
                         <!-- The whole list from its head: the issue's "smooth playback of
                              several clips" needs a way to start it. -->
-                        <Button x:Name="PlaylistPlayButton" Height="28" MinWidth="140" Margin="12,0,0,0"
-                                Click="PlaylistPlay_Click"
+                        <Button x:Name="PlaylistPlayButton" Height="32" MinWidth="140" Margin="12,0,0,0" Padding="12,0"
+                                VerticalContentAlignment="Center" Click="PlaylistPlay_Click"
                                 ToolTip="{Binding [replay.playlistPlayHint], Source={x:Static i18n:Loc.Source}}"
                                 Content="{Binding [replay.playlistPlay], Source={x:Static i18n:Loc.Source}}"/>
-                        <Button x:Name="PlaylistStopButton" Width="40" Height="28" Margin="6,0,0,0"
-                                Click="PlaylistStop_Click" FontFamily="Segoe MDL2 Assets" Content="&#xE71A;"
-                                ToolTip="{Binding [replay.playlistStopHint], Source={x:Static i18n:Loc.Source}}"/>
-                        <Button x:Name="PlaylistLoopButton" Width="48" Height="28" Margin="6,0,0,0"
-                                Click="PlaylistLoop_Click" FontFamily="Segoe MDL2 Assets" Content="&#xE8EE;"
-                                ToolTip="{Binding [replay.playlistLoopHint], Source={x:Static i18n:Loc.Source}}"/>
+                        <Button x:Name="PlaylistStopButton" Height="32" MinWidth="72" Margin="6,0,0,0" Padding="10,0"
+                                VerticalContentAlignment="Center" Click="PlaylistStop_Click"
+                                ToolTip="{Binding [replay.playlistStopHint], Source={x:Static i18n:Loc.Source}}"
+                                Content="{Binding [replay.stop], Source={x:Static i18n:Loc.Source}}"/>
+                        <Button x:Name="PlaylistLoopButton" Height="32" MinWidth="88" Margin="6,0,0,0" Padding="10,0"
+                                VerticalContentAlignment="Center" Click="PlaylistLoop_Click"
+                                ToolTip="{Binding [replay.playlistLoopHint], Source={x:Static i18n:Loc.Source}}"
+                                Content="{Binding [replay.playlistLoop], Source={x:Static i18n:Loc.Source}}"/>
                     </StackPanel>
                 </DockPanel>
                 <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                     <TextBlock Text="{Binding [replay.defaultTransition], Source={x:Static i18n:Loc.Source}}"
                                VerticalAlignment="Center" Margin="0,0,6,0"/>
-                    <ComboBox x:Name="DefaultKindBox" Width="104" Height="26" Margin="0,0,6,0" SelectionChanged="DefaultTransition_Changed">
+                    <ComboBox x:Name="DefaultKindBox" Width="120" Height="32" Margin="0,0,6,0" VerticalContentAlignment="Center" SelectionChanged="DefaultTransition_Changed">
                         <ComboBoxItem Content="{Binding [replay.transitionCut], Source={x:Static i18n:Loc.Source}}" Tag="Cut" IsSelected="True"/>
                         <ComboBoxItem Content="{Binding [replay.transitionDissolve], Source={x:Static i18n:Loc.Source}}" Tag="Dissolve"/>
                     </ComboBox>
-                    <ComboBox x:Name="DefaultTimingBox" Width="140" Height="26" Margin="0,0,6,0" SelectionChanged="DefaultTransition_Changed"
+                    <ComboBox x:Name="DefaultTimingBox" Width="150" Height="32" Margin="0,0,6,0" VerticalContentAlignment="Center" SelectionChanged="DefaultTransition_Changed"
                               ToolTip="{Binding [replay.timingHelp], Source={x:Static i18n:Loc.Source}}">
                         <ComboBoxItem Content="{Binding [replay.timingOverwrap], Source={x:Static i18n:Loc.Source}}" Tag="Overwrap" IsSelected="True"/>
                         <ComboBoxItem Content="{Binding [replay.timingAdditive], Source={x:Static i18n:Loc.Source}}" Tag="Additive"/>
                     </ComboBox>
-                    <TextBox x:Name="DefaultFramesBox" Width="56" Height="26" Margin="0,0,6,0" Text="0" LostFocus="DefaultTransition_Changed"/>
+                    <TextBox x:Name="DefaultFramesBox" Width="56" Height="32" Margin="0,0,6,0" Text="0" VerticalContentAlignment="Center" LostFocus="DefaultTransition_Changed"/>
                     <TextBlock Text="{Binding [replay.transitionFrames], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center"/>
                 </WrapPanel>
                 <WrapPanel x:Name="ClipTagPanel" DockPanel.Dock="Bottom" Margin="0,6,0,0"/>
@@ -435,74 +463,112 @@
             <DockPanel>
                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
                     <Button x:Name="MarkInButton" Width="180" Height="52" FontSize="17" FontWeight="Bold"
+                            HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                             Click="MarkIn_Click"
                             ToolTip="{Binding [replay.markInHint], Source={x:Static i18n:Loc.Source}}"
                             Content="{Binding [replay.markIn], Source={x:Static i18n:Loc.Source}}"/>
-                    <Button x:Name="MarkOutButton" Width="180" Height="52" FontSize="17" FontWeight="Bold" Margin="10,0,0,0"
+                    <Button x:Name="MarkOutButton" Width="180" Height="52" FontSize="17" FontWeight="Bold" Margin="8,0,0,0"
+                            HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                             Click="MarkOut_Click"
                             ToolTip="{Binding [replay.markOutHint], Source={x:Static i18n:Loc.Source}}"
                             Content="{Binding [replay.markOut], Source={x:Static i18n:Loc.Source}}"/>
-                    <Button x:Name="CancelMarkButton" Width="110" Height="52" Margin="10,0,0,0"
+                    <Button x:Name="CancelMarkButton" Width="120" Height="52" Margin="8,0,0,0"
+                            HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                             Click="CancelMark_Click"
                             ToolTip="{Binding [replay.cancelMarkHint], Source={x:Static i18n:Loc.Source}}"
                             Content="{Binding [replay.cancelMark], Source={x:Static i18n:Loc.Source}}"/>
                 </StackPanel>
-                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
-                    <StackPanel Margin="0,0,16,0">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <StackPanel Width="120" Margin="0,0,12,0">
                         <TextBlock Text="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" FontSize="11"/>
                         <TextBlock x:Name="InTcText" FontFamily="Consolas" FontSize="18"/>
                     </StackPanel>
-                    <StackPanel Margin="0,0,16,0">
+                    <StackPanel Width="120" Margin="0,0,12,0">
                         <TextBlock Text="{Binding [replay.out], Source={x:Static i18n:Loc.Source}}" FontSize="11"/>
                         <TextBlock x:Name="OutTcText" FontFamily="Consolas" FontSize="18"/>
                     </StackPanel>
-                    <StackPanel>
+                    <StackPanel Width="120">
                         <TextBlock Text="{Binding [replay.duration], Source={x:Static i18n:Loc.Source}}" FontSize="11"/>
                         <TextBlock x:Name="DurationTcText" FontFamily="Consolas" FontSize="18"/>
                     </StackPanel>
                 </StackPanel>
             </DockPanel>
 
-            <WrapPanel Margin="0,10,0,0">
-                <Button x:Name="RecordButton" Style="{StaticResource IconButton}" Click="RecordToggle_Click"
+            <Grid Margin="0,10,0,0" Height="44">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="16"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="16"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="220"/>
+                </Grid.ColumnDefinitions>
+                <Button x:Name="RecordButton" Style="{StaticResource TransportButton}" Click="RecordToggle_Click"
                         ToolTip="{Binding [replay.recordHint], Source={x:Static i18n:Loc.Source}}">
-                    <Ellipse Width="18" Height="18" Fill="#E05252"/>
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse Width="12" Height="12" Fill="#E05252" Margin="0,1,8,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding [replay.record], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center"/>
+                    </StackPanel>
                 </Button>
-                <Button x:Name="LiveButton" Style="{StaticResource IconButton}" Content="&#xE8B0;" Click="Live_Click"
-                        ToolTip="{Binding [replay.liveHint], Source={x:Static i18n:Loc.Source}}"/>
-                <Button x:Name="PlayButton" Style="{StaticResource IconButton}" Content="&#xE768;" Click="Play_Click"
-                        ToolTip="{Binding [replay.playHint], Source={x:Static i18n:Loc.Source}}"/>
-                <Button x:Name="StepBackButton" Style="{StaticResource IconButton}" Content="&#xE892;" Click="StepBack_Click"
-                        ToolTip="{Binding [replay.stepBackHint], Source={x:Static i18n:Loc.Source}}"/>
-                <Button x:Name="StepForwardButton" Style="{StaticResource IconButton}" Content="&#xE893;" Click="StepForward_Click"
-                        ToolTip="{Binding [replay.stepForwardHint], Source={x:Static i18n:Loc.Source}}"/>
-                <Rectangle Width="1" Fill="{DynamicResource ButtonBorder}" Margin="6,4,12,4"/>
-                <Button x:Name="Speed25Button" Width="64" Height="44" Margin="0,0,6,0" Click="Speed_Click" Tag="250" Content="25%"
-                        ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
-                <Button x:Name="Speed50Button" Width="64" Height="44" Margin="0,0,6,0" Click="Speed_Click" Tag="500" Content="50%"
-                        ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
-                <Button x:Name="Speed75Button" Width="64" Height="44" Margin="0,0,6,0" Click="Speed_Click" Tag="750" Content="75%"
-                        ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
-                <Button x:Name="Speed100Button" Width="64" Height="44" Margin="0,0,6,0" Click="Speed_Click" Tag="1000" Content="100%"
-                        ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
-                <TextBlock Text="{Binding [replay.jog], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center" Margin="8,0,8,0"/>
-                <Slider x:Name="JogSlider" Width="200" VerticalAlignment="Center" Minimum="-30" Maximum="30" Value="0"
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <Button x:Name="LiveButton" Style="{StaticResource TransportButton}" Click="Live_Click"
+                            ToolTip="{Binding [replay.liveHint], Source={x:Static i18n:Loc.Source}}"
+                            Content="{Binding [replay.live], Source={x:Static i18n:Loc.Source}}"/>
+                    <Button x:Name="PlayButton" Style="{StaticResource TransportButton}" Click="Play_Click"
+                            ToolTip="{Binding [replay.playHint], Source={x:Static i18n:Loc.Source}}"
+                            Content="{Binding [replay.play], Source={x:Static i18n:Loc.Source}}"/>
+                    <Button x:Name="StepBackButton" Style="{StaticResource IconButton}" Content="&#xE892;" Click="StepBack_Click"
+                            ToolTip="{Binding [replay.stepBackHint], Source={x:Static i18n:Loc.Source}}"/>
+                    <Button x:Name="StepForwardButton" Style="{StaticResource IconButton}" Content="&#xE893;" Click="StepForward_Click"
+                            ToolTip="{Binding [replay.stepForwardHint], Source={x:Static i18n:Loc.Source}}"/>
+                </StackPanel>
+                <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="Speed25Button" Style="{StaticResource SpeedButton}" Click="Speed_Click" Tag="250" Content="25%"
+                            ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
+                    <Button x:Name="Speed50Button" Style="{StaticResource SpeedButton}" Click="Speed_Click" Tag="500" Content="50%"
+                            ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
+                    <Button x:Name="Speed75Button" Style="{StaticResource SpeedButton}" Click="Speed_Click" Tag="750" Content="75%"
+                            ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
+                    <Button x:Name="Speed100Button" Style="{StaticResource SpeedButton}" Click="Speed_Click" Tag="1000" Content="100%"
+                            ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
+                </StackPanel>
+                <TextBlock Grid.Column="6" Text="{Binding [replay.jog], Source={x:Static i18n:Loc.Source}}"
+                           VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <Slider x:Name="JogSlider" Grid.Column="7" VerticalAlignment="Center" Minimum="-30" Maximum="30" Value="0"
                         TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="JogSlider_ValueChanged"
                         ToolTip="{Binding [replay.jogHint], Source={x:Static i18n:Loc.Source}}"/>
-            </WrapPanel>
+            </Grid>
 
-            <!-- Export: the same recordings, written to MP4 with the OS encoder. -->
-            <WrapPanel Margin="0,6,0,0">
-                <TextBlock Text="{Binding [replay.export], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                <ComboBox x:Name="ExportModeBox" Width="180" Height="28" Margin="0,0,6,0"/>
-                <TextBox x:Name="ExportPathBox" Width="300" Height="28" Margin="0,0,6,0"/>
-                <Button x:Name="ExportBrowseButton" Width="96" Height="28" Margin="0,0,6,0" Click="ExportBrowse_Click"
+            <!-- Export stays on one line so the path and the actions share a height. -->
+            <Grid Margin="0,8,0,0" Height="32">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="180"/>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="96"/>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="110"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding [replay.export], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <ComboBox x:Name="ExportModeBox" Grid.Column="1" Height="32" Margin="0,0,6,0" VerticalContentAlignment="Center"/>
+                <ComboBox x:Name="ExportCodecBox" Grid.Column="2" Height="32" Margin="0,0,6,0" VerticalContentAlignment="Center" SelectedIndex="0">
+                    <ComboBoxItem Content="H.264"/>
+                    <ComboBoxItem Content="HEVC"/>
+                </ComboBox>
+                <TextBox x:Name="ExportPathBox" Grid.Column="3" Height="32" Margin="0,0,6,0" VerticalContentAlignment="Center"/>
+                <Button x:Name="ExportBrowseButton" Grid.Column="4" Height="32" Margin="0,0,6,0" Padding="8,0"
+                        VerticalContentAlignment="Center" Click="ExportBrowse_Click"
                         Content="{Binding [replay.browse], Source={x:Static i18n:Loc.Source}}"/>
-                <Button x:Name="ExportButton" Width="110" Height="28" Margin="0,0,6,0" Click="Export_Click"
+                <Button x:Name="ExportButton" Grid.Column="5" Height="32" Margin="0,0,6,0" Padding="8,0"
+                        VerticalContentAlignment="Center" Click="Export_Click"
                         Content="{Binding [replay.exportStart], Source={x:Static i18n:Loc.Source}}"/>
-                <Button x:Name="ExportCancelButton" Width="110" Height="28" Margin="0,0,0,0" Click="ExportCancel_Click" IsEnabled="False"
+                <Button x:Name="ExportCancelButton" Grid.Column="6" Height="32" Padding="8,0"
+                        VerticalContentAlignment="Center" Click="ExportCancel_Click" IsEnabled="False"
                         Content="{Binding [replay.exportCancel], Source={x:Static i18n:Loc.Source}}"/>
-            </WrapPanel>
+            </Grid>
             <TextBlock x:Name="ExportStatusText" Margin="0,6,0,0" TextWrapping="Wrap"/>
             <!-- The keys an operator works by, on screen: a production tool should not
                  hide its shortcuts in a manual. -->

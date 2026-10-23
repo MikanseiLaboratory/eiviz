@@ -426,6 +426,22 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_channel_jump_to_now")]
     internal static partial int ReplayJumpToNow(uint channel);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_copy_recording_uuid")]
+    internal static unsafe partial int ReplayCopyRecordingUuid(byte* buffer, nuint capacity);
+
+    internal static string ReplayRecordingUuid()
+    {
+        var buffer = new byte[128];
+        unsafe
+        {
+            fixed (byte* ptr = buffer)
+            {
+                var n = ReplayCopyRecordingUuid(ptr, (nuint)buffer.Length);
+                return n <= 0 ? "" : Encoding.UTF8.GetString(buffer, 0, n);
+            }
+        }
+    }
+
     /// <summary>Turns looping on or off for a channel's playlist.</summary>
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_loop")]
     internal static partial int ReplayLoop(uint channel, uint on);
@@ -463,6 +479,11 @@ internal static partial class MixerNative
     /// <summary>Recorded frame range of one angle. Nonzero when it has frames.</summary>
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_angle_range")]
     internal static unsafe partial int ReplayAngleRange(uint angleId, ulong* first, ulong* last);
+
+    /// <summary>Jog proxy as UYVY. Zero when the recording has no proxy.</summary>
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_copy_proxy")]
+    internal static unsafe partial int ReplayCopyProxy(
+        uint angleId, ulong frame, byte* pixels, nuint cap, uint* width, uint* height);
 
     /// <summary>Starts an MP4 export. The JSON names the file and its segments.</summary>
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_export_start", StringMarshalling = StringMarshalling.Utf8)]

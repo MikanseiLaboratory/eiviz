@@ -425,6 +425,9 @@ pub struct ProReplayExportRequest {
     pub with_audio: u32,
     pub segments: *const ProReplayExportSegment,
     pub segment_count: u32,
+    /// 0 is H.264. 1 is HEVC. Older callers leave this off the struct; the
+    /// module then writes H.264.
+    pub codec: u32,
 }
 
 #[repr(C)]

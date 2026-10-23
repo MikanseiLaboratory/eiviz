@@ -298,6 +298,16 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             replay.normalize();
             Ok(())
         }
+        SessionMutation::UpdateReplayDeck { deck } => {
+            let Some(replay) = document.replay.as_mut() else {
+                return Err(ControlError::invalid(
+                    "add a Replay input before editing the Replay deck",
+                ));
+            };
+            deck.apply_to(replay);
+            replay.normalize();
+            Ok(())
+        }
         SessionMutation::SetReplayActiveAngle { angle_id } => {
             let Some(replay) = document.replay.as_mut() else {
                 return Err(ControlError::invalid("Replay is not in this session"));

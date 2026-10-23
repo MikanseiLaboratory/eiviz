@@ -672,12 +672,10 @@ fn apply_live<P: crate::port::MixerPort + ?Sized>(
             enabled,
             port: ws_port,
         } => port.configure_native_api(*enabled, *ws_port),
-        ReconcileOp::ReplayConfigure { json } => accept_io(
-            port.replay_configure(json),
-            statuses,
-            crate::ids::ResourceKind::Input,
-            crate::session::replay::REPLAY_CHANNEL_BASE,
-        ),
+        // A refused configure used to be recorded as "retrying" and the new
+        // document was committed anyway. Nothing retried it, so Replay Setup
+        // could report success while the mixer kept the previous settings.
+        ReconcileOp::ReplayConfigure { json } => port.replay_configure(json),
         _ => Ok(()),
     }
 }

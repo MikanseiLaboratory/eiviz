@@ -157,6 +157,10 @@ extension MixerController {
     }
 
     /// Recorded frame range of one angle, for the export UI.
+    func replayRecordingUuid() -> String {
+        MixerFFI.replayRecordingUuid()
+    }
+
     func replayAngleRange(_ angleId: UInt32) -> (first: UInt64, last: UInt64)? {
         MixerFFI.replayAngleRange(angleId: angleId)
     }
@@ -177,13 +181,57 @@ extension MixerController {
         guard !json.isEmpty else { return nil }
         return ReplayExportProgress(json: json)
     }
-    /// Writes the replay document back and pushes it to the core. In remote mode
-    /// the core owns the document, so it goes through a mutation instead.
+    /// Writes the deck: events, playlists, the selected angle and channel
+    /// playlists. Settings stay where Replay Setup put them.
+    @discardableResult
+    func applyReplayDeck(_ document: ReplayDocument) -> Bool {
+        var base = ReplayDocument(session.replay) ?? document
+        for name in ["events", "playlists", "activeAngleId", "nextEventId", "nextPlaylistId", "timelineCues"] {
+            if let value = document.raw[name] {
+                base.raw[name] = value
+            }
+        }
+        if let incoming = document.raw["channels"]?.arrayValue,
+           var channels = base.raw["channels"]?.arrayValue {
+            for item in incoming {
+                guard let row = item.objectValue, let index = row["index"]?.uint32Value else { continue }
+                for channelIndex in channels.indices {
+                    guard var channel = channels[channelIndex].objectValue,
+                          channel["index"]?.uint32Value == index else { continue }
+                    if let playlist = row["playlistId"] {
+                        channel["playlistId"] = playlist
+                    }
+                    channels[channelIndex] = .object(channel)
+                }
+            }
+            base.raw["channels"] = .array(channels)
+        }
+        session.replay = base.value
+        if isRemote {
+            var deck: [String: JSONValue] = [:]
+            for name in ["events", "playlists", "activeAngleId", "nextEventId", "nextPlaylistId", "channels", "timelineCues"] {
+                if let value = base.raw[name] {
+                    deck[name] = value
+                }
+            }
+            let payload = (try? JSONEncoder().encode(JSONValue.object(deck)))
+                .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+            return mutateRemote("{\"kind\":\"updateReplayDeck\",\"deck\":\(payload)}")
+        }
+        return replaceRuntime()
+    }
+
     /// Writes the recording settings. Returns false when the core refused the
     /// document, so the caller can keep the window open and say why.
     @discardableResult
     func applyReplay(_ document: ReplayDocument) -> Bool {
-        session.replay = document.value
+        var base = ReplayDocument(session.replay) ?? document
+        for name in ["enabled", "storage", "format", "buffering", "retention", "warnings", "angles", "autoAddToPlaylist", "decodeAhead", "profiling"] {
+            if let value = document.raw[name] {
+                base.raw[name] = value
+            }
+        }
+        session.replay = base.value
         if isRemote {
             // A remote core owns the events and playlists too, so Replay Setup must
             // not send them back from a copy that may already be stale.

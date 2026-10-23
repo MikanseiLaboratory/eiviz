@@ -1285,18 +1285,62 @@ public sealed class SessionSettings
         MultiviewLayout.ClampPresentInterval(DefaultPresentInterval == 0 ? 2 : DefaultPresentInterval);
 
     /// <summary>
-    /// How often the replay deck's monitors are presented. Zero follows the project's
-    /// own interval. The deck is a second window onto the same surfaces as the main
-    /// window, so an operator who wants the deck smooth and the switcher thrifty (or the
-    /// other way round) sets them apart here.
-    /// </summary>
-    /// <summary>
-    /// How often the replay deck's monitors are presented. Zero means every frame: the
-    /// deck is what an operator watches while marking, and a picture that updates at a
-    /// third of the rate reads as a broken preview rather than as a cheap one.
+    /// How often the replay deck's monitors are presented. Zero follows
+    /// <see cref="ResolvedPresentInterval"/>. Any other value is that many master frames.
     /// </summary>
     public uint ResolvedReplayPresentInterval() =>
-        MultiviewLayout.ClampPresentInterval(ReplayPresentInterval == 0 ? 1 : ReplayPresentInterval);
+        ReplayPresentInterval == 0
+            ? ResolvedPresentInterval()
+            : MultiviewLayout.ClampPresentInterval(ReplayPresentInterval);
+
+    /// Copies every stored setting, then applies the load-time clamps. A new
+    /// field on this class survives a save and an open without another assignment.
+    public void AdoptFrom(SessionSettings source)
+    {
+        foreach (var property in typeof(SessionSettings).GetProperties())
+        {
+            if (!property.CanRead || !property.CanWrite || property.GetIndexParameters().Length != 0)
+                continue;
+            property.SetValue(this, property.GetValue(source));
+        }
+        ClampLoaded();
+    }
+
+    /// The values a saved session is allowed to hold. Zero on a present interval
+    /// that follows the project stays zero.
+    public void ClampLoaded()
+    {
+        FrameBufferFrames = FrameBufferFrames == 0 ? 3 : Math.Clamp(FrameBufferFrames, 1u, 8u);
+        DefaultPresentInterval = DefaultPresentInterval == 0
+            ? 2
+            : Math.Clamp(DefaultPresentInterval, 1u, 8u);
+        ReplayPresentInterval = ReplayPresentInterval == 0
+            ? 0
+            : MultiviewLayout.ClampPresentInterval(ReplayPresentInterval);
+        if (FlipSwapchainLimit is not (0 or 4 or 6 or 8 or 10 or 12 or 16))
+            FlipSwapchainLimit = 0;
+        RebarOptimization = RebarOptimization != false;
+        NdiGpuUpload = NdiGpuUpload != false;
+        PreviewColor = RgbColor.FromOrDefault(PreviewColor, RgbColor.PreviewDefault);
+        ProgramColor = RgbColor.FromOrDefault(ProgramColor, RgbColor.ProgramDefault);
+        InactiveColor = RgbColor.FromOrDefault(InactiveColor, RgbColor.InactiveDefault);
+        if (MultiviewLabelSize <= 0)
+            MultiviewLabelSize = 18;
+        else
+            MultiviewLabelSize = Math.Clamp(MultiviewLabelSize, 1f, 200f);
+        if (VmixApiEnabled is null)
+            VmixApiEnabled = true;
+        if (VmixTcpEnabled is null)
+            VmixTcpEnabled = true;
+        if (NativeApiEnabled is null)
+            NativeApiEnabled = true;
+        if (VmixApiPort == 0)
+            VmixApiPort = 8088;
+        VmixApiUser ??= "";
+        VmixApiPassword ??= "";
+        if (NativeApiPort == 0)
+            NativeApiPort = 9400;
+    }
 }
 
 public sealed class RgbColor

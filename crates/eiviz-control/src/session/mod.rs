@@ -1447,6 +1447,11 @@ impl Document {
             doc.settings.frame_buffer_frames = 3;
         }
         doc.settings.default_present_interval = doc.settings.default_present_interval.clamp(1, 8);
+        // Zero follows the project interval. Any other value is a frame count.
+        doc.settings.replay_present_interval = match doc.settings.replay_present_interval {
+            0 => 0,
+            frames => frames.clamp(1, 8),
+        };
         doc.settings.flip_swapchain_limit = match doc.settings.flip_swapchain_limit {
             0 | 4 | 6 | 8 | 10 | 12 | 16 => doc.settings.flip_swapchain_limit,
             _ => 0,

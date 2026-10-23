@@ -45,9 +45,11 @@ public partial class ReplayWindow : Window
     private uint _channel;
     private ulong? _inFrame;
     /// <summary>True while the channel follows the recording edge instead of a clip.</summary>
-    private bool _live;
+    private bool _live = true;
     /// <summary>True while the playlist goes round again at its end.</summary>
     private bool _looping;
+    /// <summary>The operator picked a camera in this window since it last loaded.</summary>
+    private bool _angleEdited;
     /// <summary>True while the input picture is a grid of every angle.</summary>
     private bool _multiview;
     private ulong _outFrame;
@@ -123,11 +125,7 @@ public partial class ReplayWindow : Window
         // presented every N master frames, N coming from the session. Presenting every
         // frame costs GPU time for a picture an eye cannot tell apart, and the deck is
         // one of several consumers of the same texture.
-        var interval = _session.Settings.ResolvedReplayPresentInterval();
-        OutputMonitor.PresentInterval = interval;
-        LiveMonitor.PresentInterval = interval;
-        OutputMonitor.ApplyPresentInterval();
-        LiveMonitor.ApplyPresentInterval();
+        ApplyDeckPresentInterval();
         BuildChannels();
         BuildAngles();
         // The speed the deck starts on is lit, the way a controller's transport shows it.
@@ -415,6 +413,9 @@ public partial class ReplayWindow : Window
             if (parsed is not null)
             {
                 _replay = parsed;
+                // The document now on air is the truth, including the camera another
+                // writer selected while this window was open.
+                _angleEdited = false;
                 RefreshPlaylistChoices();
                 _lastJson = _session.ReplayJson;
                 BuildAngles();
@@ -551,12 +552,23 @@ public partial class ReplayWindow : Window
             ExportStatusText.Text = Loc.T("replay.exportNothing");
             return;
         }
+        if (_recording == true)
+        {
+            var answer = MessageBox.Show(
+                Loc.T("replay.exportWhileRecording"),
+                Title,
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.OK)
+                return;
+        }
+        var codec = ExportCodecBox.SelectedIndex == 1 ? "Hevc" : "H264";
         _exportQueue.Clear();
         var (width, height, fpsNum, fpsDen, bitrate) = ExportFormat();
         string Body(string target) =>
             $"{{\"path\":{JsonSerializer.Serialize(target)},\"width\":{width},\"height\":{height}," +
             $"\"fpsNum\":{fpsNum},\"fpsDen\":{fpsDen},\"bitrate\":{bitrate},\"sampleRate\":48000," +
-            $"\"channels\":2,\"withAudio\":true,\"segments\":[{segments}]}}";
+            $"\"channels\":2,\"withAudio\":true,\"codec\":\"{codec}\",\"segments\":[{segments}]}}";
         if (mode.Key == "AllAngles")
         {
             // One file per angle, so a multi-camera export stays usable.
@@ -772,6 +784,19 @@ public partial class ReplayWindow : Window
             _noticeTicks--;
             StateText.Text = _notice;
         }
+        // Timecodes live in the session. The files live on the drive, and a drive
+        // that no longer has them has to say so instead of playing black in silence.
+        if (!remote && _replay is not null)
+        {
+            var missing = ReplayModel.MissingRecordingCount(_replay, MixerNative.ReplayRecordingUuid());
+            if (missing > 0)
+            {
+                var warning = Loc.Format("replay.mediaMissing", missing);
+                StateText.Text = string.IsNullOrEmpty(StateText.Text)
+                    ? warning
+                    : StateText.Text + "  " + warning;
+            }
+        }
     }
 
     /// <summary>
@@ -920,6 +945,7 @@ public partial class ReplayWindow : Window
         if (_replay is null || ReplayModel.ActiveAngle(_replay) == angleId)
             return;
         _replay["activeAngleId"] = angleId;
+        _angleEdited = true;
         SaveDocument();
         BuildAngles();
     }
@@ -1034,7 +1060,8 @@ public partial class ReplayWindow : Window
             row.IsLoading = true;
             row.InText = ReplayModel.Timecode(clip.InFrame, fps);
             row.OutText = ReplayModel.Timecode(clip.OutFrame, fps);
-            row.DurationText = ReplayModel.Duration(clip.InFrame, clip.OutFrame, fps);
+            var duration = ReplayModel.Duration(clip.InFrame, clip.OutFrame, fps);
+            row.DurationText = ClipIsExpired(clip) ? duration + " " + Loc.T("replay.expired") : duration;
             row.AngleOptions = [.. angles.Select(angle => new Option<uint>(angle.Id, angle.Label))];
             row.AngleOption = row.AngleOptions.FirstOrDefault(option => option.Value == clip.AngleId);
             row.SpeedOptions =
@@ -1255,6 +1282,40 @@ public partial class ReplayWindow : Window
         return angleId == 0 ? "-" : angleId.ToString();
     }
 
+    /// <summary>
+    /// Reloads the document and the deck's repaint interval after Replay Setup applies.
+    /// The deck otherwise keeps the snapshot it opened with, and the next edit here
+    /// publishes that snapshot back over the settings.
+    /// </summary>
+    internal void ApplySessionSettings()
+    {
+        if (!IsLoaded)
+            return;
+        var parsed = ReplayModel.Parse(_session);
+        if (parsed is null)
+            return;
+        _replay = parsed;
+        _angleEdited = false;
+        _lastJson = _session.ReplayJson;
+        RefreshPlaylistChoices();
+        BuildAngles();
+        RefreshAngleGrid();
+        RefreshEvents();
+        RefreshPlaylist();
+        RefreshDefaultTransition();
+        RetargetMonitors();
+        ApplyDeckPresentInterval();
+    }
+
+    private void ApplyDeckPresentInterval()
+    {
+        var interval = _session.Settings.ResolvedReplayPresentInterval();
+        OutputMonitor.PresentInterval = interval;
+        LiveMonitor.PresentInterval = interval;
+        OutputMonitor.ApplyPresentInterval();
+        LiveMonitor.ApplyPresentInterval();
+    }
+
     private void SaveDocument()
     {
         if (_replay is null)
@@ -1264,21 +1325,31 @@ public partial class ReplayWindow : Window
         // plays one clip and stops. Writing it down is what makes "play the playlist"
         // mean the whole list.
         ReplayModel.SetChannelPlaylist(_replay, _channel, _playlistId);
-        var json = ReplayModel.Serialize(_replay);
+        // Settings stay with the session. This window writes events, playlists and the
+        // channel's playlist onto that document, so an Apply from Replay Setup is not
+        // replaced by the copy this window loaded earlier.
+        var json = ReplayModel.Serialize(ReplayModel.WithDeckEdits(_session, _replay, _angleEdited));
+        var previous = _session.ReplayJson;
         _session.ReplayJson = json;
         _lastJson = json;
-        if (App.IsRemote)
-        {
-            if (_main is { } main)
-                main.RemoteMutate("{\"kind\":\"upsertReplaySettings\",\"replay\":" + json + "}", Title);
-            return;
-        }
         try
         {
+            if (App.IsRemote)
+            {
+                if (_main is { } main)
+                    main.RemoteMutate(
+                        "{\"kind\":\"updateReplayDeck\",\"deck\":" + ReplayModel.SerializeDeck(_replay) + "}",
+                        Title);
+                return;
+            }
+            SessionStore.NextPublishSource = "deck";
             SessionStore.Publish(_session);
+            _angleEdited = false;
         }
         catch (Exception error)
         {
+            _session.ReplayJson = previous;
+            _lastJson = previous;
             // The core refused the document, so this edit is not on air. Say which
             // edit and why, instead of leaving the window showing something the
             // mixer never took.
@@ -1872,6 +1943,8 @@ public partial class ReplayWindow : Window
             return;
         }
         _live = false;
+        if (_multiview)
+            RefreshAngleGrid();
         if (Backend?.ReplayTransport(_channel, true, _speedMilli, -1) != true)
         {
             Warn(Refusal(Loc.T("replay.commandRefused")));
@@ -1922,8 +1995,31 @@ public partial class ReplayWindow : Window
         {
             var selected = angle.Id == active;
             var surface = new SwapchainHost { Width = 220, Height = 124, Margin = new Thickness(4) };
-            var monitorId = _session.NextMonitorId++;
-            surface.Loaded += (_, _) => surface.RetargetMonitor(monitorId, angle.LiveSourceId);
+            FrameworkElement picture = surface;
+            if (_live)
+            {
+                var monitorId = _session.NextMonitorId++;
+                surface.Loaded += (_, _) => surface.RetargetMonitor(monitorId, angle.LiveSourceId);
+            }
+            else if (TryProxyTile(angle.Id) is { } proxy)
+            {
+                picture = proxy;
+            }
+            else
+            {
+                // Jog and search show the proxy. A recording without one stays a label;
+                // the full-size picture is not decoded into the tile.
+                picture = new TextBlock
+                {
+                    Text = Loc.T("replay.proxyMissing"),
+                    Width = 220,
+                    Height = 124,
+                    Margin = new Thickness(4),
+                    TextWrapping = TextWrapping.Wrap,
+                    TextAlignment = TextAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+            }
             var label = new TextBlock
             {
                 Text = angle.Label,
@@ -1937,7 +2033,7 @@ public partial class ReplayWindow : Window
                 Margin = new Thickness(2),
                 Cursor = Cursors.Hand,
                 Tag = angle.Id,
-                Child = new StackPanel { Children = { surface, label } }
+                Child = new StackPanel { Children = { picture, label } }
             };
             tile.MouseLeftButtonUp += (clickSender, _) =>
             {
@@ -1947,7 +2043,8 @@ public partial class ReplayWindow : Window
             AutomationProperties.SetAutomationId(tile, $"AngleTile{angle.Id}");
             AutomationProperties.SetName(tile, angle.Label);
             AngleGridPanel.Children.Add(tile);
-            _angleHosts.Add(surface);
+            if (_live)
+                _angleHosts.Add(surface);
         }
     }
 
@@ -1987,8 +2084,91 @@ public partial class ReplayWindow : Window
     {
         if (Backend?.ReplayJumpToNow(_channel) != true)
             Warn(Refusal(Loc.T("replay.commandRefused")));
+        _live = true;
         _playing = false;
         UpdatePlayButton();
+        if (_multiview)
+            RefreshAngleGrid();
+    }
+
+    /// <summary>
+    /// A clip whose frames are no longer in the open recording. A different
+    /// recording, or a store that is not open, is a missing file rather than expiry.
+    /// </summary>
+    private bool ClipIsExpired(ReplayClipInfo clip)
+    {
+        var uuid = MixerNative.ReplayRecordingUuid();
+        if (string.IsNullOrEmpty(uuid)
+            || !string.Equals(clip.RecordingUuid, uuid, StringComparison.OrdinalIgnoreCase))
+            return false;
+        var range = Backend?.ReplayAngleRange(clip.AngleId);
+        return range is { } bounds && clip.OutFrame < bounds.First;
+    }
+
+    /// <summary>
+    /// The jog tile. The proxy is decoded into the tile; a missing proxy stays a
+    /// label and the full-size picture is not decoded here.
+    /// </summary>
+    private FrameworkElement? TryProxyTile(uint angleId)
+    {
+        var frame = Backend?.ReplayChannelState(_channel)?.PositionFrame ?? 0UL;
+        var buffer = new byte[480 * 270 * 2];
+        uint width;
+        uint height;
+        unsafe
+        {
+            fixed (byte* ptr = buffer)
+            {
+                if (MixerNative.ReplayCopyProxy(angleId, frame, ptr, (nuint)buffer.Length, &width, &height) == 0)
+                    return null;
+            }
+        }
+        if (width == 0 || height == 0 || (ulong)width * height * 2 > (ulong)buffer.Length)
+            return null;
+        var bitmap = new System.Windows.Media.Imaging.WriteableBitmap(
+            (int)width, (int)height, 96, 96, System.Windows.Media.PixelFormats.Bgra32, null);
+        bitmap.Lock();
+        unsafe
+        {
+            var dst = (byte*)bitmap.BackBuffer;
+            var stride = bitmap.BackBufferStride;
+            for (var y = 0; y < height; y++)
+            {
+                for (var x = 0; x < width; x += 2)
+                {
+                    var i = ((int)y * (int)width + (int)x) * 2;
+                    var u = (int)buffer[i] - 128;
+                    var y0 = (int)buffer[i + 1];
+                    var v = (int)buffer[i + 2] - 128;
+                    var y1 = (int)buffer[i + 3];
+                    WriteBgra(dst, stride, (int)x, (int)y, y0, u, v);
+                    if (x + 1 < width)
+                        WriteBgra(dst, stride, (int)x + 1, (int)y, y1, u, v);
+                }
+            }
+        }
+        bitmap.AddDirtyRect(new System.Windows.Int32Rect(0, 0, (int)width, (int)height));
+        bitmap.Unlock();
+        return new System.Windows.Controls.Image
+        {
+            Source = bitmap,
+            Width = 220,
+            Height = 124,
+            Margin = new Thickness(4),
+            Stretch = System.Windows.Media.Stretch.Uniform
+        };
+    }
+
+    private static unsafe void WriteBgra(byte* dst, int stride, int x, int y, int luma, int u, int v)
+    {
+        var c = luma + (int)(1.402 * v);
+        var g = luma - (int)(0.344136 * u + 0.714136 * v);
+        var b = luma + (int)(1.772 * u);
+        var p = dst + y * stride + x * 4;
+        p[0] = (byte)Math.Clamp(b, 0, 255);
+        p[1] = (byte)Math.Clamp(g, 0, 255);
+        p[2] = (byte)Math.Clamp(c, 0, 255);
+        p[3] = 255;
     }
 
     private void Play_Click(object sender, RoutedEventArgs e) => TogglePlay();
@@ -2037,7 +2217,10 @@ public partial class ReplayWindow : Window
         var target = (long)Math.Min(frame, long.MaxValue);
         if (Backend?.ReplayTransport(_channel, _playing, _speedMilli, target) != true)
             return;
+        _live = false;
         Waveform.PositionFrame = frame;
+        if (_multiview)
+            RefreshAngleGrid();
     }
 
     /// <summary>
@@ -2127,8 +2310,11 @@ public partial class ReplayWindow : Window
         var target = Math.Clamp(low + delta, 0, high);
         if (Backend?.ReplayTransport(_channel, false, _speedMilli, target) != true)
             Warn(Loc.T("replay.commandRefused"));
+        _live = false;
         _playing = false;
         UpdatePlayButton();
+        if (_multiview)
+            RefreshAngleGrid();
     }
 
     private void Speed_Click(object sender, RoutedEventArgs e)
@@ -2221,8 +2407,7 @@ public partial class ReplayWindow : Window
 
     private void UpdatePlayButton()
     {
-        // The transport is icons: swap the glyph, and let the tooltip carry the word.
-        PlayButton.Content = _playing ? "\uE769" : "\uE768";
+        PlayButton.Content = Loc.T(_playing ? "replay.pause" : "replay.play");
         PlayButton.ToolTip = Loc.T(_playing ? "replay.pauseHint" : "replay.playHint");
         RefreshSpeedButtons();
     }

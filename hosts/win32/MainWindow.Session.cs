@@ -47,6 +47,12 @@ public partial class MainWindow
         _replayWindow.Show();
     }
 
+    /// <summary>
+    /// Replay Setup has published. The open deck reloads that document and repaints
+    /// at the interval the operator just chose.
+    /// </summary>
+    internal void NotifyReplaySettingsApplied() => _replayWindow?.ApplySessionSettings();
+
     /// <summary>Opens the recording settings, or brings them forward.</summary>
     internal void OpenReplaySettings()
     {

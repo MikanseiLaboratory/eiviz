@@ -234,6 +234,27 @@ mod tests {
     }
 
     #[test]
+    fn remaining_time_warns_only_under_the_operators_threshold() {
+        let mut memory = HealthMemory::default();
+        let mut above = sample();
+        above.warn_secs = 90;
+        above.alert_secs = 40;
+        above.critical_secs = 10;
+        above.remaining_secs = 100;
+        assert_eq!(step(&mut memory, &above, 0).issues & ISSUE_STORAGE_LOW, 0);
+        let mut under = above;
+        under.remaining_secs = 80;
+        assert_ne!(step(&mut memory, &under, 1).issues & ISSUE_STORAGE_LOW, 0);
+        let mut defaults = sample();
+        defaults.remaining_secs = 500;
+        let mut fresh = HealthMemory::default();
+        assert_ne!(step(&mut fresh, &defaults, 0).issues & ISSUE_STORAGE_LOW, 0);
+        defaults.remaining_secs = 700;
+        fresh = HealthMemory::default();
+        assert_eq!(step(&mut fresh, &defaults, 0).issues & ISSUE_STORAGE_LOW, 0);
+    }
+
+    #[test]
     fn encode_drops_are_critical_immediately() {
         let mut memory = HealthMemory::default();
         let mut hot = sample();

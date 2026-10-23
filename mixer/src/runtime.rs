@@ -549,7 +549,7 @@ impl MixerPort for ProcessMixer {
     ) -> ControlResult<()> {
         crate::replay::engine()
             .cue(channel, angle_id, in_frame, out_frame, recording_uuid)
-            .map_err(crate::replay::control_error)
+            .map_err(crate::replay::ReplayFailure::into_control)
     }
 
     fn replay_transport(
@@ -561,7 +561,7 @@ impl MixerPort for ProcessMixer {
     ) -> ControlResult<()> {
         crate::replay::engine()
             .transport(channel, playing, speed_milli, seek_frame)
-            .map_err(crate::replay::control_error)
+            .map_err(crate::replay::ReplayFailure::into_control)
     }
 
     fn replay_set_looping(&mut self, channel: u32, looping: bool) -> ControlResult<()> {

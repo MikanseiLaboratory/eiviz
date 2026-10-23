@@ -512,15 +512,33 @@ final class MixerController: ObservableObject {
         let code = json.withUnsafeBytes { ptr in
             mixer_session_replace(ptr.bindMemory(to: UInt8.self).baseAddress, json.count, 0)
         }
-        guard code != EIVIZ_OK else { return true }
-        // The core refused the document, so what is on screen is not what is
-        // running. Say so instead of leaving the two silently apart.
-        let detail = MixerFFI.lastErrorText()
-        presentError(
-            detail.isEmpty ? L10n.error("Replace session", code) : detail,
-            title: L10n.t("msg.sessionRefused")
-        )
-        return false
+        guard code == EIVIZ_OK else {
+            let detail = MixerFFI.lastErrorText()
+            presentError(
+                detail.isEmpty ? L10n.error("Replace session", code) : detail,
+                title: L10n.t("msg.sessionRefused")
+            )
+            return false
+        }
+        adoptCanonicalReplay()
+        return true
+    }
+
+    /// The core normalizes the replay document on replace. The host keeps that copy.
+    private func adoptCanonicalReplay() {
+        var buffer = [UInt8](repeating: 0, count: 8 * 1024 * 1024)
+        let n = buffer.withUnsafeMutableBufferPointer { ptr in
+            mixer_copy_snapshot(ptr.baseAddress, ptr.count)
+        }
+        guard n > 0,
+              let text = String(bytes: buffer.prefix(Int(n)), encoding: .utf8),
+              let data = text.data(using: .utf8),
+              let root = try? JSONDecoder().decode(JSONValue.self, from: data),
+              case .object(let object) = root,
+              let replay = object["replay"]
+        else { return }
+        if case .null = replay { return }
+        session.replay = replay
     }
 
     func shutdown() {

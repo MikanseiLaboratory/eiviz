@@ -127,6 +127,11 @@ pub struct ReplayDto {
     pub next_event_id: u64,
     #[serde(default = "one_u64")]
     pub next_playlist_id: u64,
+    /// Scene states the replay timeline fires. A cue names either a clip, in which
+    /// case `frame` is that clip's in point, or an absolute recording frame when
+    /// `clip_uid` is empty. Distinct from a scene sequence's replay cue.
+    #[serde(default)]
+    pub timeline_cues: Vec<ReplayTimelineCueDto>,
 }
 
 fn one_u32() -> u32 {
@@ -161,6 +166,7 @@ impl Default for ReplayDto {
             next_angle_id: 1,
             next_event_id: 1,
             next_playlist_id: 1,
+            timeline_cues: Vec::new(),
         }
     }
 }
@@ -339,6 +345,10 @@ pub struct ReplaySettingsDto {
     pub buffering: ReplayBufferingDto,
     #[serde(default)]
     pub retention: ReplayRetention,
+    /// Remaining-time warnings. Replay Setup owns them, so a deck save cannot
+    /// put them back to the defaults.
+    #[serde(default)]
+    pub warnings: ReplayWarningsDto,
     #[serde(default)]
     pub angles: Vec<AngleDto>,
     #[serde(default)]
@@ -365,6 +375,7 @@ impl ReplaySettingsDto {
             format: replay.format.clone(),
             buffering: replay.buffering.clone(),
             retention: replay.retention,
+            warnings: replay.warnings.clone(),
             angles: replay.angles.clone(),
             auto_add_to_playlist: replay.auto_add_to_playlist,
             decode_ahead: replay.decode_ahead,
@@ -379,6 +390,7 @@ impl ReplaySettingsDto {
         replay.format = self.format;
         replay.buffering = self.buffering;
         replay.retention = self.retention;
+        replay.warnings = self.warnings;
         replay.angles = self.angles;
         replay.auto_add_to_playlist = self.auto_add_to_playlist;
         replay.decode_ahead = self.decode_ahead;
@@ -786,6 +798,145 @@ pub struct ChannelDto {
     pub playlist_id: Option<u64>,
     #[serde(default)]
     pub input_id: u64,
+}
+
+/// A scene state fired from the replay timeline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayTimelineCueDto {
+    #[serde(default)]
+    pub id: u64,
+    /// Recording frame, or the clip's in point when `clip_uid` is set.
+    #[serde(default)]
+    pub frame: u64,
+    #[serde(default)]
+    pub scene_id: u64,
+    #[serde(default)]
+    pub state_id: u64,
+    /// Empty when `frame` is an absolute recording timecode.
+    #[serde(default)]
+    pub clip_uid: String,
+}
+
+/// The part of a Replay document that the deck owns.
+///
+/// Events, playlists, the selected angle and which playlist a channel plays.
+/// Channels themselves are added and removed only with the Replay input.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayDeckDto {
+    #[serde(default)]
+    pub events: Vec<ReplayEventDto>,
+    #[serde(default)]
+    pub playlists: Vec<PlaylistDto>,
+    #[serde(default)]
+    pub active_angle_id: Option<u32>,
+    #[serde(default)]
+    pub next_event_id: u64,
+    #[serde(default)]
+    pub next_playlist_id: u64,
+    #[serde(default)]
+    pub channels: Vec<ChannelDto>,
+    #[serde(default)]
+    pub timeline_cues: Vec<ReplayTimelineCueDto>,
+}
+
+impl ReplayDeckDto {
+    /// Writes the deck onto a document. Channel rows only update the playlist a
+    /// channel already has; a deck snapshot cannot add or remove channels.
+    pub fn apply_to(self, replay: &mut ReplayDto) {
+        replay.events = self.events;
+        replay.playlists = self.playlists;
+        // A deck that never picked a camera sends none. Clearing the selection because
+        // of that silently moved the operator's angle to whatever normalize picks next.
+        if self.active_angle_id.is_some() {
+            replay.active_angle_id = self.active_angle_id;
+        }
+        if self.next_event_id != 0 {
+            replay.next_event_id = self.next_event_id;
+        }
+        if self.next_playlist_id != 0 {
+            replay.next_playlist_id = self.next_playlist_id;
+        }
+        for incoming in self.channels {
+            if let Some(channel) = replay
+                .channels
+                .iter_mut()
+                .find(|channel| channel.index == incoming.index)
+            {
+                channel.playlist_id = incoming.playlist_id;
+            }
+        }
+        replay.timeline_cues = self.timeline_cues;
+    }
+}
+
+/// True when playback moved across `boundary` since the previous frame.
+///
+/// Sitting on the boundary does not fire again. A jog that crosses it in either
+/// direction fires once for that crossing.
+pub fn boundary_crossed(previous: u64, current: u64, boundary: u64) -> bool {
+    if previous == current {
+        return false;
+    }
+    let low = previous.min(current);
+    let high = previous.max(current);
+    boundary > low && boundary <= high
+}
+
+/// Scene states whose boundary the playhead just crossed, in playback order.
+///
+/// A cue with a clip id fires at that clip's in point. A cue without one fires
+/// at its own recording frame. Only forward movement fires: a rewind that crosses
+/// a boundary again would run the states backwards, which is not what the operator
+/// recorded them for.
+///
+/// `max_step` is the largest frame-to-frame move that counts as playback. A loop
+/// back to the start of a playlist, a cue or a jump to live moves the playhead by
+/// thousands of frames in one tick; firing every state in between made the program
+/// and the scenes change by themselves at the loop point.
+pub fn due_timeline_cues(
+    previous: u64,
+    current: u64,
+    cues: &[ReplayTimelineCueDto],
+    playlists: &[PlaylistDto],
+    max_step: u64,
+) -> Vec<(u64, u64)> {
+    if current <= previous || current - previous > max_step {
+        return Vec::new();
+    }
+    let mut due = Vec::new();
+    for cue in cues {
+        let boundary = if cue.clip_uid.is_empty() {
+            cue.frame
+        } else {
+            let Some(frame) = playlists
+                .iter()
+                .flat_map(|playlist| playlist.clips.iter())
+                .find(|clip| clip.uid == cue.clip_uid)
+                .map(|clip| clip.in_frame)
+            else {
+                continue;
+            };
+            frame
+        };
+        if boundary > previous && boundary <= current {
+            due.push((cue.scene_id, cue.state_id));
+        }
+    }
+    due
+}
+
+/// A clip whose out point is before every segment that is still on disk was
+/// overwritten. `None` means the recording is not open, which is a missing file
+/// rather than an expiry.
+pub fn clip_overwritten(out_frame: u64, earliest_remaining: Option<u64>) -> bool {
+    earliest_remaining.is_some_and(|earliest| out_frame < earliest)
+}
+
+/// Passthrough stores the sender's bitstream. Playback stays refused.
+pub fn passthrough_playback_refused(mode: AngleRecordMode) -> bool {
+    mode == AngleRecordMode::Passthrough
 }
 
 pub fn replay_channel_gpu_id(index: u32) -> u64 {
@@ -1338,5 +1489,198 @@ mod tests {
         assert_eq!(replay.playlists[0].id, 1);
         assert_eq!(replay.playlists[0].clips.len(), 1);
         assert_eq!(replay.playlists[0].clips[0].angle_id, 2);
+        assert!(
+            replay.playlists[0].clips[0].preserve_pitch,
+            "a new clip holds its pitch"
+        );
+    }
+
+    #[test]
+    fn a_deck_edit_leaves_settings_where_setup_put_them() {
+        let mut replay = ReplayDto::default();
+        replay.storage.push(ReplayStorageDto {
+            path: "D:/replay".into(),
+            angle_ids: vec![1],
+        });
+        replay.format.segment_frames = 300;
+        replay.warnings.remaining_warn_secs = 90;
+        replay.decode_ahead = false;
+        replay.profiling = true;
+        replay.channels.push(ChannelDto {
+            index: 0,
+            playlist_id: None,
+            input_id: 7,
+        });
+        replay.events.push(event(3));
+        let deck = ReplayDeckDto {
+            events: vec![event(3), event(4)],
+            playlists: vec![PlaylistDto {
+                id: 2,
+                name: "Show".into(),
+                revision: 1,
+                clips: Vec::new(),
+                default_transition: ClipTransitionDto::default(),
+            }],
+            active_angle_id: Some(1),
+            next_event_id: 5,
+            next_playlist_id: 3,
+            channels: vec![ChannelDto {
+                index: 0,
+                playlist_id: Some(2),
+                input_id: 0,
+            }],
+            timeline_cues: Vec::new(),
+        };
+        deck.apply_to(&mut replay);
+        assert_eq!(replay.storage[0].path, "D:/replay");
+        assert_eq!(replay.format.segment_frames, 300);
+        assert_eq!(replay.warnings.remaining_warn_secs, 90);
+        assert!(!replay.decode_ahead);
+        assert!(replay.profiling);
+        assert_eq!(replay.channels.len(), 1);
+        assert_eq!(replay.channels[0].input_id, 7);
+        assert_eq!(replay.channels[0].playlist_id, Some(2));
+        assert_eq!(replay.events.len(), 2);
+    }
+
+    #[test]
+    fn applying_settings_leaves_the_deck_alone() {
+        let mut replay = ReplayDto::default();
+        replay.events.push(event(8));
+        replay.next_event_id = 9;
+        replay.channels.push(ChannelDto {
+            index: 0,
+            playlist_id: Some(1),
+            input_id: 4,
+        });
+        let mut settings = ReplaySettingsDto::from_document(&replay);
+        settings.storage.push(ReplayStorageDto {
+            path: "E:/takes".into(),
+            angle_ids: vec![1],
+        });
+        settings.warnings.remaining_critical_secs = 15;
+        settings.apply_to(&mut replay);
+        assert_eq!(replay.events.len(), 1);
+        assert_eq!(replay.events[0].id, 8);
+        assert_eq!(replay.next_event_id, 9);
+        assert_eq!(replay.channels[0].playlist_id, Some(1));
+        assert_eq!(replay.storage[0].path, "E:/takes");
+        assert_eq!(replay.warnings.remaining_critical_secs, 15);
+    }
+
+    #[test]
+    fn normalize_does_not_rewrite_the_operators_segment_length() {
+        let mut replay = ReplayDto::default();
+        replay.format.segment_frames = 300;
+        replay.normalize();
+        assert_eq!(replay.format.segment_frames, 300);
+    }
+
+    #[test]
+    fn a_timeline_boundary_fires_once_per_crossing() {
+        assert!(!boundary_crossed(10, 10, 12));
+        assert!(boundary_crossed(10, 12, 12));
+        assert!(!boundary_crossed(12, 12, 12));
+        assert!(boundary_crossed(14, 11, 12));
+        assert!(!boundary_crossed(13, 14, 12));
+        let mut clip = ClipDto::default();
+        clip.uid = "clip-a".into();
+        clip.in_frame = 40;
+        let playlist = PlaylistDto {
+            id: 1,
+            name: "Show".into(),
+            revision: 1,
+            clips: vec![clip],
+            default_transition: ClipTransitionDto::default(),
+        };
+        let cues = vec![
+            ReplayTimelineCueDto {
+                id: 1,
+                frame: 12,
+                scene_id: 7,
+                state_id: 3,
+                clip_uid: String::new(),
+            },
+            ReplayTimelineCueDto {
+                id: 2,
+                frame: 0,
+                scene_id: 8,
+                state_id: 4,
+                clip_uid: "clip-a".into(),
+            },
+        ];
+        assert_eq!(
+            due_timeline_cues(10, 12, &cues, &[playlist.clone()], 8),
+            vec![(7, 3)]
+        );
+        assert!(due_timeline_cues(12, 12, &cues, &[playlist.clone()], 8).is_empty());
+        // Playback order only: a rewind must not run the states backwards.
+        assert!(due_timeline_cues(14, 11, &cues, &[playlist.clone()], 8).is_empty());
+        // A loop back to the start, or a jump to live: the playhead moved across
+        // the cue without playing over it, so no state fires.
+        assert!(due_timeline_cues(10, 900, &cues, &[playlist.clone()], 8).is_empty());
+        assert_eq!(
+            due_timeline_cues(30, 40, &cues, &[playlist], 16),
+            vec![(8, 4)]
+        );
+    }
+
+    #[test]
+    fn an_overwritten_range_is_expired_and_passthrough_does_not_play() {
+        assert!(clip_overwritten(40, Some(50)));
+        assert!(!clip_overwritten(50, Some(50)));
+        assert!(!clip_overwritten(40, None));
+        assert!(passthrough_playback_refused(AngleRecordMode::Passthrough));
+        assert!(!passthrough_playback_refused(AngleRecordMode::Composite));
+    }
+
+    #[test]
+    fn a_deck_snapshot_without_an_angle_keeps_the_selection() {
+        // The remote deck sends the camera it has selected. A deck that never picked
+        // one must not clear the choice another deck already made.
+        let mut replay = ReplayDto::default();
+        replay.angles = vec![
+            AngleDto {
+                id: 1,
+                name: String::new(),
+                source: AngleSourceKind::Scene,
+                scene_id: 0,
+                input_id: 0,
+                audio: AngleAudio::Silent,
+                audio_unit_id: 0,
+                record_mode: AngleRecordMode::Composite,
+                encoder: AngleEncoder::Cpu,
+            },
+            AngleDto {
+                id: 2,
+                name: String::new(),
+                source: AngleSourceKind::Scene,
+                scene_id: 0,
+                input_id: 0,
+                audio: AngleAudio::Silent,
+                audio_unit_id: 0,
+                record_mode: AngleRecordMode::Composite,
+                encoder: AngleEncoder::Cpu,
+            },
+        ];
+        replay.active_angle_id = Some(2);
+        let deck = ReplayDeckDto {
+            events: Vec::new(),
+            playlists: Vec::new(),
+            active_angle_id: None,
+            next_event_id: 0,
+            next_playlist_id: 0,
+            channels: Vec::new(),
+            timeline_cues: Vec::new(),
+        };
+        deck.apply_to(&mut replay);
+        assert_eq!(replay.active_angle_id, Some(2));
+    }
+
+    #[test]
+    fn a_missing_preserve_pitch_field_defaults_on() {
+        let clip: ClipDto =
+            serde_json::from_str(r#"{"uid":"c","inFrame":0,"outFrame":10}"#).unwrap();
+        assert!(clip.preserve_pitch);
     }
 }

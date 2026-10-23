@@ -499,6 +499,18 @@ message Replay {
   uint64 next_playlist_id = 14;
   uint32 active_angle_id = 15;
   bool has_active_angle = 16;
+  // Absent on files written before the flag existed: playback stays ahead.
+  optional bool decode_ahead = 17;
+  optional bool profiling = 18;
+  repeated ReplayTimelineCue timeline_cues = 19;
+}
+
+message ReplayTimelineCue {
+  uint64 id = 1;
+  uint64 frame = 2;
+  uint64 scene_id = 3;
+  uint64 state_id = 4;
+  string clip_uid = 5;
 }
 
 message ReplayStorage {

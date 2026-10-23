@@ -314,6 +314,14 @@
                           Content="{Binding [replay.autoAdd], Source={x:Static i18n:Loc.Source}}"/>
                 <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
                            Text="{Binding [replay.autoAddHelp], Source={x:Static i18n:Loc.Source}}"/>
+                <TextBlock Margin="0,20,0,0" Text="{Binding [replay.warnings], Source={x:Static i18n:Loc.Source}}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                    <TextBox x:Name="WarnBox" Width="70" Height="26" Margin="0,0,8,0"/>
+                    <TextBox x:Name="AlertBox" Width="70" Height="26" Margin="0,0,8,0"/>
+                    <TextBox x:Name="CriticalBox" Width="70" Height="26"/>
+                </StackPanel>
+                <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
+                           Text="{Binding [replay.warningsHelp], Source={x:Static i18n:Loc.Source}}"/>
                 <CheckBox x:Name="DecodeAheadBox" Margin="0,20,0,0"
                           Content="{Binding [replay.decodeAhead], Source={x:Static i18n:Loc.Source}}"/>
                 <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"

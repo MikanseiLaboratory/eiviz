@@ -2,7 +2,7 @@
 //! readback handoff, health, and channel playout.
 
 mod audio;
-pub mod channel;
+pub use eiviz_replay::channel;
 pub mod gpu_encode;
 mod health;
 pub(crate) mod profile;
@@ -344,6 +344,10 @@ struct Inner {
     peaks: HashMap<u32, eiviz_pro_api::PeakAccumulator>,
     health: HealthMemory,
     started_at: Option<Instant>,
+    /// Why record and play are refused while the document stays loaded.
+    /// Community and a missing Pro module set this. A plan that simply has too
+    /// many channels refuses the document instead.
+    operations_reason: Option<String>,
 }
 
 pub struct ReplayEngine {
@@ -440,6 +444,7 @@ impl ReplayEngine {
                 peaks: HashMap::new(),
                 health: HealthMemory::default(),
                 started_at: None,
+                operations_reason: None,
             }),
             inbox: Arc::new(Inbox::new()),
             audio_inbox: Arc::new(AudioInbox::new()),
@@ -631,6 +636,7 @@ impl ReplayEngine {
             self.release_store();
             let mut inner = self.lock();
             inner.config = ReplayDto::default();
+            inner.operations_reason = None;
             inner.channels.clear();
             // Removing Replay leaves nothing to report, so the state goes back to
             // idle instead of holding the last recording's numbers.
@@ -638,7 +644,7 @@ impl ReplayEngine {
             inner.stats.stop_reason = REPLAY_STOP_NONE;
             return Ok(());
         };
-        self.gate(&dto)?;
+        let operations_reason = self.gate(&dto)?;
         // Both are the operator's to set now, so a configure is what turns them on.
         profile::set_enabled(dto.profiling);
         self.lock().decode_ahead = dto.decode_ahead;
@@ -762,6 +768,7 @@ impl ReplayEngine {
             *self.store.lock().unwrap_or_else(|error| error.into_inner()) = None;
         }
         let mut inner = self.lock();
+        inner.operations_reason = operations_reason;
         inner.config = dto;
         inner.targets_cache = None;
         inner.playlist_revision = inner.playlist_revision.wrapping_add(1);
@@ -835,8 +842,18 @@ impl ReplayEngine {
         Ok(())
     }
 
-    fn gate(&self, dto: &ReplayDto) -> Result<(), ReplayFailure> {
+    /// `Ok(None)` means record and play may run. `Ok(Some)` keeps the document
+    /// and refuses those operations. `Err` is a document the plan cannot hold,
+    /// such as a fifth channel on Professional.
+    fn gate(&self, dto: &ReplayDto) -> Result<Option<String>, ReplayFailure> {
         let ent = crate::pro::entitlements();
+        let denied = matches!(ent.replay_channels, eiviz_pro_api::Quota::Denied)
+            || matches!(ent.replay_angles, eiviz_pro_api::Quota::Denied);
+        if denied {
+            return Ok(Some(
+                "Instant Replay requires a Professional license and the Pro module".into(),
+            ));
+        }
         // Counts are checked even while recording is stopped. A document that
         // exceeds the plan can never run, and accepting it hides the problem
         // until the operator presses record.
@@ -859,24 +876,21 @@ impl ReplayEngine {
             )));
         }
         if !dto.enabled {
-            return Ok(());
-        }
-        if !Entitlements::admits_count(ent.replay_angles, 0, true) {
-            return Err(ReplayFailure::plan(format!(
-                "this plan allows {} Replay angles",
-                quota_text(ent.replay_angles)
-            )));
+            return Ok(None);
         }
         if crate::pro::module().replay().is_none() {
-            return Err(ReplayFailure::io("replay requires the Pro module"));
+            return Ok(Some("replay requires the Pro module".into()));
         }
-        Ok(())
+        Ok(None)
     }
 
     pub fn record(&self, on: bool) -> Result<(), ReplayFailure> {
         if !on {
             self.stop(REPLAY_STOP_USER);
             return Ok(());
+        }
+        if let Some(reason) = self.lock().operations_reason.clone() {
+            return Err(ReplayFailure::plan(reason));
         }
         let (
             paths,
@@ -1634,13 +1648,33 @@ impl ReplayEngine {
         in_frame: u64,
         out_frame: u64,
         recording_uuid: &str,
-    ) -> Result<(), i32> {
+    ) -> Result<(), ReplayFailure> {
+        let mut inner = self.lock();
+        if let Some(reason) = inner.operations_reason.clone() {
+            return Err(ReplayFailure::plan(reason));
+        }
+        if inner.config.angles.iter().any(|angle| {
+            angle.id == angle_id
+                && eiviz_control::session::replay::passthrough_playback_refused(angle.record_mode)
+        }) {
+            return Err(ReplayFailure::invalid(
+                "this clip is a passthrough recording: it can be recorded but not played back",
+            ));
+        }
+        drop(inner);
+        if let Some((first, _)) = self.angle_range(angle_id)
+            && eiviz_control::session::replay::clip_overwritten(out_frame, Some(first))
+        {
+            return Err(ReplayFailure::invalid(
+                "this clip's frames were overwritten and can no longer be played",
+            ));
+        }
         let mut inner = self.lock();
         let slot = inner
             .channels
             .iter_mut()
             .find(|slot| slot.index == channel)
-            .ok_or(ERR_INVALID_ARGUMENT)?;
+            .ok_or_else(|| ReplayFailure::invalid("replay channel does not exist"))?;
         slot.transport.cue(channel::Cue {
             recording_uuid: recording_uuid.to_string(),
             angle_id,
@@ -1657,13 +1691,16 @@ impl ReplayEngine {
         playing: bool,
         speed_milli: i32,
         seek_frame: i64,
-    ) -> Result<(), i32> {
+    ) -> Result<(), ReplayFailure> {
         let mut inner = self.lock();
+        if playing && let Some(reason) = inner.operations_reason.clone() {
+            return Err(ReplayFailure::plan(reason));
+        }
         let slot = inner
             .channels
             .iter_mut()
             .find(|slot| slot.index == channel)
-            .ok_or(ERR_INVALID_ARGUMENT)?;
+            .ok_or_else(|| ReplayFailure::invalid("replay channel does not exist"))?;
         let mut changed = false;
         if slot.transport.playing != playing {
             slot.transport.set_playing(playing);
@@ -1791,6 +1828,28 @@ impl ReplayEngine {
 
     pub fn recording_uuid(&self) -> String {
         self.lock().uuid.clone()
+    }
+
+    /// Jog proxy for one frame. Missing proxies stay an error so the tile does
+    /// not decode the full-size picture instead.
+    pub fn copy_proxy(
+        &self,
+        angle_id: u32,
+        frame: u64,
+        dst: &mut [u8],
+    ) -> Result<(u32, u32), ReplayFailure> {
+        let store = self
+            .store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+            .ok_or_else(|| ReplayFailure::invalid("proxy is missing"))?;
+        let decoded = store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .decode_proxy(angle_id, frame, dst)
+            .map_err(|_| ReplayFailure::invalid("proxy is missing"))?;
+        Ok((decoded.width, decoded.height))
     }
 
     /// Recorded frame range of one angle, for the export UI.
@@ -2273,6 +2332,41 @@ fn empty_targets() -> Arc<[RecordTarget]> {
     Arc::clone(EMPTY.get_or_init(|| Arc::from(Vec::<RecordTarget>::new())))
 }
 
+struct StoreSink<'a> {
+    store: &'a mut dyn ReplayStore,
+    pts_100ns: i64,
+    fps_num: u32,
+    fps_den: u32,
+}
+
+impl eiviz_replay::FrameSink for StoreSink<'_> {
+    fn write_picture(
+        &mut self,
+        angle_id: u32,
+        frame: u64,
+        picture: eiviz_replay::Picture<'_>,
+    ) -> Result<(), String> {
+        let layout = match picture.layout {
+            1 => PixelLayout::Bgra,
+            _ => PixelLayout::Uyvy,
+        };
+        let view = VideoFrame {
+            width: picture.width,
+            height: picture.height,
+            stride: picture.stride as u32,
+            layout,
+            pts_100ns: self.pts_100ns,
+            fps_num: self.fps_num,
+            fps_den: self.fps_den,
+            data: std::sync::Arc::new(picture.pixels.to_vec()),
+        };
+        self.store
+            .write_video(angle_id, frame, &view)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+}
+
 fn record_loop(inbox: Arc<Inbox>, stop_record: Arc<AtomicBool>, stop_workers: Arc<AtomicBool>) {
     let engine = engine();
     // `stop_record` is true until the user starts, and again after Stop.
@@ -2297,20 +2391,33 @@ fn record_loop(inbox: Arc<Inbox>, stop_record: Arc<AtomicBool>, stop_workers: Ar
             let inner = engine.lock();
             (inner.width, inner.height, inner.fps_num, inner.fps_den)
         };
-        let view = VideoFrame {
-            width,
-            height,
-            stride: frame.stride as u32,
-            layout: frame.layout,
-            pts_100ns: frame.pts,
-            fps_num,
-            fps_den,
-            data: Arc::new(frame.data),
+        let outcome = {
+            let mut guard = store.lock().unwrap_or_else(|error| error.into_inner());
+            let mut sink = StoreSink {
+                store: &mut **guard,
+                pts_100ns: frame.pts,
+                fps_num,
+                fps_den,
+            };
+            eiviz_replay::deliver_picture(
+                &mut sink,
+                frame.angle_id,
+                frame.frame_index,
+                eiviz_replay::Picture {
+                    width,
+                    height,
+                    stride: frame.stride,
+                    layout: match frame.layout {
+                        PixelLayout::Uyvy => 0,
+                        PixelLayout::Bgra => 1,
+                    },
+                    pixels: &frame.data,
+                    pts_100ns: frame.pts,
+                    fps_num,
+                    fps_den,
+                },
+            )
         };
-        let outcome = store
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .write_video(frame.angle_id, frame.frame_index, &view);
         if matches!(outcome, Err(_)) {
             engine.stop(crate::abi::REPLAY_STOP_IO_ERROR);
             break;
@@ -2836,6 +2943,9 @@ struct ChannelPlayout {
     /// of a frame (a software adapter, a busy CPU) must not try to run ahead: the
     /// extra decode would cost more time than the queue saves.
     last_decode: Duration,
+    /// Playhead at the previous tick. A timeline cue fires when this and the
+    /// current frame sit on opposite sides of its boundary.
+    last_source: Option<u64>,
 }
 
 impl ChannelPlayout {
@@ -2855,6 +2965,36 @@ impl ChannelPlayout {
             seen: (0, 0),
             depth: ahead_depth(context.width, context.height, context.decode_ahead),
             last_decode: Duration::ZERO,
+            last_source: None,
+        }
+    }
+
+    /// Fires scene states the playhead crossed since the previous tick.
+    ///
+    /// The mixer lock is taken only after the replay lock is released. A jog
+    /// that crosses the same boundary again fires once for that crossing.
+    fn fire_crossed_cues(&mut self, engine: &ReplayEngine, current: u64, period: Duration) {
+        let Some(previous) = self.last_source.replace(current) else {
+            return;
+        };
+        if previous == current {
+            return;
+        }
+        let due = {
+            let inner = engine.lock();
+            // Two seconds of frames is well above a late tick and well below a
+            // loop, a cue or a jump to live, so only real playback fires states.
+            let max_step = (2.0 / period.as_secs_f64().max(1e-6)) as u64;
+            eiviz_control::session::replay::due_timeline_cues(
+                previous,
+                current,
+                &inner.config.timeline_cues,
+                &inner.config.playlists,
+                max_step,
+            )
+        };
+        for (scene_id, state_id) in due {
+            let _ = unsafe { crate::mixer_scene_go_to(scene_id, state_id) };
         }
     }
 
@@ -2928,6 +3068,7 @@ impl ChannelPlayout {
             self.seen = (transport_revision, revision);
         }
         transport.note_recorded_frame(last_frame);
+        self.fire_crossed_cues(engine, transport.source_frame(), context.period);
         // A picture decoded during an earlier tick's spare time is shown straight away:
         // that is what keeps it on time when a decode runs long.
         if let Some(pending) = self.ahead.pop_front() {
@@ -3408,11 +3549,16 @@ pub fn parse_export_spec(json: &str) -> Result<eiviz_pro_api::ReplayExportSpec, 
         bitrate: number("bitrate").unwrap_or(20_000_000) as u32,
         sample_rate: number("sampleRate").unwrap_or(48_000) as u32,
         channels: number("channels").unwrap_or(2) as u32,
-        with_audio: value
+            with_audio: value
             .get("withAudio")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(true),
         segments,
+        codec: match value.get("codec").and_then(serde_json::Value::as_str).unwrap_or("H264") {
+            "H264" | "h264" => 0,
+            "Hevc" | "HEVC" | "H265" | "h265" => 1,
+            _ => return Err(ERR_INVALID_ARGUMENT),
+        },
     })
 }
 
@@ -4127,6 +4273,7 @@ impl ReplayStore for FfiReplayStore {
             with_audio: u32::from(spec.with_audio),
             segments: segments.as_ptr(),
             segment_count: segments.len() as u32,
+            codec: spec.codec,
         };
         let status = unsafe { start(self.handle, &request) };
         if status.code == 0 {
@@ -4425,6 +4572,22 @@ mod export_tests {
         // Audio and a sane bitrate are on unless the host says otherwise.
         assert!(spec.with_audio);
         assert_eq!(spec.sample_rate, 48_000);
+        assert_eq!(spec.codec, 0);
+    }
+
+    #[test]
+    fn an_unknown_export_encoder_is_refused() {
+        assert!(
+            parse_export_spec(
+                "{\"path\":\"out.mp4\",\"codec\":\"Av1\",\"segments\":[{\"angleId\":1,\"fromFrame\":0,\"toFrame\":1}]}"
+            )
+            .is_err()
+        );
+        let spec = parse_export_spec(
+            "{\"path\":\"out.mp4\",\"codec\":\"Hevc\",\"segments\":[{\"angleId\":1,\"fromFrame\":0,\"toFrame\":1}]}",
+        )
+        .unwrap();
+        assert_eq!(spec.codec, 1);
     }
 
     #[test]

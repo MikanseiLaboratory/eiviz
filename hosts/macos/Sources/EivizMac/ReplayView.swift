@@ -14,6 +14,8 @@ struct ReplayView: View {
     @State private var channel: UInt32 = 0
     @State private var playing = false
     @State private var speedMilli: Int32 = 1000
+    /// True while the channel follows the recording edge. Jog and clip playback leave it.
+    @State private var followingLive = true
     @State private var inFrame: UInt64?
     /// Marked out point. Kept so the operator can read back what was marked.
     @State private var outFrame: UInt64?
@@ -36,6 +38,7 @@ struct ReplayView: View {
     @State private var clipAudio = "FollowAngle"
     /// Export: the same recordings, written to MP4 with the OS encoder.
     @State private var exportMode = "Clip"
+    @State private var exportCodec = "H264"
     @State private var exportPath = ""
     @State private var exportStatus = ""
     /// Recording health: where the frames went.
@@ -93,7 +96,7 @@ struct ReplayView: View {
     private var playlists: [PlaylistInfo] { document?.playlists ?? [] }
 
     private var header: some View {
-        HStack {
+        HStack(alignment: .center, spacing: 8) {
             Text(L10n.t("replay.channel"))
             Picker("", selection: $channel) {
                 ForEach(channels) { item in
@@ -101,19 +104,21 @@ struct ReplayView: View {
                 }
             }
             .labelsHidden()
-            .frame(width: 140)
+            .frame(width: 140, height: 32)
             Text(stateText).fontWeight(.bold)
+            if !status.isEmpty {
+                Text(status).font(.caption).foregroundStyle(EivizTheme.dim).lineLimit(1)
+            }
             Spacer()
             Text(L10n.t("replay.recordTc")).font(.caption)
             Text(mixer.isRemote ? "--:--:--:--" : ReplayTime.timecode(stats?.recording_frame ?? 0, fps))
                 .font(.system(.title3, design: .monospaced))
+                .frame(minWidth: 148, alignment: .trailing)
             // The deck is where an operator notices that storage or angles are
             // missing, so the way into the recording settings belongs here too.
             Button(L10n.t("replay.openSetup")) { mixer.openReplaySettings() }
+                .frame(height: 32)
                 .help(L10n.t("replay.openSetupHint"))
-            if !status.isEmpty {
-                Text(status).font(.caption).foregroundStyle(EivizTheme.dim)
-            }
         }
     }
 
@@ -180,15 +185,29 @@ struct ReplayView: View {
         // A Remote drives Replay on the machine that owns the recording, so there is
         // no recording here to measure. Reporting "idle" would be a lie.
         if mixer.isRemote { return L10n.t("replay.stateRemote") }
-        guard let stats, stats.state != 0 else { return L10n.t("replay.stateIdle") }
-        switch stats.state {
-        case 1:
-            return recordingText(stats)
-        case 2:
-            return L10n.t("replay.stateStopped")
-        default:
-            return L10n.t("replay.stateIdle")
+        let base: String
+        if let stats, stats.state != 0 {
+            switch stats.state {
+            case 1: base = recordingText(stats)
+            case 2: base = L10n.t("replay.stateStopped")
+            default: base = L10n.t("replay.stateIdle")
+            }
+        } else {
+            base = L10n.t("replay.stateIdle")
         }
+        let missing = document?.missingRecordingCount(skip: stats?.state == 1 ? mixer.replayRecordingUuid() : nil) ?? 0
+        if missing > 0 {
+            return base + "  " + L10n.format("replay.mediaMissing", "\(missing)")
+        }
+        return base
+    }
+
+    private func markReadout(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption)
+            Text(value).font(.system(.body, design: .monospaced))
+        }
+        .frame(width: 120, height: 44, alignment: .leading)
     }
 
     /// Length of the mark, or a placeholder while it is incomplete.
@@ -229,12 +248,10 @@ struct ReplayView: View {
                         Button {
                             selectAngle(angle.id)
                         } label: {
-                            Text("\(index + 1)")
-                                .font(.title3)
-                                .fontWeight(selected ? .bold : .regular)
-                                .frame(width: 44, height: 36)
+                            angleTile(index: index + 1, angle: angle, selected: selected)
                         }
                         .buttonStyle(.plain)
+                        .frame(width: 48, height: 44)
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
                                 .stroke(selected ? Color.green : Color.gray.opacity(0.4),
@@ -306,7 +323,7 @@ struct ReplayView: View {
     /// cells, so nothing is "select a clip, then use the controls below".
     private var playlist: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
                 Text(L10n.t("replay.playlist")).fontWeight(.bold)
                 Picker("", selection: Binding(
                     get: { playlistId },
@@ -317,27 +334,21 @@ struct ReplayView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 190)
+                .frame(width: 190, height: 32)
                 .help(L10n.t("replay.playlistPickHelp"))
                 TextField("", text: Binding(
                     get: { playlists.first { $0.id == playlistId }?.name ?? "" },
                     set: { renamePlaylist(playlistId, $0) }
                 ))
-                .frame(width: 160)
+                .frame(width: 160, height: 32)
                 .help(L10n.t("replay.playlistNameHelp"))
-                Button {
-                    addPlaylist()
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .help(L10n.t("replay.playlistAddHint"))
-                Button {
-                    deletePlaylist()
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .disabled(playlists.count <= 1)
-                .help(L10n.t("replay.playlistRemove"))
+                Button(L10n.t("replay.playlistAdd")) { addPlaylist() }
+                    .frame(width: 88, height: 32)
+                    .help(L10n.t("replay.playlistAddHint"))
+                Button(L10n.t("replay.playlistRemove")) { deletePlaylist() }
+                    .frame(width: 72, height: 32)
+                    .disabled(playlists.count <= 1)
+                    .help(L10n.t("replay.playlistRemove"))
                 Spacer()
                 // Playlist default: what clips added from now on start with.
                 Text(L10n.t("replay.defaultTransition")).font(.caption)
@@ -346,18 +357,18 @@ struct ReplayView: View {
                     Text(L10n.t("replay.transitionDissolve")).tag("Dissolve")
                 }
                 .labelsHidden()
-                .frame(width: 96)
+                .frame(width: 110, height: 32)
                 .onChange(of: defaultKind) { _, _ in applyDefaultTransition() }
                 Picker("", selection: $defaultTiming) {
                     Text(L10n.t("replay.timingOverwrap")).tag("Overwrap")
                     Text(L10n.t("replay.timingAdditive")).tag("Additive")
                 }
                 .labelsHidden()
-                .frame(width: 120)
+                .frame(width: 140, height: 32)
                 .help(L10n.t("replay.timingHelp"))
                 .onChange(of: defaultTiming) { _, _ in applyDefaultTransition() }
                 TextField("", text: $defaultFrames)
-                    .frame(width: 50)
+                    .frame(width: 56, height: 32)
                     .onSubmit { applyDefaultTransition() }
             }
             Table(clips) {
@@ -367,7 +378,7 @@ struct ReplayView: View {
                 }
                 .width(88)
                 TableColumn(L10n.t("replay.out")) { clip in
-                    Text(ReplayTime.timecode(clip.outFrame, fps))
+                    Text(clipOutText(clip))
                         .font(.system(.caption, design: .monospaced))
                 }
                 .width(88)
@@ -512,8 +523,15 @@ struct ReplayView: View {
 
     private var exportBar: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
+            HStack(alignment: .center, spacing: 8) {
                 Text(L10n.t("replay.export"))
+                    .frame(width: 72, alignment: .leading)
+                Picker("", selection: $exportCodec) {
+                    Text("H.264").tag("H264")
+                    Text("HEVC").tag("Hevc")
+                }
+                .labelsHidden()
+                .frame(width: 100, height: 32)
                 Picker("", selection: $exportMode) {
                     Text(L10n.t("replay.exportClip")).tag("Clip")
                     Text(L10n.t("replay.exportPlaylist")).tag("Playlist")
@@ -521,14 +539,17 @@ struct ReplayView: View {
                     Text(L10n.t("replay.exportAllAngles")).tag("AllAngles")
                 }
                 .labelsHidden()
-                .frame(width: 170)
+                .frame(width: 180, height: 32)
                 TextField(L10n.t("replay.exportPath"), text: $exportPath)
-                    .frame(width: 250)
+                    .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32)
                 Button(L10n.t("replay.browse")) { chooseExportPath() }
+                    .frame(width: 88, height: 32)
                 Button(L10n.t("replay.exportStart")) { startExport() }
                     .disabled(exporting)
+                    .frame(width: 96, height: 32)
                 Button(L10n.t("replay.exportCancel")) { cancelExport() }
                     .disabled(!exporting)
+                    .frame(width: 88, height: 32)
             }
             if !exportStatus.isEmpty {
                 Text(exportStatus).font(.caption)
@@ -573,6 +594,13 @@ struct ReplayView: View {
         guard !path.isEmpty else {
             exportStatus = L10n.t("replay.exportNeedPath")
             return
+        }
+        if stats?.state == 1 {
+            let alert = NSAlert()
+            alert.messageText = L10n.t("replay.exportWhileRecording")
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() != .alertFirstButtonReturn { return }
         }
         let segments = exportSegments(mode: exportMode, document: document)
         guard !segments.isEmpty else {
@@ -718,7 +746,7 @@ struct ReplayView: View {
         return """
         {"path":\(ReplayJson.string(path)),"width":\(width),"height":\(height),\
         "fpsNum":\(fps.num),"fpsDen":\(fps.den),"bitrate":\(bitrate),\
-        "sampleRate":48000,"channels":2,"withAudio":true,"segments":[\(list)]}
+        "sampleRate":48000,"channels":2,"withAudio":true,"codec":"\(exportCodec)","segments":[\(list)]}
         """
     }
 
@@ -726,53 +754,47 @@ struct ReplayView: View {
         VStack(spacing: 8) {
             waveform
             exportBar
-            HStack {
+            HStack(alignment: .center, spacing: 8) {
                 Button(L10n.t("replay.markIn")) { markIn() }
                     .keyboardShortcut("i", modifiers: [])
                     .help(L10n.t("replay.markInHint"))
-                    .frame(width: 160, height: 48)
+                    .frame(width: 160, height: 44)
                 Button(L10n.t("replay.markOut")) { markOut() }
                     .keyboardShortcut("o", modifiers: [])
                     .help(L10n.t("replay.markOutHint"))
-                    .frame(width: 160, height: 48)
+                    .frame(width: 160, height: 44)
                     .disabled(!markOpen)
                 Button(L10n.t("replay.cancelMark")) { cancelMark() }
-                    .frame(width: 120, height: 48)
+                    .frame(width: 120, height: 44)
                 Spacer()
-                VStack(alignment: .leading) {
-                    Text(L10n.t("replay.in")).font(.caption)
-                    Text(inFrame.map { ReplayTime.timecode($0, fps) } ?? "--:--:--:--")
-                        .font(.system(.body, design: .monospaced))
-                }
-                VStack(alignment: .leading) {
-                    Text(L10n.t("replay.out")).font(.caption)
-                    Text(outFrame.map { ReplayTime.timecode($0, fps) } ?? "--:--:--:--")
-                        .font(.system(.body, design: .monospaced))
-                }
-                VStack(alignment: .leading) {
-                    Text(L10n.t("replay.duration")).font(.caption)
-                    // The length of the mark, which is what the operator cut.
-                    Text(markDuration)
-                        .font(.system(.body, design: .monospaced))
-                }
+                markReadout(L10n.t("replay.in"), inFrame.map { ReplayTime.timecode($0, fps) } ?? "--:--:--:--")
+                markReadout(L10n.t("replay.out"), outFrame.map { ReplayTime.timecode($0, fps) } ?? "--:--:--:--")
+                markReadout(L10n.t("replay.duration"), markDuration)
             }
-            HStack {
+            HStack(alignment: .center, spacing: 8) {
                 Button(L10n.t("replay.record")) { record(true) }
+                    .frame(width: 96, height: 36)
                 Button(L10n.t("replay.stop")) { record(false) }
+                    .frame(width: 96, height: 36)
                 Button(L10n.t("replay.live")) { live() }
                     .keyboardShortcut("l", modifiers: [])
+                    .frame(width: 96, height: 36)
                 Button(L10n.t(playing ? "replay.pause" : "replay.play")) { togglePlay() }
                     .keyboardShortcut(.space, modifiers: [])
-                Button("◀◀") { step(-1) }
+                    .frame(width: 108, height: 36)
+                Button("◀") { step(-1) }
                     .keyboardShortcut(.leftArrow, modifiers: [])
                     .help(L10n.t("replay.stepBackHint"))
-                Button("▶▶") { step(1) }
+                    .frame(width: 44, height: 36)
+                Button("▶") { step(1) }
                     .keyboardShortcut(.rightArrow, modifiers: [])
                     .help(L10n.t("replay.stepForwardHint"))
-                Button("25%") { setSpeed(250) }
-                Button("50%") { setSpeed(500) }
-                Button("100%") { setSpeed(1000) }
-                Spacer()
+                    .frame(width: 44, height: 36)
+                Button("25%") { setSpeed(250) }.frame(width: 64, height: 36)
+                Button("50%") { setSpeed(500) }.frame(width: 64, height: 36)
+                Button("75%") { setSpeed(750) }.frame(width: 64, height: 36)
+                Button("100%") { setSpeed(1000) }.frame(width: 64, height: 36)
+                Spacer(minLength: 8)
                 Text(L10n.t("replay.jog"))
                 Slider(value: $jogValue, in: -30...30, step: 1) { editing in
                     if !editing {
@@ -780,7 +802,7 @@ struct ReplayView: View {
                         jogValue = 0
                     }
                 }
-                .frame(width: 200)
+                .frame(width: 200, height: 36)
             }
         }
     }
@@ -953,7 +975,7 @@ struct ReplayView: View {
     private func save(_ updated: ReplayDocument) {
         document = updated
         loadedJson = updated.json
-        mixer.applyReplay(updated)
+        mixer.applyReplayDeck(updated)
     }
 
     private func selectAngle(_ id: UInt32) {
@@ -1243,7 +1265,8 @@ struct ReplayView: View {
 
     private func cue(_ clip: ReplayClipInfo) {
         if !mixer.replayCue(channel: channel, clip: clip) {
-            status = L10n.t("replay.cueRefused")
+            let detail = MixerFFI.lastErrorText()
+            status = detail.isEmpty ? L10n.t("replay.cueRefused") : detail
         }
     }
 
@@ -1381,6 +1404,7 @@ struct ReplayView: View {
         if !mixer.replayJumpToNow(channel: channel) {
             status = L10n.t("replay.commandRefused")
         }
+        followingLive = true
         playing = false
     }
 
@@ -1388,6 +1412,7 @@ struct ReplayView: View {
         let next = !playing
         if mixer.replayTransport(channel: channel, playing: next, speedMilli: speedMilli, seekFrame: -1) {
             playing = next
+            if next { followingLive = false }
         } else {
             // The channel never started, so the button must not say "Pause".
             status = L10n.t("replay.playRefused")
@@ -1403,6 +1428,7 @@ struct ReplayView: View {
             status = L10n.t("replay.stepNeedsLocalMark")
             return
         }
+        followingLive = false
         var target = max(0, Int64(start) + delta)
         if let end = outFrame, end > start {
             target = min(target, Int64(end))
@@ -1424,9 +1450,107 @@ struct ReplayView: View {
         }
     }
 
+    /// Live tiles stay the scene. Jog tiles decode the proxy, or say it is missing.
+    @ViewBuilder
+    private func angleTile(index: Int, angle: ReplayAngleInfo, selected: Bool) -> some View {
+        if followingLive || mixer.isRemote {
+            Text("\(index)")
+                .font(.title3)
+                .fontWeight(selected ? .bold : .regular)
+                .frame(width: 48, height: 44)
+        } else if let image = proxyImage(angleId: angle.id) {
+            Image(nsImage: image)
+                .resizable()
+                .frame(width: 48, height: 44)
+        } else {
+            Text(L10n.t("replay.proxyMissing"))
+                .font(.caption2)
+                .multilineTextAlignment(.center)
+                .frame(width: 48, height: 44)
+        }
+    }
+
+    private func proxyImage(angleId: UInt32) -> NSImage? {
+        var bytes = [UInt8](repeating: 0, count: 480 * 270 * 2)
+        var width: UInt32 = 0
+        var height: UInt32 = 0
+        let frame = stats?.recording_frame ?? 0
+        let ok = bytes.withUnsafeMutableBufferPointer { ptr in
+            mixer_replay_copy_proxy(angleId, frame, ptr.baseAddress, ptr.count, &width, &height)
+        }
+        guard ok == 1, width > 0, height > 0 else { return nil }
+        let pixels = uyvyToBgra(bytes, width: Int(width), height: Int(height))
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(width),
+            pixelsHigh: Int(height),
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: Int(width) * 4,
+            bitsPerPixel: 32
+        ) else { return nil }
+        pixels.withUnsafeBytes { raw in
+            if let dest = rep.bitmapData {
+                dest.update(from: raw.bindMemory(to: UInt8.self).baseAddress!, count: pixels.count)
+            }
+        }
+        let image = NSImage(size: NSSize(width: Int(width), height: Int(height)))
+        image.addRepresentation(rep)
+        return image
+    }
+
+    private func clipOutText(_ clip: ReplayClipInfo) -> String {
+        let time = ReplayTime.timecode(clip.outFrame, fps)
+        guard clipExpired(clip) else { return time }
+        return time + " " + L10n.t("replay.expired")
+    }
+
+    private func clipExpired(_ clip: ReplayClipInfo) -> Bool {
+        let current = mixer.replayRecordingUuid()
+        guard !current.isEmpty,
+              clip.recordingUuid.caseInsensitiveCompare(current) == .orderedSame,
+              let range = mixer.replayAngleRange(clip.angleId)
+        else { return false }
+        return clip.outFrame < range.first
+    }
+
     private func jog(_ delta: Int) {
         guard delta != 0 else { return }
         seekMarked(Int64(delta))
+    }
+
+    private func uyvyToBgra(_ src: [UInt8], width: Int, height: Int) -> [UInt8] {
+        var dst = [UInt8](repeating: 255, count: width * height * 4)
+        for y in 0..<height {
+            var x = 0
+            while x + 1 < width {
+                let i = (y * width + x) * 2
+                guard i + 3 < src.count else { break }
+                let u = Int(src[i]) - 128
+                let y0 = Int(src[i + 1])
+                let v = Int(src[i + 2]) - 128
+                let y1 = Int(src[i + 3])
+                writeBgra(&dst, width: width, x: x, y: y, luma: y0, u: u, v: v)
+                writeBgra(&dst, width: width, x: x + 1, y: y, luma: y1, u: u, v: v)
+                x += 2
+            }
+        }
+        return dst
+    }
+
+    private func writeBgra(_ dst: inout [UInt8], width: Int, x: Int, y: Int, luma: Int, u: Int, v: Int) {
+        let r = min(255, max(0, luma + (1402 * v) / 1000))
+        let g = min(255, max(0, luma - (344 * u + 714 * v) / 1000))
+        let b = min(255, max(0, luma + (1772 * u) / 1000))
+        let p = (y * width + x) * 4
+        guard p + 3 < dst.count else { return }
+        dst[p] = UInt8(r)
+        dst[p + 1] = UInt8(g)
+        dst[p + 2] = UInt8(b)
+        dst[p + 3] = 255
     }
 }
 
@@ -1440,6 +1564,9 @@ struct ReplaySettingsView: View {
     @State private var profile = "Sq"
     /// Segment length in frames, as text so the operator can type it.
     @State private var segmentFrames = "120"
+    @State private var warnSecs = "600"
+    @State private var alertSecs = "300"
+    @State private var criticalSecs = "60"
     @State private var retention = "StopWhenFull"
     @State private var queue = "6"
     @State private var buffer = "512"
@@ -1514,6 +1641,13 @@ struct ReplaySettingsView: View {
                                 .help(L10n.t("replay.segmentFramesRange"))
                         }
                     }
+                    HStack {
+                        Text(L10n.t("replay.warnings")).font(.caption)
+                        TextField("600", text: $warnSecs).frame(width: 70)
+                        TextField("300", text: $alertSecs).frame(width: 70)
+                        TextField("60", text: $criticalSecs).frame(width: 70)
+                    }
+                    Text(L10n.t("replay.warningsHelp")).font(.caption)
                     Text(L10n.t("replay.retentionHelp")).font(.caption)
                 }
             }
@@ -1645,6 +1779,10 @@ struct ReplaySettingsView: View {
         storages = current.storages
         profile = current.profile
         segmentFrames = "\(current.segmentFrames)"
+        let warnings = current.raw["warnings"]?.objectValue
+        warnSecs = "\(warnings?["remainingWarnSecs"]?.uint32Value ?? 600)"
+        alertSecs = "\(warnings?["remainingAlertSecs"]?.uint32Value ?? 300)"
+        criticalSecs = "\(warnings?["remainingCriticalSecs"]?.uint32Value ?? 60)"
         retention = current.retention
         let buffering = current.buffering
         queue = "\(buffering.queue)"
@@ -1923,6 +2061,18 @@ struct ReplaySettingsView: View {
         format["profile"] = .string(profile)
         format["segmentFrames"] = .number(Double(segmentValue))
         current.raw["format"] = .object(format)
+        guard let warnValue = UInt32(warnSecs),
+              let alertValue = UInt32(alertSecs),
+              let criticalValue = UInt32(criticalSecs)
+        else {
+            status = L10n.t("replay.warningsHelp")
+            return
+        }
+        current.raw["warnings"] = .object([
+            "remainingWarnSecs": .number(Double(warnValue)),
+            "remainingAlertSecs": .number(Double(alertValue)),
+            "remainingCriticalSecs": .number(Double(criticalValue)),
+        ])
         current.raw["buffering"] = .object([
             "encodeQueueFrames": .number(Double(queueValue)),
             "writeBufferMb": .number(Double(bufferValue)),

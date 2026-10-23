@@ -281,6 +281,9 @@ pub struct ReplayExportSpec {
     pub channels: u32,
     pub with_audio: bool,
     pub segments: Vec<ReplayExportSegment>,
+    /// 0 is H.264. 1 is HEVC. The writer uses the one named here and does not
+    /// switch to the other when it is missing.
+    pub codec: u32,
 }
 
 /// `state` values, matching the module's `EXPORT_*`.
@@ -309,6 +312,17 @@ pub trait ReplayStore: Send {
         frame: &VideoFrame,
     ) -> ProResult<WriteOutcome>;
     fn decode(&mut self, angle_id: u32, frame_index: u64, dst: &mut [u8]) -> ProResult<DecodedFrame>;
+
+    /// Decodes the jog proxy. A store without one returns an error and does not
+    /// decode the full-size picture in its place.
+    fn decode_proxy(
+        &mut self,
+        _angle_id: u32,
+        _frame_index: u64,
+        _dst: &mut [u8],
+    ) -> ProResult<DecodedFrame> {
+        Err(ProError::invalid("proxy is missing"))
+    }
 
     /// Reads the stored packet without decoding it, so the mixer can decode on its
     /// own GPU and never copy a decoded picture back to the CPU.

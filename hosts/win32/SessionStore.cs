@@ -94,6 +94,90 @@ internal static class SessionStore
                 "session publish drops the scene camera; the document DTO is missing the field");
         }
         MixerNative.SessionReplaceText(json);
+        AdoptCanonicalReplay(session);
+        NoteReplayPublish(session);
+    }
+
+    /// The last replay document the core settled on, so a publish can be compared
+    /// with what was on air before it.
+    private static string _settledReplay = "";
+
+    /// <summary>Names the window whose edit the next publish carries, for the log.</summary>
+    public static string NextPublishSource = "";
+
+    /// Writes one line per publish that changed the replay document: which parts
+    /// changed and how the selected angle moved. A replay edit that quietly undid
+    /// another window's edit showed up only as "it changed by itself" in the UI; with
+    /// this line the log says which publish did it and what it replaced.
+    private static void NoteReplayPublish(Session session)
+    {
+        var source = NextPublishSource;
+        NextPublishSource = "";
+        var current = session.ReplayJson;
+        if (string.Equals(current, _settledReplay, StringComparison.Ordinal))
+            return;
+        try
+        {
+            using var before = JsonDocument.Parse(string.IsNullOrWhiteSpace(_settledReplay) ? "{}" : _settledReplay);
+            using var after = JsonDocument.Parse(string.IsNullOrWhiteSpace(current) ? "{}" : current);
+            var changed = new List<string>();
+            foreach (var name in new[]
+                     {
+                         "enabled", "storage", "format", "buffering", "retention", "warnings",
+                         "angles", "autoAddToPlaylist", "decodeAhead", "profiling", "channels",
+                         "events", "playlists", "activeAngleId", "nextEventId", "nextPlaylistId",
+                     })
+            {
+                var was = before.RootElement.TryGetProperty(name, out var left) ? left.GetRawText() : "-";
+                var now = after.RootElement.TryGetProperty(name, out var right) ? right.GetRawText() : "-";
+                if (!string.Equals(was, now, StringComparison.Ordinal))
+                    changed.Add(name);
+            }
+            if (changed.Count == 0)
+            {
+                _settledReplay = current;
+                return;
+            }
+            HostLog.Write(
+                "INFO",
+                $"replay publish from={source} changed=[{string.Join(",", changed)}] " +
+                $"active={AngleOf(before.RootElement)}->{AngleOf(after.RootElement)} " +
+                $"angles={Count(before.RootElement, "angles")}->{Count(after.RootElement, "angles")} " +
+                $"events={Count(before.RootElement, "events")}->{Count(after.RootElement, "events")} " +
+                $"playlists={Count(before.RootElement, "playlists")}->{Count(after.RootElement, "playlists")}");
+            _settledReplay = current;
+        }
+        catch (JsonException)
+        {
+        }
+    }
+
+    private static string AngleOf(JsonElement replay) =>
+        replay.TryGetProperty("activeAngleId", out var angle) ? angle.ToString() : "-";
+
+    private static int Count(JsonElement replay, string name) =>
+        replay.TryGetProperty(name, out var array) && array.ValueKind == JsonValueKind.Array
+            ? array.GetArrayLength()
+            : 0;
+
+    /// The core normalizes the replay document on replace. The host keeps that
+    /// copy, so counters and repaired fields do not stay on the string it sent.
+    private static void AdoptCanonicalReplay(Session session)
+    {
+        try
+        {
+            var snapshot = MixerNative.SnapshotText();
+            if (string.IsNullOrWhiteSpace(snapshot))
+                return;
+            using var document = JsonDocument.Parse(snapshot);
+            if (!document.RootElement.TryGetProperty("replay", out var replay)
+                || replay.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+                return;
+            session.ReplayJson = replay.GetRawText();
+        }
+        catch (JsonException)
+        {
+        }
     }
 
     public static void ReplaceRuntime(Session session) => Publish(session);
@@ -334,33 +418,7 @@ internal static class SessionStore
                     ? ""
                     : Replay?.GetRawText() ?? ""
             };
-            session.Settings.MasterFpsNum = Settings.MasterFpsNum;
-            session.Settings.MasterFpsDen = Settings.MasterFpsDen;
-            session.Settings.DefaultWidth = Settings.DefaultWidth;
-            session.Settings.DefaultHeight = Settings.DefaultHeight;
-            session.Settings.Theme = Settings.Theme;
-            session.Settings.DefaultMultiviewUnitId = Settings.DefaultMultiviewUnitId;
-            session.Settings.FrameBufferFrames = Settings.FrameBufferFrames == 0 ? 3 : Math.Clamp(Settings.FrameBufferFrames, 1u, 8u);
-            session.Settings.DefaultPresentInterval = Settings.DefaultPresentInterval == 0 ? 2 : Math.Clamp(Settings.DefaultPresentInterval, 1u, 8u);
-            session.Settings.FlipSwapchainLimit = Settings.FlipSwapchainLimit is 0 or 4 or 6 or 8 or 10 or 12 or 16
-                ? Settings.FlipSwapchainLimit
-                : 0;
-            session.Settings.InternalColorFormat = Settings.InternalColorFormat;
-            session.Settings.RebarOptimization = Settings.RebarOptimization != false;
-            session.Settings.NdiGpuUpload = Settings.NdiGpuUpload != false;
-            session.Settings.PreviewColor = RgbColor.FromOrDefault(Settings.PreviewColor, RgbColor.PreviewDefault);
-            session.Settings.ProgramColor = RgbColor.FromOrDefault(Settings.ProgramColor, RgbColor.ProgramDefault);
-            session.Settings.InactiveColor = RgbColor.FromOrDefault(Settings.InactiveColor, RgbColor.InactiveDefault);
-            session.Settings.MultiviewLabelSize = Settings.MultiviewLabelSize <= 0 ? 18 : Math.Clamp(Settings.MultiviewLabelSize, 1f, 200f);
-            session.Settings.MultiviewLabelUnit = Settings.MultiviewLabelUnit;
-            session.Settings.MultiviewLabelAnchor = Settings.MultiviewLabelAnchor;
-            session.Settings.VmixApiEnabled = Settings.VmixApiEnabledValue;
-            session.Settings.VmixApiPort = Settings.VmixApiPort == 0 ? 8088 : Settings.VmixApiPort;
-            session.Settings.VmixApiUser = Settings.VmixApiUser ?? "";
-            session.Settings.VmixApiPassword = Settings.VmixApiPassword ?? "";
-            session.Settings.VmixTcpEnabled = Settings.VmixTcpEnabledValue;
-            session.Settings.NativeApiEnabled = Settings.NativeApiEnabledValue;
-            session.Settings.NativeApiPort = Settings.NativeApiPort == 0 ? 9400 : Settings.NativeApiPort;
+            session.Settings.AdoptFrom(Settings);
             foreach (var input in Inputs)
                 session.Inputs.Add(input.ToEntry());
             foreach (var scene in Scenes)

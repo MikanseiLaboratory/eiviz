@@ -232,6 +232,12 @@ enum MixerFFI {
         withCString(json) { text in mixer_replay_configure(text) }
     }
 
+    static func replayRecordingUuid() -> String {
+        let (n, bytes) = copyUtf8(startCap: 128) { mixer_replay_copy_recording_uuid($0, $1) }
+        guard n > 0 else { return "" }
+        return String(bytes: bytes, encoding: .utf8) ?? ""
+    }
+
     static func replayRecord(_ on: Bool) -> Int32 {
         mixer_replay_record(on ? 1 : 0)
     }

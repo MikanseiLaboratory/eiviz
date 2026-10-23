@@ -578,9 +578,15 @@ impl ControlService {
         };
         let capabilities = self.port.capabilities();
         if !capabilities.replay_linked || capabilities.replay_channel_limit == 0 {
-            return Err(ControlError::invalid(
-                "Instant Replay requires a Professional license and the Pro module",
-            ));
+            // Community, and a build with no Pro module, keep the timecodes and
+            // tags. Record and play are refused by the mixer. Adding another
+            // channel is the operation that still needs the plan.
+            if adds_channel {
+                return Err(ControlError::invalid(
+                    "Instant Replay requires a Professional license and the Pro module",
+                ));
+            }
+            return Ok(());
         }
         if u64::from(capabilities.replay_channel_limit) < channels as u64 {
             return Err(ControlError::invalid(format!(

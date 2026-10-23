@@ -56,9 +56,13 @@ public partial class ReplaySettingsWindow : Window
         ProfileBox.SelectionChanged += MarkDirty;
         OverflowBox.SelectionChanged += MarkDirty;
         RetentionBox.SelectionChanged += MarkDirty;
+        DeckPresentBox.SelectionChanged += MarkDirty;
         AutoAddBox.Click += MarkDirty;
         DecodeAheadBox.Click += MarkDirty;
         ProfilingBox.Click += MarkDirty;
+        WarnBox.TextChanged += MarkDirty;
+        AlertBox.TextChanged += MarkDirty;
+        CriticalBox.TextChanged += MarkDirty;
         Load();
     }
 
@@ -83,7 +87,11 @@ public partial class ReplaySettingsWindow : Window
             foreach (var item in storage)
             {
                 if (item is JsonObject entry)
-                    _storages.Add(new StorageRow { Path = entry["path"]?.GetValue<string>() ?? "" });
+                {
+                    var row = new StorageRow { Path = entry["path"]?.GetValue<string>() ?? "" };
+                    row.PropertyChanged += StorageRow_Changed;
+                    _storages.Add(row);
+                }
             }
         }
         SelectTag(ProfileBox, _replay["format"]?["profile"]?.GetValue<string>() ?? "Sq");
@@ -97,6 +105,10 @@ public partial class ReplaySettingsWindow : Window
         AutoAddBox.IsChecked = ReplayModel.AutoAddToPlaylist(_replay);
         DecodeAheadBox.IsChecked = ReplayModel.DecodeAhead(_replay);
         ProfilingBox.IsChecked = ReplayModel.Profiling(_replay);
+        var warnings = _replay["warnings"] as JsonObject;
+        WarnBox.Text = (warnings?["remainingWarnSecs"]?.GetValue<uint>() ?? 600).ToString();
+        AlertBox.Text = (warnings?["remainingAlertSecs"]?.GetValue<uint>() ?? 300).ToString();
+        CriticalBox.Text = (warnings?["remainingCriticalSecs"]?.GetValue<uint>() ?? 60).ToString();
         SegmentFramesBox.Text = (_replay["format"]?["segmentFrames"]?.GetValue<uint>() ?? 120).ToString();
 
         // Which drive each angle records to is read from the drives the document lists.
@@ -702,11 +714,15 @@ public partial class ReplaySettingsWindow : Window
             ["reserveMb"] = reserve,
         };
         _replay["retention"] = ComboTag(RetentionBox, "StopWhenFull");
-        if (uint.TryParse(ComboTag(DeckPresentBox, "0"), out var deckInterval))
-            _session.Settings.ReplayPresentInterval = MultiviewLayout.ClampPresentInterval(deckInterval);
         _replay["autoAddToPlaylist"] = AutoAddBox.IsChecked == true;
         _replay["decodeAhead"] = DecodeAheadBox.IsChecked == true;
         _replay["profiling"] = ProfilingBox.IsChecked == true;
+        _replay["warnings"] = new JsonObject
+        {
+            ["remainingWarnSecs"] = uint.TryParse(WarnBox.Text, out var warnSecs) ? warnSecs : 600,
+            ["remainingAlertSecs"] = uint.TryParse(AlertBox.Text, out var alertSecs) ? alertSecs : 300,
+            ["remainingCriticalSecs"] = uint.TryParse(CriticalBox.Text, out var criticalSecs) ? criticalSecs : 60,
+        };
 
         var angles = new JsonArray();
         foreach (var angle in _angles.OrderBy(angle => angle.Id))
@@ -738,7 +754,11 @@ public partial class ReplaySettingsWindow : Window
         // enabled", so a new project could never start recording at all.
         if (JsonNode.Parse(_session.ReplayJson) is JsonObject current)
         {
-            foreach (var ownedByDeck in new[] { "events", "playlists", "channels", "activeAngleId" })
+            foreach (var ownedByDeck in new[]
+                     {
+                         "events", "playlists", "channels", "activeAngleId",
+                         "nextEventId", "nextPlaylistId", "nextAngleId"
+                     })
             {
                 if (current[ownedByDeck] is { } value)
                     _replay[ownedByDeck] = value.DeepClone();
@@ -787,6 +807,16 @@ public partial class ReplaySettingsWindow : Window
         }
 
         var json = ReplayModel.Serialize(_replay);
+        var previousJson = _session.ReplayJson;
+        // Zero is "follow the project". Clamping it used to store "every frame",
+        // and the open deck kept painting at the interval it had when it opened.
+        var previousInterval = _session.Settings.ReplayPresentInterval;
+        if (uint.TryParse(ComboTag(DeckPresentBox, "0"), out var deckInterval))
+        {
+            _session.Settings.ReplayPresentInterval = deckInterval == 0
+                ? 0
+                : MultiviewLayout.ClampPresentInterval(deckInterval);
+        }
         _session.ReplayJson = json;
         try
         {
@@ -806,15 +836,20 @@ public partial class ReplaySettingsWindow : Window
             {
                 // Publishing the session reconfigures the mixer and validates the
                 // change, so the refusal (and its reason) comes back with it.
-                SessionStore.Publish(_session);
+                SessionStore.NextPublishSource = "setup";
+            SessionStore.Publish(_session);
             }
         }
         catch (Exception error)
         {
+            _session.ReplayJson = previousJson;
+            _session.Settings.ReplayPresentInterval = previousInterval;
             Refuse(error.Message);
             return;
         }
         _dirty = false;
+        if (Owner is MainWindow owner)
+            owner.NotifyReplaySettingsApplied();
         RefreshFreeSpace();
         // The window stays open: an operator tuning four cameras should not have to
         // reopen it between attempts. Closing keeps what was applied.

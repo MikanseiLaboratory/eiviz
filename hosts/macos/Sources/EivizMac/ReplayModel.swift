@@ -335,11 +335,36 @@ struct ReplayDocument {
 
     var value: JSONValue { .object(raw) }
 
+    /// Recordings named by events and clips whose folder is not on any drive.
+    /// The uuid being recorded now is still being written, so it is not missing.
+    func missingRecordingCount(skip: String?) -> Int {
+        let drives = (raw["storage"]?.arrayValue ?? []).compactMap { $0.objectValue?["path"]?.stringValue }
+        var seen = Set<String>()
+        var missing = 0
+        func consider(_ uuid: String) {
+            guard !uuid.isEmpty, seen.insert(uuid).inserted else { return }
+            if let skip, !skip.isEmpty, skip == uuid { return }
+            let present = drives.contains { drive in
+                FileManager.default.fileExists(atPath: (drive as NSString).appendingPathComponent(uuid))
+            }
+            if !present { missing += 1 }
+        }
+        for event in raw["events"]?.arrayValue ?? [] {
+            consider(event.objectValue?["recordingUuid"]?.stringValue ?? "")
+        }
+        for list in raw["playlists"]?.arrayValue ?? [] {
+            for clip in list.objectValue?["clips"]?.arrayValue ?? [] {
+                consider(clip.objectValue?["recordingUuid"]?.stringValue ?? "")
+            }
+        }
+        return missing
+    }
+
     /// The settings part of the document, for the `updateReplaySettings` mutation.
     /// Events and playlists stay with the core that owns them.
     var settingsJSON: String {
         var settings: [String: JSONValue] = [:]
-        for name in ["enabled", "storage", "format", "buffering", "retention", "angles", "autoAddToPlaylist"] {
+        for name in ["enabled", "storage", "format", "buffering", "retention", "warnings", "angles", "autoAddToPlaylist", "decodeAhead", "profiling"] {
             if let value = raw[name] {
                 settings[name] = value
             }
@@ -584,7 +609,7 @@ struct ReplayDocument {
                     gainDb: clip["gainDb"]?.numberValue ?? 0,
                     transition: ReplayTransitionInfo.read(clip["transition"]),
                     tags: (clip["tags"]?.arrayValue ?? []).compactMap { $0.stringValue },
-                    preservePitch: clip["preservePitch"]?.boolValue ?? false,
+                    preservePitch: clip["preservePitch"]?.boolValue ?? true,
                     audioKind: clip["audio"]?.stringValue ?? "FollowAngle",
                     audioAngleId: clip["audioAngleId"]?.uint32Value ?? 0
                 )
@@ -746,6 +771,7 @@ struct ReplayDocument {
                 "outFrame": .number(Double(event.outFrame)),
                 "speed": .number(1),
                 "gainDb": .number(0),
+                "preservePitch": .bool(true),
                 "transition": fallback,
             ]))
             playlist["clips"] = .array(clips)

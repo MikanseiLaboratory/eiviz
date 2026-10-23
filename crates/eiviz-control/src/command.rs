@@ -348,6 +348,12 @@ pub enum SessionMutation {
     UpdateReplaySettings {
         settings: Box<crate::session::replay::ReplaySettingsDto>,
     },
+    /// Writes the deck: events, playlists, the selected angle, timeline cues and
+    /// which playlist each existing channel plays. Settings and the channel list
+    /// stay with Replay Setup and the Replay inputs.
+    UpdateReplayDeck {
+        deck: Box<crate::session::replay::ReplayDeckDto>,
+    },
     /// Chooses the angle the next mark records. The deck selects it by clicking a
     /// tile; a control client selects it here.
     SetReplayActiveAngle {
@@ -391,6 +397,7 @@ impl SessionMutation {
             Self::DeleteScenePreset { .. } => "DeleteScenePreset",
             Self::UpsertReplaySettings { .. } => "UpsertReplaySettings",
             Self::UpdateReplaySettings { .. } => "UpdateReplaySettings",
+            Self::UpdateReplayDeck { .. } => "UpdateReplayDeck",
             Self::SetReplayActiveAngle { .. } => "SetReplayActiveAngle",
             Self::AddReplayChannel => "AddReplayChannel",
             Self::DeleteReplay => "DeleteReplay",

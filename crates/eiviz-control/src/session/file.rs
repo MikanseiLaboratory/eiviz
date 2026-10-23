@@ -1602,6 +1602,19 @@ fn replay_to_pb(replay: &crate::session::replay::ReplayDto) -> pb::Replay {
         next_angle_id: replay.next_angle_id,
         next_event_id: replay.next_event_id,
         next_playlist_id: replay.next_playlist_id,
+        decode_ahead: Some(replay.decode_ahead),
+        profiling: Some(replay.profiling),
+        timeline_cues: replay
+            .timeline_cues
+            .iter()
+            .map(|cue| pb::ReplayTimelineCue {
+                id: cue.id,
+                frame: cue.frame,
+                scene_id: cue.scene_id,
+                state_id: cue.state_id,
+                clip_uid: cue.clip_uid.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -1749,14 +1762,25 @@ fn replay_from_pb(replay: pb::Replay) -> Result<crate::session::replay::ReplayDt
             })
             .collect(),
         auto_add_to_playlist: replay.auto_add_to_playlist,
-        // The protobuf form predates these two; a document that came through it
-        // plays with the defaults rather than losing the queue and the profiling flag.
-        decode_ahead: true,
-        profiling: false,
+        // A file written before the fields existed leaves them absent. Decode-ahead
+        // stays on, which is how those sessions played. An explicit false is kept.
+        decode_ahead: replay.decode_ahead.unwrap_or(true),
+        profiling: replay.profiling.unwrap_or(false),
         active_angle_id: replay.has_active_angle.then_some(replay.active_angle_id),
         next_angle_id: replay.next_angle_id.max(1),
         next_event_id: replay.next_event_id.max(1),
         next_playlist_id: replay.next_playlist_id.max(1),
+        timeline_cues: replay
+            .timeline_cues
+            .into_iter()
+            .map(|cue| crate::session::replay::ReplayTimelineCueDto {
+                id: cue.id,
+                frame: cue.frame,
+                scene_id: cue.scene_id,
+                state_id: cue.state_id,
+                clip_uid: cue.clip_uid,
+            })
+            .collect(),
     })
 }
 
@@ -1990,6 +2014,128 @@ mod tests {
         let b = to_vec(&again).unwrap();
         assert_eq!(a, b);
         assert!(encoded.len() < to_vec(&original).unwrap().len());
+    }
+
+    #[test]
+    fn protobuf_roundtrip_keeps_replay_playback_flags() {
+        let mut doc = parse(sample_json()).unwrap();
+        let mut replay = crate::session::replay::ReplayDto::default();
+        replay.decode_ahead = false;
+        replay.profiling = true;
+        doc.replay = Some(replay);
+        let decoded = decode_file(&encode_file(&doc).unwrap()).unwrap();
+        let replay = decoded.replay.expect("replay");
+        assert!(!replay.decode_ahead);
+        assert!(replay.profiling);
+
+        doc.replay = Some(crate::session::replay::ReplayDto::default());
+        let defaults = decode_file(&encode_file(&doc).unwrap())
+            .unwrap()
+            .replay
+            .expect("replay");
+        assert!(defaults.decode_ahead);
+        assert!(!defaults.profiling);
+    }
+
+    #[test]
+    fn replay_dto_roundtrips_every_field_through_protobuf() {
+        use crate::session::replay::*;
+        let replay = ReplayDto {
+            enabled: true,
+            storage: vec![ReplayStorageDto {
+                path: "D:/replay".into(),
+                angle_ids: vec![3],
+            }],
+            format: ReplayFormatDto {
+                width: 1280,
+                height: 720,
+                fps_num: 50,
+                fps_den: 1,
+                profile: ReplayProfile::Hq,
+                segment_frames: 300,
+            },
+            buffering: ReplayBufferingDto {
+                encode_queue_frames: 8,
+                write_buffer_mb: 256,
+                overflow_policy: ReplayOverflowPolicy::StopRecording,
+                reserve_mb: 1024,
+            },
+            warnings: ReplayWarningsDto {
+                remaining_warn_secs: 90,
+                remaining_alert_secs: 40,
+                remaining_critical_secs: 10,
+            },
+            retention: ReplayRetention::OverwriteUnprotected,
+            angles: vec![AngleDto {
+                id: 3,
+                name: "Cam".into(),
+                source: AngleSourceKind::Input,
+                scene_id: 0,
+                input_id: 9,
+                audio: AngleAudio::Unit,
+                audio_unit_id: 2,
+                record_mode: AngleRecordMode::Passthrough,
+                encoder: AngleEncoder::Gpu,
+            }],
+            events: vec![ReplayEventDto {
+                id: 4,
+                recording_uuid: "rec-4".into(),
+                in_frame: 10,
+                out_frame: 40,
+                name: "Goal".into(),
+                tags: vec!["goal".into()],
+                protected: true,
+            }],
+            playlists: vec![PlaylistDto {
+                id: 2,
+                name: "Show".into(),
+                revision: 3,
+                clips: vec![ClipDto {
+                    uid: "clip-4".into(),
+                    source: ClipSourceKind::Angle,
+                    angle_id: 3,
+                    asset_path: String::new(),
+                    source_event: Some(4),
+                    recording_uuid: "rec-4".into(),
+                    in_frame: 10,
+                    out_frame: 40,
+                    speed: 0.5,
+                    gain_db: -3.0,
+                    tags: vec!["goal".into()],
+                    preserve_pitch: false,
+                    audio: ClipAudio::Angle,
+                    audio_angle_id: 3,
+                    transition: ClipTransitionDto {
+                        kind: ReplayTransitionKind::Dissolve,
+                        direction: ReplayTransitionDirection::Right,
+                        timing: ReplayTransitionTiming::Additive,
+                        duration_frames: 12,
+                    },
+                }],
+                default_transition: ClipTransitionDto::default(),
+            }],
+            channels: vec![ChannelDto {
+                index: 1,
+                playlist_id: Some(2),
+                input_id: 11,
+            }],
+            auto_add_to_playlist: true,
+            decode_ahead: false,
+            profiling: true,
+            active_angle_id: Some(3),
+            next_angle_id: 4,
+            next_event_id: 5,
+            next_playlist_id: 3,
+            timeline_cues: vec![ReplayTimelineCueDto {
+                id: 1,
+                frame: 10,
+                scene_id: 6,
+                state_id: 8,
+                clip_uid: "clip-4".into(),
+            }],
+        };
+        let back = replay_from_pb(replay_to_pb(&replay)).unwrap();
+        assert_eq!(replay, back);
     }
 
     #[test]
