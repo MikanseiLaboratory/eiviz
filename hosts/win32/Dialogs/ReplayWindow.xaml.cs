@@ -162,6 +162,28 @@ public partial class ReplayWindow : Window
         {
             _playing = mixer.Playing != 0;
         }
+        // While a clip plays, the header shows how much of it is left instead of the
+        // recording timecode: that is the number the operator acts on during a replay.
+        if (state is { Playing: > 0, OutFrame: > 0 } air && air.OutFrame > air.PositionFrame)
+        {
+            var fps = _replay is null ? 0.0 : ReplayModel.Rate(ReplayModel.Fps(_replay, _session));
+            if (fps > 0)
+            {
+                RecordTcLabel.Text = Loc.T("replay.clipRemaining");
+                RecordTcText.Text = "-" + ReplayModel.Timecode(air.OutFrame - air.PositionFrame, ReplayModel.Fps(_replay!, _session));
+            }
+        }
+        else
+        {
+            RecordTcLabel.Text = Loc.T("replay.recordTc");
+        }
+        // The waveform follows the picture, not the recorder: while a clip plays the
+        // middle of the strip is the frame on air, so the operator sees what is behind
+        // and ahead of the playhead.
+        if (state is { Playing: > 0 } live)
+        {
+            Waveform.PositionFrame = live.PositionFrame;
+        }
         var rows = PlaylistList.ItemsSource as List<ClipRow> ?? [];
         var playing = state is { Playing: > 0 };
         foreach (var row in rows)

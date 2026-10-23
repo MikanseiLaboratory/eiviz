@@ -6,9 +6,10 @@ using Eiviz.Host.Interop;
 namespace Eiviz.Host.Dialogs;
 
 /// <summary>
-/// Draws the recorded waveform of one angle. Each column is the min/max of the
-/// audio buckets it covers, which is how a replay operator spots a quiet gap to
-/// cut on.
+/// Draws the recorded waveform of one angle, centred on where the channel is now:
+/// everything left of the middle already happened, everything right of it is still
+/// ahead. Each column is the min/max of the audio buckets it covers, which is how a
+/// replay operator spots a quiet gap to cut on.
 /// </summary>
 internal sealed class ReplayWaveform : FrameworkElement
 {
@@ -43,6 +44,12 @@ internal sealed class ReplayWaveform : FrameworkElement
         Cursor = Cursors.Hand;
         Focusable = true;
     }
+
+    /// <summary>
+    /// Seconds drawn on each side of the playhead. Ten seconds reads like a jog wheel
+    /// and still shows enough of the recording to find a cut.
+    /// </summary>
+    public double WindowSeconds { get; set; } = 10.0;
 
     public ulong InFrame
     {
@@ -106,35 +113,31 @@ internal sealed class ReplayWaveform : FrameworkElement
         return _buckets;
     }
 
-    /// The recording frame under an x coordinate, clamped to the drawn range.
-    public ulong FrameAt(double x) =>
-        FrameAtRatio(
-            ActualWidth <= 0 ? 0.0 : Math.Clamp(x / ActualWidth, 0.0, 1.0),
-            _dropped,
-            _buckets,
-            _fps,
-            _rate,
-            _positionFrame);
+    /// The newest frame the waveform knows about.
+    private double LatestFrame => _rate == 0 ? 0.0 : (_dropped + _buckets) * _fps / _rate;
 
-    /// Maps a position across the drawn waveform to a recording frame.
-    ///
-    /// Separated from the control so the mapping can be reasoned about (and tested)
-    /// without a laid-out window: `ratio` 0 is the oldest bucket drawn, 1 the newest.
-    internal static ulong FrameAtRatio(
-        double ratio,
-        uint dropped,
-        uint buckets,
-        double fps,
-        uint rate,
-        ulong fallback)
+    /// The frame drawn at the middle of the control: where the channel is, or the live
+    /// edge when nothing is playing.
+    private double CenterFrame =>
+        _positionFrame != 0 ? Math.Min(_positionFrame, Math.Max(0.0, LatestFrame)) : LatestFrame;
+
+    /// The frame under an x coordinate. Left of the middle is the past, right is what
+    /// has not played yet.
+    public ulong FrameAt(double x) =>
+        FrameAtWindow(
+            ActualWidth <= 0 ? 0.5 : Math.Clamp(x / ActualWidth, 0.0, 1.0),
+            CenterFrame,
+            Math.Max(1.0, WindowSeconds * _fps),
+            LatestFrame);
+
+    /// Maps a position across the drawn window to a recording frame: `ratio` 0 is the
+    /// left edge (past), 1 the right edge (future). Clamped to what has been recorded.
+    internal static ulong FrameAtWindow(double ratio, double center, double half, double latest)
     {
-        if (buckets == 0)
-            return fallback;
-        var first = (long)dropped;
-        var last = first + buckets;
         var clamped = Math.Clamp(ratio, 0.0, 1.0);
-        var bucket = first + (long)((last - first) * clamped);
-        return (ulong)Math.Max(0, (long)(bucket * fps / Math.Max(1, rate)));
+        var frame = center - half + clamped * half * 2.0;
+        var bounded = Math.Clamp(frame, 0.0, Math.Max(0.0, latest));
+        return (ulong)Math.Max(0, bounded);
     }
 
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
@@ -179,17 +182,24 @@ internal sealed class ReplayWaveform : FrameworkElement
 
         if (_buckets > 0)
         {
+            var center = CenterFrame;
+            var half = Math.Max(1.0, WindowSeconds * _fps);
+            var from = center - half;
+            var to = center + half;
+            var framesPerColumn = (to - from) / columns;
             var first = (long)_dropped;
             var last = first + _buckets;
             for (var column = 0; column < columns; column++)
             {
-                var from = first + (last - first) * column / columns;
-                var to = first + (last - first) * (column + 1) / columns;
-                if (to <= from)
-                    to = from + 1;
+                var frameFrom = from + column * framesPerColumn;
+                var frameTo = frameFrom + framesPerColumn;
+                var bucketFrom = Math.Max(first, BucketOfFrame(frameFrom));
+                var bucketTo = Math.Min(last, BucketOfFrame(frameTo) + 1);
+                if (bucketTo <= bucketFrom)
+                    continue;
                 var low = float.MaxValue;
                 var high = float.MinValue;
-                for (var bucket = from; bucket < to; bucket++)
+                for (var bucket = bucketFrom; bucket < bucketTo; bucket++)
                 {
                     var index = (int)(bucket - first);
                     if (index < 0 || index >= _buckets)
@@ -204,30 +214,30 @@ internal sealed class ReplayWaveform : FrameworkElement
                 var y2 = middle - low * scale;
                 dc.DrawLine(Wave, new Point(column + 0.5, y1), new Point(column + 0.5, y2));
             }
-            DrawMarker(dc, Mark, _inFrame, first, last, height, _hasIn);
-            DrawMarker(dc, Mark, _outFrame, first, last, height, _hasOut);
-            DrawMarker(dc, Playhead, _positionFrame, first, last, height, _positionFrame != 0);
+            DrawMarker(dc, Mark, _inFrame, from, to, height, _hasIn);
+            DrawMarker(dc, Mark, _outFrame, from, to, height, _hasOut);
+            DrawMarker(dc, Playhead, _positionFrame, from, to, height, _positionFrame != 0);
         }
 
         dc.DrawLine(new Pen(new SolidColorBrush(Color.FromRgb(0x40, 0x40, 0x48)), 1),
             new Point(0, middle), new Point(width, middle));
     }
 
+    private long BucketOfFrame(double frame) =>
+        _rate == 0 ? 0 : (long)(frame * _rate / Math.Max(1.0, _fps));
+
     private void DrawMarker(
         DrawingContext dc,
         Pen pen,
         ulong frame,
-        long first,
-        long last,
+        double from,
+        double to,
         double height,
         bool visible)
     {
-        if (!visible || last <= first)
+        if (!visible || to <= from || frame < from || frame > to)
             return;
-        var bucket = BucketOf(frame);
-        if (bucket < first || bucket > last)
-            return;
-        var x = (bucket - first) * ActualWidth / (last - first);
+        var x = (frame - from) * ActualWidth / (to - from);
         dc.DrawLine(pen, new Point(x, 0), new Point(x, height));
     }
 }

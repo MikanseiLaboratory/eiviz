@@ -103,6 +103,9 @@ public static class Loc
         ["replay.windowTitle"] = "Instant Replay",
         ["replay.channel"] = "Channel",
         ["replay.recordTc"] = "REC TC",
+        ["replay.clipRemaining"] = "Remaining",
+        ["replay.passthroughCannotPlay"] = "This clip is a passthrough recording, which is stored as the sender compressed it: it can be recorded but not played back.",
+
         ["replay.angles"] = "Angles",
         ["replay.events"] = "Event list",
         ["replay.playlist"] = "Playlist",
@@ -824,6 +827,9 @@ public static class Loc
         ["replay.windowTitle"] = "インスタントリプレイ",
         ["replay.channel"] = "チャンネル",
         ["replay.recordTc"] = "録画TC",
+        ["replay.clipRemaining"] = "残り",
+        ["replay.passthroughCannotPlay"] = "このクリップはパススルー録画です。送られてきた圧縮フレームをそのまま保存しているため、録画はできますが再生はできません。",
+
         ["replay.angles"] = "アングル",
         ["replay.events"] = "イベントリスト",
         ["replay.playlist"] = "プレイリスト",

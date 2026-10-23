@@ -79,7 +79,7 @@
         <DockPanel Grid.Row="0" Margin="0,0,0,10">
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBlock x:Name="FpsText" VerticalAlignment="Center" Margin="0,0,14,0" Foreground="#B0B0B8"/>
-                <TextBlock Text="{Binding [replay.recordTc], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock x:Name="RecordTcLabel" Text="{Binding [replay.recordTc], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                 <TextBlock x:Name="RecordTcText" FontFamily="Consolas" FontSize="20" VerticalAlignment="Center"
                            Foreground="{DynamicResource HudForeground}"/>
                 <Button x:Name="CapacityButton" Height="34" MinWidth="170" Margin="16,0,0,0" Click="Capacity_Click"
