@@ -81,7 +81,19 @@ internal static class SessionStore
             }
             MixerNative.ThrowIfFailed(MixerNative.SecretSet(output.RtmpSecretRef, key), "RTMP secret");
         }
-        MixerNative.SessionReplaceText(ToJson(session));
+        var json = ToJson(session);
+        // A publish replaces the whole document in the core, so anything the DTO forgets
+        // is silently reset there. The scene camera bit us that way: every replay edit
+        // put the framing back to default. Fail loudly instead of quietly.
+        var framed = session.Scenes.Any(scene =>
+            scene.Camera.X != 0.5f || scene.Camera.Y != 0.5f || scene.Camera.Zoom != 1f);
+        if (framed && !json.Contains("\"camera\""))
+        {
+            HostLog.Write(
+                "ERROR",
+                "session publish drops the scene camera; the document DTO is missing the field");
+        }
+        MixerNative.SessionReplaceText(json);
     }
 
     public static void ReplaceRuntime(Session session) => Publish(session);
@@ -534,6 +546,12 @@ internal static class SessionStore
         public List<SceneLayer> Layers { get; set; } = [];
         public List<string> Tags { get; set; } = [];
         public bool PreviewCollapsed { get; set; }
+        /// <summary>
+        /// The scene's framing. It has to travel with the scene: leaving it out resets the
+        /// camera in the core, so the operator's framing jumps back the moment anything
+        /// else is edited or a replay angle is chosen.
+        /// </summary>
+        public SceneCamera Camera { get; set; } = new();
         public List<SceneState> States { get; set; } = [];
         public List<SceneSequence> Sequences { get; set; } = [];
 
@@ -545,6 +563,7 @@ internal static class SessionStore
             Layers = [.. scene.Layers],
             Tags = [.. scene.Tags],
             PreviewCollapsed = scene.PreviewCollapsed,
+            Camera = scene.Camera.Clone(),
             States = [.. scene.States],
             Sequences = [.. scene.Sequences]
         };
@@ -558,7 +577,8 @@ internal static class SessionStore
                 Name = Name,
                 MonitorId = session.NextMonitorId++,
                 Tags = TagCatalog.NormalizeList(Tags),
-                PreviewCollapsed = PreviewCollapsed
+                PreviewCollapsed = PreviewCollapsed,
+                Camera = Camera.Clone()
             };
             foreach (var layer in Layers)
                 scene.Layers.Add(layer);
