@@ -24,7 +24,8 @@ namespace Eiviz.Host.Dialogs;
 /// </summary>
 public partial class ReplaySettingsWindow : Window
 {
-    private readonly Session _session;
+    // The live document: App.ReplaceDocument swaps the Session object whenever the mixer reports a change, so a window that keeps the instance it was opened with writes its edits back into an outdated copy.
+    private Session _session => ((App)Application.Current).Session;
     private readonly ObservableCollection<AngleRow> _angles = [];
     private readonly ObservableCollection<StorageRow> _storages = [];
     private JsonObject? _replay;
@@ -37,7 +38,7 @@ public partial class ReplaySettingsWindow : Window
     public ReplaySettingsWindow(Session session)
     {
         InitializeComponent();
-        _session = session;
+
         RetentionBox.Items.Add(new ComboBoxItem { Content = Loc.T("replay.retentionStop"), Tag = "StopWhenFull" });
         RetentionBox.Items.Add(new ComboBoxItem { Content = Loc.T("replay.retentionOverwrite"), Tag = "Overwrite" });
         RetentionBox.Items.Add(new ComboBoxItem { Content = Loc.T("replay.retentionProtect"), Tag = "OverwriteUnprotected" });
