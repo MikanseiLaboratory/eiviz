@@ -217,6 +217,12 @@ jobs:
         with:
           workspaces: .
 
+      - name: Check the Windows session DTOs against the core
+        # The host writes its session document by hand. A field it forgets is silently
+        # reset in the core on the next publish, so the two sides are compared rather
+        # than trusted (the scene camera went missing that way).
+        run: python3 scripts/check-session-dto.py
+
       - name: Format control API
         run: cargo fmt -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless -- --check
 
