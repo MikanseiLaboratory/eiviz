@@ -18,7 +18,7 @@ control-api = []
 eiviz-control.workspace = true
 eiviz-api.workspace = true
 eiviz-pro-api.workspace = true
-eiviz-replay = { path = "../../eiviz-pro/eiviz-replay" }
+eiviz-replay = { path = "../crates/eiviz-replay" }
 ed25519-dalek = "2.2.0"
 libloading = "0.8"
 sha2 = "0.10"

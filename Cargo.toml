@@ -5,6 +5,7 @@ members = [
     "crates/eiviz-api",
     "crates/eiviz-remote",
     "crates/eiviz-pro-api",
+    "crates/eiviz-replay",
     "crates/eiviz-pro-test-plugin",
     "crates/eiviz-pro-empty-plugin",
     "headless",
