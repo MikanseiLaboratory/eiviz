@@ -116,6 +116,14 @@ internal static class SessionStore
         var current = session.ReplayJson;
         if (string.Equals(current, _settledReplay, StringComparison.Ordinal))
             return;
+        if (string.IsNullOrEmpty(_settledReplay))
+        {
+            // The first publish of a process has nothing to compare with: taking the
+            // document as the baseline keeps the log free of a bogus "everything
+            // changed" line.
+            _settledReplay = current;
+            return;
+        }
         try
         {
             using var before = JsonDocument.Parse(string.IsNullOrWhiteSpace(_settledReplay) ? "{}" : _settledReplay);

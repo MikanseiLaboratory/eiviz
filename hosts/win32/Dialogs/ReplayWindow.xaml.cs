@@ -50,6 +50,10 @@ public partial class ReplayWindow : Window
     private bool _looping;
     /// <summary>The operator picked a camera in this window since it last loaded.</summary>
     private bool _angleEdited;
+    /// <summary>Events this window deleted, so a merge does not put them back.</summary>
+    private readonly HashSet<ulong> _deletedEvents = [];
+    /// <summary>Clips this window deleted, by uid.</summary>
+    private readonly HashSet<string> _deletedClips = [];
     /// <summary>True while the input picture is a grid of every angle.</summary>
     private bool _multiview;
     private ulong _outFrame;
@@ -416,6 +420,8 @@ public partial class ReplayWindow : Window
                 // The document now on air is the truth, including the camera another
                 // writer selected while this window was open.
                 _angleEdited = false;
+                _deletedEvents.Clear();
+                _deletedClips.Clear();
                 RefreshPlaylistChoices();
                 _lastJson = _session.ReplayJson;
                 BuildAngles();
@@ -1011,11 +1017,19 @@ public partial class ReplayWindow : Window
         }
         if (_replay["events"] is not JsonArray events)
             return;
+        // A clip that names this event cannot outlive it: the control layer refuses
+        // the whole document, which would look like the save silently doing nothing.
+        if (ReplayModel.ClipsForEvent(_replay, row.Id) > 0)
+        {
+            Warn(Loc.T("replay.eventHasClips"));
+            return;
+        }
         for (var index = 0; index < events.Count; index++)
         {
             if (events[index] is JsonObject entry && entry["id"]?.GetValue<ulong>() == row.Id)
             {
                 events.RemoveAt(index);
+                _deletedEvents.Add(row.Id);
                 SaveDocument();
                 RefreshEvents();
                 return;
@@ -1296,6 +1310,8 @@ public partial class ReplayWindow : Window
             return;
         _replay = parsed;
         _angleEdited = false;
+        _deletedEvents.Clear();
+        _deletedClips.Clear();
         _lastJson = _session.ReplayJson;
         RefreshPlaylistChoices();
         BuildAngles();
@@ -1328,7 +1344,8 @@ public partial class ReplayWindow : Window
         // Settings stay with the session. This window writes events, playlists and the
         // channel's playlist onto that document, so an Apply from Replay Setup is not
         // replaced by the copy this window loaded earlier.
-        var json = ReplayModel.Serialize(ReplayModel.WithDeckEdits(_session, _replay, _angleEdited));
+        var json = ReplayModel.Serialize(
+            ReplayModel.WithDeckEdits(_session, _replay, _angleEdited, _deletedEvents, _deletedClips));
         var previous = _session.ReplayJson;
         _session.ReplayJson = json;
         _lastJson = json;
@@ -1345,6 +1362,8 @@ public partial class ReplayWindow : Window
             SessionStore.NextPublishSource = "deck";
             SessionStore.Publish(_session);
             _angleEdited = false;
+            _deletedEvents.Clear();
+            _deletedClips.Clear();
         }
         catch (Exception error)
         {
@@ -1854,7 +1873,10 @@ public partial class ReplayWindow : Window
         for (var index = clips.Count - 1; index >= 0; index--)
         {
             if (clips[index] is JsonObject clip && (clip["uid"]?.GetValue<string>() ?? "") == uid)
+            {
                 clips.RemoveAt(index);
+                _deletedClips.Add(uid);
+            }
         }
         playlist["revision"] = (playlist["revision"]?.GetValue<ulong>() ?? 0) + 1;
         // An animation step that cued this clip has nothing left to fire.

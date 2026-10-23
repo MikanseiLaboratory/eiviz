@@ -250,24 +250,169 @@ internal static class ReplayModel
     /// deck's whole snapshot put a Replay Setup apply back to whatever the deck had
     /// loaded.
     /// </summary>
-    public static JsonObject WithDeckEdits(Session session, JsonObject deck, bool angleEdited = true)
+    public static JsonObject WithDeckEdits(
+        Session session,
+        JsonObject deck,
+        bool angleEdited = true,
+        IReadOnlySet<ulong>? deletedEvents = null,
+        IReadOnlySet<string>? deletedClips = null)
     {
         var current = Parse(session);
         if (current is null)
             return deck;
-        // The camera is only written when the operator picked one here: a window that
-        // still holds the snapshot it loaded must not put back the angle another
-        // operator (or the API) has since chosen.
-        var names = angleEdited
-            ? new[] { "events", "playlists", "activeAngleId", "nextEventId", "nextPlaylistId" }
-            : new[] { "events", "playlists", "nextEventId", "nextPlaylistId" };
-        foreach (var name in names)
+        // The deck window owns the events and the playlists, but its copy can be older
+        // than the document: an API mark, a remote edit or a refused publish leaves the
+        // window holding fewer events than are on air. Replacing the arrays with that
+        // copy deleted those events (and then the clips they carried), which the log
+        // showed as "events 3->0" on a plain deck save. Merge by id instead, and let
+        // the window say which ones it meant to delete.
+        var eventIds = MergeEvents(current, deck, deletedEvents);
+        MergePlaylists(current, deck, deletedClips, eventIds);
+        if (angleEdited && deck["activeAngleId"] is { } angle)
+            current["activeAngleId"] = angle.DeepClone();
+        // The counters only ever move forward: a stale window must not reuse an id.
+        foreach (var name in new[] { "nextEventId", "nextPlaylistId" })
         {
-            if (deck[name] is { } value)
-                current[name] = value.DeepClone();
+            var mine = current[name]?.GetValue<ulong>() ?? 0;
+            var theirs = deck[name]?.GetValue<ulong>() ?? 0;
+            current[name] = Math.Max(mine, theirs);
         }
         CopyChannelPlaylists(deck, current);
         return current;
+    }
+
+    /// <summary>How many clips name this event as their source.</summary>
+    public static int ClipsForEvent(JsonObject root, ulong eventId)
+    {
+        var count = 0;
+        if (root["playlists"] is not JsonArray playlists)
+            return 0;
+        foreach (var playlist in playlists.OfType<JsonObject>())
+        {
+            if (playlist["clips"] is not JsonArray clips)
+                continue;
+            count += clips.OfType<JsonObject>()
+                .Count(clip => (clip["sourceEvent"]?.GetValue<ulong>() ?? 0) == eventId);
+        }
+        return count;
+    }
+
+    /// <summary>
+    /// Applies the window's events onto the document by id. An event the window does
+    /// not have is kept unless the window deleted it.
+    /// </summary>
+    private static HashSet<ulong> MergeEvents(JsonObject current, JsonObject deck, IReadOnlySet<ulong>? deleted)
+    {
+        if (deck["events"] is not JsonArray incoming)
+            return current["events"] is JsonArray kept
+                ? kept.OfType<JsonObject>().Select(item => item["id"]?.GetValue<ulong>() ?? 0).ToHashSet()
+                : [];
+        var byId = new Dictionary<ulong, JsonObject>();
+        var order = new List<ulong>();
+        if (current["events"] is JsonArray existing)
+        {
+            foreach (var item in existing.OfType<JsonObject>())
+            {
+                var id = item["id"]?.GetValue<ulong>() ?? 0;
+                if (deleted?.Contains(id) == true || byId.ContainsKey(id))
+                    continue;
+                byId[id] = (JsonObject)item.DeepClone();
+                order.Add(id);
+            }
+        }
+        foreach (var item in incoming.OfType<JsonObject>())
+        {
+            var id = item["id"]?.GetValue<ulong>() ?? 0;
+            if (deleted?.Contains(id) == true)
+                continue;
+            if (!byId.ContainsKey(id))
+                order.Add(id);
+            byId[id] = (JsonObject)item.DeepClone();
+        }
+        var merged = new JsonArray();
+        foreach (var id in order)
+            merged.Add(byId[id]);
+        current["events"] = merged;
+        return byId.Keys.ToHashSet();
+    }
+
+    /// <summary>
+    /// Applies the window's playlists by id and its clips by uid, so a clip the API
+    /// added (or one recorded a moment ago) survives a save from this window.
+    /// </summary>
+    private static void MergePlaylists(
+        JsonObject current,
+        JsonObject deck,
+        IReadOnlySet<string>? deletedClips,
+        HashSet<ulong> eventIds)
+    {
+        if (deck["playlists"] is not JsonArray incoming)
+            return;
+        if (current["playlists"] is not JsonArray playlists)
+        {
+            current["playlists"] = incoming.DeepClone();
+            return;
+        }
+        foreach (var deckList in incoming.OfType<JsonObject>())
+        {
+            var id = deckList["id"]?.GetValue<ulong>() ?? 0;
+            var existing = playlists.OfType<JsonObject>()
+                .FirstOrDefault(item => (item["id"]?.GetValue<ulong>() ?? 0) == id);
+            if (existing is null)
+            {
+                playlists.Add(deckList.DeepClone());
+                continue;
+            }
+            var byUid = new Dictionary<string, JsonObject>();
+            var order = new List<string>();
+            if (existing["clips"] is JsonArray currentClips)
+            {
+                foreach (var clip in currentClips.OfType<JsonObject>())
+                {
+                    var uid = clip["uid"]?.GetValue<string>() ?? "";
+                    if (deletedClips?.Contains(uid) == true || byUid.ContainsKey(uid))
+                        continue;
+                    byUid[uid] = (JsonObject)clip.DeepClone();
+                    order.Add(uid);
+                }
+            }
+            if (deckList["clips"] is JsonArray deckClips)
+            {
+                foreach (var clip in deckClips.OfType<JsonObject>())
+                {
+                    var uid = clip["uid"]?.GetValue<string>() ?? "";
+                    if (deletedClips?.Contains(uid) == true)
+                        continue;
+                    // A clip whose event is gone can never be played or saved: the
+                    // control layer refuses the document that carries it.
+                    var source = clip["sourceEvent"]?.GetValue<ulong>() ?? 0;
+                    if (source != 0 && !eventIds.Contains(source))
+                        continue;
+                    if (!byUid.ContainsKey(uid))
+                        order.Add(uid);
+                    byUid[uid] = (JsonObject)clip.DeepClone();
+                }
+            }
+            var mergedClips = new JsonArray();
+            foreach (var uid in order)
+                mergedClips.Add(byUid[uid]);
+            // Only a real edit moves the revision: the mixer reads it to decide whether
+            // the running clip has to be rebuilt, and bumping it on every save reset the
+            // playlist under the playhead.
+            var before = (existing["clips"] as JsonArray)?.ToJsonString() ?? "";
+            var after = mergedClips.ToJsonString();
+            existing["clips"] = mergedClips;
+            foreach (var name in new[] { "name", "defaultTransition" })
+            {
+                if (deckList[name] is { } value)
+                    existing[name] = value.DeepClone();
+            }
+            var mine = existing["revision"]?.GetValue<ulong>() ?? 0;
+            var theirs = deckList["revision"]?.GetValue<ulong>() ?? 0;
+            existing["revision"] = string.Equals(before, after, StringComparison.Ordinal)
+                ? Math.Max(mine, theirs)
+                : Math.Max(mine, theirs) + 1;
+        }
     }
 
     /// <summary>

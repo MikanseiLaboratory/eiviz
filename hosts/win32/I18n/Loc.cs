@@ -105,6 +105,7 @@ public static class Loc
         ["replay.recordTc"] = "REC TC",
         ["replay.clipRemaining"] = "Remaining",
         ["replay.passthroughCannotPlay"] = "This clip is a passthrough recording, which is stored as the sender compressed it: it can be recorded but not played back.",
+        ["replay.eventHasClips"] = "Clips still use this event. Delete those clips first.",
 
         ["replay.angles"] = "Angles",
         ["replay.events"] = "Event list",
@@ -836,6 +837,7 @@ public static class Loc
         ["replay.recordTc"] = "録画TC",
         ["replay.clipRemaining"] = "残り",
         ["replay.passthroughCannotPlay"] = "このクリップはパススルー録画です。送られてきた圧縮フレームをそのまま保存しているため、録画はできますが再生はできません。",
+        ["replay.eventHasClips"] = "このイベントを使っているクリップがあります。先にクリップを削除してください。",
 
         ["replay.angles"] = "アングル",
         ["replay.events"] = "イベントリスト",
