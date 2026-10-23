@@ -200,6 +200,13 @@ public partial class ReplayWindow : Window
         OutputLabel.Text = channel is null
             ? Loc.T("replay.noChannels")
             : Loc.Format("replay.outputLabel", channel.Label, _playing ? Loc.T("replay.playing") : Loc.T("replay.stopped"));
+        // A channel that is not on any scene plays into nothing: the operator watching
+        // the program sees no change and will think replay is broken. Say it here.
+        if (channel is { InputId: > 0 } air
+            && !_session.Scenes.Any(scene => scene.Layers.Any(layer => layer.InputId == air.InputId)))
+        {
+            OutputLabel.Text += "  " + Loc.T("replay.notOnAir");
+        }
 
         var angle = ActiveAngle();
         var live = angle?.LiveSourceId ?? 0;
@@ -1596,6 +1603,10 @@ public partial class ReplayWindow : Window
         if (playlist is null)
             return;
         var kind = (DefaultKindBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "Cut";
+        // Choosing a dissolve has to open the frame box in the same gesture: leaving it
+        // disabled until something else refreshes the deck hides the only control the
+        // operator needs next.
+        DefaultFramesBox.IsEnabled = kind != "Cut";
         if (!uint.TryParse(DefaultFramesBox.Text, out var frames))
             frames = 0;
         // A cut carries no duration, so the frame box is ignored for one.
