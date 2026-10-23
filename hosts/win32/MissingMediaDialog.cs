@@ -7,12 +7,12 @@ namespace Eiviz.Host;
 
 internal sealed class MissingMediaDialog : Window
 {
-    private readonly Session _session;
+    // Read the live document: App.ReplaceDocument swaps the object when the mixer reports a change.
+    private Session _session => ((App)Application.Current).Session;
     private readonly ListBox _list = new() { Height = 180, Margin = new Thickness(12, 8, 12, 8) };
 
     public MissingMediaDialog(Session session)
     {
-        _session = session;
         Title = Loc.T("input.missingTitle");
         HostDialog.Apply(this);
         Width = 620;
