@@ -200,8 +200,9 @@ public partial class ReplayWindow : Window
         OutputLabel.Text = channel is null
             ? Loc.T("replay.noChannels")
             : Loc.Format("replay.outputLabel", channel.Label, _playing ? Loc.T("replay.playing") : Loc.T("replay.stopped"));
-        // A channel that is not on any scene plays into nothing: the operator watching
-        // the program sees no change and will think replay is broken. Say it here.
+        // Playback goes to the channel whether or not anyone put it in a scene; this
+        // only says the picture is not reaching the program yet, so an operator who
+        // expected the program to change knows where to look.
         if (channel is { InputId: > 0 } air
             && !_session.Scenes.Any(scene => scene.Layers.Any(layer => layer.InputId == air.InputId)))
         {
@@ -1835,6 +1836,13 @@ public partial class ReplayWindow : Window
         {
             Warn(Loc.T("replay.playlistEmpty"));
             return;
+        }
+        // The running order comes from the document, so the channel has to be pointed at
+        // the list on screen before the cue: a channel left on another playlist (or on
+        // none) would play one clip and stop, which reads as "it did not play".
+        if (ReplayModel.ChannelPlaylist(_replay, _channel) != _playlistId)
+        {
+            SaveDocument();
         }
         if (Backend?.ReplayCue(_channel, clips[0].Uid) != true)
         {
