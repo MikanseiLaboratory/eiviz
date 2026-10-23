@@ -1224,6 +1224,50 @@ public sealed class SessionSettings
     /// <summary>A copy, so a dialog can tell what the operator changed.</summary>
     public SessionSettings Clone() => (SessionSettings)MemberwiseClone();
 
+    /// <summary>
+    /// Applies the values a dialog changed onto a live settings object, leaving every
+    /// other value as it is. Copying the whole object put back values the operator never
+    /// touched, undoing settings changed elsewhere (the replay deck, the API, a port
+    /// conflict at startup) while the dialog was open.
+    /// </summary>
+    public static void ApplyChanges(SessionSettings live, SessionSettings opened, SessionSettings edited)
+    {
+        static void Apply<T>(T was, T now, Action<T> set)
+        {
+            if (!EqualityComparer<T>.Default.Equals(was, now))
+                set(now);
+        }
+        Apply(opened.MasterFpsNum, edited.MasterFpsNum, value => live.MasterFpsNum = value);
+        Apply(opened.MasterFpsDen, edited.MasterFpsDen, value => live.MasterFpsDen = value);
+        Apply(opened.DefaultWidth, edited.DefaultWidth, value => live.DefaultWidth = value);
+        Apply(opened.DefaultHeight, edited.DefaultHeight, value => live.DefaultHeight = value);
+        Apply(opened.DefaultMultiviewUnitId, edited.DefaultMultiviewUnitId, value => live.DefaultMultiviewUnitId = value);
+        Apply(opened.FrameBufferFrames, edited.FrameBufferFrames, value => live.FrameBufferFrames = value);
+        Apply(opened.DefaultPresentInterval, edited.DefaultPresentInterval, value => live.DefaultPresentInterval = value);
+        Apply(opened.FlipSwapchainLimit, edited.FlipSwapchainLimit, value => live.FlipSwapchainLimit = value);
+        Apply(opened.InternalColorFormat, edited.InternalColorFormat, value => live.InternalColorFormat = value);
+        Apply(opened.RebarOptimization, edited.RebarOptimization, value => live.RebarOptimization = value);
+        Apply(opened.NdiGpuUpload, edited.NdiGpuUpload, value => live.NdiGpuUpload = value);
+        if (!EqualityComparer<RgbColor>.Default.Equals(opened.PreviewColor!, edited.PreviewColor!))
+            live.PreviewColor = RgbColor.FromOrDefault(edited.PreviewColor, RgbColor.PreviewDefault);
+        if (!EqualityComparer<RgbColor>.Default.Equals(opened.ProgramColor!, edited.ProgramColor!))
+            live.ProgramColor = RgbColor.FromOrDefault(edited.ProgramColor, RgbColor.ProgramDefault);
+        if (!EqualityComparer<RgbColor>.Default.Equals(opened.InactiveColor!, edited.InactiveColor!))
+            live.InactiveColor = RgbColor.FromOrDefault(edited.InactiveColor, RgbColor.InactiveDefault);
+        Apply(opened.MultiviewLabelSize, edited.MultiviewLabelSize, value => live.MultiviewLabelSize = value);
+        Apply(opened.MultiviewLabelUnit, edited.MultiviewLabelUnit, value => live.MultiviewLabelUnit = value);
+        Apply(opened.MultiviewLabelAnchor, edited.MultiviewLabelAnchor, value => live.MultiviewLabelAnchor = value);
+        Apply(opened.VmixApiEnabled, edited.VmixApiEnabled, value => live.VmixApiEnabled = value);
+        if (opened.VmixApiPort != edited.VmixApiPort)
+            live.VmixApiPort = edited.VmixApiPort == 0 ? 8088 : edited.VmixApiPort;
+        Apply(opened.VmixApiUser, edited.VmixApiUser, value => live.VmixApiUser = value ?? "");
+        Apply(opened.VmixApiPassword, edited.VmixApiPassword, value => live.VmixApiPassword = value ?? "");
+        Apply(opened.VmixTcpEnabled, edited.VmixTcpEnabled, value => live.VmixTcpEnabled = value);
+        Apply(opened.NativeApiEnabled, edited.NativeApiEnabled, value => live.NativeApiEnabled = value);
+        if (opened.NativeApiPort != edited.NativeApiPort)
+            live.NativeApiPort = edited.NativeApiPort == 0 ? 9400 : edited.NativeApiPort;
+    }
+
     public uint FramesFor(uint value, uint unit) =>
         unit == MixerNative.DurationMs
             ? (uint)Math.Max(1, Math.Round(value * (double)MasterFpsNum / Math.Max(1, MasterFpsDen) / 1000.0))

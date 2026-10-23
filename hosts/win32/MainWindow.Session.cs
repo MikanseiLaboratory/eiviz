@@ -1302,9 +1302,11 @@ public partial class MainWindow
             return;
         if (App.IsRemote)
         {
+            var merged = _session.Settings.Clone();
+            SessionSettings.ApplyChanges(merged, dialog.OpenedWith, dialog.Settings);
             RemoteMutate(
                 MutationJson.SetSettings(
-                    dialog.Settings,
+                    merged,
                     dialog.Outputs,
                     dialog.Headphone,
                     dialog.HeadphoneCopyMonitor,
@@ -1316,48 +1318,9 @@ public partial class MainWindow
         }
         var restartMedia = _session.Settings.InternalColorFormat != dialog.Settings.InternalColorFormat
             || _session.Settings.FrameBufferFrames != dialog.Settings.FrameBufferFrames;
-        // Write only what this dialog changed. Copying every field put back values the
-        // operator never touched, undoing settings that were changed elsewhere (the replay
-        // deck sets the deck present interval, the API can change the ports) while the
-        // dialog was open.
-        var edited = dialog.Settings;
-        var opened = dialog.OpenedWith;
-        var live = _session.Settings;
-        static void Apply<T>(T was, T now, Action<T> set)
-        {
-            if (!EqualityComparer<T>.Default.Equals(was, now))
-                set(now);
-        }
-        Apply(opened.MasterFpsNum, edited.MasterFpsNum, value => live.MasterFpsNum = value);
-        Apply(opened.MasterFpsDen, edited.MasterFpsDen, value => live.MasterFpsDen = value);
-        Apply(opened.DefaultWidth, edited.DefaultWidth, value => live.DefaultWidth = value);
-        Apply(opened.DefaultHeight, edited.DefaultHeight, value => live.DefaultHeight = value);
-        Apply(opened.DefaultMultiviewUnitId, edited.DefaultMultiviewUnitId, value => live.DefaultMultiviewUnitId = value);
-        Apply(opened.FrameBufferFrames, edited.FrameBufferFrames, value => live.FrameBufferFrames = value);
-        Apply(opened.DefaultPresentInterval, edited.DefaultPresentInterval, value => live.DefaultPresentInterval = value);
-        Apply(opened.FlipSwapchainLimit, edited.FlipSwapchainLimit, value => live.FlipSwapchainLimit = value);
-        FlipBudget.Configure(live.FlipSwapchainLimit);
-        Apply(opened.InternalColorFormat, edited.InternalColorFormat, value => live.InternalColorFormat = value);
-        Apply(opened.RebarOptimization, edited.RebarOptimization, value => live.RebarOptimization = value);
-        Apply(opened.NdiGpuUpload, edited.NdiGpuUpload, value => live.NdiGpuUpload = value);
-        if (!EqualityComparer<RgbColor>.Default.Equals(opened.PreviewColor!, edited.PreviewColor!))
-            live.PreviewColor = RgbColor.FromOrDefault(edited.PreviewColor, RgbColor.PreviewDefault);
-        if (!EqualityComparer<RgbColor>.Default.Equals(opened.ProgramColor!, edited.ProgramColor!))
-            live.ProgramColor = RgbColor.FromOrDefault(edited.ProgramColor, RgbColor.ProgramDefault);
-        if (!EqualityComparer<RgbColor>.Default.Equals(opened.InactiveColor!, edited.InactiveColor!))
-            live.InactiveColor = RgbColor.FromOrDefault(edited.InactiveColor, RgbColor.InactiveDefault);
-        Apply(opened.MultiviewLabelSize, edited.MultiviewLabelSize, value => live.MultiviewLabelSize = value);
-        Apply(opened.MultiviewLabelUnit, edited.MultiviewLabelUnit, value => live.MultiviewLabelUnit = value);
-        Apply(opened.MultiviewLabelAnchor, edited.MultiviewLabelAnchor, value => live.MultiviewLabelAnchor = value);
-        Apply(opened.VmixApiEnabled, edited.VmixApiEnabled, value => live.VmixApiEnabled = value);
-        if (opened.VmixApiPort != edited.VmixApiPort)
-            live.VmixApiPort = edited.VmixApiPort == 0 ? 8088 : edited.VmixApiPort;
-        Apply(opened.VmixApiUser, edited.VmixApiUser, value => live.VmixApiUser = value ?? "");
-        Apply(opened.VmixApiPassword, edited.VmixApiPassword, value => live.VmixApiPassword = value ?? "");
-        Apply(opened.VmixTcpEnabled, edited.VmixTcpEnabled, value => live.VmixTcpEnabled = value);
-        Apply(opened.NativeApiEnabled, edited.NativeApiEnabled, value => live.NativeApiEnabled = value);
-        if (opened.NativeApiPort != edited.NativeApiPort)
-            live.NativeApiPort = edited.NativeApiPort == 0 ? 9400 : edited.NativeApiPort;
+        // Apply only what this dialog changed; see SessionSettings.ApplyChanges.
+        SessionSettings.ApplyChanges(_session.Settings, dialog.OpenedWith, dialog.Settings);
+        FlipBudget.Configure(_session.Settings.FlipSwapchainLimit);
         AppPrefs.Current.NativeApiEnabled = _session.Settings.NativeApiEnabledValue;
         AppPrefs.Current.NativeApiPort = _session.Settings.NativeApiPort;
         AppPrefs.Current.Save();
