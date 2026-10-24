@@ -168,20 +168,34 @@ impl Default for ReplayDto {
     }
 }
 
+/// One recording as the recorder reports it: the id and clock it owns, and the
+/// format it writes. Handed to [`ReplayDto::link_recording`] so the session can
+/// write down where a clip's recording lives.
+#[derive(Clone, Copy, Debug)]
+pub struct RecordedRecording<'a> {
+    pub uuid: &'a str,
+    pub storage: &'a str,
+    pub width: u32,
+    pub height: u32,
+    pub fps_num: u32,
+    pub fps_den: u32,
+    /// Wall clock of frame 0, in milliseconds since the epoch; 0 when unknown.
+    pub started_ms: u64,
+}
 impl ReplayDto {
     /// Writes a recording into the session's list, or updates it when it is already
     /// there. The recorder owns the id and the clock; the session is the only place
     /// that says where a clip's recording lives.
-    pub fn link_recording(
-        &mut self,
-        uuid: &str,
-        storage: &str,
-        width: u32,
-        height: u32,
-        fps_num: u32,
-        fps_den: u32,
-        started_ms: u64,
-    ) -> bool {
+    pub fn link_recording(&mut self, recorded: RecordedRecording<'_>) -> bool {
+        let RecordedRecording {
+            uuid,
+            storage,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            started_ms,
+        } = recorded;
         let uuid = uuid.trim();
         if uuid.is_empty() {
             return false;

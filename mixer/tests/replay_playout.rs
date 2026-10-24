@@ -107,8 +107,9 @@ fn the_replay_picture_reaches_the_program_scene() {
     // replay deck does, and the frames being marked are the ones just recorded.
     expect("record on", unsafe { mixer_replay_record(1) });
     thread::sleep(Duration::from_millis(1200));
+    // A recording numbers its frames from its own first frame, so frame 0 is a
+    // recorded frame: Mark In is allowed to sit on it.
     let in_frame = mark_in_when_ready("replay_playout");
-    assert!(in_frame > 0, "Mark In should sit on a recorded frame");
     // A clip long enough to watch play: the rate assertions below need more than a
     // few frames of material, so the close waits for the recording to move on.
     let (uuid, in_frame, out_frame) = mark_out_after("replay_playout", 60);

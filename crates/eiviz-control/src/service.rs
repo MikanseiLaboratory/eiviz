@@ -881,15 +881,16 @@ impl ControlService {
             .unwrap_or_default();
         let mut doc = doc;
         let linked = doc.replay.as_mut().is_some_and(|replay| {
-            replay.link_recording(
-                &uuid,
-                &storage,
-                replay.format.width,
-                replay.format.height,
-                replay.format.fps_num,
-                replay.format.fps_den,
+            let recorded = crate::session::replay::RecordedRecording {
+                uuid: &uuid,
+                storage: &storage,
+                width: replay.format.width,
+                height: replay.format.height,
+                fps_num: replay.format.fps_num,
+                fps_den: replay.format.fps_den,
                 started_ms,
-            )
+            };
+            replay.link_recording(recorded)
         });
         if linked {
             // No request id: the document change is a consequence of the record
