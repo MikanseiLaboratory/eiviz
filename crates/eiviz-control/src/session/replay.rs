@@ -169,6 +169,48 @@ impl Default for ReplayDto {
 }
 
 impl ReplayDto {
+    /// Writes a recording into the session's list, or updates it when it is already
+    /// there. The recorder owns the id and the clock; the session is the only place
+    /// that says where a clip's recording lives.
+    pub fn link_recording(
+        &mut self,
+        uuid: &str,
+        storage: &str,
+        width: u32,
+        height: u32,
+        fps_num: u32,
+        fps_den: u32,
+        started_ms: u64,
+    ) -> bool {
+        let uuid = uuid.trim();
+        if uuid.is_empty() {
+            return false;
+        }
+        let entry = match self
+            .recordings
+            .iter_mut()
+            .find(|recording| recording.uuid == uuid)
+        {
+            Some(entry) => entry,
+            None => {
+                self.recordings.push(ReplayRecordingDto {
+                    uuid: uuid.to_string(),
+                    ..ReplayRecordingDto::default()
+                });
+                self.recordings.last_mut().expect("just pushed")
+            }
+        };
+        entry.storage = storage.to_string();
+        entry.width = width;
+        entry.height = height;
+        entry.fps_num = fps_num;
+        entry.fps_den = fps_den;
+        if started_ms != 0 {
+            entry.created_ms = started_ms;
+        }
+        entry.angles = self.angles.iter().map(|angle| angle.id).collect();
+        true
+    }
     /// Keep explicitly created channels well-formed. Replay channels are never
     /// invented while loading a session.
     pub fn normalize(&mut self) {

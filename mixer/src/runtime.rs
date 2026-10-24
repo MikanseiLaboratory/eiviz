@@ -533,6 +533,12 @@ impl MixerPort for ProcessMixer {
             .map_err(crate::replay::ReplayFailure::into_control)
     }
 
+    fn replay_recording(&mut self) -> ControlResult<(String, u64)> {
+        let engine = crate::replay::engine();
+        let uuid = engine.recording_uuid();
+        Ok((uuid, engine.started_unix_ms()))
+    }
+
     fn replay_close_mark(&mut self) -> ControlResult<(String, u64, u64)> {
         crate::replay::engine()
             .close_mark()

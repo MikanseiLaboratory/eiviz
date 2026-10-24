@@ -397,6 +397,12 @@ impl ControlService {
                     self.check_replay_can_record()?;
                 }
                 self.port.replay_record(on)?;
+                if on {
+                    // Link the recording into the session here, not in a host: a client
+                    // that starts a recording through the API must leave the same
+                    // document a deck would.
+                    self.link_recording()?;
+                }
                 self.after_live("ReplayRecord", request_id, None, false)
             }
             Command::ReplayMarkIn => {
@@ -855,6 +861,43 @@ impl ControlService {
         Ok(())
     }
 
+    /// Writes the recording the recorder just opened into the session's list, so the
+    /// clips it produces name a recording whose drive the session knows.
+    fn link_recording(&mut self) -> ControlResult<()> {
+        let (uuid, started_ms) = self.port.replay_recording()?;
+        if uuid.trim().is_empty() {
+            return Ok(());
+        }
+        let Some(doc) = self.store.document_cloned() else {
+            return Ok(());
+        };
+        let Some(replay) = doc.replay.clone() else {
+            return Ok(());
+        };
+        let storage = replay
+            .storage
+            .first()
+            .map(|item| item.path.clone())
+            .unwrap_or_default();
+        let mut doc = doc;
+        let linked = doc.replay.as_mut().is_some_and(|replay| {
+            replay.link_recording(
+                &uuid,
+                &storage,
+                replay.format.width,
+                replay.format.height,
+                replay.format.fps_num,
+                replay.format.fps_den,
+                started_ms,
+            )
+        });
+        if linked {
+            // No request id: the document change is a consequence of the record
+            // command, and the caller already gets its outcome.
+            let _ = self.replace_session(doc, None, "");
+        }
+        Ok(())
+    }
     fn replay_mark_out(&mut self, request_id: &str, name: &str) -> ControlResult<CommandOutcome> {
         let (uuid, in_frame, out_frame) = self.port.replay_close_mark()?;
         let mut doc = self

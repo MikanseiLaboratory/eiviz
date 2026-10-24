@@ -170,6 +170,12 @@ pub trait MixerPort: Send {
         Ok(0)
     }
 
+    /// The recording the recorder has open, and when it started (ms since the epoch).
+    /// Zero when nothing has been recorded.
+    fn replay_recording(&mut self) -> ControlResult<(String, u64)> {
+        Ok((String::new(), 0))
+    }
+
     fn replay_close_mark(&mut self) -> ControlResult<(String, u64, u64)> {
         Err(crate::error::ControlError::unavailable(
             "replay mark is not open",

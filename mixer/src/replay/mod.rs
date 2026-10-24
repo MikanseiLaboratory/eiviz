@@ -1937,6 +1937,12 @@ impl ReplayEngine {
         n as u32
     }
 
+    /// Wall clock of the recording's frame 0, in milliseconds since the epoch; 0 when
+    /// nothing has been recorded since this session started.
+    pub fn started_unix_ms(&self) -> u64 {
+        self.lock().started_unix_ms
+    }
+
     pub fn recording_uuid(&self) -> String {
         self.lock().uuid.clone()
     }
@@ -2522,6 +2528,17 @@ impl eiviz_replay::FrameSink for StoreSink<'_> {
     }
 }
 
+/// Says once per angle why the recorder found no picture, instead of counting
+/// silently. A recording that does not fill then names the source that never
+/// delivered, instead of looking like a slow readback.
+pub fn log_missing_picture(angle_id: u32, reason: &str) {
+    static SAID: Mutex<Option<std::collections::HashSet<u32>>> = Mutex::new(None);
+    let mut guard = SAID.lock().unwrap_or_else(|error| error.into_inner());
+    let said = guard.get_or_insert_with(Default::default);
+    if said.insert(angle_id) {
+        crate::diag::info(&format!("{reason} (angle {angle_id})"));
+    }
+}
 fn record_loop(inbox: Arc<Inbox>, stop_record: Arc<AtomicBool>, stop_workers: Arc<AtomicBool>) {
     let engine = engine();
     // `stop_record` is true until the user starts, and again after Stop.

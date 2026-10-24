@@ -365,13 +365,21 @@ pub(crate) fn render_loop(
                 }
                 compose_sources.push(*id);
             }
-            let (mut used_scenes, used_uploads) = collect_frame_live_ids(
+            let (mut used_scenes, mut used_uploads) = collect_frame_live_ids(
                 &scene_specs,
                 &snapshot,
                 &compose_sources,
                 &outputs_snap,
                 &mix_inputs,
                 compose_dirty,
+            );
+            // An input angle records the input's own picture, so that input has to
+            // reach the composer even when no scene or monitor shows it: otherwise the
+            // recorder finds no texture and the angle stays empty.
+            used_uploads.extend(
+                crate::replay::engine()
+                    .live_angle_input_ids()
+                    .into_iter(),
             );
             let mut role_sources = presenters.attached_monitor_sources();
             role_sources.extend(thumbs_snap.keys().copied());
@@ -743,6 +751,21 @@ pub(crate) fn render_loop(
                     // The angle has no picture this frame. Counted: a frame the
                     // recorder never saw must not vanish silently.
                     crate::replay::engine().note_replaced(target.angle_id, 1);
+                    // A source that never has a picture (an input that has not
+                    // connected, a scene that is not drawn) would otherwise look
+                    // exactly like a slow readback, so the reason is said once.
+                    let reason = match target.source {
+                        crate::replay::RecordSource::Input(id) => format!(
+                            "replay record: input {id} has no picture (packed={}, texture={}, size={:?})",
+                            composer.source_is_packed(id),
+                            composer.source_texture(id).is_some(),
+                            composer.source_rgba_size(id)
+                        ),
+                        crate::replay::RecordSource::Scene(id) => {
+                            format!("replay record: scene {id} is not drawn")
+                        }
+                    };
+                    crate::replay::log_missing_picture(target.angle_id, &reason);
                     continue;
                 };
                 // One replay format: a source that is not already that size is scaled.
