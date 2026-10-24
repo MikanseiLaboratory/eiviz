@@ -355,11 +355,12 @@ pub struct ReplayEngine {
     inbox: Arc<Inbox>,
     audio_inbox: Arc<AudioInbox>,
     audio_drops: AtomicU64,
-    store: Mutex<Option<Arc<Mutex<Box<dyn ReplayStore>>>>>,
+    /// The recording being written (or the last one recorded). Writes go here.
+    record_store: Mutex<Option<Arc<Mutex<Box<dyn ReplayStore>>>>>,
     /// Recordings opened for playback, keyed by the recording id the clips carry.
     /// One entry per recording (not per channel), so two channels can play two
     /// different recordings at the same time.
-    playback: Mutex<HashMap<String, Arc<Mutex<Box<dyn ReplayStore>>>>>,
+    playback_stores: Mutex<HashMap<String, Arc<Mutex<Box<dyn ReplayStore>>>>>,
     /// Bumped when a recording is attached for playback, so a channel drops the
     /// frames it decoded ahead from the recording that is no longer its own.
     playback_generation: AtomicU64,
@@ -456,8 +457,8 @@ impl ReplayEngine {
             inbox: Arc::new(Inbox::new()),
             audio_inbox: Arc::new(AudioInbox::new()),
             audio_drops: AtomicU64::new(0),
-            store: Mutex::new(None),
-            playback: Mutex::new(HashMap::new()),
+            record_store: Mutex::new(None),
+            playback_stores: Mutex::new(HashMap::new()),
             playback_generation: AtomicU64::new(0),
             stop_record: Arc::new(AtomicBool::new(true)),
             stop_workers: Arc::new(AtomicBool::new(false)),
@@ -711,7 +712,7 @@ impl ReplayEngine {
                     continue;
                 }
                 if self
-                    .playback
+                    .playback_stores
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
                     .contains_key(&uuid)
@@ -730,7 +731,7 @@ impl ReplayEngine {
                 match crate::pro_load::loaded_api() {
                     Some((api, module)) => match attach_ffi(api, module, &path) {
                         Ok(store) => {
-                            self.playback
+                            self.playback_stores
                                 .lock()
                                 .unwrap_or_else(|error| error.into_inner())
                                 .insert(
@@ -763,7 +764,7 @@ impl ReplayEngine {
         let stale_store = angles_changed
             && !recording
             && self
-                .store
+                .record_store
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .as_ref()
@@ -778,7 +779,7 @@ impl ReplayEngine {
                 });
         if stale_store {
             self.release_store();
-            *self.store.lock().unwrap_or_else(|error| error.into_inner()) = None;
+            *self.record_store.lock().unwrap_or_else(|error| error.into_inner()) = None;
         }
         let mut inner = self.lock();
         inner.operations_reason = operations_reason;
@@ -1115,7 +1116,7 @@ impl ReplayEngine {
             ReplayFailure::io(format!("the Pro module refused the recording: {error}"))
         })?;
         self.stop_record.store(false, Ordering::Relaxed);
-        *self.store.lock().unwrap_or_else(|error| error.into_inner()) =
+        *self.record_store.lock().unwrap_or_else(|error| error.into_inner()) =
             Some(Arc::new(Mutex::new(store)));
         self.ensure_workers();
         let mut inner = self.lock();
@@ -1171,7 +1172,7 @@ impl ReplayEngine {
     /// Releases the recorded material. Only when Replay is removed or the mixer
     /// shuts down: a stopped recorder keeps its frames.
     fn release_store(&self) {
-        if let Some(store) = self.store.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        if let Some(store) = self.record_store.lock().unwrap_or_else(|e| e.into_inner()).clone() {
             if let Ok(mut store) = store.lock() {
                 let _ = store.close();
             }
@@ -1322,7 +1323,7 @@ impl ReplayEngine {
     /// recording that quietly holds nothing.
     pub fn write_encoded_frame(&self, angle_id: u32, frame: &EncodedFrame) -> bool {
         let store = self
-            .store
+            .record_store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
@@ -1400,7 +1401,7 @@ impl ReplayEngine {
             dropped_before: 0,
         };
         let store = self
-            .store
+            .record_store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
@@ -1602,7 +1603,7 @@ impl ReplayEngine {
             return live;
         }
         let Some(store) = self
-            .store
+            .record_store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
@@ -1665,7 +1666,7 @@ impl ReplayEngine {
             return Ok(true);
         }
         if self
-            .playback
+            .playback_stores
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .contains_key(uuid)
@@ -1701,14 +1702,18 @@ impl ReplayEngine {
                     };
                     std::path::Path::new(&storage).join(uuid)
                 });
-            known.or_else(|| {
-                inner
-                    .config
-                    .storage
-                    .iter()
-                    .map(|storage| std::path::Path::new(&storage.path).join(uuid))
-                    .find(|candidate| candidate.is_dir())
-            })
+            // A recording listed on a drive that moved is looked for on the session's
+            // other drives before it counts as missing. A direct path check only.
+            known
+                .filter(|candidate| candidate.is_dir())
+                .or_else(|| {
+                    inner
+                        .config
+                        .storage
+                        .iter()
+                        .map(|storage| std::path::Path::new(&storage.path).join(uuid))
+                        .find(|candidate| candidate.is_dir())
+                })
         };
         let Some(directory) = directory else {
             return Ok(false);
@@ -1722,7 +1727,7 @@ impl ReplayEngine {
         let store = attach_ffi(api, module, &directory.display().to_string()).map_err(|error| {
             ReplayFailure::io(format!("recording {uuid} could not be opened: {error}"))
         })?;
-        self.playback
+        self.playback_stores
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .insert(
@@ -1742,7 +1747,7 @@ impl ReplayEngine {
         let uuid = uuid.trim();
         if !uuid.is_empty() {
             if let Some(store) = self
-                .playback
+                .playback_stores
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .get(uuid)
@@ -1751,8 +1756,21 @@ impl ReplayEngine {
             }
         }
         // Live playout and a clip from the recording still being written use the
-        // record store; anything else needs an attached recording.
-        self.store
+        // record store. A clip that names another recording it could not open gets
+        // nothing: reading the wrong recording would show a picture that belongs to a
+        // different moment, which is worse than saying it is missing.
+        if !uuid.is_empty() {
+            // The record store keeps the last recording open after Stop, so a clip from
+            // it still plays without being attached a second time.
+            let is_record_store = {
+                let inner = self.lock();
+                inner.uuid == uuid
+            };
+            if !is_record_store {
+                return None;
+            }
+        }
+        self.record_store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
@@ -1969,7 +1987,7 @@ impl ReplayEngine {
         dst: &mut [u8],
     ) -> Result<(u32, u32), ReplayFailure> {
         let store = self
-            .store
+            .record_store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
@@ -1985,7 +2003,7 @@ impl ReplayEngine {
     /// Recorded frame range of one angle, for the export UI.
     pub fn angle_range(&self, angle_id: u32) -> Option<(u64, u64)> {
         let store = self
-            .store
+            .record_store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()?;
@@ -2062,7 +2080,7 @@ impl ReplayEngine {
     /// Starts an MP4 export of the requested segments.
     pub fn export_start(&self, spec: eiviz_pro_api::ReplayExportSpec) -> Result<(), i32> {
         let store = self
-            .store
+            .record_store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
@@ -2084,7 +2102,7 @@ impl ReplayEngine {
     /// Progress of the running export, or an idle snapshot when none is running.
     pub fn export_progress(&self) -> eiviz_pro_api::ReplayExportProgress {
         let Some(store) = self
-            .store
+            .record_store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
@@ -2100,7 +2118,7 @@ impl ReplayEngine {
 
     pub fn export_cancel(&self) -> Result<(), i32> {
         let store = self
-            .store
+            .record_store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
@@ -2320,7 +2338,7 @@ impl ReplayEngine {
 
     fn refresh_stats(&self) {
         let store = self
-            .store
+            .record_store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
@@ -2554,7 +2572,7 @@ fn record_loop(inbox: Arc<Inbox>, stop_record: Arc<AtomicBool>, stop_workers: Ar
             continue;
         }
         let store = engine
-            .store
+            .record_store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
@@ -2613,7 +2631,7 @@ fn audio_loop(inbox: Arc<AudioInbox>, stop_workers: Arc<AtomicBool>) {
             continue;
         }
         let store = engine
-            .store
+            .record_store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
@@ -4705,6 +4723,89 @@ pub fn estimate_ffi(
         remaining_secs: out.remaining_secs,
         path_writable: out.path_writable != 0,
     })
+}
+#[cfg(test)]
+mod recording_registry_tests {
+    use super::*;
+    use eiviz_control::session::replay::{
+        ReplayRecordingDto, ReplayStorageDto,
+    };
+
+    fn clip(uuid: &str) -> eiviz_control::session::replay::PlaylistDto {
+        use eiviz_control::session::replay::*;
+        PlaylistDto {
+            id: 1,
+            name: "Show".into(),
+            revision: 1,
+            clips: vec![ClipDto {
+                uid: format!("clip-{uuid}"),
+                recording_uuid: uuid.into(),
+                ..ClipDto::default()
+            }],
+            default_transition: ClipTransitionDto::default(),
+        }
+    }
+
+    #[test]
+    fn the_session_list_says_where_a_recording_lives() {
+        let mut dto = ReplayDto::default();
+        dto.storage = vec![ReplayStorageDto {
+            path: "D:/first".into(),
+            angle_ids: vec![1],
+        }];
+        dto.recordings = vec![ReplayRecordingDto {
+            uuid: "rec-a".into(),
+            storage: "E:/second".into(),
+            ..ReplayRecordingDto::default()
+        }];
+        dto.playlists = vec![clip("rec-a")];
+        let found = referenced_recordings(&dto);
+        assert_eq!(found, vec![("rec-a".to_string(), "E:/second".to_string())]);
+    }
+
+    #[test]
+    fn an_old_document_falls_back_to_the_storage_that_holds_the_id() {
+        let dir = std::env::temp_dir().join(format!("eiviz-registry-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("rec-old")).unwrap();
+        let mut dto = ReplayDto::default();
+        dto.storage = vec![
+            ReplayStorageDto {
+                path: "D:/empty".into(),
+                angle_ids: vec![1],
+            },
+            ReplayStorageDto {
+                path: dir.display().to_string(),
+                angle_ids: vec![2],
+            },
+        ];
+        dto.playlists = vec![clip("rec-old")];
+        let found = referenced_recordings(&dto);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "rec-old");
+        assert_eq!(found[0].1, dir.display().to_string());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_recording_is_listed_once_even_when_several_clips_use_it() {
+        let mut dto = ReplayDto::default();
+        dto.storage = vec![ReplayStorageDto {
+            path: "D:/only".into(),
+            angle_ids: vec![1],
+        }];
+        let mut playlist = clip("rec-a");
+        use eiviz_control::session::replay::ClipDto;
+        let second = ClipDto {
+            uid: "clip-b".into(),
+            recording_uuid: "rec-a".into(),
+            ..ClipDto::default()
+        };
+        playlist.clips.push(second);
+        dto.playlists = vec![playlist];
+        let found = referenced_recordings(&dto);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "rec-a");
+    }
 }
 #[cfg(test)]
 mod export_tests {

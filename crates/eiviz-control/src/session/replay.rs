@@ -806,7 +806,7 @@ pub struct PlaylistDto {
 /// so playback opens a path the session knows instead of searching the drives. The
 /// fields after `storage` describe the recording as it was written, which is what the
 /// deck shows when the files are no longer there.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplayRecordingDto {
     /// `rec-...`, the same id the clips and events carry.
@@ -1727,6 +1727,27 @@ mod tests {
         assert_eq!(replay.active_angle_id, Some(2));
     }
 
+    #[test]
+    fn a_recording_is_listed_once_and_never_without_an_id() {
+        let mut replay = ReplayDto::default();
+        replay.recordings = vec![
+            ReplayRecordingDto {
+                uuid: "rec-a".into(),
+                ..Default::default()
+            },
+            ReplayRecordingDto {
+                uuid: "rec-a".into(),
+                ..Default::default()
+            },
+            ReplayRecordingDto {
+                uuid: "   ".into(),
+                ..Default::default()
+            },
+        ];
+        replay.normalize();
+        assert_eq!(replay.recordings.len(), 1);
+        assert_eq!(replay.recordings[0].uuid, "rec-a");
+    }
     #[test]
     fn a_missing_preserve_pitch_field_defaults_on() {
         let clip: ClipDto =

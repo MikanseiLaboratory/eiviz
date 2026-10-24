@@ -35,6 +35,11 @@ Replay Setup is a dedicated window, opened from the main window. It holds everyt
 
 The angle set is fixed while recording: stop the recording before adding or removing angles.
 
+## Recordings and the session
+
+The session keeps a list of the recordings it uses: recording id, drive, resolution and frame rate, angles and range. Starting a recording appends to that list, and clips and events point at the id. Playback opens the recording from the place the session names, so nothing searches a drive for it (an older session is linked once at load by checking where the ids it names live).
+
+There is one playback store per recording, shared by the channels. A channel reads from its own clip's recording, so two channels can play two different recordings at the same time. The recording in progress has its own store, so an old clip can be played while a new recording runs.
 ## How many angles this PC can record
 
 **Measure this PC** runs the GPU encoder, the CPU encoder, and the targets' read and write speed, then reports how many angles hold 60 fps (about ten seconds; recording keeps running throughout). Recording more angles than it reports means frames are dropped, or the recording stops, following the overflow setting. If the CPU encoder turns out to be the faster one, the result says so, and you can switch encoders.
