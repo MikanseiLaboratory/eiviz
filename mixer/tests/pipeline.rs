@@ -360,7 +360,10 @@ fn omt_program_shows_fade_during_auto() {
     );
 
     let _ = drain_omt_means(&session, Duration::from_millis(80));
-    let during = wait_omt_fade(&session, baseline, Duration::from_millis(1500));
+    // The fade runs for AUTO_MS of master frames, and the OMT picture comes from the
+    // composed program: a slow CI adapter needs the whole transition plus the frames
+    // it takes to reach us, not a fixed 1.5 s that fits a fast desktop.
+    let during = wait_omt_fade(&session, baseline, Duration::from_millis(4000));
     assert!(
         during.len() >= 5,
         "OMT should keep emitting during auto, got {} frames",
