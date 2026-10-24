@@ -277,6 +277,15 @@ impl Inbox {
     }
 }
 
+/// What an angle's audio follows: one input, or the inputs of one scene.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AudioSourceSpec {
+    pub angle_id: u32,
+    /// The input the angle records, when it records an input.
+    pub input_id: u64,
+    /// The scene's gpu id, when the angle records a scene.
+    pub scene_id: u64,
+}
 struct ChannelSlot {
     index: u32,
     source_id: u64,
@@ -1423,7 +1432,34 @@ impl ReplayEngine {
 
     /// Feeds the audio the scheduler just mixed into the waveform buckets of every
     /// angle that records from a mixing unit.
-    pub fn offer_audio(&self, by_unit: &HashMap<u64, Vec<f32>>) {
+    /// The audio of what each angle records, for the angles whose audio follows
+    /// their source: `(angle id, input id or 0, scene id or 0)`. Built once per
+    /// configure and read by the audio graph every block.
+    pub fn audio_sources(&self) -> Arc<[AudioSourceSpec]> {
+        let inner = self.lock();
+        inner
+            .config
+            .angles
+            .iter()
+            .filter(|angle| {
+                angle.audio == eiviz_control::session::replay::AngleAudio::Source
+            })
+            .map(|angle| AudioSourceSpec {
+                angle_id: angle.id,
+                input_id: match angle.source {
+                    AngleSourceKind::Input => angle.input_id,
+                    AngleSourceKind::Scene => 0,
+                },
+                scene_id: match angle.source {
+                    AngleSourceKind::Scene => eiviz_control::ids::scene_gpu_id(angle.scene_id),
+                    AngleSourceKind::Input => 0,
+                },
+            })
+            .collect()
+    }
+
+    pub fn offer_audio(&self, mixed: &crate::audio::MixedAudio) {
+        let by_unit = &mixed.by_unit;
         let mut jobs: Vec<AudioJob> = Vec::new();
         {
             let mut inner = self.lock();
@@ -1440,6 +1476,7 @@ impl ReplayEngine {
                 })
                 .map(|angle| (angle.id, angle.audio_unit_id))
                 .collect();
+            // Angles that follow a mixing unit take that unit's program mix.
             let frame_index = inner.last_frame;
             for (angle_id, unit_id) in targets {
                 let Some(pcm) = by_unit.get(&unit_id) else {
@@ -1452,6 +1489,31 @@ impl ReplayEngine {
                     .push(pcm, AUDIO_CHANNELS);
                 // The block is stored against the frame it was heard on, so audio
                 // and video share one timeline.
+                jobs.push(AudioJob {
+                    angle_id,
+                    frame_index,
+                    sample_rate: AUDIO_SAMPLE_RATE,
+                    channels: AUDIO_CHANNELS as u32,
+                    pcm: pcm.clone(),
+                });
+            }
+            // Angles that follow their source take its own sound: the input the angle
+            // records, or the inputs in the scene it records.
+            let sources: Vec<(u32, &Vec<f32>)> = inner
+                .config
+                .angles
+                .iter()
+                .filter(|angle| {
+                    angle.audio == eiviz_control::session::replay::AngleAudio::Source
+                })
+                .filter_map(|angle| mixed.for_angle(angle.id).map(|pcm| (angle.id, pcm)))
+                .collect();
+            for (angle_id, pcm) in sources {
+                inner
+                    .peaks
+                    .entry(angle_id)
+                    .or_insert_with(|| eiviz_pro_api::PeakAccumulator::new(AUDIO_SAMPLE_RATE))
+                    .push(pcm, AUDIO_CHANNELS);
                 jobs.push(AudioJob {
                     angle_id,
                     frame_index,
@@ -1873,12 +1935,6 @@ impl ReplayEngine {
             };
         }
         n as u32
-    }
-
-    /// Wall clock of the recording's frame 0, in milliseconds since the epoch; 0 when
-    /// nothing has been recorded since this session started.
-    pub fn started_unix_ms(&self) -> u64 {
-        self.lock().started_unix_ms
     }
 
     pub fn recording_uuid(&self) -> String {

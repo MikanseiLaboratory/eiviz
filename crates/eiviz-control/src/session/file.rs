@@ -1517,6 +1517,7 @@ fn replay_to_pb(replay: &crate::session::replay::ReplayDto) -> pb::Replay {
                 audio: match angle.audio {
                     crate::session::replay::AngleAudio::Silent => pb::AngleAudio::Silent as i32,
                     crate::session::replay::AngleAudio::Unit => pb::AngleAudio::Unit as i32,
+                    crate::session::replay::AngleAudio::Source => pb::AngleAudio::Source as i32,
                 },
                 encoder: match angle.encoder {
                     crate::session::replay::AngleEncoder::Cpu => pb::AngleEncoder::Cpu as i32,

@@ -138,6 +138,7 @@ public partial class ReplaySettingsWindow : Window
                 SourceId = angle.Source == "Input" ? angle.InputId : angle.SceneId,
                 Encoder = angle.Encoder,
                 AudioUnitId = angle.AudioUnitId,
+                AudioMode = angle.Audio,
                 DriveIndex = driveOf.TryGetValue(angle.Id, out var index) ? index : -1,
             };
             // The dropdowns are filled before the row reaches the list: a ComboBox reads
@@ -192,6 +193,7 @@ public partial class ReplaySettingsWindow : Window
     private IReadOnlyList<Option<ulong>> AudioOptions() =>
     [
         new(0UL, Loc.T("replay.audioSilent")),
+        new(AngleRow.SourceAudioValue, Loc.T("replay.audioSource")),
         .. _session.Units.Select(unit => new Option<ulong>(unit.Id, unit.Name)),
     ];
 
@@ -749,9 +751,9 @@ public partial class ReplaySettingsWindow : Window
                 ["source"] = angle.SourceKind,
                 ["sceneId"] = angle.SceneId,
                 ["inputId"] = angle.InputId,
-                ["audio"] = angle.AudioUnitId == 0 ? "Silent" : "Unit",
+                ["audio"] = angle.AudioMode,
                 ["audioUnitId"] = angle.AudioUnitId,
-                        ["encoder"] = angle.Encoder,
+                ["encoder"] = angle.Encoder,
             });
         }
         _replay["angles"] = angles;

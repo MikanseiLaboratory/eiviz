@@ -77,6 +77,7 @@ internal sealed class AngleRow : INotifyPropertyChanged
     private ulong _sourceId;
     private string _encoder = "Cpu";
     private ulong _audioUnitId;
+    private string _audioMode = "Silent";
     private int _driveIndex = -1;
 
     public uint Id { get; init; }
@@ -116,10 +117,21 @@ internal sealed class AngleRow : INotifyPropertyChanged
     }
 
     /// <summary>Mixing unit whose program mix feeds this angle. Zero means silent.</summary>
+    /// <summary>Combo value that means "the audio of what this angle records".</summary>
+    public const ulong SourceAudioValue = ulong.MaxValue;
+
     public ulong AudioUnitId
     {
         get => _audioUnitId;
         set => Set(ref _audioUnitId, value);
+    }
+
+    /// <summary>`Silent`, `Unit` (a mixing unit's program mix) or `Source` (what the
+    /// angle records: its input, or the inputs in its scene).</summary>
+    public string AudioMode
+    {
+        get => _audioMode;
+        set => Set(ref _audioMode, value);
     }
 
     /// <summary>Index of the drive this angle records to, or -1 when it has none.</summary>
@@ -184,11 +196,23 @@ internal sealed class AngleRow : INotifyPropertyChanged
 
     public Option<ulong>? AudioOption
     {
-        get => AudioOptions.FirstOrDefault(option => option.Value == AudioUnitId);
+        get =>
+            AudioMode == "Source"
+                ? AudioOptions.FirstOrDefault(option => option.Value == SourceAudioValue)
+                : AudioOptions.FirstOrDefault(option => option.Value == AudioUnitId);
         set
         {
             if (value is not null)
+                if (value.Value == SourceAudioValue)
+            {
+                AudioMode = "Source";
+                AudioUnitId = 0;
+            }
+            else
+            {
+                AudioMode = value.Value == 0 ? "Silent" : "Unit";
                 AudioUnitId = value.Value;
+            }
         }
     }
 

@@ -462,6 +462,8 @@ enum AngleAudio {
   ANGLE_AUDIO_SILENT = 0;
   /// The mixing unit's program mix, selected by `Angle.audio_unit_id`.
   ANGLE_AUDIO_UNIT = 1;
+  /// The audio of what the angle records: its input, or the inputs in its scene.
+  ANGLE_AUDIO_SOURCE = 2;
 }
 
 

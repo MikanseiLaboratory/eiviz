@@ -127,7 +127,8 @@ internal sealed record ReplayAngleInfo(
     string Source = "Scene",
     ulong InputId = 0,
     string Encoder = "Cpu",
-    JsonObject? Json = null)
+    JsonObject? Json = null,
+    string Audio = "Silent")
 {
     /// <summary>`Gpu` encodes from the scene texture; `Cpu` reads it back first.</summary>
     public static string EncoderOf(JsonObject? angle) =>
@@ -524,7 +525,9 @@ internal static class ReplayModel
                 // A document written before the source existed is a scene angle.
                 angle["source"]?.GetValue<string>() ?? "Scene",
                 angle["inputId"]?.GetValue<ulong>() ?? 0,
-                    ReplayAngleInfo.EncoderOf(angle)));
+                    ReplayAngleInfo.EncoderOf(angle),
+                null,
+                angle["audio"]?.GetValue<string>() ?? "Silent"));
         }
         return result;
     }

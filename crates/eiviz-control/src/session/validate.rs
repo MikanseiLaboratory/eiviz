@@ -549,6 +549,20 @@ fn validate_replay(doc: &Document) -> Result<(), ValidationError> {
                 }
             }
         }
+        // An angle that follows its source needs a picture source to follow, and the
+        // source has to carry sound: a scene of silent inputs records silence.
+        if angle.audio == crate::session::replay::AngleAudio::Source {
+            let audible = match angle.source {
+                AngleSourceKind::Input => angle.input_id != 0,
+                AngleSourceKind::Scene => angle.scene_id != 0,
+            };
+            if !audible {
+                return Err(ValidationError::new(format!(
+                    "replay angle {} takes the sound of what it records, but it records nothing",
+                    angle.id
+                )));
+            }
+        }
         // Choosing an audio source that is not there would record silence while
         // claiming otherwise.
         if angle.audio == crate::session::replay::AngleAudio::Unit
@@ -1165,6 +1179,21 @@ mod tests {
         assert!(err.message.contains("no picture"), "{}", err.message);
     }
 
+    /// An angle that takes the sound of what it records needs something to record:
+    /// a scene angle without a scene would claim an audio source it cannot read.
+    #[test]
+    fn a_source_audio_angle_needs_a_source() {
+        use crate::session::replay::*;
+        let mut doc = recordable_replay();
+        {
+            let replay = doc.replay.as_mut().unwrap();
+            replay.angles[0].audio = AngleAudio::Source;
+        }
+        // A scene angle takes the sound of the inputs in that scene, so a scene that
+        // exists is all it needs. An angle without a source is refused earlier: there
+        // is no picture for it to record either.
+        validate(&doc).unwrap();
+    }
     /// Two angles recording one source would record the same picture twice and
     /// silently double the encode load.
     #[test]

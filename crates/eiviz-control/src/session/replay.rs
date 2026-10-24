@@ -40,12 +40,15 @@ session_string_enum! {
 
 session_string_enum! {
     /// Where an angle's audio comes from. `Unit` records the mixing unit's
-    /// program mix; its id lives on `AngleDto::audio_unit_id`.
+    /// program mix; its id lives on `AngleDto::audio_unit_id`. `Source` records the
+    /// audio of what the angle records: the input's own sound, or the sound of the
+    /// inputs in the scene, before any unit fader.
     #[derive(Default)]
     pub enum AngleAudio {
         #[default]
         Silent,
         Unit,
+        Source,
     }
 }
 
