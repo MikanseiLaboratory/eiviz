@@ -348,6 +348,12 @@ struct Inner {
     /// Community and a missing Pro module set this. A plan that simply has too
     /// many channels refuses the document instead.
     operations_reason: Option<String>,
+    /// The recording the store slot currently holds, when it was attached for
+    /// playback. A cue from another recording re-attaches that one.
+    attached: Option<String>,
+    /// Bumped whenever the store is replaced, so the playout drops the frames it
+    /// decoded ahead from the recording that is no longer open.
+    store_generation: u64,
 }
 
 pub struct ReplayEngine {
@@ -445,6 +451,8 @@ impl ReplayEngine {
                 health: HealthMemory::default(),
                 started_at: None,
                 operations_reason: None,
+                attached: None,
+                store_generation: 0,
             }),
             inbox: Arc::new(Inbox::new()),
             audio_inbox: Arc::new(AudioInbox::new()),
@@ -699,28 +707,74 @@ impl ReplayEngine {
                 // Any recording the playlist names will do: a clip from a recording that
                 // has since been removed must not stop the clips that are still on disk
                 // from playing.
-                let root = dto
+                let clips: Vec<&str> = dto
                     .playlists
                     .iter()
                     .flat_map(|list| list.clips.iter())
-                    .filter_map(|clip| {
-                        let uuid = clip.recording_uuid.trim();
-                        if uuid.is_empty() {
-                            return None;
+                    .map(|clip| clip.recording_uuid.trim())
+                    .filter(|uuid| !uuid.is_empty())
+                    .collect();
+                // Every drive is searched, not just the first: an angle may record to a
+                // second drive and its clips must still find their recording.
+                let mut root = None;
+                'search: for storage in &dto.storage {
+                    for uuid in &clips {
+                        let candidate = std::path::Path::new(&storage.path).join(uuid);
+                        if candidate.is_dir() {
+                            root = Some(candidate);
+                            break 'search;
                         }
-                        dto.storage
-                            .first()
-                            .map(|storage| std::path::Path::new(&storage.path).join(uuid))
-                    })
-                    .find(|root| root.is_dir());
+                    }
+                }
+                // An older session names no recording at all. With exactly one recording
+                // on the drives there is nothing to guess: attach it, so the clips the
+                // operator recorded before this field existed still play.
+                if root.is_none() && clips.is_empty() {
+                    let mut found: Vec<std::path::PathBuf> = Vec::new();
+                    for storage in &dto.storage {
+                        let Ok(entries) = std::fs::read_dir(&storage.path) else {
+                            continue;
+                        };
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.is_dir()
+                                && path
+                                    .file_name()
+                                    .is_some_and(|name| name.to_string_lossy().starts_with("rec-"))
+                            {
+                                found.push(path);
+                            }
+                        }
+                    }
+                    if found.len() == 1 {
+                        crate::diag::info(
+                            "replay attach: the session names no recording; using the only one on the drive",
+                        );
+                        root = found.pop();
+                    } else if found.len() > 1 {
+                        crate::diag::info(&format!(
+                            "replay attach: the session names no recording and {} exist; name one from the clip",
+                            found.len()
+                        ));
+                    }
+                }
                 match root {
                     Some(root) => {
                         let path = root.display().to_string();
                         match crate::pro_load::loaded_api() {
                             Some((api, module)) => match attach_ffi(api, module, &path) {
                                 Ok(store) => {
+                                    let uuid = root
+                                        .file_name()
+                                        .map(|name| name.to_string_lossy().into_owned())
+                                        .unwrap_or_default();
                                     *self.store.lock().unwrap_or_else(|error| error.into_inner()) =
                                         Some(std::sync::Arc::new(std::sync::Mutex::new(store)));
+                                    {
+                                        let mut inner = self.lock();
+                                        inner.attached = Some(uuid);
+                                        inner.store_generation = inner.store_generation.wrapping_add(1);
+                                    }
                                     crate::diag::info(&format!("replay attach: attached {path}"));
                                 }
                                 Err(error) => crate::diag::error(&format!(
@@ -1641,6 +1695,50 @@ impl ReplayEngine {
         Ok((inner.uuid.clone(), in_frame, out_frame))
     }
 
+    /// Opens the recording a clip belongs to, so clips from a session that spans more
+    /// than one recording still play. A recording in progress is never replaced: the
+    /// store is then the file being written.
+    ///
+    /// Returns whether the recording is open after the call.
+    fn attach_for_playback(&self, uuid: &str) -> Result<bool, ReplayFailure> {
+        let uuid = uuid.trim();
+        if uuid.is_empty() {
+            return Ok(true);
+        }
+        {
+            let inner = self.lock();
+            if inner.recording || inner.attached.as_deref() == Some(uuid) {
+                return Ok(true);
+            }
+            let path = inner
+                .config
+                .storage
+                .iter()
+                .map(|storage| std::path::Path::new(&storage.path).join(uuid))
+                .find(|candidate| candidate.is_dir());
+            let Some(path) = path else {
+                return Ok(false);
+            };
+            drop(inner);
+            let Some((api, module)) = crate::pro_load::loaded_api() else {
+                return Err(ReplayFailure::io("replay requires the Pro module"));
+            };
+            let store = attach_ffi(api, module, &path.display().to_string()).map_err(|error| {
+                ReplayFailure::io(format!("recording {uuid} could not be opened: {error}"))
+            })?;
+            *self
+                .store
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(std::sync::Arc::new(
+                std::sync::Mutex::new(store),
+            ));
+            let mut inner = self.lock();
+            inner.attached = Some(uuid.to_string());
+            inner.store_generation = inner.store_generation.wrapping_add(1);
+            crate::diag::info(&format!("replay attach: attached {uuid} for a cue"));
+        }
+        Ok(true)
+    }
     pub fn cue(
         &self,
         channel: u32,
@@ -1662,6 +1760,24 @@ impl ReplayEngine {
             ));
         }
         drop(inner);
+        // Bring the recording this clip belongs to into the store slot. A session that
+        // spans several recordings (recorded, restarted, recorded again) needs this:
+        // otherwise the older clips read frames from the newer recording.
+        // Best effort: a recording that is not on a drive leaves the store as it is.
+        // The cue then either uses the open recording or reports that none is open.
+        let _ = self.attach_for_playback(recording_uuid)?;
+        // Without an attached recording there is nothing to read: say so, instead of
+        // cueing a clip that can only play black. The session keeps the timecodes.
+        if self
+            .store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_none()
+        {
+            return Err(ReplayFailure::io(
+                "the recording for this clip is not on any drive; the timecodes stay in the session",
+            ));
+        }
         if let Some((first, _)) = self.angle_range(angle_id)
             && eiviz_control::session::replay::clip_overwritten(out_frame, Some(first))
         {
@@ -2937,7 +3053,7 @@ struct ChannelPlayout {
     ahead: std::collections::VecDeque<AheadFrame>,
     /// Revisions the queued pictures belong to. A cue, a speed change or a new
     /// playlist makes them wrong, and showing one would put the old transport on air.
-    seen: (u64, u64),
+    seen: (u64, u64, u64),
     depth: usize,
     /// How long the last decode took. A machine where that is already a large part
     /// of a frame (a software adapter, a busy CPU) must not try to run ahead: the
@@ -2962,7 +3078,7 @@ impl ChannelPlayout {
             decoder: ChannelDecoder::new(context.width, context.height, context.profile),
             next: Instant::now(),
             ahead: std::collections::VecDeque::with_capacity(4),
-            seen: (0, 0),
+            seen: (0, 0, 0),
             depth: ahead_depth(context.width, context.height, context.decode_ahead),
             last_decode: Duration::ZERO,
             last_source: None,
@@ -3039,7 +3155,7 @@ impl ChannelPlayout {
         let audio = Arc::clone(&self.audio);
         // A configure that dropped this channel stops the loop, but one stale tick can
         // still land before that thread sees the flag.
-        let (mut transport, transport_revision, revision, last_frame) = {
+        let (mut transport, transport_revision, revision, last_frame, store_generation) = {
             let inner = engine.lock();
             let Some(slot) = inner.channels.iter().find(|slot| slot.index == index) else {
                 return;
@@ -3049,6 +3165,7 @@ impl ChannelPlayout {
                 slot.transport_revision,
                 inner.playlist_revision,
                 inner.last_frame,
+                inner.store_generation,
             )
         };
         let gpu = engine.gpu_device();
@@ -3063,9 +3180,9 @@ impl ChannelPlayout {
         let fps = context.fps;
         // A cue, a speed change or a reconfigure makes every queued picture wrong, and
         // the ones already decoded belong to the transport that was on air before it.
-        if self.seen != (transport_revision, revision) {
+        if self.seen != (transport_revision, revision, store_generation) {
             self.ahead.clear();
-            self.seen = (transport_revision, revision);
+            self.seen = (transport_revision, revision, store_generation);
         }
         transport.note_recorded_frame(last_frame);
         self.fire_crossed_cues(engine, transport.source_frame(), context.period);
