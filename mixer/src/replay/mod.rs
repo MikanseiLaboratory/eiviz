@@ -356,6 +356,10 @@ struct Inner {
     /// Wall clock (milliseconds since the epoch) at the recording start: the time of
     /// frame 0, which is what the deck shows as the recording's timecode.
     started_unix_ms: u64,
+    /// The render frame the recording began on. A recording numbers its frames from
+    /// its own first frame, so a clip's frame numbers match the segments the store
+    /// wrote; the render counter keeps running across recordings.
+    started_frame: Option<u64>,
     /// Why record and play are refused while the document stays loaded.
     /// Community and a missing Pro module set this. A plan that simply has too
     /// many channels refuses the document instead.
@@ -465,6 +469,7 @@ impl ReplayEngine {
                 health: HealthMemory::default(),
                 started_at: None,
             started_unix_ms: 0,
+            started_frame: None,
                 operations_reason: None,
             }),
             inbox: Arc::new(Inbox::new()),
@@ -1134,6 +1139,8 @@ impl ReplayEngine {
         inner.first_frame = 0;
         inner.last_frame = 0;
         inner.has_frames = false;
+        // The first frame this recording sees becomes its frame 0.
+        inner.started_frame = None;
         inner.stats.state = REPLAY_STATE_RECORDING;
         inner.stats.stop_reason = REPLAY_STOP_NONE;
         inner.stats.remaining_is_estimate = 1;
@@ -1302,12 +1309,26 @@ impl ReplayEngine {
         pts: i64,
         payload: &[u8],
     ) -> bool {
-        let (width, height, fps_num, fps_den) = {
-            let inner = self.lock();
+        let (width, height, fps_num, fps_den, frame_index) = {
+            let mut inner = self.lock();
             if !inner.recording {
                 return false;
             }
-            (inner.width, inner.height, inner.fps_num, inner.fps_den)
+            // A recording numbers frames from its own start, like the readback path.
+            let frame_index = match inner.started_frame {
+                Some(start) => frame_index.saturating_sub(start),
+                None => {
+                    inner.started_frame = Some(frame_index);
+                    0
+                }
+            };
+            (
+                inner.width,
+                inner.height,
+                inner.fps_num,
+                inner.fps_den,
+                frame_index,
+            )
         };
         let frame = EncodedFrame {
             payload: Arc::new(payload.to_vec()),
@@ -1371,6 +1392,19 @@ impl ReplayEngine {
         stride: usize,
         layout: PixelLayout,
     ) {
+        // The caller counts render frames for the life of the mixer; a recording
+        // counts from its own first frame, which is what the store names its
+        // segments and index by.
+        let frame_index = {
+            let mut inner = self.lock();
+            match inner.started_frame {
+                Some(start) => frame_index.saturating_sub(start),
+                None => {
+                    inner.started_frame = Some(frame_index);
+                    0
+                }
+            }
+        };
         let accepted = self.inbox.offer(RecordFrame {
             angle_id,
             frame_index,
