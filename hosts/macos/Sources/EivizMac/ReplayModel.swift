@@ -701,23 +701,6 @@ struct ReplayDocument {
         })
     }
 
-    /// Drops the link from every clip to an event that no longer exists. The clip
-    /// keeps its own recording, range and angle, so it still plays.
-    mutating func clearSourceEvent(_ eventId: UInt64) {
-        guard var playlists = raw["playlists"]?.arrayValue else { return }
-        for index in playlists.indices {
-            guard var playlist = playlists[index].objectValue,
-                  var clips = playlist["clips"]?.arrayValue
-            else { continue }
-            var changed = false
-            for clipIndex in clips.indices {
-                guard var clip = clips[clipIndex].objectValue,
-                      (clip["sourceEvent"]?.uint64Value ?? 0) == eventId
-                else { continue }
-                clip.removeValue(forKey: "sourceEvent")
-                clips[clipIndex] = .object(clip)
-                changed = true
-            }
             guard changed else { continue }
             playlist["clips"] = .array(clips)
             playlist["revision"] = .number(Double((playlist["revision"]?.uint64Value ?? 0) + 1))
@@ -765,7 +748,6 @@ struct ReplayDocument {
                 "uid": .string(uniqueClipUid(event.id)),
                 "source": .string("Angle"),
                 "angleId": .number(Double(angleId)),
-                "sourceEvent": .number(Double(event.id)),
                 "recordingUuid": .string(event.recordingUuid),
                 "inFrame": .number(Double(event.inFrame)),
                 "outFrame": .number(Double(event.outFrame)),

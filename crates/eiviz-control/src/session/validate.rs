@@ -765,14 +765,6 @@ fn validate_replay(doc: &Document) -> Result<(), ValidationError> {
                     clip.uid, clip.speed
                 )));
             }
-            if let Some(source_event) = clip.source_event {
-                if !events.contains(&source_event) {
-                    return Err(ValidationError::new(format!(
-                        "replay clip {} references event {source_event}, which does not exist",
-                        clip.uid
-                    )));
-                }
-            }
         }
     }
     let queue = replay.buffering.encode_queue_frames;
@@ -1304,7 +1296,6 @@ mod tests {
                 uid: "clip-1".into(),
                 source: ClipSourceKind::Angle,
                 angle_id: 1,
-                source_event: Some(1),
                 ..ClipDto::default()
             }],
             default_transition: ClipTransitionDto::default(),
@@ -1317,12 +1308,8 @@ mod tests {
 
         let clip = &mut doc.replay.as_mut().unwrap().playlists[0].clips[0];
         clip.angle_id = 1;
-        clip.source_event = Some(42);
-        let err = validate(&doc).unwrap_err();
-        assert!(err.message.contains("event 42"), "{}", err.message);
 
         let replay = doc.replay.as_mut().unwrap();
-        replay.playlists[0].clips[0].source_event = Some(1);
         replay.playlists[0].clips.push(ClipDto {
             uid: "clip-1".into(),
             source: ClipSourceKind::Angle,
@@ -1351,14 +1338,12 @@ mod tests {
                     uid: "clip-1".into(),
                     source: ClipSourceKind::Angle,
                     angle_id: 1,
-                    source_event: Some(1),
                     ..ClipDto::default()
                 },
                 ClipDto {
                     uid: "clip-1-2".into(),
                     source: ClipSourceKind::Angle,
                     angle_id: 1,
-                    source_event: Some(1),
                     ..ClipDto::default()
                 },
             ],

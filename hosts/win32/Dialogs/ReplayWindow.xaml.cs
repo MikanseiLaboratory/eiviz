@@ -878,6 +878,28 @@ public partial class ReplayWindow : Window
     /// Commits an in or out point typed into a clip or event row. The cell shows a
     /// timecode and accepts one back, or a plain frame number.
     /// </summary>
+    /// <summary>
+    /// A range cell can be scrubbed with the mouse as well as typed into: dragging up
+    /// adds frames, dragging down removes them, and the value is committed on release.
+    /// </summary>
+    private void RangeCell_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not TextBox box)
+            return;
+        // Rows are recycled, so the handlers are attached once per cell.
+        box.Loaded -= RangeCell_Loaded;
+        NumericDrag.AttachTimecode(
+            box,
+            2f,
+            text => _replay is not null && ReplayModel.TryParseTimecode(
+                text, ReplayModel.Fps(_replay, _session), out var frames)
+                ? frames
+                : null,
+            frames => box.Text = ReplayModel.Timecode(
+                (ulong)Math.Max(0, Math.Round(frames)),
+                ReplayModel.Fps(_replay!, _session)),
+            () => CommitRange(box));
+    }
     private void RangeCell_LostFocus(object sender, RoutedEventArgs e) => CommitRange(sender as TextBox);
 
     private void RangeCell_KeyDown(object sender, KeyEventArgs e)
@@ -1112,6 +1134,7 @@ public partial class ReplayWindow : Window
             var previous = existing.FirstOrDefault(row => row.Id == entry.Id);
             var row = previous ?? new EventRow { Id = entry.Id };
             row.IsLoading = true;
+            row.InFrame = entry.InFrame;
             row.InText = ReplayModel.Timecode(entry.InFrame, fps);
             row.OutText = ReplayModel.Timecode(entry.OutFrame, fps);
             row.DurationText = ReplayModel.Duration(entry.InFrame, entry.OutFrame, fps);
@@ -1158,13 +1181,6 @@ public partial class ReplayWindow : Window
         }
         if (_replay["events"] is not JsonArray events)
             return;
-        // A clip that names this event cannot outlive it: the control layer refuses
-        // the whole document, which would look like the save silently doing nothing.
-        if (ReplayModel.ClipsForEvent(_replay, row.Id) > 0)
-        {
-            Warn(Loc.T("replay.eventHasClips"));
-            return;
-        }
         for (var index = 0; index < events.Count; index++)
         {
             if (events[index] is JsonObject entry && entry["id"]?.GetValue<ulong>() == row.Id)
@@ -1183,18 +1199,15 @@ public partial class ReplayWindow : Window
     {
         if (sender is not Button { Tag: EventRow row } || _replay is null)
             return;
-        var clip = ReplayModel.Clips(_replay, _playlistId)
-            .FirstOrDefault(candidate => ReplayModel.EventIdOf(candidate.Uid) == row.Id);
-        if (clip is null)
-        {
-            Warn(Loc.T("replay.eventNotInPlaylist"));
-            return;
-        }
-        if (Backend?.ReplayCue(_channel, clip.Uid) != true)
+        // The event is a range of the recording, not a playlist entry, so cue it where
+        // it starts on the channel that is showing it.
+        var target = (long)Math.Min(row.InFrame, long.MaxValue);
+        if (Backend?.ReplayTransport(_channel, false, _speedMilli, target) != true)
         {
             Warn(Refusal(Loc.T("replay.cueRefused")));
             return;
         }
+        _live = false;
         RefreshStatus();
     }
 
@@ -1774,23 +1787,6 @@ public partial class ReplayWindow : Window
             if (events[index] is JsonObject entry && (entry["id"]?.GetValue<ulong>() ?? 0) == row.Id)
                 events.RemoveAt(index);
         }
-        // A clip keeps its own recording, range and angle, so it survives the event
-        // it came from; only the reference to an event that is gone goes away.
-        foreach (var playlist in _replay["playlists"] as JsonArray ?? new JsonArray())
-        {
-            if (playlist is not JsonObject list || list["clips"] is not JsonArray clips)
-                continue;
-            var changed = false;
-            foreach (var item in clips)
-            {
-                if (item is not JsonObject clip || (clip["sourceEvent"]?.GetValue<ulong>() ?? 0) != row.Id)
-                    continue;
-                clip.Remove("sourceEvent");
-                changed = true;
-            }
-            if (changed)
-                list["revision"] = (list["revision"]?.GetValue<ulong>() ?? 0) + 1;
-        }
         SaveDocument();
         RefreshEvents();
         RefreshPlaylist();
@@ -1828,7 +1824,6 @@ public partial class ReplayWindow : Window
             ["uid"] = ReplayModel.UniqueClipUid(_replay, source.Id),
             ["source"] = "Angle",
             ["angleId"] = angleId,
-            ["sourceEvent"] = source.Id,
             ["recordingUuid"] = source.RecordingUuid,
             ["inFrame"] = source.InFrame,
             ["outFrame"] = source.OutFrame,
@@ -2589,7 +2584,9 @@ public partial class ReplayWindow : Window
 
         public ulong Id { get; init; }
 
-        /// <summary>In, out and length, read-only: they come from the mark.</summary>
+        /// <summary>The range the operator marked, for cueing the event itself.</summary>
+        public ulong InFrame { get; set; }
+
         public string InText { get; set; } = "";
 
         public string OutText { get; set; } = "";
@@ -2667,7 +2664,6 @@ public partial class ReplayWindow : Window
             set => Set(ref _marker, value);
         }
 
-        /// <summary>In, out and length, read-only: they come from the mark.</summary>
         public string InText { get; set; } = "";
 
         public string OutText { get; set; } = "";

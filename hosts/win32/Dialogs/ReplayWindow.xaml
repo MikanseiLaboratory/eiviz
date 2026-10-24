@@ -204,7 +204,7 @@
                                     <DataTemplate>
                                         <TextBox Name="EventInBox" Text="{Binding InText, Mode=OneWay}" Tag="{Binding}" FontFamily="Consolas"
                                                  Height="24" Margin="2,1" VerticalContentAlignment="Center"
-                                                 LostFocus="RangeCell_LostFocus" KeyDown="RangeCell_KeyDown"
+                                                 Loaded="RangeCell_Loaded" LostFocus="RangeCell_LostFocus" KeyDown="RangeCell_KeyDown"
                                                  ToolTip="{Binding [replay.rangeHelp], Source={x:Static i18n:Loc.Source}}"/>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
@@ -214,7 +214,7 @@
                                     <DataTemplate>
                                         <TextBox Name="EventOutBox" Text="{Binding OutText, Mode=OneWay}" Tag="{Binding}" FontFamily="Consolas"
                                                  Height="24" Margin="2,1" VerticalContentAlignment="Center"
-                                                 LostFocus="RangeCell_LostFocus" KeyDown="RangeCell_KeyDown"
+                                                 Loaded="RangeCell_Loaded" LostFocus="RangeCell_LostFocus" KeyDown="RangeCell_KeyDown"
                                                  ToolTip="{Binding [replay.rangeHelp], Source={x:Static i18n:Loc.Source}}"/>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
@@ -345,7 +345,7 @@
                                     <DataTemplate>
                                         <TextBox Name="ClipInBox" Text="{Binding InText, Mode=OneWay}" Tag="{Binding}" FontFamily="Consolas"
                                                  Height="24" Margin="2,1" VerticalContentAlignment="Center"
-                                                 LostFocus="RangeCell_LostFocus" KeyDown="RangeCell_KeyDown"
+                                                 Loaded="RangeCell_Loaded" LostFocus="RangeCell_LostFocus" KeyDown="RangeCell_KeyDown"
                                                  ToolTip="{Binding [replay.rangeHelp], Source={x:Static i18n:Loc.Source}}"/>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
@@ -355,7 +355,7 @@
                                     <DataTemplate>
                                         <TextBox Name="ClipOutBox" Text="{Binding OutText, Mode=OneWay}" Tag="{Binding}" FontFamily="Consolas"
                                                  Height="24" Margin="2,1" VerticalContentAlignment="Center"
-                                                 LostFocus="RangeCell_LostFocus" KeyDown="RangeCell_KeyDown"
+                                                 Loaded="RangeCell_Loaded" LostFocus="RangeCell_LostFocus" KeyDown="RangeCell_KeyDown"
                                                  ToolTip="{Binding [replay.rangeHelp], Source={x:Static i18n:Loc.Source}}"/>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>

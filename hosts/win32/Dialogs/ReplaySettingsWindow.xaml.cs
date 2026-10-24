@@ -531,13 +531,21 @@ public partial class ReplaySettingsWindow : Window
     {
         if (sender is not Button { Tag: AngleRow row })
             return;
-        // A clip that plays this angle, or takes its sound from it, would be left
-        // pointing at nothing, so the angle waits until those clips are gone.
+        // A clip that plays this angle, or takes its sound from it, has nowhere to go
+        // once the angle is gone. Deleting the angle therefore offers to delete those
+        // clips: refusing outright left an angle that could never be removed.
         var users = ClipsUsingAngle(row.Id);
         if (users > 0)
         {
-            Refuse(Loc.Format("replay.angleInUse", users));
-            return;
+            var answer = MessageBox.Show(
+                this,
+                Loc.Format("replay.angleInUseDeleteClips", users),
+                Title,
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.OK)
+                return;
+            RemoveClipsUsingAngle(row.Id);
         }
         row.PropertyChanged -= AngleRow_Changed;
         _angles.Remove(row);
@@ -546,6 +554,30 @@ public partial class ReplaySettingsWindow : Window
         _dirty = true;
     }
 
+    /// <summary>Deletes the clips that play this angle or take their sound from it.</summary>
+    private void RemoveClipsUsingAngle(uint angleId)
+    {
+        if (_replay?["playlists"] is not JsonArray playlists)
+            return;
+        foreach (var list in playlists.OfType<JsonObject>())
+        {
+            if (list["clips"] is not JsonArray clips)
+                continue;
+            var before = clips.Count;
+            for (var index = clips.Count - 1; index >= 0; index--)
+            {
+                if (clips[index] is not JsonObject clip)
+                    continue;
+                if ((clip["angleId"]?.GetValue<uint>() ?? 0) == angleId
+                    || (clip["audioAngleId"]?.GetValue<uint>() ?? 0) == angleId)
+                {
+                    clips.RemoveAt(index);
+                }
+            }
+            if (clips.Count != before)
+                list["revision"] = (list["revision"]?.GetValue<ulong>() ?? 0) + 1;
+        }
+    }
     /// <summary>How many clips play this angle, or take their sound from it.</summary>
     private int ClipsUsingAngle(uint angleId)
     {

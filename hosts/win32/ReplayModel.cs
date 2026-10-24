@@ -266,8 +266,8 @@ internal static class ReplayModel
         // copy deleted those events (and then the clips they carried), which the log
         // showed as "events 3->0" on a plain deck save. Merge by id instead, and let
         // the window say which ones it meant to delete.
-        var eventIds = MergeEvents(current, deck, deletedEvents);
-        MergePlaylists(current, deck, deletedClips, eventIds);
+        MergeEvents(current, deck, deletedEvents);
+        MergePlaylists(current, deck, deletedClips);
         if (angleEdited && deck["activeAngleId"] is { } angle)
             current["activeAngleId"] = angle.DeepClone();
         // The counters only ever move forward: a stale window must not reuse an id.
@@ -281,32 +281,15 @@ internal static class ReplayModel
         return current;
     }
 
-    /// <summary>How many clips name this event as their source.</summary>
-    public static int ClipsForEvent(JsonObject root, ulong eventId)
-    {
-        var count = 0;
-        if (root["playlists"] is not JsonArray playlists)
-            return 0;
-        foreach (var playlist in playlists.OfType<JsonObject>())
-        {
-            if (playlist["clips"] is not JsonArray clips)
-                continue;
-            count += clips.OfType<JsonObject>()
-                .Count(clip => (clip["sourceEvent"]?.GetValue<ulong>() ?? 0) == eventId);
-        }
-        return count;
-    }
 
     /// <summary>
     /// Applies the window's events onto the document by id. An event the window does
     /// not have is kept unless the window deleted it.
     /// </summary>
-    private static HashSet<ulong> MergeEvents(JsonObject current, JsonObject deck, IReadOnlySet<ulong>? deleted)
+    private static void MergeEvents(JsonObject current, JsonObject deck, IReadOnlySet<ulong>? deleted)
     {
         if (deck["events"] is not JsonArray incoming)
-            return current["events"] is JsonArray kept
-                ? kept.OfType<JsonObject>().Select(item => item["id"]?.GetValue<ulong>() ?? 0).ToHashSet()
-                : [];
+            return;
         var byId = new Dictionary<ulong, JsonObject>();
         var order = new List<ulong>();
         if (current["events"] is JsonArray existing)
@@ -333,7 +316,6 @@ internal static class ReplayModel
         foreach (var id in order)
             merged.Add(byId[id]);
         current["events"] = merged;
-        return byId.Keys.ToHashSet();
     }
 
     /// <summary>
@@ -343,8 +325,7 @@ internal static class ReplayModel
     private static void MergePlaylists(
         JsonObject current,
         JsonObject deck,
-        IReadOnlySet<string>? deletedClips,
-        HashSet<ulong> eventIds)
+        IReadOnlySet<string>? deletedClips)
     {
         if (deck["playlists"] is not JsonArray incoming)
             return;
@@ -382,11 +363,6 @@ internal static class ReplayModel
                 {
                     var uid = clip["uid"]?.GetValue<string>() ?? "";
                     if (deletedClips?.Contains(uid) == true)
-                        continue;
-                    // A clip whose event is gone can never be played or saved: the
-                    // control layer refuses the document that carries it.
-                    var source = clip["sourceEvent"]?.GetValue<ulong>() ?? 0;
-                    if (source != 0 && !eventIds.Contains(source))
                         continue;
                     if (!byUid.ContainsKey(uid))
                         order.Add(uid);
@@ -794,7 +770,6 @@ internal static class ReplayModel
             ["uid"] = uid,
             ["source"] = "Angle",
             ["angleId"] = angleId,
-            ["sourceEvent"] = eventId,
             ["recordingUuid"] = recordingUuid,
             ["inFrame"] = inFrame,
             ["outFrame"] = outFrame,
@@ -986,22 +961,6 @@ internal static class ReplayModel
         return candidate;
     }
 
-    /// <summary>
-    /// The event a clip was cut from. A clip's uid starts with the event id, with a
-    /// suffix when the same event was filed twice, so the event list can offer the clip
-    /// that belongs to an event.
-    /// </summary>
-    public static ulong? EventIdOf(string clipUid)
-    {
-        const string prefix = "clip-";
-        if (!clipUid.StartsWith(prefix, StringComparison.Ordinal))
-            return null;
-        var rest = clipUid[prefix.Length..];
-        var dash = rest.IndexOf('-');
-        if (dash >= 0)
-            rest = rest[..dash];
-        return ulong.TryParse(rest, out var id) ? id : null;
-    }
 }
 
 

@@ -311,7 +311,7 @@ impl ReplayDto {
             uid: format!("clip-{id}"),
             source: ClipSourceKind::Angle,
             angle_id,
-            source_event: Some(id),
+
             recording_uuid: uuid.to_string(),
             in_frame,
             out_frame,
@@ -587,8 +587,6 @@ pub struct ClipDto {
     #[serde(default)]
     pub asset_path: String,
     #[serde(default)]
-    pub source_event: Option<u64>,
-    #[serde(default)]
     pub recording_uuid: String,
     #[serde(default)]
     pub in_frame: u64,
@@ -632,7 +630,6 @@ impl Default for ClipDto {
             source: ClipSourceKind::Angle,
             angle_id: 0,
             asset_path: String::new(),
-            source_event: None,
             recording_uuid: String::new(),
             in_frame: 0,
             out_frame: 0,
@@ -1345,7 +1342,6 @@ mod tests {
         assert_eq!(replay.playlists[0].revision, 2, "the playlist changed");
         let clip = &replay.playlists[0].clips[0];
         assert_eq!(clip.transition, default, "the default transition applies");
-        assert_eq!(clip.source_event, Some(1));
         assert_eq!(clip.angle_id, 1);
         assert_eq!(clip.recording_uuid, "rec");
         assert_eq!((clip.in_frame, clip.out_frame), (10, 40));

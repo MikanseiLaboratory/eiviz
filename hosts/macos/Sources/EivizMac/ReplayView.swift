@@ -1238,7 +1238,6 @@ struct ReplayView: View {
         current.removeEvent(id)
         // A clip keeps its own recording, range and angle, so it survives the event
         // it came from; only the reference to an event that is gone goes away.
-        current.clearSourceEvent(id)
         save(current)
         selectedEvent = nil
     }

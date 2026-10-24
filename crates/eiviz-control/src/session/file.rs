@@ -1569,8 +1569,6 @@ fn replay_to_pb(replay: &crate::session::replay::ReplayDto) -> pb::Replay {
                         },
                         angle_id: clip.angle_id,
                         asset_path: clip.asset_path.clone(),
-                        source_event: clip.source_event.unwrap_or(0),
-                        has_source_event: clip.source_event.is_some(),
                         recording_uuid: clip.recording_uuid.clone(),
                         in_frame: clip.in_frame,
                         out_frame: clip.out_frame,
@@ -1730,7 +1728,6 @@ fn replay_from_pb(replay: pb::Replay) -> Result<crate::session::replay::ReplayDt
                         },
                         angle_id: clip.angle_id,
                         asset_path: clip.asset_path,
-                        source_event: clip.has_source_event.then_some(clip.source_event),
                         recording_uuid: clip.recording_uuid,
                         in_frame: clip.in_frame,
                         out_frame: clip.out_frame,
@@ -2095,7 +2092,6 @@ mod tests {
                     source: ClipSourceKind::Angle,
                     angle_id: 3,
                     asset_path: String::new(),
-                    source_event: Some(4),
                     recording_uuid: "rec-4".into(),
                     in_frame: 10,
                     out_frame: 40,
@@ -2180,7 +2176,7 @@ mod tests {
       "revision": 3,
       "defaultTransition": { "kind": "Dissolve", "timing": "Additive", "durationFrames": 25 },
       "clips": [{
-        "uid": "clip-4", "source": "Angle", "angleId": 2, "sourceEvent": 4, "recordingUuid": "rec-1",
+        "uid": "clip-4", "source": "Angle", "angleId": 2, "recordingUuid": "rec-1",
         "inFrame": 100, "outFrame": 400, "speed": 0.5, "gainDb": -6.0, "tags": ["Score"],
         "preservePitch": true, "audio": "Angle", "audioAngleId": 1,
         "transition": { "kind": "Dissolve", "timing": "Additive", "durationFrames": 25 }
