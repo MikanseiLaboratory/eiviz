@@ -613,6 +613,89 @@ internal static class ReplayModel
     public static double Rate((uint Num, uint Den) fps) =>
         fps.Den == 0 ? 60.0 : (double)fps.Num / fps.Den;
 
+    /// <summary>
+    /// When a recording's frame 0 was written, in milliseconds since the epoch. Null
+    /// when the session does not know: the recording predates the timecode, or it is
+    /// not in the list.
+    /// </summary>
+    public static ulong? RecordingStart(JsonObject root, string? uuid)
+    {
+        if (string.IsNullOrWhiteSpace(uuid))
+            return null;
+        foreach (var item in Array(root, "recordings").OfType<JsonObject>())
+        {
+            if (!string.Equals(item["uuid"]?.GetValue<string>(), uuid, StringComparison.Ordinal))
+                continue;
+            var started = item["createdMs"]?.GetValue<ulong>() ?? 0;
+            return started == 0 ? null : started;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The wall-clock time of a frame: the recording started at `startMs` and this frame
+    /// is `frames` into it. "HH:MM:SS:FF". A recording whose start is unknown falls back
+    /// to the time from the recording's own beginning, which is what the deck showed
+    /// before it knew the clock.
+    /// </summary>
+    public static string Timestamp(ulong? startMs, ulong frames, (uint Num, uint Den) fps)
+    {
+        if (startMs is not ulong start || start == 0)
+            return Timecode(frames, fps);
+        var rate = Rate(fps);
+        var perSecond = (int)Math.Round(rate);
+        if (perSecond <= 0)
+            return Timecode(frames, fps);
+        // The recording start is stored in UTC milliseconds; the operator reads the
+        // clock on the wall, so the timecode is in this machine's zone.
+        var local = DateTimeOffset.FromUnixTimeMilliseconds((long)start).ToLocalTime();
+        var dayMs = local.TimeOfDay.TotalMilliseconds;
+        var totalSeconds = (ulong)(dayMs / 1000) + frames / (ulong)perSecond;
+        var frame = (int)(frames % (ulong)perSecond);
+        return $"{totalSeconds / 3600 % 24:00}:{totalSeconds / 60 % 60:00}:{totalSeconds % 60:00}:{frame:00}";
+    }
+
+    /// <summary>
+    /// Reads a wall-clock timecode ("HH:MM:SS:FF", optionally prefixed with the date
+    /// part discarded here) back into frames from the recording's start. Falls back to
+    /// <see cref="TryParseTimecode"/> when the recording's start is unknown.
+    /// </summary>
+    public static bool TryParseTimestamp(
+        string? text,
+        ulong? startMs,
+        (uint Num, uint Den) fps,
+        out ulong frames)
+    {
+        frames = 0;
+        if (startMs is not ulong start || start == 0)
+            return TryParseTimecode(text, fps, out frames);
+        var rate = Rate(fps);
+        var perSecond = (int)Math.Round(rate);
+        if (perSecond <= 0)
+            return TryParseTimecode(text, fps, out frames);
+        var parts = (text ?? "").Trim().Split(':', '.', ';');
+        if (parts.Length != 4
+            || !uint.TryParse(parts[0], out var hours)
+            || !uint.TryParse(parts[1], out var minutes)
+            || !uint.TryParse(parts[2], out var seconds)
+            || !uint.TryParse(parts[3], out var frame)
+            || frame >= (uint)perSecond)
+            return false;
+        var local = DateTimeOffset.FromUnixTimeMilliseconds((long)start).ToLocalTime();
+        var startSeconds = (long)local.TimeOfDay.TotalSeconds;
+        // The recording's own frames per day: the timecode wraps at midnight, so the
+        // typed value may be a little before or after the recording's start.
+        var typed = (long)hours * 3600 + (long)minutes * 60 + seconds;
+        var delta = typed - startSeconds;
+        if (delta < -12 * 3600)
+            delta += 24 * 3600;
+        if (delta > 12 * 3600)
+            delta -= 24 * 3600;
+        if (delta < 0)
+            return false;
+        frames = (ulong)delta * (ulong)perSecond + frame;
+        return true;
+    }
     /// <summary>HH:MM:SS:FF.</summary>
     public static string Timecode(ulong frames, (uint Num, uint Den) fps)
     {
@@ -714,7 +797,8 @@ internal static class ReplayModel
         uint height,
         uint fpsNum,
         uint fpsDen,
-        ulong firstFrame)
+        ulong firstFrame,
+        ulong startedMs = 0)
     {
         uuid = uuid.Trim();
         if (uuid.Length == 0)
@@ -741,7 +825,14 @@ internal static class ReplayModel
         entry["firstFrame"] = firstFrame;
         entry["angles"] = ids;
         entry["lastFrame"] ??= 0UL;
-        entry["createdMs"] ??= (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        // The wall clock of frame 0: the timecode the deck shows. Kept when the caller
+        // does not know it (a session written before it existed).
+        if (startedMs != 0 || entry["createdMs"] is null)
+        {
+            entry["createdMs"] = startedMs != 0
+                ? startedMs
+                : (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        }
         return true;
     }
 

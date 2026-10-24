@@ -344,6 +344,9 @@ struct Inner {
     peaks: HashMap<u32, eiviz_pro_api::PeakAccumulator>,
     health: HealthMemory,
     started_at: Option<Instant>,
+    /// Wall clock (milliseconds since the epoch) at the recording start: the time of
+    /// frame 0, which is what the deck shows as the recording's timecode.
+    started_unix_ms: u64,
     /// Why record and play are refused while the document stays loaded.
     /// Community and a missing Pro module set this. A plan that simply has too
     /// many channels refuses the document instead.
@@ -452,6 +455,7 @@ impl ReplayEngine {
                 peaks: HashMap::new(),
                 health: HealthMemory::default(),
                 started_at: None,
+            started_unix_ms: 0,
                 operations_reason: None,
             }),
             inbox: Arc::new(Inbox::new()),
@@ -1114,6 +1118,10 @@ impl ReplayEngine {
         inner.fps_num = fps_num;
         inner.fps_den = fps_den;
         inner.started_at = Some(Instant::now());
+        inner.started_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as u64)
+            .unwrap_or(0);
         inner.first_frame = 0;
         inner.last_frame = 0;
         inner.has_frames = false;
@@ -1317,7 +1325,7 @@ impl ReplayEngine {
             Ok(WriteOutcome::Accepted) => {
                 let mut inner = self.lock();
                 *inner.angle_written.entry(angle_id).or_insert(0) += 1;
-                inner.stats.encoded_frames = inner.stats.encoded_frames.saturating_add(1);
+                inner.stats.frames_written = inner.stats.frames_written.saturating_add(1);
                 if !inner.has_frames {
                     inner.first_frame = frame_index;
                     inner.has_frames = true;
@@ -1329,7 +1337,7 @@ impl ReplayEngine {
             }
             Ok(WriteOutcome::Dropped) => {
                 let mut inner = self.lock();
-                inner.stats.encoded_dropped = inner.stats.encoded_dropped.saturating_add(1);
+                inner.stats.frames_dropped = inner.stats.frames_dropped.saturating_add(1);
                 false
             }
             Err(error) => {
@@ -1338,7 +1346,7 @@ impl ReplayEngine {
                 // disk that is genuinely behind, and the drop counter says how many
                 // frames were lost.
                 let mut inner = self.lock();
-                inner.stats.encoded_dropped = inner.stats.encoded_dropped.saturating_add(1);
+                inner.stats.frames_dropped = inner.stats.frames_dropped.saturating_add(1);
                 crate::diag::error(&format!("replay GPU encode write failed: {error}"));
                 false
             }
@@ -1867,6 +1875,12 @@ impl ReplayEngine {
         n as u32
     }
 
+    /// Wall clock of the recording's frame 0, in milliseconds since the epoch; 0 when
+    /// nothing has been recorded since this session started.
+    pub fn started_unix_ms(&self) -> u64 {
+        self.lock().started_unix_ms
+    }
+
     pub fn recording_uuid(&self) -> String {
         self.lock().uuid.clone()
     }
@@ -2096,10 +2110,6 @@ impl ReplayEngine {
             "remainingIsEstimate": stats.remaining_is_estimate != 0,
             "framesWritten": stats.frames_written,
             "framesDropped": stats.frames_dropped,
-            // Kept in the ABI for older hosts; no path stores frames as the sender
-            // encoded them any more.
-            "encodedFrames": stats.encoded_frames,
-            "encodedDropped": stats.encoded_dropped,
             "markInFrame": stats.mark_in_frame,
             "markInValid": stats.mark_in_valid != 0,
             "recordingUuid": self.recording_uuid(),
@@ -2265,6 +2275,7 @@ fn apply_pro_stats(inner: &mut Inner, snapshot: &ReplayStats) {
     inner.stats.frames_written = snapshot.frames_written;
     inner.stats.frames_offered = inner.offered;
     inner.stats.frames_pushed = inner.pushed;
+    inner.stats.started_unix_ms = inner.started_unix_ms;
     inner.stats.frames_dropped = snapshot.frames_dropped;
     inner.stats.frames_dropped_recent = snapshot.frames_dropped_recent;
     inner.stats.first_frame = snapshot.first_frame;

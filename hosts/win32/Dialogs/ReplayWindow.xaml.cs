@@ -248,14 +248,8 @@ public partial class ReplayWindow : Window
         OutputLabel.Text = channel is null
             ? Loc.T("replay.noChannels")
             : Loc.Format("replay.outputLabel", channel.Label, _playing ? Loc.T("replay.playing") : Loc.T("replay.stopped"));
-        // Playback goes to the channel whether or not anyone put it in a scene; this
-        // only says the picture is not reaching the program yet, so an operator who
-        // expected the program to change knows where to look.
-        if (channel is { InputId: > 0 } air
-            && !_session.Scenes.Any(scene => scene.Layers.Any(layer => layer.InputId == air.InputId)))
-        {
-            OutputLabel.Text += "  " + Loc.T("replay.notOnAir");
-        }
+        // Whether the channel reaches the program is the operator's business: the deck
+        // reports what the channel is sending, not where it is used.
 
         var angle = ActiveAngle();
         var live = angle?.LiveSourceId ?? 0;
@@ -748,7 +742,7 @@ public partial class ReplayWindow : Window
                 2 => Loc.T("replay.stateStopped"),
                 _ => Loc.T("replay.stateIdle")
             };
-            RecordTcText.Text = ReplayModel.Timecode(stats.RecordingFrame, fps);
+            RecordTcText.Text = Stamp(stats.RecordingFrame, string.IsNullOrEmpty(MixerNative.ReplayRecordingUuid()) ? null : MixerNative.ReplayRecordingUuid());
             if (stats.FramesDroppedRecent > 0)
                 StateText.Text += "  " + Loc.Format("replay.dropped", stats.FramesDroppedRecent);
             var count = Math.Min(stats.AngleCount, 8u);
@@ -888,18 +882,27 @@ public partial class ReplayWindow : Window
             return;
         // Rows are recycled, so the handlers are attached once per cell.
         box.Loaded -= RangeCell_Loaded;
+        // The cell shows and accepts the recording's wall-clock timecode, so what the
+        // operator sees matches the clock the pictures were recorded on.
+        var uuid = RowRecording(box);
         NumericDrag.AttachTimecode(
             box,
             2f,
-            text => _replay is not null && ReplayModel.TryParseTimecode(
-                text, ReplayModel.Fps(_replay, _session), out var frames)
+            text => _replay is not null && ReplayModel.TryParseTimestamp(
+                text, ReplayModel.RecordingStart(_replay, uuid), ReplayModel.Fps(_replay, _session), out var frames)
                 ? frames
                 : null,
-            frames => box.Text = ReplayModel.Timecode(
-                (ulong)Math.Max(0, Math.Round(frames)),
-                ReplayModel.Fps(_replay!, _session)),
+            frames => box.Text = Stamp((ulong)Math.Max(0, Math.Round(frames)), uuid),
             () => CommitRange(box));
     }
+    /// <summary>The recording the row a range cell belongs to was cut from.</summary>
+    private static string? RowRecording(TextBox? box) => box?.Tag switch
+    {
+        EventRow row => row.RecordingUuid,
+        ClipRow clip => clip.RecordingUuid,
+        _ => null
+    };
+
     private void RangeCell_LostFocus(object sender, RoutedEventArgs e) => CommitRange(sender as TextBox);
 
     private void RangeCell_KeyDown(object sender, KeyEventArgs e)
@@ -915,7 +918,7 @@ public partial class ReplayWindow : Window
         if (box?.Tag is null || _replay is null)
             return;
         var fps = ReplayModel.Fps(_replay, _session);
-        if (!ReplayModel.TryParseTimecode(box.Text, fps, out var frames))
+        if (!ReplayModel.TryParseTimestamp(box.Text, ReplayModel.RecordingStart(_replay, RowRecording(box)), fps, out var frames))
         {
             Warn(Loc.T("replay.badTimecode"));
             RefreshEvents();
@@ -1135,8 +1138,9 @@ public partial class ReplayWindow : Window
             var row = previous ?? new EventRow { Id = entry.Id };
             row.IsLoading = true;
             row.InFrame = entry.InFrame;
-            row.InText = ReplayModel.Timecode(entry.InFrame, fps);
-            row.OutText = ReplayModel.Timecode(entry.OutFrame, fps);
+            row.RecordingUuid = entry.RecordingUuid;
+            row.InText = Stamp(entry.InFrame, entry.RecordingUuid);
+            row.OutText = Stamp(entry.OutFrame, entry.RecordingUuid);
             row.DurationText = ReplayModel.Duration(entry.InFrame, entry.OutFrame, fps);
             row.Name = entry.Name;
             row.Protected = entry.Protected;
@@ -1226,8 +1230,9 @@ public partial class ReplayWindow : Window
             var row = existing.FirstOrDefault(candidate => candidate.Uid == clip.Uid)
                 ?? new ClipRow { Uid = clip.Uid, InFrame = clip.InFrame, OutFrame = clip.OutFrame, AngleId = clip.AngleId };
             row.IsLoading = true;
-            row.InText = ReplayModel.Timecode(clip.InFrame, fps);
-            row.OutText = ReplayModel.Timecode(clip.OutFrame, fps);
+            row.RecordingUuid = clip.RecordingUuid;
+            row.InText = Stamp(clip.InFrame, clip.RecordingUuid);
+            row.OutText = Stamp(clip.OutFrame, clip.RecordingUuid);
             var duration = ReplayModel.Duration(clip.InFrame, clip.OutFrame, fps);
             row.DurationText = ClipIsExpired(clip) ? duration + " " + Loc.T("replay.expired") : duration;
             row.AngleOptions = [.. angles.Select(angle => new Option<uint>(angle.Id, angle.Label))];
@@ -1628,7 +1633,7 @@ public partial class ReplayWindow : Window
         _outFrame = 0;
         _markOpen = true;
         var fps = ReplayModel.Fps(_replay, _session);
-        InTcText.Text = frame is { } value ? ReplayModel.Timecode(value, fps) : Loc.T("replay.markInRemote");
+        InTcText.Text = frame is { } value ? Stamp(value, TransportRecording()) : Loc.T("replay.markInRemote");
         OutTcText.Text = "--:--:--:--";
         DurationTcText.Text = "--:--:--:--";
         MarkOutButton.IsEnabled = true;
@@ -1668,8 +1673,8 @@ public partial class ReplayWindow : Window
         var fps = ReplayModel.Fps(_replay, _session);
         _inFrame = mark.InFrame;
         _outFrame = mark.OutFrame;
-        InTcText.Text = ReplayModel.Timecode(mark.InFrame, fps);
-        OutTcText.Text = ReplayModel.Timecode(mark.OutFrame, fps);
+        InTcText.Text = Stamp(mark.InFrame, mark.Uuid);
+        OutTcText.Text = Stamp(mark.OutFrame, mark.Uuid);
         DurationTcText.Text = ReplayModel.Duration(mark.InFrame, mark.OutFrame, fps);
         _markOpen = false;
         MarkOutButton.IsEnabled = false;
@@ -1681,6 +1686,33 @@ public partial class ReplayWindow : Window
     /// Shows a message over the state line for a few polls, so a command the core
     /// refused is not mistaken for one that worked.
     /// </summary>
+    /// <summary>
+    /// The wall-clock timecode of a frame in a recording, falling back to the time
+    /// from the recording's start when the session does not know the clock. Events and
+    /// clips carry their recording's id; the transport uses the on-air clip's.
+    /// </summary>
+    private string Stamp(ulong frame, string? uuid)
+    {
+        if (_replay is null)
+            return ReplayModel.Timecode(frame, (60, 1));
+        var fps = ReplayModel.Fps(_replay, _session);
+        var start = ReplayModel.RecordingStart(_replay, uuid);
+        return ReplayModel.Timestamp(start, frame, fps);
+    }
+
+    /// <summary>The recording the transport is on: the clip on air, else the recorder.</summary>
+    private string? TransportRecording()
+    {
+        if (Backend?.ReplayChannelState(_channel) is { } state && state.OutFrame > 0 && _replay is not null)
+        {
+            var clip = ReplayModel.Clips(_replay, _playlistId)
+                .FirstOrDefault(item => item.InFrame <= state.PositionFrame && item.OutFrame >= state.PositionFrame);
+            if (clip is not null)
+                return clip.RecordingUuid;
+        }
+        var uuid = MixerNative.ReplayRecordingUuid();
+        return string.IsNullOrEmpty(uuid) ? null : uuid;
+    }
     private void Warn(string message)
     {
         _notice = message;
@@ -2065,7 +2097,8 @@ public partial class ReplayWindow : Window
                 format?["height"]?.GetValue<uint>() ?? 0,
                 format?["fpsNum"]?.GetValue<uint>() ?? 0,
                 format?["fpsDen"]?.GetValue<uint>() ?? 0,
-                0))
+                0,
+                MixerNative.ReplayStartedUnixMs()))
         {
             SaveDocument();
         }
@@ -2142,8 +2175,10 @@ public partial class ReplayWindow : Window
     private void Multiview_Click(object sender, RoutedEventArgs e)
     {
         _multiview = !_multiview;
-        AngleGridScroller.Visibility = _multiview ? Visibility.Visible : Visibility.Collapsed;
-        LiveBox.Visibility = _multiview ? Visibility.Collapsed : Visibility.Visible;
+        AngleGridScroller.Visibility = _multiview ? Visibility.Visible : Visibility.Hidden;
+        // Hidden, not Collapsed: the picture still measures, so the row keeps its
+        // height and toggling does not resize the whole deck.
+        LiveBox.Visibility = _multiview ? Visibility.Hidden : Visibility.Visible;
         SetLit(MultiviewButton, _multiview, Color.FromRgb(0x7F, 0xD1, 0x4B));
         RefreshAngleGrid();
     }
@@ -2606,6 +2641,9 @@ public partial class ReplayWindow : Window
 
         public ulong Id { get; init; }
 
+        /// <summary>The recording this event was cut from; its timecode uses that clock.</summary>
+        public string RecordingUuid { get; set; } = "";
+
         /// <summary>The range the operator marked, for cueing the event itself.</summary>
         public ulong InFrame { get; set; }
 
@@ -2658,6 +2696,9 @@ public partial class ReplayWindow : Window
     /// </summary>
     private sealed class ClipRow : System.ComponentModel.INotifyPropertyChanged
     {
+        /// <summary>The recording this clip was cut from; its timecode uses that clock.</summary>
+        public string RecordingUuid { get; set; } = "";
+
         private Option<uint>? _angle;
         private Option<uint>? _speed;
         private Option<string>? _transition;

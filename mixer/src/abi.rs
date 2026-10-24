@@ -220,10 +220,9 @@ pub struct MixerReplayStats {
     /// Frames handed to the readback. `frames_offered` should match it: the
     /// difference is picture the readback could not carry.
     pub frames_pushed: u64,
-    /// Unused: kept so the ABI layout an older host reads does not move.
-    pub encoded_frames: u64,
-    /// Unused: kept so the ABI layout an older host reads does not move.
-    pub encoded_dropped: u64,
+    /// Wall clock of the recording's frame 0, in milliseconds since the epoch. Zero
+    /// when nothing has been recorded since the mixer started.
+    pub started_unix_ms: u64,
 }
 
 #[repr(C)]

@@ -429,6 +429,13 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_copy_recording_uuid")]
     internal static unsafe partial int ReplayCopyRecordingUuid(byte* buffer, nuint capacity);
 
+    /// <summary>Wall clock of the recording's frame 0 (ms since the epoch); 0 when unknown.</summary>
+    internal static unsafe ulong ReplayStartedUnixMs()
+    {
+        var stats = default(MixerReplayStats);
+        return ReplayCopyStats(&stats, 0, 0) == 0 ? stats.StartedUnixMs : 0UL;
+    }
+
     internal static string ReplayRecordingUuid()
     {
         var buffer = new byte[128];
@@ -1289,10 +1296,8 @@ internal struct MixerReplayStats
     public uint MarkInValid;
     public ulong FramesOffered;
     public ulong FramesPushed;
-    /// <summary>Unused: the field stays so the native struct layout does not move.</summary>
-    public ulong EncodedFrames;
-    /// <summary>Unused: the field stays so the native struct layout does not move.</summary>
-    public ulong EncodedDropped;
+    /// <summary>Wall clock of the recording's frame 0 (ms since the epoch); 0 when unknown.</summary>
+    public ulong StartedUnixMs;
 }
 
 /// <summary>What a replay channel is showing, and where in its clip it is.</summary>

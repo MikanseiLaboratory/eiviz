@@ -140,7 +140,7 @@
                     <RowDefinition Height="*" MinHeight="180"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
-                <DockPanel Grid.Row="0">
+                <DockPanel Grid.Row="0" Height="32">
                     <TextBlock DockPanel.Dock="Left" FontWeight="Bold" VerticalAlignment="Center"
                                Text="{Binding [replay.liveInput], Source={x:Static i18n:Loc.Source}}"/>
                     <!-- The same shape of view the main window calls a multiview: every
@@ -150,7 +150,11 @@
                             ToolTip="{Binding [replay.multiviewHint], Source={x:Static i18n:Loc.Source}}"
                             Content="{Binding [replay.multiview], Source={x:Static i18n:Loc.Source}}"/>
                 </DockPanel>
-                <Grid Grid.Row="1">
+                <!-- The multiview and the single picture share this cell. The picture stays
+                     measured while the multiview is shown (Hidden, not Collapsed): it is what
+                     sets the row height, and a collapsed one let the multiview resize the
+                     row on every toggle. -->
+                <Grid Grid.Row="1" ClipToBounds="True">
                     <!-- The same container the main window uses: the picture keeps its
                          shape and follows the window, instead of being stretched. -->
                     <preview:AspectBox x:Name="LiveBox">
@@ -171,7 +175,7 @@
                     <RowDefinition Height="*" MinHeight="180"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" FontWeight="Bold"
+                <TextBlock Grid.Row="0" FontWeight="Bold" Height="32" VerticalAlignment="Center"
                            Text="{Binding [replay.output], Source={x:Static i18n:Loc.Source}}"/>
                 <preview:AspectBox Grid.Row="1">
                     <Border Style="{StaticResource MonitorBox}">
@@ -497,17 +501,23 @@
                             Content="{Binding [replay.cancelMark], Source={x:Static i18n:Loc.Source}}"/>
                 </StackPanel>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <!-- The clock at the playhead: the same timecode the IN and OUT
+                         cells show, so scrubbing reads the time it was recorded. -->
+                    <StackPanel Width="128" Margin="0,0,16,0">
+                        <TextBlock Text="{Binding [replay.playhead], Source={x:Static i18n:Loc.Source}}" FontSize="11"/>
+                        <TextBlock x:Name="PlayheadTcText" FontFamily="Consolas" FontSize="18" Foreground="#7FD14B"/>
+                    </StackPanel>
                     <StackPanel Width="120" Margin="0,0,12,0">
                         <TextBlock Text="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" FontSize="11"/>
-                        <TextBlock x:Name="InTcText" FontFamily="Consolas" FontSize="18"/>
+                        <TextBlock x:Name="InTcText" FontFamily="Consolas" FontSize="17"/>
                     </StackPanel>
                     <StackPanel Width="120" Margin="0,0,12,0">
                         <TextBlock Text="{Binding [replay.out], Source={x:Static i18n:Loc.Source}}" FontSize="11"/>
-                        <TextBlock x:Name="OutTcText" FontFamily="Consolas" FontSize="18"/>
+                        <TextBlock x:Name="OutTcText" FontFamily="Consolas" FontSize="17"/>
                     </StackPanel>
                     <StackPanel Width="120">
                         <TextBlock Text="{Binding [replay.duration], Source={x:Static i18n:Loc.Source}}" FontSize="11"/>
-                        <TextBlock x:Name="DurationTcText" FontFamily="Consolas" FontSize="18"/>
+                        <TextBlock x:Name="DurationTcText" FontFamily="Consolas" FontSize="17"/>
                     </StackPanel>
                 </StackPanel>
             </DockPanel>
