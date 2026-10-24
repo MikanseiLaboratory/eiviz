@@ -397,12 +397,14 @@
                                                       ItemsSource="{Binding TransitionOptions}" SelectedItem="{Binding TransitionOption}"
                                                       ToolTip="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}"/>
                                             <ComboBox Width="104" Height="24" Margin="4,1,1,1" DisplayMemberPath="Label"
+                                                      Visibility="{Binding DirectionVisibility}"
                                                       ItemsSource="{Binding DirectionOptions}" SelectedItem="{Binding DirectionOption}"
                                                       ToolTip="{Binding [replay.directionHelp], Source={x:Static i18n:Loc.Source}}"/>
                                             <ComboBox Width="96" Height="24" Margin="4,1,1,1" DisplayMemberPath="Label"
                                                       ItemsSource="{Binding TimingOptions}" SelectedItem="{Binding TimingOption}"
                                                       ToolTip="{Binding [replay.timingHelp], Source={x:Static i18n:Loc.Source}}"/>
                                             <TextBox Width="52" Height="24" Margin="4,1,1,1" VerticalContentAlignment="Center"
+                                                     Visibility="{Binding LengthVisibility}"
                                                      Text="{Binding TransitionFrames, UpdateSourceTrigger=LostFocus}"
                                                      ToolTip="{Binding [replay.transitionFrames], Source={x:Static i18n:Loc.Source}}"/>
                                         </StackPanel>
@@ -478,6 +480,25 @@
                     <WrapPanel x:Name="AnglePanel" Orientation="Horizontal"/>
                 </ScrollViewer>
             </DockPanel>
+            <!-- The whole recording, left edge to the live edge. The waveform below is
+                 a closer look at what is around the playhead. -->
+            <Grid Margin="0,0,0,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Slider x:Name="RecordingSlider" Grid.Column="0" Height="30" VerticalAlignment="Center"
+                        Minimum="0" Maximum="1000" IsSnapToTickEnabled="False"
+                        ValueChanged="RecordingSlider_ValueChanged"
+                        AutomationProperties.AutomationId="RecordingSlider"
+                        AutomationProperties.Name="{Binding [replay.seekWhole], Source={x:Static i18n:Loc.Source}}"
+                        ToolTip="{Binding [replay.seekWholeHint], Source={x:Static i18n:Loc.Source}}"/>
+                <Button x:Name="JumpLiveButton" Grid.Column="1" Height="30" MinWidth="150" Margin="10,0,0,0"
+                        Padding="10,0" Click="JumpLive_Click"
+                        AutomationProperties.AutomationId="JumpLiveButton"
+                        ToolTip="{Binding [replay.jumpLiveHint], Source={x:Static i18n:Loc.Source}}"
+                        Content="{Binding [replay.jumpLive], Source={x:Static i18n:Loc.Source}}"/>
+            </Grid>
             <local:ReplayWaveform x:Name="Waveform" Height="52" Margin="0,0,0,8"
                                            AutomationProperties.AutomationId="Waveform"
                                            AutomationProperties.Name="{Binding [replay.waveformSeek], Source={x:Static i18n:Loc.Source}}"
@@ -569,35 +590,17 @@
                         ToolTip="{Binding [replay.jogHint], Source={x:Static i18n:Loc.Source}}"/>
             </Grid>
 
-            <!-- Export stays on one line so the path and the actions share a height. -->
-            <Grid Margin="0,8,0,0" Height="32">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="180"/>
-                    <ColumnDefinition Width="110"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="96"/>
-                    <ColumnDefinition Width="110"/>
-                    <ColumnDefinition Width="110"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Text="{Binding [replay.export], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <ComboBox x:Name="ExportModeBox" Grid.Column="1" Height="32" Margin="0,0,6,0" VerticalContentAlignment="Center"/>
-                <ComboBox x:Name="ExportCodecBox" Grid.Column="2" Height="32" Margin="0,0,6,0" VerticalContentAlignment="Center" SelectedIndex="0">
-                    <ComboBoxItem Content="H.264"/>
-                    <ComboBoxItem Content="HEVC"/>
-                </ComboBox>
-                <TextBox x:Name="ExportPathBox" Grid.Column="3" Height="32" Margin="0,0,6,0" VerticalContentAlignment="Center"/>
-                <Button x:Name="ExportBrowseButton" Grid.Column="4" Height="32" Margin="0,0,6,0" Padding="8,0"
-                        VerticalContentAlignment="Center" Click="ExportBrowse_Click"
-                        Content="{Binding [replay.browse], Source={x:Static i18n:Loc.Source}}"/>
-                <Button x:Name="ExportButton" Grid.Column="5" Height="32" Margin="0,0,6,0" Padding="8,0"
+            <!-- Export is one button: the settings and the start/cancel live in their
+                 own window, so the deck keeps its room for the picture and the lists. -->
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                <Button x:Name="ExportButton" Height="32" MinWidth="160" Padding="12,0"
                         VerticalContentAlignment="Center" Click="Export_Click"
-                        Content="{Binding [replay.exportStart], Source={x:Static i18n:Loc.Source}}"/>
-                <Button x:Name="ExportCancelButton" Grid.Column="6" Height="32" Padding="8,0"
-                        VerticalContentAlignment="Center" Click="ExportCancel_Click" IsEnabled="False"
-                        Content="{Binding [replay.exportCancel], Source={x:Static i18n:Loc.Source}}"/>
-            </Grid>
-            <TextBlock x:Name="ExportStatusText" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                        AutomationProperties.AutomationId="ExportButton"
+                        ToolTip="{Binding [replay.exportHint], Source={x:Static i18n:Loc.Source}}"
+                        Content="{Binding [replay.export], Source={x:Static i18n:Loc.Source}}"/>
+                <TextBlock x:Name="ExportStatusText" Margin="12,0,0,0" VerticalAlignment="Center"
+                           TextWrapping="Wrap"/>
+            </StackPanel>
             <!-- The keys an operator works by, on screen: a production tool should not
                  hide its shortcuts in a manual. -->
             <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" Foreground="#B0B0B8"

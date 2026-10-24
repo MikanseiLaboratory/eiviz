@@ -66,6 +66,8 @@ public partial class ReplayWindow : Window
     private readonly HashSet<string> _deletedClips = [];
     /// <summary>True while the input picture is a grid of every angle.</summary>
     private bool _multiview;
+    /// <summary>True while the seek slider is being moved to match the channel.</summary>
+    private bool _sliderGuard;
     private ulong _outFrame;
     /// <summary>
     /// True between Mark In and Mark Out. The mark itself stays on screen after it
@@ -95,7 +97,6 @@ public partial class ReplayWindow : Window
     private const uint ExportDone = 2;
     private const uint ExportFailed = 3;
     private const uint ExportCancelled = 4;
-    private readonly List<ExportModeChoice> _exportModes = [];
     private readonly Queue<ExportJobSpec> _exportQueue = new();
     private bool _exporting;
 
@@ -459,6 +460,10 @@ public partial class ReplayWindow : Window
     /// angle) are written one after another, because the store runs one export at
     /// a time.
     /// </summary>
+    /// <summary>
+    /// Follows a running export. The window shows the progress; the deck's status line
+    /// carries the same sentence so an operator watching the picture still sees it.
+    /// </summary>
     private void RefreshExport()
     {
         if (!_exporting)
@@ -476,36 +481,35 @@ public partial class ReplayWindow : Window
         switch (state)
         {
             case ExportRunning:
-                ExportCancelButton.IsEnabled = true;
-                ExportButton.IsEnabled = false;
-                ExportStatusText.Text = Loc.Format("replay.exportRunning", done, total, skipped);
+                Report(Loc.Format("replay.exportRunning", done, total, skipped));
                 return;
             case ExportDone:
                 _exporting = false;
-                ExportCancelButton.IsEnabled = false;
-                ExportButton.IsEnabled = true;
                 if (_exportQueue.Count > 0)
                 {
                     StartNextExport();
                     return;
                 }
-                ExportStatusText.Text = Loc.Format("replay.exportDone", done, skipped);
+                Report(Loc.Format("replay.exportDone", done, skipped));
                 return;
             case ExportFailed:
                 _exporting = false;
                 _exportQueue.Clear();
-                ExportCancelButton.IsEnabled = false;
-                ExportButton.IsEnabled = true;
-                ExportStatusText.Text = Loc.Format("replay.exportError", message);
+                Report(Loc.Format("replay.exportError", message));
                 return;
             case ExportCancelled:
                 _exporting = false;
                 _exportQueue.Clear();
-                ExportCancelButton.IsEnabled = false;
-                ExportButton.IsEnabled = true;
-                ExportStatusText.Text = Loc.T("replay.exportCancelled");
+                Report(Loc.T("replay.exportCancelled"));
                 return;
         }
+    }
+
+    /// <summary>One export sentence for the window and the deck's own status line.</summary>
+    private void Report(string text)
+    {
+        _exportWindow?.ShowProgress(text);
+        ExportStatusText.Text = text;
     }
 
     private void StartNextExport()
@@ -513,7 +517,6 @@ public partial class ReplayWindow : Window
         if (_exportQueue.Count == 0)
         {
             _exporting = false;
-            ExportButton.IsEnabled = true;
             return;
         }
         var next = _exportQueue.Dequeue();
@@ -521,114 +524,67 @@ public partial class ReplayWindow : Window
         {
             _exporting = false;
             _exportQueue.Clear();
-            ExportButton.IsEnabled = true;
-            ExportStatusText.Text = Loc.T("replay.exportFailed");
+            Report(Loc.T("replay.exportFailed"));
             return;
         }
         if (!backend.ReplayExportStart(next.Json, out var error))
         {
             _exporting = false;
             _exportQueue.Clear();
-            ExportButton.IsEnabled = true;
-            ExportStatusText.Text = error.Length > 0 ? error : Loc.T("replay.exportFailed");
+            Report(error.Length > 0 ? error : Loc.T("replay.exportFailed"));
             return;
         }
         _exporting = true;
-        ExportButton.IsEnabled = false;
-        ExportCancelButton.IsEnabled = true;
-        ExportStatusText.Text = Loc.Format("replay.exportStarted", next.Label);
+        Report(Loc.Format("replay.exportStarted", next.Label));
     }
+    /// <summary>The export settings window, while it is open.</summary>
+    private ReplayExportWindow? _exportWindow;
 
+    /// <summary>
+    /// Opens the export settings. The deck keeps one button: the mode, the codec and
+    /// the path live in the window, and so does the progress of a running export.
+    /// </summary>
     private void Export_Click(object sender, RoutedEventArgs e)
     {
         if (_replay is null)
             return;
-        if (ExportModeBox.SelectedItem is not ExportModeChoice mode)
+        if (_exportWindow is { } open)
         {
-            // Saying nothing here left the button looking dead.
-            ExportStatusText.Text = Loc.T("replay.exportNeedMode");
+            open.Activate();
             return;
         }
-        var path = ExportPathBox.Text.Trim();
-        if (path.Length == 0)
+        if (Backend?.IsRemote == true)
         {
-            ExportStatusText.Text = Loc.T("replay.exportNeedPath");
+            Warn(Loc.T("replay.exportLocalOnly"));
             return;
         }
-        // A folder is a reasonable thing to type, and the MP4 writer answers it with an
-        // opaque E_INVALIDARG. Put a name inside it instead of failing.
-        if (Directory.Exists(path))
+        var modes = new List<ExportModeChoice>
         {
-            path = Path.Combine(path, $"replay-{DateTime.Now:yyyyMMdd-HHmmss}.mp4");
-            ExportPathBox.Text = path;
-        }
-        else if (!Path.HasExtension(path))
-        {
-            // The MP4 writer picks its container from the extension; a path without one
-            // fails with a bare E_INVALIDARG that says nothing about the cause.
-            path += ".mp4";
-            ExportPathBox.Text = path;
-        }
-        var segments = string.Join(",", BuildSegments(mode.Key).Select(segment =>
-            $"{{\"angleId\":{segment.AngleId},\"fromFrame\":{segment.From},\"toFrame\":{segment.To}}}"));
-        if (segments.Length == 0)
-        {
-            ExportStatusText.Text = Loc.T("replay.exportNothing");
+            new("Clip", Loc.T("replay.exportClip")),
+            new("Playlist", Loc.T("replay.exportPlaylist")),
+            new("Angle", Loc.T("replay.exportAngle")),
+            new("AllAngles", Loc.T("replay.exportAllAngles")),
+        };
+        var window = new ReplayExportWindow(
+            modes,
+            BuildSegments,
+            ExportFormat,
+            () => [.. ExportAngles().Select(angle => (angle.Id, angle.Label))],
+            () => _recording == true,
+            (body, label) => StartExport(body, label)) { Owner = this };
+        window.Closed += (_, _) => _exportWindow = null;
+        _exportWindow = window;
+        window.Show();
+    }
+
+    /// <summary>Hands one export body to the mixer and reports it in the window.</summary>
+    private void StartExport(string body, string label)
+    {
+        _exportQueue.Enqueue(new ExportJobSpec(body, label));
+        if (_exporting)
             return;
-        }
-        if (_recording == true)
-        {
-            var answer = MessageBox.Show(
-                Loc.T("replay.exportWhileRecording"),
-                Title,
-                MessageBoxButton.OKCancel,
-                MessageBoxImage.Warning);
-            if (answer != MessageBoxResult.OK)
-                return;
-        }
-        var codec = ExportCodecBox.SelectedIndex == 1 ? "Hevc" : "H264";
-        _exportQueue.Clear();
-        var (width, height, fpsNum, fpsDen, bitrate) = ExportFormat();
-        string Body(string target) =>
-            $"{{\"path\":{JsonSerializer.Serialize(target)},\"width\":{width},\"height\":{height}," +
-            $"\"fpsNum\":{fpsNum},\"fpsDen\":{fpsDen},\"bitrate\":{bitrate},\"sampleRate\":48000," +
-            $"\"channels\":2,\"withAudio\":true,\"codec\":\"{codec}\",\"segments\":[{segments}]}}";
-        if (mode.Key == "AllAngles")
-        {
-            // One file per angle, so a multi-camera export stays usable.
-            foreach (var angle in ExportAngles())
-            {
-                var target = Path.Combine(
-                    Path.GetDirectoryName(path) ?? "",
-                    $"{Path.GetFileNameWithoutExtension(path)}-angle{angle.Id}{Path.GetExtension(path)}");
-                        _exportQueue.Enqueue(new ExportJobSpec(Body(target), $"{angle.Label} → {Path.GetFileName(target)}"));
-            }
-        }
-        else
-        {
-            _exportQueue.Enqueue(new ExportJobSpec(Body(path), Path.GetFileName(path)));
-        }
         StartNextExport();
     }
-
-    private void ExportBrowse_Click(object sender, RoutedEventArgs e)
-    {
-        var dialog = new Microsoft.Win32.SaveFileDialog
-        {
-            FileName = $"replay-{DateTime.Now:yyyyMMdd-HHmmss}.mp4",
-            Filter = "MP4|*.mp4",
-            OverwritePrompt = true
-        };
-        if (dialog.ShowDialog(this) == true)
-            ExportPathBox.Text = dialog.FileName;
-    }
-
-    private void ExportCancel_Click(object sender, RoutedEventArgs e)
-    {
-        Backend?.ReplayExportCancel();
-        _exportQueue.Clear();
-    }
-
     /// <summary>Segments the chosen mode writes, in order.</summary>
     private List<(uint AngleId, ulong From, ulong To)> BuildSegments(string mode)
     {
@@ -696,18 +652,8 @@ public partial class ReplayWindow : Window
 
     private void RefreshExportModes()
     {
-        _exportModes.Clear();
-        _exportModes.Add(new ExportModeChoice("Clip", Loc.T("replay.exportClip")));
-        _exportModes.Add(new ExportModeChoice("Playlist", Loc.T("replay.exportPlaylist")));
-        _exportModes.Add(new ExportModeChoice("Angle", Loc.T("replay.exportAngle")));
-        _exportModes.Add(new ExportModeChoice("AllAngles", Loc.T("replay.exportAllAngles")));
-        ExportModeBox.ItemsSource = null;
-        ExportModeBox.ItemsSource = _exportModes;
-        ExportModeBox.DisplayMemberPath = nameof(ExportModeChoice.Label);
-        ExportModeBox.SelectedIndex = 0;
     }
 
-    private sealed record ExportModeChoice(string Key, string Label);
 
     private sealed record ExportJobSpec(string Json, string Label);
 
@@ -801,6 +747,7 @@ public partial class ReplayWindow : Window
         Waveform.HasOut = placed && _outFrame != 0;
         Waveform.OutFrame = _outFrame;
         Waveform.PositionFrame = remote ? 0 : stats.RecordingFrame;
+        SyncRecordingSlider();
 
         // A refused command must not look like it worked.
         if (_noticeTicks > 0)
@@ -826,6 +773,10 @@ public partial class ReplayWindow : Window
     /// <summary>Counts the remaining clip time down between status ticks.</summary>
     private void UpdateHeader()
     {
+        // The playhead clock and the whole-recording slider follow the transport even
+        // while it is parked, so a jog or a seek reads where it landed.
+        UpdatePlayhead();
+        SyncRecordingSlider();
         if (_replay is null || _headerOut == 0 || !_headerPlaying)
             return;
         var fps = ReplayModel.Fps(_replay, _session);
@@ -847,6 +798,25 @@ public partial class ReplayWindow : Window
         RecordTcText.Text = "-" + ReplayModel.Timecode(_headerOut - position, fps);
     }
 
+    /// <summary>
+    /// Writes the clock at the playhead. The transport's own state is the truth: it
+    /// is what the decoder is showing, and it follows every cue, seek and jog.
+    /// </summary>
+    private void UpdatePlayhead()
+    {
+        if (_replay is null)
+        {
+            PlayheadTcText.Text = "--:--:--:--";
+            return;
+        }
+        var state = Backend?.ReplayChannelState(_channel);
+        if (state is not { OutFrame: > 0 } air)
+        {
+            PlayheadTcText.Text = "--:--:--:--";
+            return;
+        }
+        PlayheadTcText.Text = Stamp(air.PositionFrame, TransportRecording());
+    }
     /// <summary>Holds the picture; presses again to continue from the same frame.</summary>
     private void PlaylistPause_Click(object sender, RoutedEventArgs e)
     {
@@ -2294,6 +2264,80 @@ public partial class ReplayWindow : Window
 
     private void Live_Click(object sender, RoutedEventArgs e) => Live();
 
+    /// <summary>
+    /// Jumps to the live edge of the recording and plays from there. The deck's LIVE
+    /// button parks on the edge; this one goes there and starts, which is what an
+    /// operator wants when they have been reviewing and the show has moved on.
+    /// </summary>
+    private void JumpLive_Click(object sender, RoutedEventArgs e)
+    {
+        if (Backend?.ReplayJumpToNow(_channel) != true)
+        {
+            Warn(Refusal(Loc.T("replay.commandRefused")));
+            return;
+        }
+        // Play from the edge: the transport takes the recording on from now.
+        if (Backend.ReplayTransport(_channel, true, _speedMilli, -1) != true)
+        {
+            Warn(Refusal(Loc.T("replay.commandRefused")));
+            return;
+        }
+        _live = true;
+        _playing = true;
+        UpdatePlayButton();
+        UpdatePauseButton();
+        if (_multiview)
+            RefreshAngleGrid();
+    }
+
+    /// <summary>
+    /// Moves the channel along the whole recording. The slider runs over the angle's
+    /// range, so the left end is the first recorded frame and the right end the newest
+    /// one; a drag seeks, and the transport keeps its play state.
+    /// </summary>
+    private void RecordingSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_sliderGuard || _replay is null)
+            return;
+        var range = Backend?.ReplayAngleRange(ActiveAngleId());
+        if (range is not { } bounds || bounds.Last <= bounds.First)
+            return;
+        var span = (double)(bounds.Last - bounds.First);
+        var frame = bounds.First + (ulong)Math.Round(span * e.NewValue / RecordingSlider.Maximum);
+        var target = (long)Math.Min(frame, long.MaxValue);
+        if (Backend?.ReplayTransport(_channel, _playing, _speedMilli, target) != true)
+            return;
+        _live = false;
+        Waveform.PositionFrame = frame;
+        UpdatePlayhead();
+        if (_multiview)
+            RefreshAngleGrid();
+    }
+
+    /// <summary>Puts the slider where the channel now is, without seeking.</summary>
+    private void SyncRecordingSlider()
+    {
+        if (_replay is null)
+            return;
+        var range = Backend?.ReplayAngleRange(ActiveAngleId());
+        if (range is not { } bounds || bounds.Last <= bounds.First)
+        {
+            _sliderGuard = true;
+            RecordingSlider.Value = RecordingSlider.Maximum;
+            _sliderGuard = false;
+            return;
+        }
+        var position = Backend?.ReplayChannelState(_channel)?.PositionFrame ?? bounds.Last;
+        var span = (double)(bounds.Last - bounds.First);
+        var value = position <= bounds.First
+            ? 0.0
+            : Math.Min(RecordingSlider.Maximum, RecordingSlider.Maximum * (position - bounds.First) / span);
+        _sliderGuard = true;
+        RecordingSlider.Value = value;
+        _sliderGuard = false;
+    }
+
+
     /// <summary>Returns the channel to the recording edge.</summary>
     private void Live()
     {
@@ -2765,7 +2809,15 @@ public partial class ReplayWindow : Window
         public Option<string>? TransitionOption
         {
             get => _transition;
-            set => Set(ref _transition, value);
+            set
+        {
+            if (_transition == value)
+                return;
+            _transition = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(TransitionOption)));
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(DirectionVisibility)));
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(LengthVisibility)));
+        }
         }
 
         public Option<string>? DirectionOption
@@ -2774,6 +2826,16 @@ public partial class ReplayWindow : Window
             set => Set(ref _direction, value);
         }
 
+        /// <summary>
+        /// Direction and length only mean something for some transitions: a cut has no
+        /// edge to move and no time to spend. The cells hide instead of showing a
+        /// setting the mixer would ignore, the way the main window does it.
+        /// </summary>
+        public Visibility DirectionVisibility =>
+            _transition is { Value: "Wipe" or "Slide" or "Push" } ? Visibility.Visible : Visibility.Collapsed;
+
+        public Visibility LengthVisibility =>
+            _transition is { Value: "Cut" } ? Visibility.Collapsed : Visibility.Visible;
         public Option<string>? TimingOption
         {
             get => _timing;

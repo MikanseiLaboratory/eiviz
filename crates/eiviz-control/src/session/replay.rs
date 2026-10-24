@@ -693,6 +693,14 @@ session_string_enum! {
     }
 }
 
+impl ReplayTransitionKind {
+    /// Whether the direction means anything for this transition. A cut has no edge to
+    /// move and a dissolve has no edge at all, so offering a direction there only
+    /// invites a setting that is silently ignored.
+    pub fn takes_direction(self) -> bool {
+        matches!(self, Self::Wipe | Self::Slide | Self::Push)
+    }
+}
 /// Transition out of one clip and into the next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
