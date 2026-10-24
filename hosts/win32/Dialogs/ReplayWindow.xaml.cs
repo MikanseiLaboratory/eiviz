@@ -49,7 +49,16 @@ public partial class ReplayWindow : Window
     private bool _live = true;
     /// <summary>True while the playlist goes round again at its end.</summary>
     private bool _looping;
-    /// <summary>The operator picked a camera in this window since it last loaded.</summary>
+    /// <summary>
+    /// Paints the remaining time between the 200 ms status ticks. A countdown that
+    /// steps five times a second reads as a stopped clock; the position is known, so
+    /// it is advanced by the elapsed time instead of waiting for the next tick.
+    /// </summary>
+    private readonly DispatcherTimer _headerTimer = new() { Interval = TimeSpan.FromMilliseconds(33) };
+    private ulong _headerOut;
+    private ulong _headerPosition;
+    private long _headerAt;
+    private bool _headerPlaying;    /// <summary>The operator picked a camera in this window since it last loaded.</summary>
     private bool _angleEdited;
     /// <summary>Events this window deleted, so a merge does not put them back.</summary>
     private readonly HashSet<ulong> _deletedEvents = [];
@@ -101,6 +110,8 @@ public partial class ReplayWindow : Window
         InitializeComponent();
         // The waveform doubles as the seek bar.
         Waveform.SeekRequested += OnWaveformSeek;
+        _headerTimer.Tick += (_, _) => UpdateHeader();
+        Closed += (_, _) => _headerTimer.Stop();
 
         _main = main;
         Loaded += OnLoaded;
@@ -139,11 +150,13 @@ public partial class ReplayWindow : Window
         RefreshPlaylist();
         Tick();
         _timer.Start();
+        _headerTimer.Start();
     }
 
     private void OnClosed(object? sender, EventArgs e)
     {
         _timer.Stop();
+        _headerTimer.Stop();
         foreach (var host in _angleHosts)
             host.ReleaseNative();
         _angleHosts.Clear();
@@ -163,7 +176,17 @@ public partial class ReplayWindow : Window
         var state = Backend?.ReplayChannelState(_channel);
         if (state is { } mixer)
         {
+            var wasPlaying = _playing;
             _playing = mixer.Playing != 0;
+            _headerOut = mixer.OutFrame;
+            _headerPosition = mixer.PositionFrame;
+            _headerPlaying = mixer.Playing > 0;
+            _headerAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (wasPlaying != _playing)
+            {
+                UpdatePlayButton();
+                UpdatePauseButton();
+            }
         }
         // While a clip plays, the header shows how much of it is left instead of the
         // recording timecode: that is the number the operator acts on during a replay.
@@ -806,6 +829,123 @@ public partial class ReplayWindow : Window
         }
     }
 
+    /// <summary>Counts the remaining clip time down between status ticks.</summary>
+    private void UpdateHeader()
+    {
+        if (_replay is null || _headerOut == 0 || !_headerPlaying)
+            return;
+        var fps = ReplayModel.Fps(_replay, _session);
+        var rate = ReplayModel.Rate(fps);
+        if (rate <= 0)
+            return;
+        var position = _headerPosition;
+        if (_headerAt != 0)
+        {
+            var elapsed = (System.Diagnostics.Stopwatch.GetTimestamp() - _headerAt)
+                / (double)System.Diagnostics.Stopwatch.Frequency;
+            var advanced = elapsed * rate * (_speedMilli / 1000.0);
+            if (advanced > 0)
+                position += (ulong)advanced;
+        }
+        if (_headerOut <= position || _headerOut <= _headerPosition)
+            return;
+        RecordTcLabel.Text = Loc.T("replay.clipRemaining");
+        RecordTcText.Text = "-" + ReplayModel.Timecode(_headerOut - position, fps);
+    }
+
+    /// <summary>Holds the picture; presses again to continue from the same frame.</summary>
+    private void PlaylistPause_Click(object sender, RoutedEventArgs e)
+    {
+        var playing = !_playing;
+        if (Backend?.ReplayTransport(_channel, playing, _speedMilli, -1) != true)
+        {
+            Warn(Refusal(Loc.T("replay.commandRefused")));
+            return;
+        }
+        _playing = playing;
+        UpdatePlayButton();
+        UpdatePauseButton();
+        RefreshOnAir();
+    }
+
+    private void UpdatePauseButton()
+    {
+        PlaylistPauseButton.Content = Loc.T(_playing ? "replay.pause" : "replay.resume");
+        PlaylistPauseButton.ToolTip = Loc.T(_playing ? "replay.pauseHint" : "replay.resumeHint");
+    }
+
+    /// <summary>
+    /// Commits an in or out point typed into a clip or event row. The cell shows a
+    /// timecode and accepts one back, or a plain frame number.
+    /// </summary>
+    private void RangeCell_LostFocus(object sender, RoutedEventArgs e) => CommitRange(sender as TextBox);
+
+    private void RangeCell_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter)
+            return;
+        CommitRange(sender as TextBox);
+        e.Handled = true;
+    }
+
+    private void CommitRange(TextBox? box)
+    {
+        if (box?.Tag is null || _replay is null)
+            return;
+        var fps = ReplayModel.Fps(_replay, _session);
+        if (!ReplayModel.TryParseTimecode(box.Text, fps, out var frames))
+        {
+            Warn(Loc.T("replay.badTimecode"));
+            RefreshEvents();
+            RefreshPlaylist();
+            return;
+        }
+        if (box.Tag is EventRow eventRow)
+        {
+            if (_replay["events"] is not JsonArray events)
+                return;
+            var entry = events.OfType<JsonObject>()
+                .FirstOrDefault(item => (item["id"]?.GetValue<ulong>() ?? 0) == eventRow.Id);
+            if (entry is null)
+                return;
+            var inFrame = box.Name == "EventInBox" ? frames : entry["inFrame"]?.GetValue<ulong>() ?? 0;
+            var outFrame = box.Name == "EventOutBox" ? frames : entry["outFrame"]?.GetValue<ulong>() ?? 0;
+            if (outFrame <= inFrame)
+            {
+                Warn(Loc.T("replay.badRange"));
+                RefreshEvents();
+                return;
+            }
+            entry["inFrame"] = inFrame;
+            entry["outFrame"] = outFrame;
+            SaveDocument();
+            RefreshEvents();
+            return;
+        }
+        if (box.Tag is ClipRow clipRow)
+        {
+            var playlist = ReplayModel.Playlist(_replay, _playlistId);
+            if (playlist?["clips"] is not JsonArray clips)
+                return;
+            var clip = clips.OfType<JsonObject>()
+                .FirstOrDefault(item => (item["uid"]?.GetValue<string>() ?? "") == clipRow.Uid);
+            if (clip is null)
+                return;
+            var inFrame = box.Name == "ClipInBox" ? frames : clip["inFrame"]?.GetValue<ulong>() ?? 0;
+            var outFrame = box.Name == "ClipOutBox" ? frames : clip["outFrame"]?.GetValue<ulong>() ?? 0;
+            if (outFrame <= inFrame)
+            {
+                Warn(Loc.T("replay.badRange"));
+                RefreshPlaylist();
+                return;
+            }
+            clip["inFrame"] = inFrame;
+            clip["outFrame"] = outFrame;
+            playlist["revision"] = (playlist["revision"]?.GetValue<ulong>() ?? 0) + 1;
+            SaveDocument();
+            RefreshPlaylist();
+        }
+    }
     /// <summary>
     /// What the recorder is doing, in the operator's words. A disk that ran out of
     /// room says so; a store that has not measured free space yet reports zero,

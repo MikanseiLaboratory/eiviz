@@ -199,17 +199,23 @@
                           ScrollViewer.HorizontalScrollBarVisibility="Auto">
                     <ListView.View>
                         <GridView>
-                            <GridViewColumn Header="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" Width="100">
+                            <GridViewColumn Header="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" Width="104">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding InText}" FontFamily="Consolas" VerticalAlignment="Center" Margin="4,0"/>
+                                        <TextBox Name="EventInBox" Text="{Binding InText, Mode=OneWay}" Tag="{Binding}" FontFamily="Consolas"
+                                                 Height="24" Margin="2,1" VerticalContentAlignment="Center"
+                                                 LostFocus="RangeCell_LostFocus" KeyDown="RangeCell_KeyDown"
+                                                 ToolTip="{Binding [replay.rangeHelp], Source={x:Static i18n:Loc.Source}}"/>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.out], Source={x:Static i18n:Loc.Source}}" Width="100">
+                            <GridViewColumn Header="{Binding [replay.out], Source={x:Static i18n:Loc.Source}}" Width="104">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding OutText}" FontFamily="Consolas" VerticalAlignment="Center" Margin="4,0"/>
+                                        <TextBox Name="EventOutBox" Text="{Binding OutText, Mode=OneWay}" Tag="{Binding}" FontFamily="Consolas"
+                                                 Height="24" Margin="2,1" VerticalContentAlignment="Center"
+                                                 LostFocus="RangeCell_LostFocus" KeyDown="RangeCell_KeyDown"
+                                                 ToolTip="{Binding [replay.rangeHelp], Source={x:Static i18n:Loc.Source}}"/>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
@@ -287,6 +293,12 @@
                                 VerticalContentAlignment="Center" Click="PlaylistPlay_Click"
                                 ToolTip="{Binding [replay.playlistPlayHint], Source={x:Static i18n:Loc.Source}}"
                                 Content="{Binding [replay.playlistPlay], Source={x:Static i18n:Loc.Source}}"/>
+                        <!-- Pause holds the picture where it is and resume continues from that
+                             frame, instead of starting the list over. -->
+                        <Button x:Name="PlaylistPauseButton" Height="32" MinWidth="110" Margin="6,0,0,0" Padding="10,0"
+                                VerticalContentAlignment="Center" Click="PlaylistPause_Click"
+                                ToolTip="{Binding [replay.pauseHint], Source={x:Static i18n:Loc.Source}}"
+                                Content="{Binding [replay.pause], Source={x:Static i18n:Loc.Source}}"/>
                         <Button x:Name="PlaylistStopButton" Height="32" MinWidth="72" Margin="6,0,0,0" Padding="10,0"
                                 VerticalContentAlignment="Center" Click="PlaylistStop_Click"
                                 ToolTip="{Binding [replay.playlistStopHint], Source={x:Static i18n:Loc.Source}}"
@@ -328,17 +340,23 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" Width="96">
+                            <GridViewColumn Header="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" Width="100">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding InText}" FontFamily="Consolas" VerticalAlignment="Center" Margin="4,0"/>
+                                        <TextBox Name="ClipInBox" Text="{Binding InText, Mode=OneWay}" Tag="{Binding}" FontFamily="Consolas"
+                                                 Height="24" Margin="2,1" VerticalContentAlignment="Center"
+                                                 LostFocus="RangeCell_LostFocus" KeyDown="RangeCell_KeyDown"
+                                                 ToolTip="{Binding [replay.rangeHelp], Source={x:Static i18n:Loc.Source}}"/>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.out], Source={x:Static i18n:Loc.Source}}" Width="96">
+                            <GridViewColumn Header="{Binding [replay.out], Source={x:Static i18n:Loc.Source}}" Width="100">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding OutText}" FontFamily="Consolas" VerticalAlignment="Center" Margin="4,0"/>
+                                        <TextBox Name="ClipOutBox" Text="{Binding OutText, Mode=OneWay}" Tag="{Binding}" FontFamily="Consolas"
+                                                 Height="24" Margin="2,1" VerticalContentAlignment="Center"
+                                                 LostFocus="RangeCell_LostFocus" KeyDown="RangeCell_KeyDown"
+                                                 ToolTip="{Binding [replay.rangeHelp], Source={x:Static i18n:Loc.Source}}"/>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>

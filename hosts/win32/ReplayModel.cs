@@ -616,6 +616,35 @@ internal static class ReplayModel
         return $"{totalSeconds / 3600:00}:{totalSeconds / 60 % 60:00}:{totalSeconds % 60:00}:{frame:00}";
     }
 
+    /// <summary>
+    /// Reads a timecode back into frames: "HH:MM:SS:FF" (the shape <see cref="Timecode"/>
+    /// writes) or a plain frame count. Used where the operator types an in or out point.
+    /// </summary>
+    public static bool TryParseTimecode(string? text, (uint Num, uint Den) fps, out ulong frames)
+    {
+        frames = 0;
+        var trimmed = (text ?? "").Trim();
+        if (trimmed.Length == 0)
+            return false;
+        if (ulong.TryParse(trimmed, out var plain))
+        {
+            frames = plain;
+            return true;
+        }
+        var parts = trimmed.Split(':', '.', ';');
+        if (parts.Length != 4)
+            return false;
+        if (!uint.TryParse(parts[0], out var hours)
+            || !uint.TryParse(parts[1], out var minutes)
+            || !uint.TryParse(parts[2], out var seconds)
+            || !uint.TryParse(parts[3], out var frame))
+            return false;
+        var perSecond = (int)Math.Round(Rate(fps));
+        if (perSecond <= 0 || frame >= (uint)perSecond)
+            return false;
+        frames = ((ulong)hours * 3600 + (ulong)minutes * 60 + (ulong)seconds) * (ulong)perSecond + frame;
+        return true;
+    }
     public static string Duration(ulong inFrame, ulong outFrame, (uint Num, uint Den) fps)
     {
         var frames = outFrame > inFrame ? outFrame - inFrame : 0;
