@@ -422,6 +422,7 @@ internal sealed class SceneAnimWindow : Window
         wait.Children.Add(new TextBlock { Text = Loc.T("anim.frames"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) });
         wait.Children.Add(waitSeconds);
         body.Children.Add(wait);
+        body.Children.Add(ReplayActionRow(step));
 
         return new Border
         {
@@ -432,6 +433,148 @@ internal sealed class SceneAnimWindow : Window
             Child = body,
             Tag = index
         };
+    }
+
+    /// <summary>
+    /// Replay cue this step fires. An animation can start a replay clip on its own
+    /// timecode, so an operator can build a running order that plays back by
+    /// itself.
+    /// </summary>
+    private Panel ReplayActionRow(SequenceStep step)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(28, 6, 0, 0) };
+        var session = (Application.Current as App)?.Session;
+        var replay = session is null ? null : ReplayModel.Parse(session);
+        var channels = replay is null ? [] : ReplayModel.Channels(replay);
+        var active = step.Replay is not null;
+
+        var enable = new CheckBox
+        {
+            Content = Loc.T("anim.replayAction"),
+            IsChecked = active,
+            // Without a Replay channel there is nothing to cue, so the action
+            // cannot be turned on at all.
+            IsEnabled = channels.Count > 0,
+            Foreground = Brushes.White,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        enable.Checked += (_, _) =>
+        {
+            step.Replay ??= new SequenceReplayAction();
+            StepsChanged();
+        };
+        enable.Unchecked += (_, _) =>
+        {
+            step.Replay = null;
+            StepsChanged();
+        };
+        row.Children.Add(enable);
+
+        var channelBox = new ComboBox { MinWidth = 110, Margin = new Thickness(8, 0, 0, 0), IsEnabled = active };
+        foreach (var channel in channels)
+        {
+            channelBox.Items.Add(new ComboBoxItem
+            {
+                Content = channel.Label,
+                Tag = channel.Index,
+                IsSelected = step.Replay?.Channel == channel.Index
+            });
+        }
+        if (channelBox.SelectedItem is null && channelBox.Items.Count > 0)
+            channelBox.SelectedIndex = 0;
+        row.Children.Add(channelBox);
+
+        var clipBox = new ComboBox { MinWidth = 200, Margin = new Thickness(8, 0, 0, 0), IsEnabled = active };
+        void FillClips()
+        {
+            clipBox.Items.Clear();
+            var selected = step.Replay?.ClipUid ?? "";
+            clipBox.Items.Add(new ComboBoxItem
+            {
+                Content = Loc.T("anim.replayNewestClip"),
+                Tag = "",
+                IsSelected = selected.Length == 0
+            });
+            var channel = step.Replay?.Channel;
+            var playlistId = PlaylistOf(channels, channel);
+            foreach (var clip in replay is null ? [] : ReplayModel.Clips(replay, playlistId))
+            {
+                clipBox.Items.Add(new ComboBoxItem
+                {
+                    Content = clip.Uid,
+                    Tag = clip.Uid,
+                    IsSelected = clip.Uid == selected
+                });
+            }
+            if (clipBox.SelectedItem is null && clipBox.Items.Count > 0)
+                clipBox.SelectedIndex = 0;
+        }
+        FillClips();
+        channelBox.SelectionChanged += (_, _) =>
+        {
+            if (!enable.IsChecked!.Value || step.Replay is not { } action)
+                return;
+            if (channelBox.SelectedItem is not ComboBoxItem item || item.Tag is not uint index)
+                return;
+            if (action.Channel == index)
+                return;
+            action.Channel = index;
+            // The clip list belongs to the channel, so a stale id would name a clip
+            // the channel does not have.
+            action.ClipUid = "";
+            FillClips();
+            StepsChanged(rebuild: false);
+        };
+        clipBox.SelectionChanged += (_, _) =>
+        {
+            if (!enable.IsChecked!.Value || step.Replay is not { } action)
+                return;
+            if (clipBox.SelectedItem is not ComboBoxItem item)
+                return;
+            var uid = item.Tag as string ?? "";
+            if (action.ClipUid == uid)
+                return;
+            action.ClipUid = uid;
+            StepsChanged(rebuild: false);
+        };
+        row.Children.Add(clipBox);
+
+        var play = new CheckBox
+        {
+            Content = Loc.T("anim.replayPlay"),
+            IsChecked = step.Replay?.Play == true,
+            IsEnabled = active,
+            Foreground = Brushes.White,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0)
+        };
+        play.Checked += (_, _) =>
+        {
+            if (step.Replay is { } action)
+            {
+                action.Play = true;
+                StepsChanged(rebuild: false);
+            }
+        };
+        play.Unchecked += (_, _) =>
+        {
+            if (step.Replay is { } action)
+            {
+                action.Play = false;
+                StepsChanged(rebuild: false);
+            }
+        };
+        row.Children.Add(play);
+        return row;
+    }
+
+    /// <summary>Playlist a channel plays, or null when it has none.</summary>
+    private static ulong? PlaylistOf(IReadOnlyList<ReplayChannelInfo> channels, uint? index)
+    {
+        if (index is not { } wanted)
+            return null;
+        var info = channels.FirstOrDefault(channel => channel.Index == wanted);
+        return info?.PlaylistId;
     }
 
     private void BuildTimeline(SceneSequence sequence)
@@ -780,7 +923,10 @@ internal sealed class SceneAnimWindow : Window
         {
             MixerApply.DefineSceneAnim(_scene);
             if (_persist && Application.Current is App app)
+            {
+                SessionStore.AdoptScene(app.Session, _scene);
                 SessionStore.Publish(app.Session);
+            }
             _status.Text = "";
         }
         catch (Exception ex)
@@ -807,7 +953,10 @@ internal sealed class SceneAnimWindow : Window
         {
             MixerApply.DefineSceneAnim(_scene);
             if (publish)
+            {
+                SessionStore.AdoptScene(app.Session, _scene);
                 SessionStore.Publish(app.Session);
+            }
             _status.Text = "";
             return true;
         }

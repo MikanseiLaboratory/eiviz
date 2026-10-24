@@ -21,7 +21,10 @@ pub struct VideoFrame {
     pub pts_100ns: i64,
     pub fps_num: u32,
     pub fps_den: u32,
-    pub data: Arc<[u8]>,
+    /// Shared frame bytes. `Arc<Vec<u8>>` lets a producer move its buffer into the
+    /// frame without the `Vec -> Arc<[u8]>` copy that used to cost a full frame on
+    /// every Replay readback.
+    pub data: Arc<Vec<u8>>,
 }
 
 /// 32-bit float planar PCM, one plane per channel.

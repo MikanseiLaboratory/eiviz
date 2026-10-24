@@ -1122,6 +1122,11 @@ struct AddInputView: View {
             items.append("DeckLink")
         }
         items.append("Mix")
+        // Instant Replay is an input like any other: it exists only because the
+        // operator adds it, and only while the plan and the module allow it.
+        if InputKind.replayAllowed() || editing?.kind == .replay {
+            items.append("Replay")
+        }
         return items
     }
 
@@ -1506,6 +1511,8 @@ struct AddInputView: View {
             return ndiAddress
         case "DeckLink":
             return decklinkDevices.first { $0.id == selectedDeckLink }?.label ?? "DeckLink"
+        case "Replay":
+            return "Replay"
         case "Mix":
             if mixIsMultiview {
                 return mixer.session.multiviews.first { $0.gpuId == mixTargetId }.map { "\($0.name) MV" } ?? "Mix"
@@ -1518,6 +1525,13 @@ struct AddInputView: View {
     }
 
     private func commit() -> Bool {
+        // A Replay input keeps its kind: its channel and the replay document go
+        // with it, so switching the kind here would leave a dead channel behind.
+        // Removing the input is the explicit way out.
+        if let editing, editing.kind == .replay, category != "Replay" {
+            mixer.presentInputError(L10n.t("replay.kindLocked"), editing: true)
+            return false
+        }
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         var input = InputEntry(id: editing?.id ?? 0, name: trimmed.isEmpty ? defaultName() : trimmed, kind: .still)
         switch category {
@@ -1590,6 +1604,20 @@ struct AddInputView: View {
             input.mixSource = mixIsMultiview ? .sessionMultiview : (mixPreview ? .muPreview : .muProgram)
             input.audioUnits = []
             input.frameBufferFrames = max(1, min(8, mixBuffer))
+        case "Replay":
+            // The reserved channel id, the input band and the replay document all
+            // follow from adding a Replay input; the Replay windows own the rest.
+            // The plan caps channels, and the core would refuse a document that
+            // exceeds it with a bare code, so the limit is named here instead.
+            if let limits = mixer.replayLimits(), limits.channels != .max,
+               mixer.session.inputs.filter({ $0.kind == .replay }).count >= Int(limits.channels) {
+                mixer.presentInputError(
+                    L10n.format("replay.planLimits", "\(limits.angles)", "\(limits.channels)"),
+                    editing: editing != nil
+                )
+                return false
+            }
+            input.kind = .replay
         default:
             guard !selectedUvc.isEmpty, let mode = selectedMode else { return false }
             input.kind = .uvc
@@ -1811,7 +1839,7 @@ struct MultiviewSlotsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Numbers match Window 1…N. Click a pane to assign that window.")
+            Text(L10n.t("mv.slotsHelp"))
                 .foregroundStyle(EivizTheme.dim)
             if let index = layoutIndex {
                 HStack(spacing: 8) {

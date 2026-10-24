@@ -18,6 +18,7 @@ control-api = []
 eiviz-control.workspace = true
 eiviz-api.workspace = true
 eiviz-pro-api.workspace = true
+eiviz-replay = { path = "../crates/eiviz-replay" }
 ed25519-dalek = "2.2.0"
 libloading = "0.8"
 sha2 = "0.10"
@@ -25,7 +26,7 @@ tokio.workspace = true
 bytemuck = { version = "1.25", features = ["derive"] }
 fontdue = "0.9"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatransport-rs", rev = "7711da45e2ed83330c2e1fced06c5d1673e4d502", features = ["wgpu"] }
+openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatransport-rs", rev = "9f88abac09d18c0e7cd56cbcfc2318c521413222", features = ["wgpu"] }
 pollster = "0.4"
 arc-swap = "1.9"
 raw-window-handle = "0.6"
@@ -36,7 +37,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tiny_http = "0.12"
 vmix-core = { git = "https://github.com/MikanseiLaboratory/vmix-rs", features = ["xml", "std"] }
-vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs", rev = "b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3" }
+vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs", rev = "b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3", features = ["wgpu"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot"] }
 naga = { version = "30.0.1", default-features = false, features = ["wgsl-in"] }
 
@@ -77,3 +78,4 @@ sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png"] }
 pollster = "0.4"
 serial_test = "3"
+vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs", rev = "b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3", features = ["wgpu"] }

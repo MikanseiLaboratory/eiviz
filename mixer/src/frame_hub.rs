@@ -282,7 +282,7 @@ mod tests {
             height: 1,
             stride: 4,
             pts: 1,
-            data: Arc::from([1u8, 2, 3, 4]),
+            data: Arc::new(vec![1u8, 2, 3, 4]),
             fps_n: 50,
             fps_d: 1,
         });
@@ -291,7 +291,7 @@ mod tests {
             height: 1,
             stride: 4,
             pts: 2,
-            data: Arc::from([5u8, 6, 7, 8]),
+            data: Arc::new(vec![5u8, 6, 7, 8]),
             fps_n: 50,
             fps_d: 1,
         });
@@ -329,7 +329,7 @@ mod tests {
             height: 1,
             stride: 4,
             pts: 1,
-            data: Arc::from([1u8, 2, 3, 4]),
+            data: Arc::new(vec![1u8, 2, 3, 4]),
             fps_n: 50,
             fps_d: 1,
         });
@@ -338,7 +338,7 @@ mod tests {
             height: 1,
             stride: 4,
             pts: 9,
-            data: Arc::from([9u8, 8, 7, 6]),
+            data: Arc::new(vec![9u8, 8, 7, 6]),
             fps_n: 25,
             fps_d: 1,
         });
@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn encode_once_mailbox_does_not_clone_per_subscriber() {
         let tx = OutputTx::stub();
-        let data: Arc<[u8]> = Arc::from([1u8, 2, 3, 4]);
+        let data: Arc<Vec<u8>> = Arc::new(vec![1u8, 2, 3, 4]);
         tx.video.publish(SendCmd::Video {
             width: 2,
             height: 1,

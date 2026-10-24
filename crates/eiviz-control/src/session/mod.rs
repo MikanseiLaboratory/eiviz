@@ -10,10 +10,10 @@ pub mod mutate;
 pub mod reconcile;
 pub mod relink;
 pub mod store;
+#[macro_use]
 mod string_enum;
+pub mod replay;
 pub mod validate;
-
-use string_enum::session_string_enum;
 
 pub use default::{dated_session_filename, dated_session_filename_now, default_document};
 pub use file::{
@@ -37,6 +37,10 @@ pub struct Document {
     pub input_tags: Vec<String>,
     #[serde(default)]
     pub scene_tags: Vec<String>,
+    /// Tag suggestions for replay clips, the same way inputs and scenes have
+    /// their own catalog.
+    #[serde(default)]
+    pub replay_tags: Vec<String>,
     #[serde(default)]
     pub settings: SessionSettings,
     #[serde(default)]
@@ -80,6 +84,9 @@ pub struct Document {
     pub headphone_listen_kind: u32,
     #[serde(default)]
     pub headphone_listen_id: u64,
+    /// Replay is opt-in: it is created only when the user adds a Replay input.
+    #[serde(default)]
+    pub replay: Option<replay::ReplayDto>,
 }
 
 fn version_two() -> i32 {
@@ -103,8 +110,12 @@ pub struct SessionSettings {
     pub default_multiview_unit_id: u64,
     #[serde(default = "three")]
     pub frame_buffer_frames: u32,
-    #[serde(default = "three")]
+    #[serde(default = "two")]
     pub default_present_interval: u32,
+    /// Presentation interval for the replay deck's monitors. Zero follows
+    /// `default_present_interval`.
+    #[serde(default)]
+    pub replay_present_interval: u32,
     #[serde(default)]
     pub flip_swapchain_limit: u32,
     #[serde(default)]
@@ -157,7 +168,8 @@ impl Default for SessionSettings {
             theme: theme_charcoal(),
             default_multiview_unit_id: 1,
             frame_buffer_frames: 3,
-            default_present_interval: 3,
+            default_present_interval: 2,
+            replay_present_interval: 0,
             flip_swapchain_limit: 0,
             internal_color_format: InternalColorFormat::Uyvy,
             renderer: Renderer::Auto,
@@ -276,8 +288,13 @@ fn default_true() -> bool {
 fn de_bool_null_true<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
     Ok(Option::<bool>::deserialize(deserializer)?.unwrap_or(true))
 }
+
 fn three() -> u32 {
     3
+}
+
+fn two() -> u32 {
+    2
 }
 
 fn api_port() -> u32 {
@@ -425,6 +442,7 @@ session_string_enum! {
         Mix,
         Audio,
         DeckLink,
+        Replay,
     }
 }
 
@@ -848,6 +866,24 @@ pub struct SequenceStep {
     pub motion: Option<Motion>,
     #[serde(default)]
     pub hold_frames: u32,
+    /// Replay action fired when this step is reached, so an animation can cue a
+    /// clip on its own timecode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay: Option<SequenceReplayAction>,
+}
+
+/// What an animation step does to Replay.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceReplayAction {
+    /// Replay channel to cue.
+    pub channel: u32,
+    /// Clip to cue. Empty means the newest clip on the channel's playlist.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub clip_uid: String,
+    /// Start playing as soon as the step is reached.
+    #[serde(default)]
+    pub play: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1411,6 +1447,11 @@ impl Document {
             doc.settings.frame_buffer_frames = 3;
         }
         doc.settings.default_present_interval = doc.settings.default_present_interval.clamp(1, 8);
+        // Zero follows the project interval. Any other value is a frame count.
+        doc.settings.replay_present_interval = match doc.settings.replay_present_interval {
+            0 => 0,
+            frames => frames.clamp(1, 8),
+        };
         doc.settings.flip_swapchain_limit = match doc.settings.flip_swapchain_limit {
             0 | 4 | 6 | 8 | 10 | 12 | 16 => doc.settings.flip_swapchain_limit,
             _ => 0,
@@ -1448,6 +1489,12 @@ impl Document {
         if !listen_ok {
             doc.headphone_listen_kind = 0;
             doc.headphone_listen_id = 0;
+        }
+        // Replay counters are repaired from the ids the document already holds.
+        // A host that wrote its own Replay JSON without the counters would otherwise
+        // reuse id 1 for the next event.
+        if let Some(replay) = doc.replay.as_mut() {
+            replay.normalize();
         }
         for input in &mut doc.inputs {
             if input.kind == InputKind::Mix {
@@ -1730,6 +1777,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn null_replay_is_the_default() {
+        let src = r#"{
+  "version": 2,
+  "settings": { "masterFpsNum": 60, "masterFpsDen": 1 },
+  "inputs": [{ "id": 2, "name": "SMPTE Bars", "kind": "Bars" }],
+  "scenes": [{ "id": 1, "name": "Scene 1", "layers": [] }],
+  "units": [{ "id": 1, "name": "Mixing Unit 1" }],
+  "replay": null
+}"#;
+        let doc = parse(src.as_bytes()).expect("null replay");
+        assert!(doc.replay.is_none());
+    }
+
+    #[test]
     fn windows_shaped_json_is_stable() {
         let src = r#"{
   "version": 2,
@@ -1748,6 +1809,7 @@ mod tests {
         let b = canonicalize_bytes(&a).expect("again");
         assert_eq!(a, b);
         let doc = parse(src.as_bytes()).unwrap();
+        assert!(doc.replay.is_none());
         assert_eq!(doc.inputs[0].kind, InputKind::Bars);
         assert_eq!(doc.outputs[0].audio_unit_id, 1);
         assert!(doc.outputs[0].skip_encode_when_no_receivers);

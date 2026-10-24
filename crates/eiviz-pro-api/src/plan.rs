@@ -106,6 +106,8 @@ pub struct Entitlements {
     pub recording: bool,
     pub srt: bool,
     pub hardware_encode: bool,
+    pub replay_angles: Quota<u32>,
+    pub replay_channels: Quota<u32>,
 }
 
 impl Entitlements {
@@ -119,6 +121,8 @@ impl Entitlements {
             recording: false,
             srt: false,
             hardware_encode: false,
+            replay_angles: Quota::Denied,
+            replay_channels: Quota::Denied,
         }
     }
 
@@ -132,6 +136,8 @@ impl Entitlements {
             recording: true,
             srt: true,
             hardware_encode: true,
+            replay_angles: Quota::Limited(4),
+            replay_channels: Quota::Limited(4),
         }
     }
 
@@ -145,6 +151,8 @@ impl Entitlements {
             recording: true,
             srt: true,
             hardware_encode: true,
+            replay_angles: Quota::Unlimited,
+            replay_channels: Quota::Unlimited,
         }
     }
 

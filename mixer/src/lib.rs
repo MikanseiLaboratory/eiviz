@@ -4,6 +4,7 @@ mod abi;
 mod anim;
 mod audio;
 mod audio_in;
+pub(crate) mod bench;
 mod clock;
 mod compose;
 #[cfg(windows)]
@@ -45,6 +46,7 @@ pub use pro_load::{
 pub use pro_load::{load_pro_module, prepare_pro_module};
 mod readback;
 mod rebar;
+mod replay;
 mod runtime;
 mod save;
 mod session;
@@ -68,15 +70,18 @@ pub use abi::{
     AudioPeak, BACKEND_AUTO, BACKEND_DX12, BACKEND_METAL, BACKEND_VULKAN, DURATION_FRAMES,
     DURATION_MS, EASING_BEZIER, EASING_HOLD, EASING_IN, EASING_IN_OUT, EASING_LINEAR, EASING_OUT,
     EASING_SMOOTHSTEP, ERR_ALREADY_CREATED, ERR_BUFFER_TOO_SMALL, ERR_DEVICE, ERR_INVALID_ARGUMENT,
-    ERR_IO, ERR_NOT_CREATED, ERR_NOT_SUPPORTED_PLAN, EivizCurve, EivizSceneCamera, GEN_BARS,
-    GEN_SOLID, INCOMING_PREVIEW, INCOMING_PROGRAM, InputRuntimeStats, MULTIVIEW_BASE,
-    MixerCapabilities, MixerLicenseStatus, MixerRebarInfo, MixerRuntimeStats, MixerSourceStatus,
-    MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK, OUT_DECKLINK, OUT_NDI,
-    OUT_OMT, OUT_RTMP, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE, OutputRuntimeStats,
-    OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM, SCENE_BASE, SRC_BARS,
-    SRC_BLACK, SRC_BLUE, SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW,
-    SRC_KIND_MU_PROGRAM, SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR,
-    TRANSITION_BLINDS, TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
+    ERR_IO, ERR_NOT_CREATED, ERR_NOT_SUPPORTED_PLAN, EivizCurve, EivizMotion, EivizSceneCamera,
+    EivizSceneSequenceDesc, EivizSceneStateDesc, EivizSequenceStepDesc, GEN_BARS, GEN_SOLID,
+    INCOMING_PREVIEW, INCOMING_PROGRAM, InputRuntimeStats, MULTIVIEW_BASE, MixerCapabilities,
+    MixerLicenseStatus, MixerRebarInfo, MixerReplayAngleStats, MixerReplayChannelState,
+    MixerReplayEstimateIn, MixerReplayEstimateOut, MixerReplayStats, MixerRuntimeStats,
+    MixerSourceStatus, MixerStats, MixerVideoInfo, NATIVE_APPKIT_NSVIEW, NATIVE_WIN32_HWND, OK,
+    OUT_DECKLINK, OUT_NDI, OUT_OMT, OUT_RTMP, OUTPUT_PREVIEW, OUTPUT_PROGRAM, OUTPUT_SOURCE,
+    OutputRuntimeStats, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM,
+    SCENE_BASE, SCENE_SEQ_PLAY, SCENE_SEQ_REVERSE, SCENE_SEQ_STOP, SRC_BARS, SRC_BLACK, SRC_BLUE,
+    SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
+    SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
+    TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
     TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DATAMOSH,
     TRANSITION_DIAMOND, TRANSITION_DIP, TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT,
     TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP, TRANSITION_DISPLACE, TRANSITION_FADE,
@@ -135,6 +140,16 @@ impl ControlFacade for MixerFacade {
             .unwrap_or(eiviz_control::Lifecycle::Failed)
     }
 
+    /// Live Replay state for `GetReplayState`. Without this the facade answers with
+    /// the trait's empty default, and a client that asks what Replay is doing gets
+    /// nothing back.
+    fn replay_state_json(&self) -> eiviz_control::ControlResult<String> {
+        runtime::control()
+            .lock()
+            .map_err(|_| eiviz_control::ControlError::internal("control lock"))?
+            .replay_state_json()
+    }
+
     fn epoch(&self) -> String {
         runtime::control()
             .lock()
@@ -187,7 +202,7 @@ use omt::{
 };
 use present::Presenters;
 use readback::ReadbackStore;
-use save::{LiveSave, collect_source_roles, want_full};
+use save::{LiveSave, collect_source_roles, mark_replay_scenes, want_full};
 use upload::{AUDIO_RATE, AudioPacket, CpuFormat, GpuIngest, UploadStore};
 
 pub(crate) struct AutoTransition {
@@ -496,7 +511,7 @@ impl OutputHandle {
         height: u32,
         stride: u32,
         pts: i64,
-        data: Arc<[u8]>,
+        data: Arc<Vec<u8>>,
         fps_n: u32,
         fps_d: u32,
     ) -> Result<(), String> {
@@ -609,7 +624,7 @@ pub(crate) enum SendCmd {
         height: u32,
         stride: u32,
         pts: i64,
-        data: Arc<[u8]>,
+        data: Arc<Vec<u8>>,
         fps_n: u32,
         fps_d: u32,
     },
@@ -718,8 +733,29 @@ pub(crate) struct Mixer {
     audio_captures: Arc<Mutex<audio::AudioCaptureStore>>,
     stop: Arc<AtomicBool>,
     backend: u32,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(windows, target_os = "macos"))]
     surface_gpu: present::SurfaceGpu,
+}
+
+pub(crate) fn replay_record_context() -> Result<((u32, u32), Vec<u64>, (u32, u32)), i32> {
+    with_mixer(|mixer| {
+        let shared = mixer.shared.lock_or_recover();
+        let size = shared
+            .units
+            .values()
+            .next()
+            .map(|unit| (unit.width, unit.height))
+            .unwrap_or((1920, 1080));
+        (
+            (shared.master_fps_num, shared.master_fps_den),
+            shared.scenes.keys().copied().collect::<Vec<_>>(),
+            size,
+        )
+    })
+}
+
+pub(crate) fn with_uploads<T>(body: impl FnOnce(&mut UploadStore) -> T) -> Result<T, i32> {
+    with_mixer(|mixer| body(&mut mixer.uploads.lock_or_recover()))
 }
 
 pub(crate) fn live_snapshot() -> crate::vmix_xml::LiveSnapshot {
@@ -890,10 +926,6 @@ pub(crate) fn set_error(telemetry: &Mutex<Telemetry>, message: impl Into<String>
     telemetry.lock_or_recover().last_error = message.into();
 }
 
-pub(crate) fn with_uploads<T>(mixer: &Mixer, f: impl FnOnce(&mut UploadStore) -> T) -> T {
-    f(&mut mixer.uploads.lock_or_recover())
-}
-
 pub(crate) fn session_error_slot() -> &'static Mutex<String> {
     static SLOT: OnceLock<Mutex<String>> = OnceLock::new();
     SLOT.get_or_init(|| Mutex::new(String::new()))
@@ -919,7 +951,7 @@ pub(crate) fn copy_bytes(src: &[u8], out: *mut u8, cap: usize) -> i32 {
     src.len() as i32
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(windows, target_os = "macos"))]
 pub(crate) fn prepare_surface_off_slot(
     surface: NativeSurface,
     width: u32,
@@ -929,7 +961,9 @@ pub(crate) fn prepare_surface_off_slot(
         Ok(gpu) => gpu,
         Err(code) => return Err(code),
     };
-    crate::main_thread::run_on_main(move || {
+    // Vulkan swapchain setup sends window messages. Doing it on the render
+    // thread deadlocks when the UI thread is blocked in send_gpu_and_wait.
+    let prepare = move || {
         present::prepare_surface(
             &gpu.instance,
             &gpu.adapter,
@@ -938,8 +972,12 @@ pub(crate) fn prepare_surface_off_slot(
             width,
             height,
         )
-    })
-    .map_err(|error| {
+    };
+    #[cfg(target_os = "macos")]
+    let prepared = crate::main_thread::run_on_main(prepare);
+    #[cfg(windows)]
+    let prepared = prepare();
+    prepared.map_err(|error| {
         let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error));
         ERR_DEVICE
     })
@@ -1026,7 +1064,7 @@ pub(crate) fn start_mixer(
         }
     };
     let backend = crate::device::abi_of_backend(device.adapter.get_info().backend);
-    #[cfg(target_os = "macos")]
+    #[cfg(any(windows, target_os = "macos"))]
     let surface_gpu = present::SurfaceGpu {
         instance: device.instance.clone(),
         adapter: device.adapter.clone(),
@@ -1164,7 +1202,7 @@ pub(crate) fn start_mixer(
         audio_captures: Arc::new(Mutex::new(audio::AudioCaptureStore::default())),
         stop,
         backend,
-        #[cfg(target_os = "macos")]
+        #[cfg(any(windows, target_os = "macos"))]
         surface_gpu,
     };
     match audio::AudioScheduler::start(
@@ -1342,6 +1380,7 @@ fn mixer_destroy_ffi() {
 }
 
 pub(crate) fn mixer_destroy_inner() {
+    crate::replay::engine().shutdown();
     crate::vmix_api::suspend();
     crate::diag::info("mixer_destroy begin");
     let mut mixer = {
@@ -2097,12 +2136,25 @@ fn mixer_unit_attach_native_ffi(
             "attach surface unit={unit_id} kind={kind}: native kind={native_kind} handle={handle} is not valid on this OS"
         ));
     };
-    #[cfg(target_os = "macos")]
+    // Check the unit before touching the GPU. Preparing a present surface for a
+    // unit that does not exist is wasted work, and it replaced the caller's
+    // "not created" error with a device error on every platform. A mixer that does
+    // not exist at all is still "not created": that is the code the hosts act on.
+    match with_mixer(|mixer| mixer.shared.lock_or_recover().units.contains_key(&unit_id)) {
+        Err(code) => return code,
+        Ok(false) => {
+            return attach_invalid(format!(
+                "attach surface unit={unit_id} kind={kind}: mixing unit {unit_id:#x} is not created"
+            ));
+        }
+        Ok(true) => {}
+    }
+    #[cfg(any(windows, target_os = "macos"))]
     let prepared = match prepare_surface_off_slot(surface, width, height) {
         Ok(prepared) => Some(prepared),
         Err(code) => return code,
     };
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     let prepared = None;
     send_gpu_and_wait(|mixer, reply| {
         if !mixer.shared.lock_or_recover().units.contains_key(&unit_id) {
@@ -3021,12 +3073,12 @@ fn mixer_attach_monitor_native_ffi(
     let Ok(surface) = NativeSurface::parse(native_kind, handle) else {
         return ERR_INVALID_ARGUMENT;
     };
-    #[cfg(target_os = "macos")]
+    #[cfg(any(windows, target_os = "macos"))]
     let prepared = match prepare_surface_off_slot(surface, width, height) {
         Ok(prepared) => Some(prepared),
         Err(code) => return code,
     };
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     let prepared = None;
     send_gpu_and_wait(|mixer, reply| {
         if mixer
@@ -3123,7 +3175,10 @@ fn mixer_register_source_ffi(id: u64, width: u32, height: u32, format: u32) -> i
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        with_uploads(mixer, |uploads| uploads.register(id, width, height, format));
+        mixer
+            .uploads
+            .lock_or_recover()
+            .register(id, width, height, format);
         OK
     })
     .unwrap_or_else(|code| code)
@@ -3150,7 +3205,11 @@ unsafe fn mixer_push_frame_ffi(id: u64, ptr: *const u8, stride: u32, height: u32
     // SAFETY: caller keeps the frame readable for this call only.
     let src = unsafe { std::slice::from_raw_parts(ptr, len) };
     with_mixer(|mixer| {
-        match with_uploads(mixer, |uploads| uploads.push(id, src, stride as usize, pts)) {
+        match mixer
+            .uploads
+            .lock_or_recover()
+            .push(id, src, stride as usize, pts)
+        {
             Ok(()) => OK,
             Err(error) => {
                 set_error(&mixer.telemetry, error);
@@ -3233,13 +3292,12 @@ unsafe fn mixer_load_still_ffi(id: u64, path: *const c_char) -> i32 {
         return ERR_INVALID_ARGUMENT;
     }
     with_mixer(|mixer| {
-        with_uploads(mixer, |uploads| {
-            uploads.register(id, width, height, CpuFormat::Rgba);
-            match uploads.push(id, &image, width as usize * 4, 0) {
-                Ok(()) => OK,
-                Err(_) => ERR_IO,
-            }
-        })
+        let mut uploads = mixer.uploads.lock_or_recover();
+        uploads.register(id, width, height, CpuFormat::Rgba);
+        match uploads.push(id, &image, width as usize * 4, 0) {
+            Ok(()) => OK,
+            Err(_) => ERR_IO,
+        }
     })
     .unwrap_or_else(|code| code)
 }
@@ -4716,10 +4774,445 @@ unsafe fn mixer_capabilities_ffi(out: *mut MixerCapabilities) -> i32 {
         hardware_encode: 0,
         decklink_linked: 0,
         rtmp_linked: 0,
+        replay_angle_limit: 0,
+        replay_channel_limit: 0,
+        replay_linked: 0,
     };
     crate::pro::fill_capabilities(&mut caps);
     unsafe { *out = caps };
     OK
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_configure(json: *const c_char) -> i32 {
+    ffi_guard("mixer_replay_configure", ERR_IO, || {
+        let Some(json) = crate::pro::cstr(json) else {
+            report_session_error("replay settings pointer is null");
+            return ERR_INVALID_ARGUMENT;
+        };
+        match crate::replay::engine().configure(json) {
+            Ok(()) => OK,
+            Err(failure) => {
+                // The reason is what the operator acts on, so it travels with the
+                // code instead of being replaced by a generic sentence.
+                report_session_error(&failure.message);
+                failure.code
+            }
+        }
+    })
+}
+
+/// Copies one jog-proxy picture as UYVY. Returns 1 when the proxy exists.
+/// A missing proxy returns 0 and does not decode the full-size picture.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_copy_proxy(
+    angle_id: u32,
+    frame: u64,
+    out: *mut u8,
+    cap: usize,
+    width: *mut u32,
+    height: *mut u32,
+) -> i32 {
+    ffi_guard("mixer_replay_copy_proxy", 0, || unsafe {
+        if out.is_null() || width.is_null() || height.is_null() || cap == 0 {
+            return 0;
+        }
+        let dst = std::slice::from_raw_parts_mut(out, cap);
+        match crate::replay::engine().copy_proxy(angle_id, frame, dst) {
+            Ok((w, h)) => {
+                *width = w;
+                *height = h;
+                1
+            }
+            Err(_) => 0,
+        }
+    })
+}
+
+/// Recorded frame range of one angle. Returns nonzero when the angle has frames.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_angle_range(
+    angle_id: u32,
+    first: *mut u64,
+    last: *mut u64,
+) -> i32 {
+    ffi_guard("mixer_replay_angle_range", 0, || unsafe {
+        if first.is_null() || last.is_null() {
+            return 0;
+        }
+        match crate::replay::engine().angle_range(angle_id) {
+            Some((start, end)) => {
+                *first = start;
+                *last = end;
+                1
+            }
+            None => 0,
+        }
+    })
+}
+
+/// Starts an MP4 export. The JSON names the file and the segments to write.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_bench_capacity(
+    path: *const u8,
+    path_len: usize,
+    width: u32,
+    height: u32,
+    out: *mut u8,
+    cap: usize,
+    written: *mut usize,
+) -> i32 {
+    ffi_guard("mixer_bench_capacity", ERR_INVALID_ARGUMENT, || unsafe {
+        if out.is_null() || written.is_null() {
+            return ERR_INVALID_ARGUMENT;
+        }
+        if path.is_null() {
+            return ERR_INVALID_ARGUMENT;
+        }
+        let bytes = std::slice::from_raw_parts(path, path_len);
+        let Ok(path) = std::str::from_utf8(bytes) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        match crate::bench::run(path, width, height) {
+            Ok(capacity) => {
+                let json = capacity.to_json();
+                let result = write_bytes(out, cap, json.as_bytes());
+                if result >= 0 {
+                    *written = result as usize;
+                    OK
+                } else {
+                    result
+                }
+            }
+            Err(error) => {
+                crate::diag::error(&format!("capacity bench failed: {error}"));
+                ERR_IO
+            }
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_export_start(json: *const c_char) -> i32 {
+    ffi_guard("mixer_replay_export_start", ERR_IO, || {
+        let Some(json) = crate::pro::cstr(json) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        let spec = match crate::replay::parse_export_spec(json) {
+            Ok(spec) => spec,
+            Err(code) => return code,
+        };
+        match crate::replay::engine().export_start(spec) {
+            Ok(()) => OK,
+            Err(code) => code,
+        }
+    })
+}
+
+/// Progress of the running export as JSON, or an idle snapshot.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_export_progress(
+    out: *mut u8,
+    cap: usize,
+    written: *mut usize,
+) -> i32 {
+    ffi_guard(
+        "mixer_replay_export_progress",
+        ERR_INVALID_ARGUMENT,
+        || unsafe {
+            if out.is_null() || written.is_null() || cap == 0 {
+                return ERR_INVALID_ARGUMENT;
+            }
+            let json =
+                crate::replay::export_progress_json(&crate::replay::engine().export_progress());
+            let bytes = json.as_bytes();
+            let count = bytes.len().min(cap - 1);
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, count);
+            *out.add(count) = 0;
+            *written = count;
+            OK
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_replay_export_cancel() -> i32 {
+    ffi_guard(
+        "mixer_replay_export_cancel",
+        ERR_IO,
+        || match crate::replay::engine().export_cancel() {
+            Ok(()) => OK,
+            Err(code) => code,
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_mark_in(out_frame: *mut u64) -> i32 {
+    ffi_guard("mixer_replay_mark_in", ERR_IO, || unsafe {
+        match crate::replay::engine().mark_in() {
+            Ok(frame) => {
+                if !out_frame.is_null() {
+                    *out_frame = frame;
+                }
+                OK
+            }
+            Err(failure) => {
+                report_session_error(&failure.message);
+                failure.code
+            }
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_mark_out(
+    out_in: *mut u64,
+    out_out: *mut u64,
+    uuid: *mut u8,
+    cap: usize,
+) -> i32 {
+    ffi_guard("mixer_replay_mark_out", ERR_IO, || unsafe {
+        match crate::replay::engine().close_mark() {
+            Ok((id, in_frame, out_frame)) => {
+                if !out_in.is_null() {
+                    *out_in = in_frame;
+                }
+                if !out_out.is_null() {
+                    *out_out = out_frame;
+                }
+                if !uuid.is_null() && cap > 0 {
+                    let bytes = id.as_bytes();
+                    let n = bytes.len().min(cap.saturating_sub(1));
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), uuid, n);
+                    *uuid.add(n) = 0;
+                }
+                OK
+            }
+            Err(failure) => {
+                report_session_error(&failure.message);
+                failure.code
+            }
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+/// Turns looping on or off for a replay channel's playlist.
+///
+/// # Safety
+/// A plain C call: no pointers cross the boundary.
+pub unsafe extern "C" fn mixer_replay_loop(channel: u32, on: u32) -> i32 {
+    ffi_guard(
+        "mixer_replay_loop",
+        ERR_INVALID_ARGUMENT,
+        || match crate::replay::engine().set_looping(channel, on != 0) {
+            Ok(()) => OK,
+            Err(code) => code,
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_replay_channel_step(channel: u32, delta: i32) -> i32 {
+    ffi_guard(
+        "mixer_replay_channel_step",
+        ERR_INVALID_ARGUMENT,
+        || match crate::replay::engine().step_channel(channel, delta) {
+            Ok(()) => OK,
+            Err(code) => code,
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_record(on: u32) -> i32 {
+    ffi_guard("mixer_replay_record", ERR_IO, || {
+        match crate::replay::engine().record(on != 0) {
+            Ok(()) => OK,
+            Err(failure) => {
+                // A recorder that refuses to start has to say why: "no storage",
+                // "no angles", "no Pro module" and "bad format" are different
+                // problems with different fixes.
+                report_session_error(&failure.message);
+                failure.code
+            }
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_channel_cue(
+    channel: u32,
+    angle_id: u32,
+    in_frame: u64,
+    out_frame: u64,
+    recording_uuid: *const c_char,
+) -> i32 {
+    ffi_guard("mixer_replay_channel_cue", ERR_IO, || {
+        let Some(uuid) = crate::pro::cstr(recording_uuid) else {
+            return ERR_INVALID_ARGUMENT;
+        };
+        match crate::replay::engine().cue(channel, angle_id, in_frame, out_frame, uuid) {
+            Ok(()) => OK,
+            Err(failure) => {
+                report_session_error(&failure.message);
+                failure.code
+            }
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_channel_transport(
+    channel: u32,
+    playing: u32,
+    speed_milli: i32,
+    seek_frame: i64,
+) -> i32 {
+    ffi_guard(
+        "mixer_replay_channel_transport",
+        ERR_IO,
+        || match crate::replay::engine().transport(channel, playing != 0, speed_milli, seek_frame) {
+            Ok(()) => OK,
+            Err(failure) => {
+                report_session_error(&failure.message);
+                failure.code
+            }
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_channel_jump_to_now(channel: u32) -> i32 {
+    ffi_guard(
+        "mixer_replay_channel_jump_to_now",
+        ERR_IO,
+        || match crate::replay::engine().jump_to_now(channel) {
+            Ok(()) => OK,
+            Err(code) => code,
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_copy_stats(
+    stats: *mut MixerReplayStats,
+    angles: *mut MixerReplayAngleStats,
+    cap: u32,
+) -> i32 {
+    ffi_guard("mixer_replay_copy_stats", ERR_INVALID_ARGUMENT, || unsafe {
+        if stats.is_null() {
+            return ERR_INVALID_ARGUMENT;
+        }
+        let angle_slice = if angles.is_null() || cap == 0 {
+            &mut [][..]
+        } else {
+            std::slice::from_raw_parts_mut(angles, cap as usize)
+        };
+        crate::replay::engine().copy_stats(&mut *stats, angle_slice);
+        OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_copy_channels(
+    channels: *mut MixerReplayChannelState,
+    cap: u32,
+) -> i32 {
+    ffi_guard(
+        "mixer_replay_copy_channels",
+        ERR_INVALID_ARGUMENT,
+        || unsafe {
+            if channels.is_null() || cap == 0 {
+                return ERR_INVALID_ARGUMENT;
+            }
+            let slice = std::slice::from_raw_parts_mut(channels, cap as usize);
+            crate::replay::engine().copy_channels(slice) as i32
+        },
+    )
+}
+
+/// Buckets per second the replay waveform is stored at. The host needs it to map
+/// a video frame to a waveform bucket.
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_replay_peak_rate() -> u32 {
+    eiviz_pro_api::PEAK_BUCKETS_PER_SEC
+}
+
+/// Waveform buckets an angle has. `dropped` receives the number of buckets the
+/// ring had to evict from the front, so the host can keep absolute numbering.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_peak_count(angle_id: u32, dropped: *mut u32) -> u32 {
+    ffi_guard("mixer_replay_peak_count", 0, || {
+        if !dropped.is_null() {
+            unsafe { *dropped = crate::replay::engine().peak_dropped(angle_id) };
+        }
+        crate::replay::engine().peak_count(angle_id)
+    })
+}
+
+/// Copies an angle's waveform from `from` into the caller's arrays.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_copy_peaks(
+    angle_id: u32,
+    from: u32,
+    min_out: *mut f32,
+    max_out: *mut f32,
+    cap: u32,
+) -> i32 {
+    ffi_guard("mixer_replay_copy_peaks", -1, || unsafe {
+        if min_out.is_null() || max_out.is_null() || cap == 0 {
+            return -ERR_INVALID_ARGUMENT;
+        }
+        let mins = std::slice::from_raw_parts_mut(min_out, cap as usize);
+        let maxes = std::slice::from_raw_parts_mut(max_out, cap as usize);
+        crate::replay::engine().copy_peaks(angle_id, from, mins, maxes) as i32
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_copy_recording_uuid(out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_replay_copy_recording_uuid", -1, || unsafe {
+        if out.is_null() || cap == 0 {
+            return -ERR_INVALID_ARGUMENT;
+        }
+        let uuid = crate::replay::engine().recording_uuid();
+        let bytes = uuid.as_bytes();
+        let n = bytes.len().min(cap);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, n);
+        n as i32
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_estimate(
+    input: *const MixerReplayEstimateIn,
+    out: *mut MixerReplayEstimateOut,
+) -> i32 {
+    ffi_guard("mixer_replay_estimate", ERR_INVALID_ARGUMENT, || unsafe {
+        if input.is_null() || out.is_null() {
+            return ERR_INVALID_ARGUMENT;
+        }
+        let input = &*input;
+        let path = if input.path.is_null() || input.path_len == 0 {
+            String::new()
+        } else {
+            String::from_utf8_lossy(std::slice::from_raw_parts(input.path, input.path_len))
+                .into_owned()
+        };
+        *out = crate::replay::ReplayEngine::estimate(
+            &path,
+            input.width,
+            input.height,
+            input.fps_num,
+            input.fps_den,
+            input.profile,
+            input.angle_count,
+            input.reserve_bytes,
+        );
+        OK
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -6654,6 +7147,7 @@ unsafe fn mixer_copy_runtime_stats_ffi(out: *mut MixerRuntimeStats) -> i32 {
             *out = MixerRuntimeStats {
                 uptime_ms: elapsed_ms(shared.clock.epoch()),
                 render_skipped: crate::diag::render_skipped(),
+                frames_rendered: crate::diag::frames_rendered(),
                 input_queue_dropped,
                 output_omt,
                 output_ndi,
@@ -6846,6 +7340,7 @@ fn mixer_set_master_fps_ffi(fps_num: u32, fps_den: u32) -> i32 {
     with_mixer(|mixer| {
         let mut shared = mixer.shared.lock_or_recover();
         shared.master_fps_num = rate.num;
+        crate::replay::engine().note_fps(rate.num, rate.den);
         shared.master_fps_den = rate.den;
         OK
     })
@@ -7010,7 +7505,7 @@ unsafe fn mixer_thumb_read_ffi(
 
 #[derive(Clone)]
 pub(crate) struct Acquired {
-    data: Arc<[u8]>,
+    data: Arc<Vec<u8>>,
     stride: u32,
     pts: i64,
 }
@@ -7042,6 +7537,47 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::collections::HashMap;
+
+    /// A client that asks what Replay is doing must get the document and the live
+    /// state, not the facade's empty default: automation and a remote host read the
+    /// replay state through this call.
+    #[test]
+    #[serial]
+    fn the_facade_reports_replay_state() {
+        mixer_destroy();
+        assert_eq!(mixer_create(0, 60_000, 1_001), 0, "create");
+        let json = br#"{
+  "version": 2,
+  "inputs": [
+    { "id": 10, "name": "Bars", "kind": "Bars" },
+    { "id": 524289, "name": "Replay A", "kind": "Replay" }
+  ],
+  "scenes": [
+    { "id": 1, "name": "Scene 1", "layers": [{ "inputId": 10, "width": 1, "height": 1 }] }
+  ],
+  "units": [{ "id": 1, "name": "MU1" }],
+  "replay": {
+    "enabled": false,
+    "angles": [{ "id": 1, "name": "Cam 1", "sceneId": 1, "audio": "Silent", "recordMode": "Composite" }],
+    "channels": [{ "index": 0, "inputId": 524289 }],
+    "playlists": []
+  }
+}"#;
+        assert_eq!(
+            unsafe { mixer_session_replace(json.as_ptr().cast(), json.len(), 0) },
+            0,
+            "session replace"
+        );
+        let state =
+            eiviz_control::ControlFacade::replay_state_json(&MixerFacade).expect("replay state");
+        mixer_destroy();
+        assert!(state.contains("\"document\""), "{state}");
+        assert!(state.contains("\"live\""), "{state}");
+        assert_ne!(
+            state, "{}",
+            "the facade must not answer with the empty default"
+        );
+    }
 
     #[test]
     fn scene_layer_validation_rejects_self_reference_and_non_finite() {
@@ -7488,6 +8024,13 @@ mod tests {
             mixer_unit_attach_native(1, OUTPUT_PROGRAM, NATIVE_APPKIT_NSVIEW, 1, 1920, 1080),
             ERR_INVALID_ARGUMENT
         );
+        // Without a mixer there is nothing to attach to, and that is what the
+        // callers report: the same code on every platform.
+        #[cfg(windows)]
+        assert_eq!(
+            mixer_unit_attach_native(1, OUTPUT_PROGRAM, NATIVE_WIN32_HWND, 1, 1920, 1080),
+            ERR_NOT_CREATED
+        );
         #[cfg(target_os = "macos")]
         assert_eq!(
             mixer_unit_attach_native(1, OUTPUT_PROGRAM, NATIVE_WIN32_HWND, 1, 1920, 1080),
@@ -7605,7 +8148,7 @@ mod tests {
             height: 2,
             stride: 4,
             pts: 0,
-            data: Arc::from([0u8; 8]),
+            data: Arc::new(vec![0u8; 8]),
             fps_n: 60,
             fps_d: 1,
         }

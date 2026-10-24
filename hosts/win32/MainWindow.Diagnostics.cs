@@ -317,6 +317,7 @@ public partial class MainWindow
                 FlipBudget.ObserveLost(stats.SurfaceLost);
         }
         ResourceText.Text = _resources.Line();
+        RefreshReplayStatus();
         RefreshStatusBar();
         RefreshStreamLamps();
         TickVideo();
@@ -390,6 +391,43 @@ public partial class MainWindow
 
 
     private void Logs_Click(object sender, RoutedEventArgs e) => OpenLogs();
+
+    private void RefreshReplayStatus()
+    {
+        MixerReplayStats stats = default;
+        int code;
+        unsafe
+        {
+            code = MixerNative.ReplayCopyStats(&stats, 0, 0);
+        }
+        if (code != 0 || stats.State == 0)
+        {
+            ReplayText.Text = "";
+            return;
+        }
+        // A stopped recorder has no meaningful remaining time; saying so beats
+        // showing a frozen figure from just before the stop.
+        var text = stats.State == 2
+            ? Loc.T("replay.stateStopped")
+            : stats.RemainingSecs == uint.MaxValue
+                ? Loc.T("replay.remainingUnknown")
+                : Loc.Format(
+                    stats.RemainingIsEstimate != 0 ? "replay.estimate" : "replay.remaining",
+                    TimeSpan.FromSeconds(stats.RemainingSecs).ToString(@"h\:mm\:ss"));
+        if (stats.FramesDroppedRecent > 0)
+            text += "  " + Loc.Format("replay.dropped", stats.FramesDroppedRecent);
+        // A coloured line the operator cannot explain is not a diagnosis.
+        var issues = ReplayIssues.Text(stats.Issues);
+        if (issues.Length > 0)
+            text += "  " + issues;
+        ReplayText.Text = text;
+        ReplayText.Foreground = stats.Severity switch
+        {
+            2 => System.Windows.Media.Brushes.OrangeRed,
+            1 => System.Windows.Media.Brushes.Goldenrod,
+            _ => (System.Windows.Media.Brush)FindResource("HudForeground")
+        };
+    }
 
     private void ResourceHud_MouseUp(object sender, MouseButtonEventArgs e) => OpenResources();
 

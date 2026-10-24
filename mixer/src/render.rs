@@ -11,6 +11,11 @@ pub(crate) fn render_loop(
     cmds: mpsc::Receiver<GpuCmd>,
     stop: Arc<AtomicBool>,
 ) {
+    // The capacity measurement needs the device, and this is where it becomes known.
+    crate::bench::remember(&device.device, &device.queue);
+    // Replay playback decodes packets on this same device, so a decoded picture can
+    // go straight to the compositor instead of through a CPU frame.
+    crate::replay::engine().set_gpu(&device.device, &device.queue);
     let mut composer = match Composer::new(&device) {
         Ok(composer) => composer,
         Err(error) => {
@@ -35,6 +40,10 @@ pub(crate) fn render_loop(
     let mut scene_cameras = HashMap::new();
     let mut generators = Vec::new();
     let mut outputs_snap = Vec::new();
+    // Two clock reads per phase, only when asked for: this is how the parallelisation
+    // work is measured, and it must not cost anything in normal runs.
+    let profile_frames = std::env::var_os("EIVIZ_PROFILE_FRAME").is_some();
+    let mut phases = (0f32, 0f32, 0f32, 0u32);
     let mut cached_mem = (0u64, 0u64);
     let mut cached_adapter = 0u64;
     let mut mem_at = Instant::now()
@@ -61,6 +70,10 @@ pub(crate) fn render_loop(
                     prepared,
                     reply,
                 } => {
+                    crate::diag::info(&format!(
+                        "render attach unit={unit_id:#x} kind={kind} prepared={}",
+                        prepared.is_some()
+                    ));
                     let code = match panic::catch_unwind(AssertUnwindSafe(|| {
                         presenters.attach(&device, unit_id, kind, surface, width, height, prepared)
                     })) {
@@ -208,6 +221,7 @@ pub(crate) fn render_loop(
             continue;
         };
         crate::diag::add_render_skipped(skipped);
+        crate::diag::note_frame_rendered();
         frame_i = master_cursor.idx.saturating_sub(1);
         {
             let mut guard = shared.lock_or_recover();
@@ -365,7 +379,20 @@ pub(crate) fn render_loop(
                 .iter()
                 .map(|item| (item.source_kind, item.source_id))
                 .collect();
-            let roles = collect_source_roles(&scene_specs, &snapshot, &role_sources, &output_refs);
+            let mut roles =
+                collect_source_roles(&scene_specs, &snapshot, &role_sources, &output_refs);
+            // Angle scenes stay rendered whenever Replay has angles configured,
+            // so the Replay window can show them before recording starts. Only the
+            // recording set is forced to full receive quality.
+            for id in crate::replay::engine().live_angle_scene_ids() {
+                used_scenes.insert(id);
+            }
+            let replay_scenes = crate::replay::engine().replay_scene_ids();
+            mark_replay_scenes(&scene_specs, &replay_scenes, &mut roles);
+            // An input angle records an input's own picture, so that input has to
+            // arrive at full quality too.
+            let replay_inputs = crate::replay::engine().live_angle_input_ids();
+            crate::save::mark_replay_inputs(&replay_inputs, &mut roles);
             {
                 let guard = shared.lock_or_recover();
                 for (id, receiver) in &guard.receivers {
@@ -376,8 +403,14 @@ pub(crate) fn render_loop(
             }
             {
                 let live_units: HashSet<u64> = snapshot.iter().map(|snap| snap.id).collect();
-                let live_outputs: HashSet<u64> =
+                let mut live_outputs: HashSet<u64> =
                     outputs_snap.iter().map(|item| item.output_id).collect();
+                live_outputs.extend(
+                    crate::replay::engine()
+                        .record_targets()
+                        .iter()
+                        .map(|target| target.readback_key),
+                );
                 let live_sources: HashSet<u64> = uploads.lock_or_recover().ids().collect();
                 composer.retain_live(&live_sources, &live_units, &live_outputs);
                 frame_delay.retain(&live_units);
@@ -495,6 +528,7 @@ pub(crate) fn render_loop(
                                     native_w,
                                     native_h,
                                     2,
+                                    crate::readback::READBACK_SLOTS,
                                 );
                                 rb.copy_from(&mut encoder, &packed, pts);
                                 packed_copies.push((output.output_id, native_w, native_h));
@@ -551,8 +585,8 @@ pub(crate) fn render_loop(
                 }
                 device.submit(Some(encoder.finish()));
                 emit_packed(&mut readbacks, &device, &packed_copies, &outputs_snap);
-                emit_gpu_encode(&gpu_copies, pts);
             }
+
             frame_delay.consume_display(false);
             composer.set_bus_colors(bus_colors.preview, bus_colors.program, bus_colors.inactive);
             composer.sync_scenes(&device, &scene_specs, &scene_labels, &scene_cameras);
@@ -573,11 +607,13 @@ pub(crate) fn render_loop(
                     &mix_sources,
                 );
             }
+            let scenes_started = Instant::now();
             if let Err(error) =
                 composer.render_scenes(&device, &used_scenes, &mut encoder, &tallies)
             {
                 set_error(&telemetry, error);
             }
+            let scenes_ms = scenes_started.elapsed().as_secs_f32() * 1000.0;
             let mut packed_copies: Vec<(u64, u32, u32)> = Vec::new();
             let mut gpu_copies: Vec<GpuEncodeCopy> = Vec::new();
             for snap in &snapshot {
@@ -678,7 +714,151 @@ pub(crate) fn render_loop(
                 pts,
             );
             thumbs.capture(&device, &mut composer, &mut encoder, frame_i, &thumbs_snap);
+            let replay_started = Instant::now();
+            let replay_targets = crate::replay::engine().record_targets();
+            // Copies queued this frame; handed to the per-angle workers once the copy
+            // has been submitted, so the worker sees the picture and not the scene.
+            let mut gpu_jobs: Vec<(u32, crate::replay::gpu_encode::CopyJob)> = Vec::new();
+            // Each encoder thread serves several angles in queue order, so a fixed
+            // iteration order would always starve the later angles of every thread. Starting
+            // one angle further each frame shares the encoder evenly.
+            let replay_from = if replay_targets.is_empty() {
+                0
+            } else {
+                frame_i as usize % replay_targets.len()
+            };
+            for offset in 0..replay_targets.len() {
+                let target = &replay_targets[(replay_from + offset) % replay_targets.len()];
+                let picture = match target.source {
+                    crate::replay::RecordSource::Scene(gpu_id) => {
+                        composer.scene_texture(gpu_id).cloned()
+                    }
+                    // An input angle records the input's own picture. A packed input
+                    // (OMT/NDI) is unpacked first: the recorder reads RGBA.
+                    crate::replay::RecordSource::Input(input_id) => {
+                        replay_input_texture(&mut composer, &device, input_id)
+                    }
+                };
+                let Some(src) = picture else {
+                    // The angle has no picture this frame. Counted: a frame the
+                    // recorder never saw must not vanish silently.
+                    crate::replay::engine().note_replaced(target.angle_id, 1);
+                    continue;
+                };
+                // One replay format: a source that is not already that size is scaled.
+                // Both encoder paths need the same picture, so the scale happens here
+                // rather than inside the readback one.
+                let picture =
+                    if src.size().width == target.width && src.size().height == target.height {
+                        src
+                    } else {
+                        match composer
+                            .scale_rgba(
+                                &device,
+                                &mut encoder,
+                                target.readback_key,
+                                &src,
+                                target.width,
+                                target.height,
+                                false,
+                            )
+                            .cloned()
+                        {
+                            Some(scaled) => scaled,
+                            None => {
+                                crate::replay::engine().note_replaced(target.angle_id, 1);
+                                continue;
+                            }
+                        }
+                    };
+                // A GPU angle is encoded from a copy of the picture, on a worker per
+                // angle. Doing the encode here made the angles serial: at four angles
+                // the renderer waited for one encode after another and the recording
+                // fell from 60 to 42 frames a second. The copy is one GPU operation;
+                // the encode and the packet write happen on the worker.
+                if target.gpu_encode {
+                    match crate::replay::gpu_encode::prepare(
+                        target.angle_id,
+                        target.width,
+                        target.height,
+                        target.profile,
+                        &device.device,
+                        &device.queue,
+                    ) {
+                        Some(ring) => {
+                            encoder.copy_texture_to_texture(
+                                picture.as_image_copy(),
+                                ring.as_image_copy(),
+                                wgpu::Extent3d {
+                                    width: target.width,
+                                    height: target.height,
+                                    depth_or_array_layers: 1,
+                                },
+                            );
+                            gpu_jobs.push((
+                                target.angle_id,
+                                crate::replay::gpu_encode::CopyJob {
+                                    texture: ring,
+                                    frame: frame_i,
+                                    pts,
+                                },
+                            ));
+                        }
+                        None => {
+                            crate::diag::warn_throttled(
+                                "replay-prepare-none",
+                                &format!(
+                                    "replay record: prepare returned None for angle {} {}x{} profile={}",
+                                    target.angle_id, target.width, target.height, target.profile
+                                ),
+                            );
+                            crate::replay::engine().note_encode_dropped(target.angle_id);
+                        }
+                    }
+                    continue;
+                }
+                push_replay_packed(
+                    &mut composer,
+                    &device,
+                    &mut encoder,
+                    &mut readbacks,
+                    target.readback_key,
+                    target.angle_id,
+                    target.width,
+                    target.height,
+                    &picture,
+                    target.layout,
+                    pts,
+                    frame_i,
+                );
+            }
+            let replay_ms = replay_started.elapsed().as_secs_f32() * 1000.0;
+            let submit_started = Instant::now();
             device.submit(Some(encoder.finish()));
+            let submit_ms = submit_started.elapsed().as_secs_f32() * 1000.0;
+            if profile_frames {
+                phases.0 += scenes_ms;
+                phases.1 += replay_ms;
+                phases.2 += submit_ms;
+                phases.3 += 1;
+                if phases.3 >= 120 {
+                    let frames = phases.3 as f32;
+                    crate::diag::info(&format!(
+                        "frame phases over {frames:.0} frames: scenes {:.2} ms, replay {:.2} ms, submit {:.2} ms",
+                        phases.0 / frames,
+                        phases.1 / frames,
+                        phases.2 / frames
+                    ));
+                    phases = (0.0, 0.0, 0.0, 0);
+                }
+            }
+            // The copy is on the same queue as the encode, so a worker that picks the
+            // texture up now still encodes the picture, in submission order.
+            for (angle_id, job) in gpu_jobs.drain(..) {
+                if !crate::replay::gpu_encode::dispatch(angle_id, job) {
+                    crate::replay::engine().note_replaced(angle_id, 1);
+                }
+            }
             flush_snapshots(
                 &device,
                 &mut composer,
@@ -688,6 +868,7 @@ pub(crate) fn render_loop(
             );
             thumbs.advance(&device);
             emit_packed(&mut readbacks, &device, &packed_copies, &outputs_snap);
+            emit_replay(&mut readbacks, &device, &replay_targets);
             emit_gpu_encode(&gpu_copies, pts);
             if presenters.any_monitor_due(frame_i) {
                 let monitor_epoch = composer.gpu_epoch() ^ frame_delay.epoch().rotate_left(8);
@@ -817,7 +998,7 @@ pub(crate) fn emit_packed(
                     .find(|output| output.output_id == *key)
                     .map(|output| output.bytes_per_pixel.max(2))
                     .unwrap_or(2);
-                let data: Arc<[u8]> = packed.to_vec().into();
+                let data: Arc<Vec<u8>> = Arc::new(packed.to_vec());
                 last_frames().lock_or_recover().insert(
                     *key,
                     Acquired {
@@ -900,14 +1081,28 @@ fn push_cpu_packed(
             return;
         };
         let rgba = rgba.clone();
-        let rb = readbacks.ensure(device, output.output_id, width, height, 4);
+        let rb = readbacks.ensure(
+            device,
+            output.output_id,
+            width,
+            height,
+            4,
+            crate::readback::READBACK_SLOTS,
+        );
         rb.copy_from(encoder, &rgba, pts);
         packed_copies.push((output.output_id, width, height));
         return;
     }
     if packed_src && (width, height) == (src_w, src_h) {
         // Already UYVY at the requested size: read it back untouched.
-        let rb = readbacks.ensure(device, output.output_id, src_w, src_h, 2);
+        let rb = readbacks.ensure(
+            device,
+            output.output_id,
+            src_w,
+            src_h,
+            2,
+            crate::readback::READBACK_SLOTS,
+        );
         rb.copy_from(encoder, src, pts);
         packed_copies.push((output.output_id, src_w, src_h));
         return;
@@ -932,9 +1127,140 @@ fn push_cpu_packed(
     };
     let packed_w = packed.size().width.saturating_mul(2).max(2);
     let packed_h = packed.size().height.max(1);
-    let rb = readbacks.ensure(device, output.output_id, packed_w, packed_h, 2);
+    let rb = readbacks.ensure(
+        device,
+        output.output_id,
+        packed_w,
+        packed_h,
+        2,
+        crate::readback::READBACK_SLOTS,
+    );
     rb.copy_from(encoder, packed, pts);
     packed_copies.push((output.output_id, packed_w, packed_h));
+}
+
+/// The input's own picture as RGBA, for an input angle. A packed input is blitted
+/// into an RGBA texture first, because the recorder's readback is RGBA.
+fn replay_input_texture(
+    composer: &mut Composer,
+    device: &GpuDevice,
+    input_id: u64,
+) -> Option<wgpu::Texture> {
+    if composer.source_is_packed(input_id) {
+        composer.blit_source_rgba(device, input_id)
+    } else {
+        composer.source_texture(input_id).cloned()
+    }
+}
+
+fn push_replay_packed(
+    composer: &mut Composer,
+    device: &GpuDevice,
+    encoder: &mut wgpu::CommandEncoder,
+    readbacks: &mut ReadbackStore,
+    key: u64,
+    angle_id: u32,
+    width: u32,
+    height: u32,
+    src: &wgpu::Texture,
+    layout: eiviz_pro_api::PixelLayout,
+    pts: i64,
+    frame_index: u64,
+) {
+    let picture = if src.size().width == width && src.size().height == height {
+        src.clone()
+    } else {
+        // Decision: one replay format. A scene that is not already that size is scaled.
+        let Some(scaled) = composer
+            .scale_rgba(device, encoder, key, src, width, height, false)
+            .cloned()
+        else {
+            // The scene could not be scaled this frame. Counted: a frame that
+            // silently vanishes from a recording is worse than a visible drop.
+            crate::replay::engine().note_replaced(angle_id, 1);
+            return;
+        };
+        scaled
+    };
+    // The recorder gets a deeper ring: a map takes a few frames to come back, and
+    // with a preview-sized ring those frames are lost.
+    crate::replay::engine().note_pushed();
+    if layout == eiviz_pro_api::PixelLayout::Uyvy {
+        // A CPU encoder wants 4:2:2. Packing on the GPU halves the readback and
+        // removes the scalar BGRA→UYVY conversion the store used to do.
+        let view = picture.create_view(&wgpu::TextureViewDescriptor::default());
+        let Some(packed) = composer
+            .pack_rgba_sized(device, encoder, key, &view, width, height)
+            .cloned()
+        else {
+            crate::replay::engine().note_replaced(angle_id, 1);
+            return;
+        };
+        let rb = readbacks.ensure(
+            device,
+            key,
+            width,
+            height,
+            2,
+            crate::readback::READBACK_RECORD_SLOTS,
+        );
+        if rb.matches(width, height) {
+            rb.copy_from_frame(encoder, &packed, pts, frame_index);
+        } else {
+            crate::replay::engine().note_replaced(angle_id, 1);
+        }
+        return;
+    }
+    let rb = readbacks.ensure(
+        device,
+        key,
+        width,
+        height,
+        4,
+        crate::readback::READBACK_RECORD_SLOTS,
+    );
+    if rb.matches(width, height) {
+        rb.copy_from_frame(encoder, &picture, pts, frame_index);
+    } else {
+        crate::replay::engine().note_replaced(angle_id, 1);
+    }
+}
+
+fn emit_replay(
+    readbacks: &mut ReadbackStore,
+    device: &GpuDevice,
+    targets: &[crate::replay::RecordTarget],
+) {
+    for target in targets {
+        let Some(rb) = readbacks.get_mut(target.readback_key) else {
+            continue;
+        };
+        rb.advance(device);
+        let replaced = rb.take_replaced();
+        if replaced > 0 {
+            crate::replay::engine().note_replaced(target.angle_id, replaced);
+        }
+        // Every frame that finished goes to the recorder, in order. Taking one
+        // per tick made the recording follow the readback latency instead of the
+        // render rate, which lost frames even when nothing was overloaded.
+        let stride = match target.layout {
+            eiviz_pro_api::PixelLayout::Bgra => (target.width.max(1) * 4) as usize,
+            eiviz_pro_api::PixelLayout::Uyvy => (target.width.max(1) * 2) as usize,
+        };
+        while let Some((data, pts, captured)) = rb.take_latest() {
+            // Stamp the frame the picture actually came from. Labelling it with
+            // the frame that happened to be rendering when the readback completed
+            // biased every Mark In/Out by the readback latency.
+            crate::replay::engine().offer_frame(
+                target.angle_id,
+                captured,
+                pts,
+                data,
+                stride,
+                target.layout,
+            );
+        }
+    }
 }
 
 fn push_scaled_gpu(

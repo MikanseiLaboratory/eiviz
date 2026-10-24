@@ -438,7 +438,14 @@ fn dispatch(state: &State, instance: &str, role: Role, request: crate::proto::Re
         | Some(request::Payload::VideoSeek(_))
         | Some(request::Payload::AudioSetInput(_))
         | Some(request::Payload::AudioSetBus(_))
-        | Some(request::Payload::Discover(_)) => Role::Operate,
+        | Some(request::Payload::Discover(_))
+        | Some(request::Payload::ReplayRecord(_))
+        | Some(request::Payload::ReplayMarkIn(_))
+        | Some(request::Payload::ReplayMarkOut(_))
+        | Some(request::Payload::ReplayCue(_))
+        | Some(request::Payload::ReplayTransport(_))
+        | Some(request::Payload::ReplayJumpToNow(_))
+        | Some(request::Payload::GetReplayState(_)) => Role::Operate,
         Some(request::Payload::ReplaceSession(_))
         | Some(request::Payload::MutateSession(_))
         | Some(request::Payload::SaveSession(_))
@@ -704,6 +711,68 @@ fn dispatch(state: &State, instance: &str, role: Role, request: crate::proto::Re
         Some(request::Payload::Shutdown(_)) => {
             exec_cmd(state, instance, &request_id, Command::Shutdown)
         }
+        Some(request::Payload::ReplayRecord(body)) => exec_cmd(
+            state,
+            instance,
+            &request_id,
+            Command::ReplayRecord { on: body.on },
+        ),
+        Some(request::Payload::ReplayMarkIn(_)) => {
+            exec_cmd(state, instance, &request_id, Command::ReplayMarkIn)
+        }
+        Some(request::Payload::ReplayMarkOut(body)) => exec_cmd(
+            state,
+            instance,
+            &request_id,
+            Command::ReplayMarkOut { name: body.name },
+        ),
+        Some(request::Payload::ReplayCue(body)) => exec_cmd(
+            state,
+            instance,
+            &request_id,
+            Command::ReplayCue {
+                channel: body.channel,
+                clip_uid: body.clip_uid,
+            },
+        ),
+        Some(request::Payload::ReplayTransport(body)) => exec_cmd(
+            state,
+            instance,
+            &request_id,
+            Command::ReplayTransport {
+                channel: body.channel,
+                playing: body.playing,
+                speed_milli: body.speed_milli,
+                seek_frame: body.seek_frame,
+            },
+        ),
+        Some(request::Payload::ReplayJumpToNow(body)) => exec_cmd(
+            state,
+            instance,
+            &request_id,
+            Command::ReplayJumpToNow {
+                channel: body.channel,
+            },
+        ),
+        Some(request::Payload::GetReplayState(_)) => {
+            // The document alone cannot tell a client what is playing, so the
+            // payload carries both the session document and live state.
+            let replay_json = state.control.replay_state_json();
+            state.control.snapshot().and_then(|snap| {
+                Ok(ProtoResponse {
+                    request_id: request_id.clone(),
+                    status: Some(Status {
+                        code: "OK".into(),
+                        message: String::new(),
+                    }),
+                    revision: snap.revision,
+                    sequence: snap.sequence,
+                    payload: Some(response::Payload::ReplayState(crate::proto::ReplayState {
+                        json: replay_json?,
+                    })),
+                })
+            })
+        }
         None => Err(ControlError::invalid("empty request")),
     };
     match result {
@@ -938,6 +1007,9 @@ fn proto_snapshot(snapshot: eiviz_control::Snapshot, request_id: String) -> Prot
                 hardware_encode: capabilities.hardware_encode,
                 decklink_linked: capabilities.decklink_linked,
                 rtmp_linked: capabilities.rtmp_linked,
+                replay_angle_limit: capabilities.replay_angle_limit,
+                replay_channel_limit: capabilities.replay_channel_limit,
+                replay_linked: capabilities.replay_linked,
             }),
         })),
     }
@@ -1013,6 +1085,23 @@ fn proto_event(event: &eiviz_control::Event, epoch: &str) -> ProtoEvent {
         eiviz_control::Event::Discovered { kind, payload, .. } => {
             proto.discover_kind = kind.clone();
             proto.discover_payload = payload.clone();
+        }
+        eiviz_control::Event::ReplayHealth {
+            severity,
+            issues,
+            stop_reason,
+            remaining_secs,
+            message,
+            ..
+        } => {
+            proto.live_json = serde_json::to_vec(&serde_json::json!({
+                "severity": severity,
+                "issues": issues,
+                "stopReason": stop_reason,
+                "remainingSecs": remaining_secs,
+                "message": message,
+            }))
+            .unwrap_or_default();
         }
         _ => {}
     }

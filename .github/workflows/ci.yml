@@ -119,6 +119,49 @@ jobs:
       - name: Build host
         run: dotnet build eiviz.slnx -c Release
 
+  replay-debug:
+    name: Replay tests (debug)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup NDI SDK and LLVM
+        uses: ./.github/actions/setup-ndi-windows
+
+      - name: Install Rust 1.97
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          # Its own cache: this job builds debug while the other jobs build release.
+          key: replay-debug
+
+      - name: Test Replay in debug
+        # The replay integration tests are `#![cfg(debug_assertions)]` because they
+        # load a Pro module, which is process-wide and permanent. A release run skips
+        # them, so this job is the one that exercises recording, marking and playout.
+        #
+        # `replay_transition` is left out: it judges the dissolve from the composed
+        # program picture, and this runner renders through a software adapter that
+        # returns the picture in jumps coarse enough to miss a half-second blend
+        # entirely (measured: 75 samples inside the window, none of them a blend). It
+        # runs on the macOS job, where the picture comes from Metal, and locally.
+        run: >
+          cargo test -p eiviz_mixer --locked
+          --test replay_record --test replay_record_nomodule --test replay_input
+          --test replay_passthrough
+          --test replay_flow --test replay_playout --test replay_offair
+          --test replay_animation --test replay_audio
+          --test vmix_replay
+          -- --test-threads=1
+
   macos:
     name: Test mixer and Mac host
     runs-on: macos-latest
@@ -174,14 +217,20 @@ jobs:
         with:
           workspaces: .
 
+      - name: Check the Windows session DTOs against the core
+        # The host writes its session document by hand. A field it forgets is silently
+        # reset in the core on the next publish, so the two sides are compared rather
+        # than trusted (the scene camera went missing that way).
+        run: python3 scripts/check-session-dto.py
+
       - name: Format control API
-        run: cargo fmt -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless -- --check
+        run: cargo fmt -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless -p eiviz-replay -- --check
 
       - name: Clippy control API
-        run: cargo clippy -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless --locked --no-default-features -- -D warnings
+        run: cargo clippy -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless -p eiviz-replay --locked --no-default-features -- -D warnings
 
       - name: Test control and API
-        run: cargo test -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless --locked --no-default-features
+        run: cargo test -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless -p eiviz-replay --locked --no-default-features
 
       - name: Build eivizctl and headless without GPU
         run: cargo build -p eiviz-headless --locked --bins --no-default-features

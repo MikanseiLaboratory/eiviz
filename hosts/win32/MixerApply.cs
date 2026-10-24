@@ -79,20 +79,40 @@ internal static class MixerApply
         var states = new EivizSceneStateDesc[scene.States.Count];
         foreach (var state in scene.States)
             layerSets.Add(StateLayers(scene, state));
+        var pins = new List<GCHandle>();
         var stepSets = new List<EivizSequenceStepDesc[]>();
         var sequences = new EivizSceneSequenceDesc[scene.Sequences.Count];
         for (var i = 0; i < scene.Sequences.Count; i++)
         {
             var sequence = scene.Sequences[i];
-            stepSets.Add(sequence.Steps.Select(step => new EivizSequenceStepDesc
+            stepSets.Add(sequence.Steps.Select(step =>
             {
-                StateId = step.StateId,
-                Motion = MotionDesc(step.Motion ?? new Motion()),
-                HasMotion = step.Motion is null ? 0u : 1u,
-                HoldFrames = step.HoldFrames
+                // The clip id travels as bytes and must stay pinned until the
+                // define call returns, so its pin joins the others below.
+                var clip = step.Replay is { } action
+                    ? System.Text.Encoding.UTF8.GetBytes(action.ClipUid ?? "")
+                    : [];
+                nint clipPtr = 0;
+                if (clip.Length > 0)
+                {
+                    var clipPin = GCHandle.Alloc(clip, GCHandleType.Pinned);
+                    pins.Add(clipPin);
+                    clipPtr = clipPin.AddrOfPinnedObject();
+                }
+                return new EivizSequenceStepDesc
+                {
+                    StateId = step.StateId,
+                    Motion = MotionDesc(step.Motion ?? new Motion()),
+                    HasMotion = step.Motion is null ? 0u : 1u,
+                    HoldFrames = step.HoldFrames,
+                    ReplayChannel = step.Replay?.Channel ?? 0,
+                    ReplayActive = step.Replay is null ? 0u : 1u,
+                    ReplayPlay = step.Replay?.Play == true ? 1u : 0u,
+                    ReplayClip = clipPtr,
+                    ReplayClipLen = (nuint)clip.Length
+                };
             }).ToArray());
         }
-        var pins = new List<GCHandle>();
         try
         {
             unsafe
@@ -794,3 +814,4 @@ internal static class MixerApply
         });
     }
 }
+

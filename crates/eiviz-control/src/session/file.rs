@@ -340,6 +340,7 @@ fn document_to_pb(doc: &Document) -> pb::Document {
         scene_presets: doc.scene_presets.iter().map(preset_to_pb).collect(),
         input_tags: doc.input_tags.clone(),
         scene_tags: doc.scene_tags.clone(),
+        replay_tags: doc.replay_tags.clone(),
         settings: Some(settings_to_pb(&doc.settings)),
         inputs: doc.inputs.iter().map(input_to_pb).collect(),
         scenes: doc.scenes.iter().map(scene_to_pb).collect(),
@@ -365,6 +366,7 @@ fn document_to_pb(doc: &Document) -> pb::Document {
         headphone: Some(headphone_to_pb(&doc.headphone)),
         headphone_listen_kind: doc.headphone_listen_kind,
         headphone_listen_id: doc.headphone_listen_id,
+        replay: doc.replay.as_ref().map(replay_to_pb),
     }
 }
 
@@ -374,6 +376,7 @@ fn document_from_pb(doc: pb::Document) -> Result<Document, String> {
         scene_presets: doc.scene_presets.into_iter().map(preset_from_pb).collect(),
         input_tags: doc.input_tags,
         scene_tags: doc.scene_tags,
+        replay_tags: doc.replay_tags,
         settings: settings_from_pb(doc.settings.unwrap_or_default())?,
         inputs: doc
             .inputs
@@ -423,6 +426,7 @@ fn document_from_pb(doc: pb::Document) -> Result<Document, String> {
             .map(headphone_from_pb)
             .transpose()?
             .unwrap_or_default(),
+        replay: doc.replay.map(replay_from_pb).transpose()?,
     })
 }
 
@@ -436,6 +440,7 @@ fn settings_to_pb(settings: &SessionSettings) -> pb::SessionSettings {
         default_multiview_unit_id: settings.default_multiview_unit_id,
         frame_buffer_frames: settings.frame_buffer_frames,
         default_present_interval: settings.default_present_interval,
+        replay_present_interval: settings.replay_present_interval,
         flip_swapchain_limit: settings.flip_swapchain_limit,
         internal_color_format: color_format_to_pb(settings.internal_color_format).into(),
         rebar_optimization: settings.rebar_optimization,
@@ -482,6 +487,9 @@ fn settings_from_pb(settings: pb::SessionSettings) -> Result<SessionSettings, St
     }
     if settings.default_present_interval != 0 {
         out.default_present_interval = settings.default_present_interval;
+    }
+    if settings.replay_present_interval != 0 {
+        out.replay_present_interval = settings.replay_present_interval;
     }
     out.flip_swapchain_limit = settings.flip_swapchain_limit;
     out.internal_color_format = color_format_from_pb(settings.internal_color_format)?;
@@ -791,6 +799,11 @@ fn sequence_to_pb(seq: &super::SceneSequence) -> pb::SceneSequence {
                 state_id: step.state_id,
                 motion: step.motion.as_ref().map(motion_to_pb),
                 hold_frames: step.hold_frames,
+                replay: step.replay.as_ref().map(|action| pb::SequenceReplayAction {
+                    channel: action.channel,
+                    clip_uid: action.clip_uid.clone(),
+                    play: action.play,
+                }),
             })
             .collect(),
     }
@@ -807,6 +820,11 @@ fn sequence_from_pb(seq: pb::SceneSequence) -> super::SceneSequence {
                 state_id: step.state_id,
                 motion: step.motion.map(motion_from_pb),
                 hold_frames: step.hold_frames,
+                replay: step.replay.map(|action| super::SequenceReplayAction {
+                    channel: action.channel,
+                    clip_uid: action.clip_uid,
+                    play: action.play,
+                }),
             })
             .collect(),
     }
@@ -1444,6 +1462,404 @@ proto_enum!(
     { All => All, Include => Include, Exclude => Exclude }
 );
 
+fn replay_to_pb(replay: &crate::session::replay::ReplayDto) -> pb::Replay {
+    use crate::session::replay::*;
+    pb::Replay {
+        enabled: replay.enabled,
+        storage: replay
+            .storage
+            .iter()
+            .map(|item| pb::ReplayStorage {
+                path: item.path.clone(),
+                angle_ids: item.angle_ids.clone(),
+            })
+            .collect(),
+        format: Some(pb::ReplayFormat {
+            width: replay.format.width,
+            height: replay.format.height,
+            fps_num: replay.format.fps_num,
+            fps_den: replay.format.fps_den,
+            profile: match replay.format.profile {
+                ReplayProfile::Hq => pb::ReplayProfile::Hq as i32,
+                ReplayProfile::Lq => pb::ReplayProfile::Lq as i32,
+                ReplayProfile::Sq => pb::ReplayProfile::Sq as i32,
+            },
+            segment_frames: replay.format.segment_frames,
+        }),
+        buffering: Some(pb::ReplayBuffering {
+            encode_queue_frames: replay.buffering.encode_queue_frames,
+            write_buffer_mb: replay.buffering.write_buffer_mb,
+            overflow_policy: match replay.buffering.overflow_policy {
+                ReplayOverflowPolicy::StopRecording => pb::ReplayOverflow::Stop as i32,
+                ReplayOverflowPolicy::DropFrames => pb::ReplayOverflow::Drop as i32,
+            },
+            reserve_mb: replay.buffering.reserve_mb,
+        }),
+        warnings: Some(pb::ReplayWarnings {
+            remaining_warn_secs: Some(replay.warnings.remaining_warn_secs),
+            remaining_alert_secs: Some(replay.warnings.remaining_alert_secs),
+            remaining_critical_secs: Some(replay.warnings.remaining_critical_secs),
+        }),
+        retention: match replay.retention {
+            ReplayRetention::Overwrite => pb::ReplayRetention::Overwrite as i32,
+            ReplayRetention::OverwriteUnprotected => {
+                pb::ReplayRetention::OverwriteUnprotected as i32
+            }
+            ReplayRetention::StopWhenFull => pb::ReplayRetention::StopWhenFull as i32,
+        },
+        angles: replay
+            .angles
+            .iter()
+            .map(|angle| pb::Angle {
+                id: angle.id,
+                name: angle.name.clone(),
+                scene_id: angle.scene_id,
+                audio: match angle.audio {
+                    crate::session::replay::AngleAudio::Silent => pb::AngleAudio::Silent as i32,
+                    crate::session::replay::AngleAudio::Unit => pb::AngleAudio::Unit as i32,
+                },
+                record_mode: match angle.record_mode {
+                    AngleRecordMode::Composite => pb::AngleRecordMode::Composite as i32,
+                    AngleRecordMode::Passthrough => pb::AngleRecordMode::Passthrough as i32,
+                },
+                encoder: match angle.encoder {
+                    crate::session::replay::AngleEncoder::Cpu => pb::AngleEncoder::Cpu as i32,
+                    crate::session::replay::AngleEncoder::Gpu => pb::AngleEncoder::Gpu as i32,
+                },
+                audio_unit_id: angle.audio_unit_id,
+                source: match angle.source {
+                    crate::session::replay::AngleSourceKind::Scene => {
+                        pb::AngleSourceKind::Scene as i32
+                    }
+                    crate::session::replay::AngleSourceKind::Input => {
+                        pb::AngleSourceKind::Input as i32
+                    }
+                },
+                input_id: angle.input_id,
+            })
+            .collect(),
+        events: replay
+            .events
+            .iter()
+            .map(|event| pb::ReplayEvent {
+                id: event.id,
+                recording_uuid: event.recording_uuid.clone(),
+                in_frame: event.in_frame,
+                out_frame: event.out_frame,
+                name: event.name.clone(),
+                tags: event.tags.clone(),
+                protected: event.protected,
+            })
+            .collect(),
+        playlists: replay
+            .playlists
+            .iter()
+            .map(|list| pb::Playlist {
+                id: list.id,
+                name: list.name.clone(),
+                revision: list.revision,
+                clips: list
+                    .clips
+                    .iter()
+                    .map(|clip| pb::Clip {
+                        uid: clip.uid.clone(),
+                        source_kind: match clip.source {
+                            ClipSourceKind::Asset => pb::ClipSourceKind::Asset as i32,
+                            ClipSourceKind::Angle => pb::ClipSourceKind::Angle as i32,
+                        },
+                        angle_id: clip.angle_id,
+                        asset_path: clip.asset_path.clone(),
+                        source_event: clip.source_event.unwrap_or(0),
+                        has_source_event: clip.source_event.is_some(),
+                        recording_uuid: clip.recording_uuid.clone(),
+                        in_frame: clip.in_frame,
+                        out_frame: clip.out_frame,
+                        speed: clip.speed,
+                        gain_db: clip.gain_db,
+                        transition: Some(clip_transition_to_pb(clip.transition)),
+                        tags: clip.tags.clone(),
+                        preserve_pitch: clip.preserve_pitch,
+                        audio: clip_audio_to_pb(clip.audio) as i32,
+                        audio_angle_id: clip.audio_angle_id,
+                    })
+                    .collect(),
+                default_transition: Some(clip_transition_to_pb(list.default_transition)),
+            })
+            .collect(),
+        channels: replay
+            .channels
+            .iter()
+            .map(|channel| pb::ReplayChannel {
+                index: channel.index,
+                playlist_id: channel.playlist_id.unwrap_or(0),
+                has_playlist: channel.playlist_id.is_some(),
+                input_id: channel.input_id,
+            })
+            .collect(),
+        auto_add_to_playlist: replay.auto_add_to_playlist,
+        active_angle_id: replay.active_angle_id.unwrap_or(0),
+        has_active_angle: replay.active_angle_id.is_some(),
+        next_angle_id: replay.next_angle_id,
+        next_event_id: replay.next_event_id,
+        next_playlist_id: replay.next_playlist_id,
+        decode_ahead: Some(replay.decode_ahead),
+        profiling: Some(replay.profiling),
+        timeline_cues: replay
+            .timeline_cues
+            .iter()
+            .map(|cue| pb::ReplayTimelineCue {
+                id: cue.id,
+                frame: cue.frame,
+                scene_id: cue.scene_id,
+                state_id: cue.state_id,
+                clip_uid: cue.clip_uid.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn replay_from_pb(replay: pb::Replay) -> Result<crate::session::replay::ReplayDto, String> {
+    use crate::session::replay::*;
+    let format = replay.format.unwrap_or_default();
+    let buffering = replay.buffering.unwrap_or_default();
+    let warnings = replay.warnings.unwrap_or_default();
+    Ok(ReplayDto {
+        enabled: replay.enabled,
+        storage: replay
+            .storage
+            .into_iter()
+            .map(|item| ReplayStorageDto {
+                path: item.path,
+                angle_ids: item.angle_ids,
+            })
+            .collect(),
+        format: ReplayFormatDto {
+            width: format.width,
+            height: format.height,
+            fps_num: format.fps_num,
+            fps_den: format.fps_den,
+            profile: match pb::ReplayProfile::try_from(format.profile) {
+                Ok(pb::ReplayProfile::Hq) => ReplayProfile::Hq,
+                Ok(pb::ReplayProfile::Lq) => ReplayProfile::Lq,
+                _ => ReplayProfile::Sq,
+            },
+            segment_frames: format.segment_frames,
+        },
+        buffering: ReplayBufferingDto {
+            encode_queue_frames: buffering.encode_queue_frames,
+            write_buffer_mb: buffering.write_buffer_mb,
+            overflow_policy: match pb::ReplayOverflow::try_from(buffering.overflow_policy) {
+                Ok(pb::ReplayOverflow::Stop) => ReplayOverflowPolicy::StopRecording,
+                _ => ReplayOverflowPolicy::DropFrames,
+            },
+            reserve_mb: buffering.reserve_mb,
+        },
+        // A threshold that is absent takes the document's default; one that is
+        // present is kept as written, including zero.
+        warnings: ReplayWarningsDto {
+            remaining_warn_secs: warnings
+                .remaining_warn_secs
+                .unwrap_or_else(|| ReplayWarningsDto::default().remaining_warn_secs),
+            remaining_alert_secs: warnings
+                .remaining_alert_secs
+                .unwrap_or_else(|| ReplayWarningsDto::default().remaining_alert_secs),
+            remaining_critical_secs: warnings
+                .remaining_critical_secs
+                .unwrap_or_else(|| ReplayWarningsDto::default().remaining_critical_secs),
+        },
+        retention: match pb::ReplayRetention::try_from(replay.retention) {
+            Ok(pb::ReplayRetention::Overwrite) => ReplayRetention::Overwrite,
+            Ok(pb::ReplayRetention::OverwriteUnprotected) => ReplayRetention::OverwriteUnprotected,
+            _ => ReplayRetention::StopWhenFull,
+        },
+        angles: replay
+            .angles
+            .into_iter()
+            .map(|angle| AngleDto {
+                id: angle.id,
+                name: angle.name,
+                source: match pb::AngleSourceKind::try_from(angle.source) {
+                    Ok(pb::AngleSourceKind::Input) => AngleSourceKind::Input,
+                    _ => AngleSourceKind::Scene,
+                },
+                scene_id: angle.scene_id,
+                input_id: angle.input_id,
+                audio: match pb::AngleAudio::try_from(angle.audio) {
+                    Ok(pb::AngleAudio::Unit) => AngleAudio::Unit,
+                    _ => AngleAudio::Silent,
+                },
+                audio_unit_id: angle.audio_unit_id,
+                record_mode: match pb::AngleRecordMode::try_from(angle.record_mode) {
+                    Ok(pb::AngleRecordMode::Passthrough) => AngleRecordMode::Passthrough,
+                    _ => AngleRecordMode::Composite,
+                },
+                encoder: match pb::AngleEncoder::try_from(angle.encoder) {
+                    Ok(pb::AngleEncoder::Gpu) => AngleEncoder::Gpu,
+                    _ => AngleEncoder::Cpu,
+                },
+            })
+            .collect(),
+        events: replay
+            .events
+            .into_iter()
+            .map(|event| ReplayEventDto {
+                id: event.id,
+                recording_uuid: event.recording_uuid,
+                in_frame: event.in_frame,
+                out_frame: event.out_frame,
+                name: event.name,
+                tags: event.tags,
+                protected: event.protected,
+            })
+            .collect(),
+        playlists: replay
+            .playlists
+            .into_iter()
+            .map(|list| PlaylistDto {
+                id: list.id,
+                name: list.name,
+                revision: list.revision,
+                clips: list
+                    .clips
+                    .into_iter()
+                    .map(|clip| ClipDto {
+                        uid: clip.uid,
+                        source: match pb::ClipSourceKind::try_from(clip.source_kind) {
+                            Ok(pb::ClipSourceKind::Asset) => ClipSourceKind::Asset,
+                            _ => ClipSourceKind::Angle,
+                        },
+                        angle_id: clip.angle_id,
+                        asset_path: clip.asset_path,
+                        source_event: clip.has_source_event.then_some(clip.source_event),
+                        recording_uuid: clip.recording_uuid,
+                        in_frame: clip.in_frame,
+                        out_frame: clip.out_frame,
+                        speed: clip.speed,
+                        gain_db: clip.gain_db,
+                        transition: clip
+                            .transition
+                            .map(clip_transition_from_pb)
+                            .unwrap_or_default(),
+                        tags: clip.tags,
+                        preserve_pitch: clip.preserve_pitch,
+                        audio: clip_audio_from_pb(clip.audio),
+                        audio_angle_id: clip.audio_angle_id,
+                    })
+                    .collect(),
+                default_transition: list
+                    .default_transition
+                    .map(clip_transition_from_pb)
+                    .unwrap_or_default(),
+            })
+            .collect(),
+        channels: replay
+            .channels
+            .into_iter()
+            .map(|channel| ChannelDto {
+                index: channel.index,
+                playlist_id: channel.has_playlist.then_some(channel.playlist_id),
+                input_id: channel.input_id,
+            })
+            .collect(),
+        auto_add_to_playlist: replay.auto_add_to_playlist,
+        // A file written before the fields existed leaves them absent. Decode-ahead
+        // stays on, which is how those sessions played. An explicit false is kept.
+        decode_ahead: replay.decode_ahead.unwrap_or(true),
+        profiling: replay.profiling.unwrap_or(false),
+        active_angle_id: replay.has_active_angle.then_some(replay.active_angle_id),
+        next_angle_id: replay.next_angle_id.max(1),
+        next_event_id: replay.next_event_id.max(1),
+        next_playlist_id: replay.next_playlist_id.max(1),
+        timeline_cues: replay
+            .timeline_cues
+            .into_iter()
+            .map(|cue| crate::session::replay::ReplayTimelineCueDto {
+                id: cue.id,
+                frame: cue.frame,
+                scene_id: cue.scene_id,
+                state_id: cue.state_id,
+                clip_uid: cue.clip_uid,
+            })
+            .collect(),
+    })
+}
+
+fn clip_audio_to_pb(audio: crate::session::replay::ClipAudio) -> pb::ClipAudio {
+    use crate::session::replay::ClipAudio;
+    match audio {
+        ClipAudio::FollowAngle => pb::ClipAudio::FollowAngle,
+        ClipAudio::Silent => pb::ClipAudio::Silent,
+        ClipAudio::Angle => pb::ClipAudio::Angle,
+    }
+}
+
+fn clip_audio_from_pb(audio: i32) -> crate::session::replay::ClipAudio {
+    use crate::session::replay::ClipAudio;
+    match pb::ClipAudio::try_from(audio) {
+        Ok(pb::ClipAudio::Silent) => ClipAudio::Silent,
+        Ok(pb::ClipAudio::Angle) => ClipAudio::Angle,
+        _ => ClipAudio::FollowAngle,
+    }
+}
+
+fn clip_transition_to_pb(
+    transition: crate::session::replay::ClipTransitionDto,
+) -> pb::ClipTransition {
+    use crate::session::replay::{
+        ReplayTransitionDirection, ReplayTransitionKind, ReplayTransitionTiming,
+    };
+    pb::ClipTransition {
+        kind: match transition.kind {
+            ReplayTransitionKind::Cut => pb::ReplayTransitionKind::Cut as i32,
+            ReplayTransitionKind::Dissolve => pb::ReplayTransitionKind::Dissolve as i32,
+            ReplayTransitionKind::Dip => pb::ReplayTransitionKind::Dip as i32,
+            ReplayTransitionKind::Wipe => pb::ReplayTransitionKind::Wipe as i32,
+            ReplayTransitionKind::Slide => pb::ReplayTransitionKind::Slide as i32,
+            ReplayTransitionKind::Push => pb::ReplayTransitionKind::Push as i32,
+        },
+        timing: match transition.timing {
+            ReplayTransitionTiming::Overwrap => pb::ReplayTransitionTiming::Overwrap as i32,
+            ReplayTransitionTiming::Additive => pb::ReplayTransitionTiming::Additive as i32,
+        },
+        duration_frames: transition.duration_frames,
+        direction: match transition.direction {
+            ReplayTransitionDirection::Left => pb::ReplayTransitionDirection::Left as i32,
+            ReplayTransitionDirection::Right => pb::ReplayTransitionDirection::Right as i32,
+            ReplayTransitionDirection::Up => pb::ReplayTransitionDirection::Up as i32,
+            ReplayTransitionDirection::Down => pb::ReplayTransitionDirection::Down as i32,
+        },
+    }
+}
+
+fn clip_transition_from_pb(
+    transition: pb::ClipTransition,
+) -> crate::session::replay::ClipTransitionDto {
+    use crate::session::replay::{
+        ReplayTransitionDirection, ReplayTransitionKind, ReplayTransitionTiming,
+    };
+    crate::session::replay::ClipTransitionDto {
+        kind: match pb::ReplayTransitionKind::try_from(transition.kind) {
+            Ok(pb::ReplayTransitionKind::Dissolve) => ReplayTransitionKind::Dissolve,
+            Ok(pb::ReplayTransitionKind::Dip) => ReplayTransitionKind::Dip,
+            Ok(pb::ReplayTransitionKind::Wipe) => ReplayTransitionKind::Wipe,
+            Ok(pb::ReplayTransitionKind::Slide) => ReplayTransitionKind::Slide,
+            Ok(pb::ReplayTransitionKind::Push) => ReplayTransitionKind::Push,
+            _ => ReplayTransitionKind::Cut,
+        },
+        direction: match pb::ReplayTransitionDirection::try_from(transition.direction) {
+            Ok(pb::ReplayTransitionDirection::Right) => ReplayTransitionDirection::Right,
+            Ok(pb::ReplayTransitionDirection::Up) => ReplayTransitionDirection::Up,
+            Ok(pb::ReplayTransitionDirection::Down) => ReplayTransitionDirection::Down,
+            _ => ReplayTransitionDirection::Left,
+        },
+        timing: match pb::ReplayTransitionTiming::try_from(transition.timing) {
+            Ok(pb::ReplayTransitionTiming::Additive) => ReplayTransitionTiming::Additive,
+            _ => ReplayTransitionTiming::Overwrap,
+        },
+        duration_frames: transition.duration_frames,
+    }
+}
+
 fn input_kind_to_pb(kind: InputKind) -> pb::InputKind {
     match kind {
         InputKind::Color => pb::InputKind::Color,
@@ -1457,6 +1873,7 @@ fn input_kind_to_pb(kind: InputKind) -> pb::InputKind {
         InputKind::Mix => pb::InputKind::Mix,
         InputKind::Audio => pb::InputKind::Audio,
         InputKind::DeckLink => pb::InputKind::DeckLink,
+        InputKind::Replay => pb::InputKind::Replay,
     }
 }
 
@@ -1474,6 +1891,7 @@ fn input_kind_from_pb(value: i32) -> Result<InputKind, String> {
         Ok(pb::InputKind::Mix) => Ok(InputKind::Mix),
         Ok(pb::InputKind::Audio) => Ok(InputKind::Audio),
         Ok(pb::InputKind::DeckLink) => Ok(InputKind::DeckLink),
+        Ok(pb::InputKind::Replay) => Ok(InputKind::Replay),
         Err(_) => Err(unknown("input kind", value)),
     }
 }
@@ -1599,9 +2017,206 @@ mod tests {
     }
 
     #[test]
+    fn protobuf_roundtrip_keeps_replay_playback_flags() {
+        let mut doc = parse(sample_json()).unwrap();
+        let mut replay = crate::session::replay::ReplayDto::default();
+        replay.decode_ahead = false;
+        replay.profiling = true;
+        doc.replay = Some(replay);
+        let decoded = decode_file(&encode_file(&doc).unwrap()).unwrap();
+        let replay = decoded.replay.expect("replay");
+        assert!(!replay.decode_ahead);
+        assert!(replay.profiling);
+
+        doc.replay = Some(crate::session::replay::ReplayDto::default());
+        let defaults = decode_file(&encode_file(&doc).unwrap())
+            .unwrap()
+            .replay
+            .expect("replay");
+        assert!(defaults.decode_ahead);
+        assert!(!defaults.profiling);
+    }
+
+    #[test]
+    fn replay_dto_roundtrips_every_field_through_protobuf() {
+        use crate::session::replay::*;
+        let replay = ReplayDto {
+            enabled: true,
+            storage: vec![ReplayStorageDto {
+                path: "D:/replay".into(),
+                angle_ids: vec![3],
+            }],
+            format: ReplayFormatDto {
+                width: 1280,
+                height: 720,
+                fps_num: 50,
+                fps_den: 1,
+                profile: ReplayProfile::Hq,
+                segment_frames: 300,
+            },
+            buffering: ReplayBufferingDto {
+                encode_queue_frames: 8,
+                write_buffer_mb: 256,
+                overflow_policy: ReplayOverflowPolicy::StopRecording,
+                reserve_mb: 1024,
+            },
+            warnings: ReplayWarningsDto {
+                remaining_warn_secs: 90,
+                remaining_alert_secs: 40,
+                remaining_critical_secs: 10,
+            },
+            retention: ReplayRetention::OverwriteUnprotected,
+            angles: vec![AngleDto {
+                id: 3,
+                name: "Cam".into(),
+                source: AngleSourceKind::Input,
+                scene_id: 0,
+                input_id: 9,
+                audio: AngleAudio::Unit,
+                audio_unit_id: 2,
+                record_mode: AngleRecordMode::Passthrough,
+                encoder: AngleEncoder::Gpu,
+            }],
+            events: vec![ReplayEventDto {
+                id: 4,
+                recording_uuid: "rec-4".into(),
+                in_frame: 10,
+                out_frame: 40,
+                name: "Goal".into(),
+                tags: vec!["goal".into()],
+                protected: true,
+            }],
+            playlists: vec![PlaylistDto {
+                id: 2,
+                name: "Show".into(),
+                revision: 3,
+                clips: vec![ClipDto {
+                    uid: "clip-4".into(),
+                    source: ClipSourceKind::Angle,
+                    angle_id: 3,
+                    asset_path: String::new(),
+                    source_event: Some(4),
+                    recording_uuid: "rec-4".into(),
+                    in_frame: 10,
+                    out_frame: 40,
+                    speed: 0.5,
+                    gain_db: -3.0,
+                    tags: vec!["goal".into()],
+                    preserve_pitch: false,
+                    audio: ClipAudio::Angle,
+                    audio_angle_id: 3,
+                    transition: ClipTransitionDto {
+                        kind: ReplayTransitionKind::Dissolve,
+                        direction: ReplayTransitionDirection::Right,
+                        timing: ReplayTransitionTiming::Additive,
+                        duration_frames: 12,
+                    },
+                }],
+                default_transition: ClipTransitionDto::default(),
+            }],
+            channels: vec![ChannelDto {
+                index: 1,
+                playlist_id: Some(2),
+                input_id: 11,
+            }],
+            auto_add_to_playlist: true,
+            decode_ahead: false,
+            profiling: true,
+            active_angle_id: Some(3),
+            next_angle_id: 4,
+            next_event_id: 5,
+            next_playlist_id: 3,
+            timeline_cues: vec![ReplayTimelineCueDto {
+                id: 1,
+                frame: 10,
+                scene_id: 6,
+                state_id: 8,
+                clip_uid: "clip-4".into(),
+            }],
+        };
+        let back = replay_from_pb(replay_to_pb(&replay)).unwrap();
+        assert_eq!(replay, back);
+    }
+
+    #[test]
     fn json_payload_is_rejected() {
         assert!(decode_file(sample_json()).is_err());
         assert!(decode_file(br#"  {"version":2}"#).is_err());
+    }
+
+    /// The replay document is project data: angles, clips, transitions and the
+    /// operator's selections have to survive a save and a load unchanged.
+    #[test]
+    fn replay_document_survives_a_save_and_a_load() {
+        use crate::session::replay::{
+            ReplayRetention, ReplayTransitionKind, ReplayTransitionTiming,
+        };
+        let json = br#"{
+  "version": 2,
+  "settings": { "masterFpsNum": 60000, "masterFpsDen": 1001 },
+  "inputs": [
+    { "id": 2, "name": "SMPTE Bars", "kind": "Bars" },
+    { "id": 524289, "name": "Replay A", "kind": "Replay" }
+  ],
+  "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+  "units": [{ "id": 1, "name": "Mixing Unit 1", "previewSceneId": 1, "programSceneId": 1 }],
+  "replay": {
+    "enabled": true,
+    "storage": [{ "path": "D:/replay", "angleIds": [1, 2] }],
+    "format": { "width": 1920, "height": 1080, "fpsNum": 60000, "fpsDen": 1001, "profile": "Hq", "segmentFrames": 300 },
+    "buffering": { "encodeQueueFrames": 8, "writeBufferMb": 512, "overflowPolicy": "StopRecording", "reserveMb": 4096 },
+    "warnings": { "remainingWarnSecs": 900, "remainingAlertSecs": 300, "remainingCriticalSecs": 60 },
+    "retention": "OverwriteUnprotected",
+    "angles": [
+      { "id": 1, "name": "Cam 1", "sceneId": 1, "audio": "Unit", "audioUnitId": 1, "recordMode": "Composite" },
+      { "id": 2, "name": "Cam 2", "sceneId": 1, "audio": "Silent", "recordMode": "Composite" }
+    ],
+    "events": [
+      { "id": 4, "recordingUuid": "rec-1", "inFrame": 100, "outFrame": 400, "name": "Goal", "tags": ["Score"], "protected": true }
+    ],
+    "playlists": [{
+      "id": 7,
+      "name": "Highlights",
+      "revision": 3,
+      "defaultTransition": { "kind": "Dissolve", "timing": "Additive", "durationFrames": 25 },
+      "clips": [{
+        "uid": "clip-4", "source": "Angle", "angleId": 2, "sourceEvent": 4, "recordingUuid": "rec-1",
+        "inFrame": 100, "outFrame": 400, "speed": 0.5, "gainDb": -6.0, "tags": ["Score"],
+        "preservePitch": true, "audio": "Angle", "audioAngleId": 1,
+        "transition": { "kind": "Dissolve", "timing": "Additive", "durationFrames": 25 }
+      }]
+    }],
+    "channels": [{ "index": 0, "playlistId": 7, "inputId": 524289 }],
+    "autoAddToPlaylist": true,
+    "activeAngleId": 2,
+    "nextAngleId": 3, "nextEventId": 5, "nextPlaylistId": 8
+  },
+  "nextInputId": 10, "nextSceneId": 2, "nextUnitId": 2
+}"#;
+        let original = parse(json).unwrap();
+        let replay = original.replay.as_ref().expect("the session has Replay");
+        assert_eq!(replay.channels[0].input_id, 524289);
+        assert_eq!(replay.retention, ReplayRetention::OverwriteUnprotected);
+
+        let decoded = decode_file(&encode_file(&original).unwrap()).unwrap();
+        let round = decoded.replay.as_ref().expect("Replay survived the file");
+        assert_eq!(round, replay, "the replay document must round-trip exactly");
+        // The pieces an operator would notice missing.
+        let clip = &round.playlists[0].clips[0];
+        assert_eq!(clip.transition.kind, ReplayTransitionKind::Dissolve);
+        assert_eq!(clip.transition.timing, ReplayTransitionTiming::Additive);
+        assert_eq!(clip.transition.duration_frames, 25);
+        assert_eq!(
+            round.playlists[0].default_transition, clip.transition,
+            "the playlist default is not lost"
+        );
+        assert!(clip.preserve_pitch);
+        assert_eq!(clip.audio_angle_id, 1);
+        assert_eq!(round.active_angle_id, Some(2));
+        assert_eq!(round.channels[0].playlist_id, Some(7));
+        assert_eq!(round.events[0].tags, ["Score"]);
+        assert_eq!(round.angles[0].audio_unit_id, 1);
+        assert_eq!(decoded.inputs.len(), 2);
     }
 
     #[test]

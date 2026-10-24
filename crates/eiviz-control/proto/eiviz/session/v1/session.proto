@@ -53,6 +53,8 @@ message Document {
   uint64 headphone_listen_id = 25;
   repeated StreamEncoder stream_encoders = 26;
   uint64 next_stream_encoder_id = 27;
+  Replay replay = 28;
+  repeated string replay_tags = 29;
 }
 
 message SessionSettings {
@@ -65,6 +67,8 @@ message SessionSettings {
   uint32 frame_buffer_frames = 7;
   uint32 default_present_interval = 8;
   uint32 flip_swapchain_limit = 9;
+  // Presentation interval for the replay deck's monitors. Zero follows the default.
+  uint32 replay_present_interval = 27;
   InternalColorFormat internal_color_format = 10;
   bool rebar_optimization = 11;
   bool rebar_direct_sample = 12;
@@ -194,6 +198,15 @@ message SequenceStep {
   uint64 state_id = 1;
   optional Motion motion = 2;
   uint32 hold_frames = 3;
+  optional SequenceReplayAction replay = 4;
+}
+
+/// What an animation step does to Replay.
+message SequenceReplayAction {
+  uint32 channel = 1;
+  /// Empty means the newest clip on the channel's playlist.
+  string clip_uid = 2;
+  bool play = 3;
 }
 
 message SceneSequence {
@@ -425,6 +438,211 @@ enum InputKind {
   INPUT_KIND_MIX = 9;
   INPUT_KIND_AUDIO = 10;
   INPUT_KIND_DECK_LINK = 11;
+  INPUT_KIND_REPLAY = 12;
+}
+
+enum ReplayProfile {
+  REPLAY_PROFILE_SQ = 0;
+  REPLAY_PROFILE_HQ = 1;
+  REPLAY_PROFILE_LQ = 2;
+}
+
+enum ReplayOverflow {
+  REPLAY_OVERFLOW_DROP = 0;
+  REPLAY_OVERFLOW_STOP = 1;
+}
+
+enum ReplayRetention {
+  REPLAY_RETENTION_STOP_WHEN_FULL = 0;
+  REPLAY_RETENTION_OVERWRITE = 1;
+  REPLAY_RETENTION_OVERWRITE_UNPROTECTED = 2;
+}
+
+enum AngleAudio {
+  ANGLE_AUDIO_SILENT = 0;
+  /// The mixing unit's program mix, selected by `Angle.audio_unit_id`.
+  ANGLE_AUDIO_UNIT = 1;
+}
+
+enum AngleRecordMode {
+  ANGLE_RECORD_MODE_COMPOSITE = 0;
+  /// Keep the frames as they arrive, without re-encoding them. OMT inputs only.
+  ANGLE_RECORD_MODE_PASSTHROUGH = 1;
+}
+
+/// What an angle records. A scene angle records that scene's composited output; an
+/// input angle records the input's own picture without composing a scene.
+enum AngleSourceKind {
+  ANGLE_SOURCE_KIND_SCENE = 0;
+  ANGLE_SOURCE_KIND_INPUT = 1;
+}
+
+enum ClipSourceKind {
+  CLIP_SOURCE_KIND_ANGLE = 0;
+  CLIP_SOURCE_KIND_ASSET = 1;
+}
+
+message Replay {
+  bool enabled = 1;
+  repeated ReplayStorage storage = 2;
+  ReplayFormat format = 3;
+  ReplayBuffering buffering = 4;
+  ReplayWarnings warnings = 5;
+  ReplayRetention retention = 6;
+  repeated Angle angles = 7;
+  repeated ReplayEvent events = 8;
+  repeated Playlist playlists = 9;
+  repeated ReplayChannel channels = 10;
+  bool auto_add_to_playlist = 11;
+  uint32 next_angle_id = 12;
+  uint64 next_event_id = 13;
+  uint64 next_playlist_id = 14;
+  uint32 active_angle_id = 15;
+  bool has_active_angle = 16;
+  // Absent on files written before the flag existed: playback stays ahead.
+  optional bool decode_ahead = 17;
+  optional bool profiling = 18;
+  repeated ReplayTimelineCue timeline_cues = 19;
+}
+
+message ReplayTimelineCue {
+  uint64 id = 1;
+  uint64 frame = 2;
+  uint64 scene_id = 3;
+  uint64 state_id = 4;
+  string clip_uid = 5;
+}
+
+message ReplayStorage {
+  string path = 1;
+  repeated uint32 angle_ids = 2;
+}
+
+message ReplayFormat {
+  uint32 width = 1;
+  uint32 height = 2;
+  uint32 fps_num = 3;
+  uint32 fps_den = 4;
+  ReplayProfile profile = 5;
+  uint32 segment_frames = 6;
+}
+
+message ReplayBuffering {
+  uint32 encode_queue_frames = 1;
+  uint32 write_buffer_mb = 2;
+  ReplayOverflow overflow_policy = 3;
+  uint32 reserve_mb = 4;
+}
+
+message ReplayWarnings {
+  // Presence matters: a warning threshold of 0 is a value the operator chose, and
+  // rewriting it to a default would silently change when warnings appear.
+  optional uint32 remaining_warn_secs = 1;
+  optional uint32 remaining_alert_secs = 2;
+  optional uint32 remaining_critical_secs = 3;
+}
+
+message Angle {
+  uint32 id = 1;
+  string name = 2;
+  uint64 scene_id = 3;
+  AngleAudio audio = 4;
+  AngleRecordMode record_mode = 5;
+  uint64 audio_unit_id = 6;
+  /// Where this angle records from. `scene_id` is used when this is SCENE,
+  /// `input_id` when it is INPUT.
+  AngleSourceKind source = 7;
+  uint64 input_id = 8;
+  // Where this angle is encoded. GPU keeps the picture on the GPU from scene to packet.
+  AngleEncoder encoder = 9;
+}
+
+message ReplayEvent {
+  uint64 id = 1;
+  string recording_uuid = 2;
+  uint64 in_frame = 3;
+  uint64 out_frame = 4;
+  string name = 5;
+  repeated string tags = 6;
+  bool protected = 7;
+}
+
+message Clip {
+  string uid = 1;
+  ClipSourceKind source_kind = 2;
+  uint32 angle_id = 3;
+  string asset_path = 4;
+  uint64 source_event = 5;
+  bool has_source_event = 6;
+  string recording_uuid = 7;
+  uint64 in_frame = 8;
+  uint64 out_frame = 9;
+  float speed = 10;
+  float gain_db = 11;
+  ClipTransition transition = 12;
+  repeated string tags = 13;
+  bool preserve_pitch = 14;
+  ClipAudio audio = 15;
+  uint32 audio_angle_id = 16;
+}
+
+/// Which recording a clip's audio comes from.
+enum ClipAudio {
+  CLIP_AUDIO_FOLLOW_ANGLE = 0;
+  CLIP_AUDIO_SILENT = 1;
+  /// Another angle's recording, named by `Clip.audio_angle_id`.
+  CLIP_AUDIO_ANGLE = 2;
+}
+
+// Where a replay angle is encoded.
+enum AngleEncoder {
+  ANGLE_ENCODER_CPU = 0;
+  ANGLE_ENCODER_GPU = 1;
+}
+
+enum ReplayTransitionKind {
+  REPLAY_TRANSITION_KIND_CUT = 0;
+  REPLAY_TRANSITION_KIND_DISSOLVE = 1;
+  REPLAY_TRANSITION_KIND_DIP = 2;
+  REPLAY_TRANSITION_KIND_WIPE = 3;
+  REPLAY_TRANSITION_KIND_SLIDE = 4;
+  REPLAY_TRANSITION_KIND_PUSH = 5;
+}
+
+// Which way a Wipe, Slide or Push travels.
+enum ReplayTransitionDirection {
+  REPLAY_TRANSITION_DIRECTION_LEFT = 0;
+  REPLAY_TRANSITION_DIRECTION_RIGHT = 1;
+  REPLAY_TRANSITION_DIRECTION_UP = 2;
+  REPLAY_TRANSITION_DIRECTION_DOWN = 3;
+}
+
+enum ReplayTransitionTiming {
+  REPLAY_TRANSITION_TIMING_OVERWRAP = 0;
+  REPLAY_TRANSITION_TIMING_ADDITIVE = 1;
+}
+
+message ClipTransition {
+  ReplayTransitionKind kind = 1;
+  ReplayTransitionTiming timing = 2;
+  uint32 duration_frames = 3;
+  ReplayTransitionDirection direction = 4;
+}
+
+
+message Playlist {
+  uint64 id = 1;
+  string name = 2;
+  uint64 revision = 3;
+  repeated Clip clips = 4;
+  ClipTransition default_transition = 5;
+}
+
+message ReplayChannel {
+  uint32 index = 1;
+  uint64 playlist_id = 2;
+  bool has_playlist = 3;
+  uint64 input_id = 4;
 }
 
 enum MixSource {

@@ -228,32 +228,52 @@ impl MixerPort for ProcessMixer {
                 states.len() as u32,
             )
         })?;
-        let step_bufs: Vec<Vec<crate::abi::EivizSequenceStepDesc>> = spec
-            .sequences
-            .iter()
-            .map(|sequence| {
-                sequence
-                    .steps
-                    .iter()
-                    .map(|step| crate::abi::EivizSequenceStepDesc {
-                        state_id: step.state_id,
-                        motion: step.motion.as_ref().map(motion_desc).unwrap_or(
-                            crate::abi::EivizMotion {
-                                duration_frames: 1,
-                                easing: 0,
-                                x1: 0.0,
-                                y1: 0.0,
-                                x2: 1.0,
-                                y2: 1.0,
-                                has_bezier: 0,
-                            },
-                        ),
-                        has_motion: u32::from(step.motion.is_some()),
-                        hold_frames: step.hold_frames,
-                    })
-                    .collect()
-            })
-            .collect();
+        // Clip ids are pointed at by the step descriptors, so their bytes must
+        // outlive the call. They are kept here until the define call returns.
+        let mut clip_bufs: Vec<Vec<u8>> = Vec::new();
+        let mut step_bufs: Vec<Vec<crate::abi::EivizSequenceStepDesc>> = Vec::new();
+        for sequence in &spec.sequences {
+            let mut steps = Vec::with_capacity(sequence.steps.len());
+            for step in &sequence.steps {
+                clip_bufs.push(
+                    step.replay
+                        .as_ref()
+                        .map(|action| action.clip_uid.as_bytes().to_vec())
+                        .unwrap_or_default(),
+                );
+                let clip = &clip_bufs[clip_bufs.len() - 1];
+                steps.push(crate::abi::EivizSequenceStepDesc {
+                    state_id: step.state_id,
+                    motion: step.motion.as_ref().map(motion_desc).unwrap_or(
+                        crate::abi::EivizMotion {
+                            duration_frames: 1,
+                            easing: 0,
+                            x1: 0.0,
+                            y1: 0.0,
+                            x2: 1.0,
+                            y2: 1.0,
+                            has_bezier: 0,
+                        },
+                    ),
+                    has_motion: u32::from(step.motion.is_some()),
+                    hold_frames: step.hold_frames,
+                    replay_channel: step
+                        .replay
+                        .as_ref()
+                        .map(|action| action.channel)
+                        .unwrap_or(0),
+                    replay_active: u32::from(step.replay.is_some()),
+                    replay_play: u32::from(step.replay.as_ref().is_some_and(|action| action.play)),
+                    replay_clip: if clip.is_empty() {
+                        std::ptr::null()
+                    } else {
+                        clip.as_ptr()
+                    },
+                    replay_clip_len: clip.len(),
+                });
+            }
+            step_bufs.push(steps);
+        }
         let sequences: Vec<crate::abi::EivizSceneSequenceDesc> = spec
             .sequences
             .iter()
@@ -467,6 +487,9 @@ impl MixerPort for ProcessMixer {
             hardware_encode: 0,
             decklink_linked: 0,
             rtmp_linked: 0,
+            replay_angle_limit: 0,
+            replay_channel_limit: 0,
+            replay_linked: 0,
         };
         if unsafe { mixer_capabilities(&mut raw) } != crate::abi::OK {
             return eiviz_control::query::Capabilities::default();
@@ -485,8 +508,76 @@ impl MixerPort for ProcessMixer {
             hardware_encode: raw.hardware_encode != 0,
             decklink_linked: raw.decklink_linked != 0,
             rtmp_linked: raw.rtmp_linked != 0,
+            replay_angle_limit: raw.replay_angle_limit,
+            replay_channel_limit: raw.replay_channel_limit,
+            replay_linked: raw.replay_linked != 0,
             ..eiviz_control::query::Capabilities::default()
         }
+    }
+
+    fn replay_configure(&mut self, json: &str) -> ControlResult<()> {
+        crate::replay::engine()
+            .configure(json)
+            .map_err(crate::replay::ReplayFailure::into_control)
+    }
+
+    fn replay_record(&mut self, on: bool) -> ControlResult<()> {
+        crate::replay::engine()
+            .record(on)
+            .map_err(crate::replay::ReplayFailure::into_control)
+    }
+
+    fn replay_mark_in(&mut self) -> ControlResult<u64> {
+        crate::replay::engine()
+            .mark_in()
+            .map_err(crate::replay::ReplayFailure::into_control)
+    }
+
+    fn replay_close_mark(&mut self) -> ControlResult<(String, u64, u64)> {
+        crate::replay::engine()
+            .close_mark()
+            .map_err(crate::replay::ReplayFailure::into_control)
+    }
+
+    fn replay_cue(
+        &mut self,
+        channel: u32,
+        angle_id: u32,
+        in_frame: u64,
+        out_frame: u64,
+        recording_uuid: &str,
+    ) -> ControlResult<()> {
+        crate::replay::engine()
+            .cue(channel, angle_id, in_frame, out_frame, recording_uuid)
+            .map_err(crate::replay::ReplayFailure::into_control)
+    }
+
+    fn replay_transport(
+        &mut self,
+        channel: u32,
+        playing: bool,
+        speed_milli: i32,
+        seek_frame: i64,
+    ) -> ControlResult<()> {
+        crate::replay::engine()
+            .transport(channel, playing, speed_milli, seek_frame)
+            .map_err(crate::replay::ReplayFailure::into_control)
+    }
+
+    fn replay_set_looping(&mut self, channel: u32, looping: bool) -> ControlResult<()> {
+        crate::replay::engine()
+            .set_looping(channel, looping)
+            .map_err(crate::replay::control_error)
+    }
+
+    fn replay_jump_to_now(&mut self, channel: u32) -> ControlResult<()> {
+        crate::replay::engine()
+            .jump_to_now(channel)
+            .map_err(crate::replay::control_error)
+    }
+
+    fn replay_state_json(&self) -> String {
+        crate::replay::engine().state_json()
     }
 
     fn output_remove(&mut self, id: u64) -> ControlResult<()> {
@@ -951,6 +1042,8 @@ pub(crate) fn replace_session_bytes(bytes: &[u8], expected_revision: u64) -> i32
         Ok(doc) => doc,
         Err(error) => {
             crate::diag::error(&error);
+            // The host shows this text next to the failure, so it has to say why.
+            report_session_error(&error);
             return -ERR_INVALID_ARGUMENT;
         }
     };
@@ -976,11 +1069,20 @@ pub(crate) fn replace_session_bytes(bytes: &[u8], expected_revision: u64) -> i32
             }
             Err(error) => {
                 crate::diag::error(error.message());
+                report_session_error(error.message());
                 -error.to_abi()
             }
         },
         Err(_) => -ERR_INVALID_ARGUMENT,
     }
+}
+
+/// Records why a session change was refused, so `mixer_last_error` can hand the
+/// reason to the host instead of a code alone.
+fn report_session_error(message: &str) {
+    let _ = crate::lifecycle::with_mixer(|mixer| {
+        crate::set_error(&mixer.telemetry, message);
+    });
 }
 
 pub(crate) fn poll_event(after: u64, out: &mut [u8]) -> i32 {
@@ -1025,6 +1127,23 @@ fn events_json(events: &[eiviz_control::Event]) -> serde_json::Value {
                 if let Ok(json) = serde_json::to_vec(live) {
                     value["liveJson"] = serde_json::Value::String(String::from_utf8_lossy(&json).into_owned());
                 }
+            }
+            if let eiviz_control::Event::ReplayHealth {
+                severity,
+                issues,
+                stop_reason,
+                remaining_secs,
+                message,
+                ..
+            } = event
+            {
+                value["healthJson"] = serde_json::json!({
+                    "severity": severity,
+                    "issues": issues,
+                    "stopReason": stop_reason,
+                    "remainingSecs": remaining_secs,
+                    "message": message,
+                });
             }
             value
         }).collect::<Vec<_>>()
