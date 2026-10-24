@@ -65,8 +65,9 @@ fn an_operator_records_marks_and_plays_back() {
     // Mark In, let more of the recording land, then Mark Out. Both wait for the
     // recording to reach the frame they need: a software adapter takes longer than
     // any fixed sleep to produce one.
+    // A recording numbers its frames from its own first frame, so frame 0 is a
+    // recorded frame: Mark In is allowed to sit on it.
     let in_frame = mark_in_when_ready("replay_flow");
-    assert!(in_frame > 0, "Mark In should sit on a recorded frame");
     let (uuid, in_frame, out_frame) = mark_out_after("replay_flow", 40);
     assert!(
         out_frame > in_frame,

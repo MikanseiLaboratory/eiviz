@@ -707,14 +707,6 @@ struct ReplayDocument {
         })
     }
 
-            guard changed else { continue }
-            playlist["clips"] = .array(clips)
-            playlist["revision"] = .number(Double((playlist["revision"]?.uint64Value ?? 0) + 1))
-            playlists[index] = .object(playlist)
-        }
-        raw["playlists"] = .array(playlists)
-    }
-
     /// A clip uid that no playlist uses yet. The uid is the handle a channel plays
     /// by, so the control layer refuses a document where two clips share one.
     /// Playing the same event twice is a normal replay move, so the second clip
