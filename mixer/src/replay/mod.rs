@@ -348,12 +348,6 @@ struct Inner {
     /// Community and a missing Pro module set this. A plan that simply has too
     /// many channels refuses the document instead.
     operations_reason: Option<String>,
-    /// The recording the store slot currently holds, when it was attached for
-    /// playback. A cue from another recording re-attaches that one.
-    attached: Option<String>,
-    /// Bumped whenever the store is replaced, so the playout drops the frames it
-    /// decoded ahead from the recording that is no longer open.
-    store_generation: u64,
 }
 
 pub struct ReplayEngine {
@@ -362,6 +356,13 @@ pub struct ReplayEngine {
     audio_inbox: Arc<AudioInbox>,
     audio_drops: AtomicU64,
     store: Mutex<Option<Arc<Mutex<Box<dyn ReplayStore>>>>>,
+    /// Recordings opened for playback, keyed by the recording id the clips carry.
+    /// One entry per recording (not per channel), so two channels can play two
+    /// different recordings at the same time.
+    playback: Mutex<HashMap<String, Arc<Mutex<Box<dyn ReplayStore>>>>>,
+    /// Bumped when a recording is attached for playback, so a channel drops the
+    /// frames it decoded ahead from the recording that is no longer its own.
+    playback_generation: AtomicU64,
     stop_record: Arc<AtomicBool>,
     stop_workers: Arc<AtomicBool>,
     workers: Mutex<Vec<JoinHandle<()>>>,
@@ -451,13 +452,13 @@ impl ReplayEngine {
                 health: HealthMemory::default(),
                 started_at: None,
                 operations_reason: None,
-                attached: None,
-                store_generation: 0,
             }),
             inbox: Arc::new(Inbox::new()),
             audio_inbox: Arc::new(AudioInbox::new()),
             audio_drops: AtomicU64::new(0),
             store: Mutex::new(None),
+            playback: Mutex::new(HashMap::new()),
+            playback_generation: AtomicU64::new(0),
             stop_record: Arc::new(AtomicBool::new(true)),
             stop_workers: Arc::new(AtomicBool::new(false)),
             workers: Mutex::new(Vec::new()),
@@ -694,101 +695,59 @@ impl ReplayEngine {
         if !dto.enabled {
             self.stop(REPLAY_STOP_USER);
         }
-        // A recording from an earlier run is attached for playback: clips reference it,
-        // and without it they play black and cannot be exported. Only when nothing is
-        // open, so a running recording is never replaced.
+        // The recordings this session uses are opened up front, from the session's
+        // own list: a clip names a recording and the session says where it lives, so
+        // playback never has to search a drive to find it. One store per recording,
+        // shared by the channels, so two channels can show two recordings at once.
+        // A recording in progress keeps its own store and is never replaced.
         {
-            let open = self
-                .store
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .is_some();
-            if !open {
-                // Any recording the playlist names will do: a clip from a recording that
-                // has since been removed must not stop the clips that are still on disk
-                // from playing.
-                let clips: Vec<&str> = dto
-                    .playlists
-                    .iter()
-                    .flat_map(|list| list.clips.iter())
-                    .map(|clip| clip.recording_uuid.trim())
-                    .filter(|uuid| !uuid.is_empty())
-                    .collect();
-                // Every drive is searched, not just the first: an angle may record to a
-                // second drive and its clips must still find their recording.
-                let mut root = None;
-                'search: for storage in &dto.storage {
-                    for uuid in &clips {
-                        let candidate = std::path::Path::new(&storage.path).join(uuid);
-                        if candidate.is_dir() {
-                            root = Some(candidate);
-                            break 'search;
-                        }
-                    }
+            let referenced = referenced_recordings(&dto);
+            let recording_in_progress = {
+                let inner = self.lock();
+                (inner.recording, inner.uuid.clone())
+            };
+            for (uuid, storage) in referenced {
+                if recording_in_progress.0 && recording_in_progress.1 == uuid {
+                    continue;
                 }
-                // An older session names no recording at all. With exactly one recording
-                // on the drives there is nothing to guess: attach it, so the clips the
-                // operator recorded before this field existed still play.
-                if root.is_none() && clips.is_empty() {
-                    let mut found: Vec<std::path::PathBuf> = Vec::new();
-                    for storage in &dto.storage {
-                        let Ok(entries) = std::fs::read_dir(&storage.path) else {
-                            continue;
-                        };
-                        for entry in entries.flatten() {
-                            let path = entry.path();
-                            if path.is_dir()
-                                && path
-                                    .file_name()
-                                    .is_some_and(|name| name.to_string_lossy().starts_with("rec-"))
-                            {
-                                found.push(path);
-                            }
-                        }
-                    }
-                    if found.len() == 1 {
-                        crate::diag::info(
-                            "replay attach: the session names no recording; using the only one on the drive",
-                        );
-                        root = found.pop();
-                    } else if found.len() > 1 {
-                        crate::diag::info(&format!(
-                            "replay attach: the session names no recording and {} exist; name one from the clip",
-                            found.len()
-                        ));
-                    }
+                if self
+                    .playback
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .contains_key(&uuid)
+                {
+                    continue;
                 }
-                match root {
-                    Some(root) => {
-                        let path = root.display().to_string();
-                        match crate::pro_load::loaded_api() {
-                            Some((api, module)) => match attach_ffi(api, module, &path) {
-                                Ok(store) => {
-                                    let uuid = root
-                                        .file_name()
-                                        .map(|name| name.to_string_lossy().into_owned())
-                                        .unwrap_or_default();
-                                    *self.store.lock().unwrap_or_else(|error| error.into_inner()) =
-                                        Some(std::sync::Arc::new(std::sync::Mutex::new(store)));
-                                    {
-                                        let mut inner = self.lock();
-                                        inner.attached = Some(uuid);
-                                        inner.store_generation = inner.store_generation.wrapping_add(1);
-                                    }
-                                    crate::diag::info(&format!("replay attach: attached {path}"));
-                                }
-                                Err(error) => crate::diag::error(&format!(
-                                    "replay attach: {path} could not be opened: {error}"
-                                )),
-                            },
-                            None => crate::diag::error("replay attach: no module is loaded"),
+                let directory = std::path::Path::new(&storage).join(&uuid);
+                if !directory.is_dir() {
+                    crate::diag::info(&format!(
+                        "replay attach: recording {uuid} is not at {}",
+                        directory.display()
+                    ));
+                    continue;
+                }
+                let path = directory.display().to_string();
+                match crate::pro_load::loaded_api() {
+                    Some((api, module)) => match attach_ffi(api, module, &path) {
+                        Ok(store) => {
+                            self.playback
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner())
+                                .insert(
+                                    uuid.clone(),
+                                    std::sync::Arc::new(std::sync::Mutex::new(store)),
+                                );
+                            self.playback_generation.fetch_add(1, Ordering::Relaxed);
+                            crate::diag::info(&format!("replay attach: attached {path}"));
                         }
-                    }
-                    None => crate::diag::info("replay attach: no earlier recording to attach"),
+                        Err(error) => crate::diag::error(&format!(
+                            "replay attach: {path} could not be opened: {error}"
+                        )),
+                    },
+                    None => crate::diag::error("replay attach: no module is loaded"),
                 }
             }
-        }
-        let mut inner = self.lock();
+        }        let mut inner = self.lock();
         let mut old = std::mem::take(&mut inner.channels);
         // The recording store is opened with the angle set the operator had at the time,
         // and it keeps that list: a later configure with more angles left the extra ones
@@ -1705,40 +1664,100 @@ impl ReplayEngine {
         if uuid.is_empty() {
             return Ok(true);
         }
+        if self
+            .playback
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .contains_key(uuid)
+        {
+            return Ok(true);
+        }
+        // The recording being written right now is served by the record store.
         {
             let inner = self.lock();
-            if inner.recording || inner.attached.as_deref() == Some(uuid) {
+            if inner.recording && inner.uuid == uuid {
                 return Ok(true);
             }
-            let path = inner
-                .config
-                .storage
-                .iter()
-                .map(|storage| std::path::Path::new(&storage.path).join(uuid))
-                .find(|candidate| candidate.is_dir());
-            let Some(path) = path else {
-                return Ok(false);
-            };
-            drop(inner);
-            let Some((api, module)) = crate::pro_load::loaded_api() else {
-                return Err(ReplayFailure::io("replay requires the Pro module"));
-            };
-            let store = attach_ffi(api, module, &path.display().to_string()).map_err(|error| {
-                ReplayFailure::io(format!("recording {uuid} could not be opened: {error}"))
-            })?;
-            *self
-                .store
-                .lock()
-                .unwrap_or_else(|error| error.into_inner()) = Some(std::sync::Arc::new(
-                std::sync::Mutex::new(store),
-            ));
-            let mut inner = self.lock();
-            inner.attached = Some(uuid.to_string());
-            inner.store_generation = inner.store_generation.wrapping_add(1);
-            crate::diag::info(&format!("replay attach: attached {uuid} for a cue"));
         }
+        // Where the session says this recording lives; a document written before the
+        // list existed is looked up under its storage entries by id.
+        let directory = {
+            let inner = self.lock();
+            let known = inner
+                .config
+                .recordings
+                .iter()
+                .find(|recording| recording.uuid.trim() == uuid)
+                .map(|recording| {
+                    let storage = if recording.storage.trim().is_empty() {
+                        inner
+                            .config
+                            .storage
+                            .first()
+                            .map(|item| item.path.clone())
+                            .unwrap_or_default()
+                    } else {
+                        recording.storage.clone()
+                    };
+                    std::path::Path::new(&storage).join(uuid)
+                });
+            known.or_else(|| {
+                inner
+                    .config
+                    .storage
+                    .iter()
+                    .map(|storage| std::path::Path::new(&storage.path).join(uuid))
+                    .find(|candidate| candidate.is_dir())
+            })
+        };
+        let Some(directory) = directory else {
+            return Ok(false);
+        };
+        if !directory.is_dir() {
+            return Ok(false);
+        }
+        let Some((api, module)) = crate::pro_load::loaded_api() else {
+            return Err(ReplayFailure::io("replay requires the Pro module"));
+        };
+        let store = attach_ffi(api, module, &directory.display().to_string()).map_err(|error| {
+            ReplayFailure::io(format!("recording {uuid} could not be opened: {error}"))
+        })?;
+        self.playback
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(
+                uuid.to_string(),
+                std::sync::Arc::new(std::sync::Mutex::new(store)),
+            );
+        self.playback_generation.fetch_add(1, Ordering::Relaxed);
+        crate::diag::info(&format!(
+            "replay attach: attached {} for {uuid}",
+            directory.display()
+        ));
         Ok(true)
     }
+
+    /// The store a channel plays a given recording from.
+    fn playback_store(&self, uuid: &str) -> Option<Arc<Mutex<Box<dyn ReplayStore>>>> {
+        let uuid = uuid.trim();
+        if !uuid.is_empty() {
+            if let Some(store) = self
+                .playback
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get(uuid)
+            {
+                return Some(Arc::clone(store));
+            }
+        }
+        // Live playout and a clip from the recording still being written use the
+        // record store; anything else needs an attached recording.
+        self.store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
     pub fn cue(
         &self,
         channel: u32,
@@ -1768,12 +1787,7 @@ impl ReplayEngine {
         let _ = self.attach_for_playback(recording_uuid)?;
         // Without an attached recording there is nothing to read: say so, instead of
         // cueing a clip that can only play black. The session keeps the timecodes.
-        if self
-            .store
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .is_none()
-        {
+        if self.playback_store(recording_uuid).is_none() {
             return Err(ReplayFailure::io(
                 "the recording for this clip is not on any drive; the timecodes stay in the session",
             ));
@@ -2443,6 +2457,53 @@ fn angle_stats(
 
 /// The empty target list. A stopped recorder is asked for its targets several times
 /// per rendered frame, and allocating a fresh empty Arc each time was pointless.
+/// The recordings this document uses, with the directory each lives in.
+///
+/// The session's own list is the authority: a recording is played from the place the
+/// session says it was written. Only a document written before that list existed
+/// falls back to looking under its storage entries for the id itself.
+fn referenced_recordings(dto: &ReplayDto) -> Vec<(String, String)> {
+    let mut ordered: Vec<(String, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for recording in &dto.recordings {
+        let uuid = recording.uuid.trim();
+        if uuid.is_empty() || !seen.insert(uuid.to_string()) {
+            continue;
+        }
+        let storage = if recording.storage.trim().is_empty() {
+            dto.storage.first().map(|item| item.path.clone()).unwrap_or_default()
+        } else {
+            recording.storage.clone()
+        };
+        ordered.push((uuid.to_string(), storage));
+    }
+    // Older documents name the recording on the clip but have no list entry.
+    let mut mentioned: Vec<&str> = dto
+        .playlists
+        .iter()
+        .flat_map(|list| list.clips.iter())
+        .map(|clip| clip.recording_uuid.trim())
+        .chain(dto.events.iter().map(|event| event.recording_uuid.trim()))
+        .filter(|uuid| !uuid.is_empty())
+        .collect();
+    mentioned.sort_unstable();
+    mentioned.dedup();
+    for uuid in mentioned {
+        if !seen.insert(uuid.to_string()) {
+            continue;
+        }
+        // The storage that actually holds it; the session never says for these.
+        let storage = dto
+            .storage
+            .iter()
+            .map(|item| item.path.clone())
+            .find(|path| std::path::Path::new(path).join(uuid).is_dir())
+            .or_else(|| dto.storage.first().map(|item| item.path.clone()))
+            .unwrap_or_default();
+        ordered.push((uuid.to_string(), storage));
+    }
+    ordered
+}
 fn empty_targets() -> Arc<[RecordTarget]> {
     static EMPTY: OnceLock<Arc<[RecordTarget]>> = OnceLock::new();
     Arc::clone(EMPTY.get_or_init(|| Arc::from(Vec::<RecordTarget>::new())))
@@ -3155,7 +3216,7 @@ impl ChannelPlayout {
         let audio = Arc::clone(&self.audio);
         // A configure that dropped this channel stops the loop, but one stale tick can
         // still land before that thread sees the flag.
-        let (mut transport, transport_revision, revision, last_frame, store_generation) = {
+        let (mut transport, transport_revision, revision, last_frame, playback_generation) = {
             let inner = engine.lock();
             let Some(slot) = inner.channels.iter().find(|slot| slot.index == index) else {
                 return;
@@ -3165,24 +3226,22 @@ impl ChannelPlayout {
                 slot.transport_revision,
                 inner.playlist_revision,
                 inner.last_frame,
-                inner.store_generation,
+                engine.playback_generation.load(Ordering::Relaxed),
             )
         };
         let gpu = engine.gpu_device();
-        let store = engine
-            .store
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone();
+        // The recording the on-air clip belongs to. Two channels can hold clips from
+        // two recordings at the same time; each reads its own.
+        let store = engine.playback_store(transport.recording_uuid());
         let width = context.width;
         let height = context.height;
         let profile = context.profile;
         let fps = context.fps;
         // A cue, a speed change or a reconfigure makes every queued picture wrong, and
         // the ones already decoded belong to the transport that was on air before it.
-        if self.seen != (transport_revision, revision, store_generation) {
+        if self.seen != (transport_revision, revision, playback_generation) {
             self.ahead.clear();
-            self.seen = (transport_revision, revision, store_generation);
+            self.seen = (transport_revision, revision, playback_generation);
         }
         transport.note_recorded_frame(last_frame);
         self.fire_crossed_cues(engine, transport.source_frame(), context.period);

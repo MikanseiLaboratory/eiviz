@@ -503,6 +503,20 @@ message Replay {
   optional bool decode_ahead = 17;
   optional bool profiling = 18;
   repeated ReplayTimelineCue timeline_cues = 19;
+  repeated ReplayRecording recordings = 20;
+}
+
+message ReplayRecording {
+  string uuid = 1;
+  string storage = 2;
+  repeated uint32 angles = 3;
+  uint32 width = 4;
+  uint32 height = 5;
+  uint32 fps_num = 6;
+  uint32 fps_den = 7;
+  uint64 first_frame = 8;
+  uint64 last_frame = 9;
+  uint64 created_ms = 10;
 }
 
 message ReplayTimelineCue {

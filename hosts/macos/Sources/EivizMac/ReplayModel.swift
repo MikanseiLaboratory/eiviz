@@ -338,16 +338,25 @@ struct ReplayDocument {
     /// Recordings named by events and clips whose folder is not on any drive.
     /// The uuid being recorded now is still being written, so it is not missing.
     func missingRecordingCount(skip: String?) -> Int {
-        let drives = (raw["storage"]?.arrayValue ?? []).compactMap { $0.objectValue?["path"]?.stringValue }
+        // The session says where each recording lives; nothing is searched.
+        var storageOf: [String: String] = [:]
+        for entry in raw["recordings"]?.arrayValue ?? [] {
+            guard let object = entry.objectValue,
+                  let uuid = object["uuid"]?.stringValue, !uuid.isEmpty
+            else { continue }
+            storageOf[uuid] = object["storage"]?.stringValue ?? ""
+        }
         var seen = Set<String>()
         var missing = 0
         func consider(_ uuid: String) {
             guard !uuid.isEmpty, seen.insert(uuid).inserted else { return }
             if let skip, !skip.isEmpty, skip == uuid { return }
-            let present = drives.contains { drive in
-                FileManager.default.fileExists(atPath: (drive as NSString).appendingPathComponent(uuid))
+            if let storage = storageOf[uuid], !storage.isEmpty,
+               FileManager.default.fileExists(atPath: (storage as NSString).appendingPathComponent(uuid))
+            {
+                return
             }
-            if !present { missing += 1 }
+            missing += 1
         }
         for event in raw["events"]?.arrayValue ?? [] {
             consider(event.objectValue?["recordingUuid"]?.stringValue ?? "")

@@ -267,6 +267,7 @@ internal static class ReplayModel
         // showed as "events 3->0" on a plain deck save. Merge by id instead, and let
         // the window say which ones it meant to delete.
         MergeEvents(current, deck, deletedEvents);
+        MergeRecordings(current, deck);
         MergePlaylists(current, deck, deletedClips);
         if (angleEdited && deck["activeAngleId"] is { } angle)
             current["activeAngleId"] = angle.DeepClone();
@@ -318,6 +319,40 @@ internal static class ReplayModel
         current["events"] = merged;
     }
 
+    /// <summary>
+    /// Adds the recordings the window linked to the document, by id. A recording the
+    /// window linked while it was open (it started one) is not in the document yet;
+    /// without this the clip it just made points at an id the session never wrote.
+    /// </summary>
+    private static void MergeRecordings(JsonObject current, JsonObject deck)
+    {
+        if (deck["recordings"] is not JsonArray incoming)
+            return;
+        var recordings = current["recordings"] as JsonArray ?? new JsonArray();
+        foreach (var item in incoming.OfType<JsonObject>())
+        {
+            var uuid = item["uuid"]?.GetValue<string>()?.Trim() ?? "";
+            if (uuid.Length == 0)
+                continue;
+            JsonObject? existing = null;
+            foreach (var candidate in recordings.OfType<JsonObject>())
+            {
+                if (string.Equals(candidate["uuid"]?.GetValue<string>()?.Trim(), uuid, StringComparison.Ordinal))
+                    existing = candidate;
+            }
+            if (existing is null)
+            {
+                recordings.Add(item.DeepClone());
+                continue;
+            }
+            foreach (var pair in item)
+            {
+                if (pair.Key != "uuid")
+                    existing[pair.Key] = pair.Value?.DeepClone();
+            }
+        }
+        current["recordings"] = recordings;
+    }
     /// <summary>
     /// Applies the window's playlists by id and its clips by uid, so a clip the API
     /// added (or one recorded a moment ago) survives a save from this window.
@@ -651,6 +686,110 @@ internal static class ReplayModel
     /// Drives the recording is allowed to use. A recorder without one writes
     /// nothing, which is what the deck checks before it starts.
     /// </summary>
+    /// <summary>
+    /// The recordings this document uses, by id. The list is the authority: a clip's
+    /// recording is played from where the session says it lives.
+    /// </summary>
+    public static IReadOnlyList<(string Uuid, string Storage)> Recordings(JsonObject root)
+    {
+        var result = new List<(string, string)>();
+        foreach (var item in Array(root, "recordings").OfType<JsonObject>())
+        {
+            var uuid = item["uuid"]?.GetValue<string>()?.Trim() ?? "";
+            if (uuid.Length == 0)
+                continue;
+            result.Add((uuid, item["storage"]?.GetValue<string>()?.Trim() ?? ""));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Links a recording the session uses: called when a recording starts, so the id
+    /// the clips carry is written down with the drive it went to.
+    /// </summary>
+    public static bool AddRecording(
+        JsonObject root,
+        string uuid,
+        string storage,
+        IReadOnlyList<uint> angles,
+        uint width,
+        uint height,
+        uint fpsNum,
+        uint fpsDen,
+        ulong firstFrame)
+    {
+        uuid = uuid.Trim();
+        if (uuid.Length == 0)
+            return false;
+        var recordings = root["recordings"] as JsonArray ?? new JsonArray();
+        root["recordings"] = recordings;
+        JsonObject? entry = null;
+        foreach (var item in recordings.OfType<JsonObject>())
+        {
+            if (string.Equals(item["uuid"]?.GetValue<string>(), uuid, StringComparison.Ordinal))
+                entry = item;
+        }
+        entry ??= new JsonObject { ["uuid"] = uuid };
+        if (entry.Parent is null)
+            recordings.Add(entry);
+        var ids = new JsonArray();
+        foreach (var angle in angles)
+            ids.Add(angle);
+        entry["storage"] = storage;
+        entry["width"] = width;
+        entry["height"] = height;
+        entry["fpsNum"] = fpsNum;
+        entry["fpsDen"] = fpsDen;
+        entry["firstFrame"] = firstFrame;
+        entry["angles"] = ids;
+        entry["lastFrame"] ??= 0UL;
+        entry["createdMs"] ??= (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        return true;
+    }
+
+    /// <summary>
+    /// Links the recordings a session written before this list names only on its
+    /// clips. One direct path check at load; afterwards the list is the authority and
+    /// nothing searches a drive for a recording.
+    /// </summary>
+    public static bool EnsureRecordings(Session session, JsonObject root)
+    {
+        var known = Recordings(root).Select(item => item.Uuid).ToHashSet(StringComparer.Ordinal);
+        var storages = Storages(root);
+        var referenced = new List<string>();
+        foreach (var list in Playlists(root))
+            foreach (var clip in Clips(root, list.Id))
+                if (clip.RecordingUuid.Length > 0)
+                    referenced.Add(clip.RecordingUuid);
+        foreach (var entry in Events(root))
+            if (entry.RecordingUuid.Length > 0)
+                referenced.Add(entry.RecordingUuid);
+        var added = false;
+        foreach (var uuid in referenced.Distinct(StringComparer.Ordinal))
+        {
+            if (known.Contains(uuid))
+                continue;
+            var storage = storages.FirstOrDefault(path => Directory.Exists(Path.Combine(path, uuid)));
+            if (storage is null)
+                continue;
+            if (AddRecording(
+                    root,
+                    uuid,
+                    storage,
+                    Angles(root).Select(angle => angle.Id).ToList(),
+                    root["format"]?["width"]?.GetValue<uint>() ?? 0,
+                    root["format"]?["height"]?.GetValue<uint>() ?? 0,
+                    root["format"]?["fpsNum"]?.GetValue<uint>() ?? 0,
+                    root["format"]?["fpsDen"]?.GetValue<uint>() ?? 0,
+                    0))
+            {
+                added = true;
+            }
+        }
+        if (added)
+            session.ReplayJson = Serialize(root);
+        return added;
+    }
     public static IReadOnlyList<string> Storages(JsonObject root)
     {
         var result = new List<string>();
@@ -693,28 +832,32 @@ internal static class ReplayModel
     /// </summary>
     public static int MissingRecordingCount(JsonObject root, string? recordingNow = null)
     {
-        var drives = Storages(root);
+        // The session says where each recording lives; a recording it does not list is
+        // not playable, and so is one whose directory is gone. Nothing is searched.
+        var storageOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (uuid, storage) in Recordings(root))
+            storageOf[uuid] = storage;
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var missing = 0;
         void Consider(string? uuid)
         {
-            if (string.IsNullOrWhiteSpace(uuid) || !seen.Add(uuid))
+            uuid = uuid?.Trim();
+            if (string.IsNullOrEmpty(uuid) || !seen.Add(uuid))
                 return;
             if (!string.IsNullOrEmpty(recordingNow)
                 && string.Equals(uuid, recordingNow, StringComparison.OrdinalIgnoreCase))
                 return;
-            var present = drives.Any(drive =>
-                Directory.Exists(Path.Combine(drive, uuid)));
-            if (!present)
-                missing++;
+            if (storageOf.TryGetValue(uuid, out var storage)
+                && storage.Length > 0
+                && Directory.Exists(Path.Combine(storage, uuid)))
+                return;
+            missing++;
         }
         foreach (var entry in Events(root))
             Consider(entry.RecordingUuid);
         foreach (var list in Playlists(root))
-        {
             foreach (var clip in Clips(root, list.Id))
                 Consider(clip.RecordingUuid);
-        }
         return missing;
     }
 

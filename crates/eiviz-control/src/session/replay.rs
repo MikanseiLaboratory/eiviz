@@ -127,6 +127,11 @@ pub struct ReplayDto {
     pub next_event_id: u64,
     #[serde(default = "one_u64")]
     pub next_playlist_id: u64,
+    /// Recordings this session uses, so a clip's recording is looked up by the
+    /// session rather than discovered by scanning the drives. A recording that is not
+    /// listed here is not played.
+    #[serde(default)]
+    pub recordings: Vec<ReplayRecordingDto>,
     /// Scene states the replay timeline fires. A cue names either a clip, in which
     /// case `frame` is that clip's in point, or an absolute recording frame when
     /// `clip_uid` is empty. Distinct from a scene sequence's replay cue.
@@ -167,6 +172,7 @@ impl Default for ReplayDto {
             next_event_id: 1,
             next_playlist_id: 1,
             timeline_cues: Vec::new(),
+            recordings: Vec::new(),
         }
     }
 }
@@ -190,6 +196,13 @@ impl ReplayDto {
         if self.buffering.encode_queue_frames != 0 && self.buffering.encode_queue_frames < 2 {
             self.buffering.encode_queue_frames = 2;
         }
+        // One registry entry per recording, and none without an id: a duplicate would
+        // make "where is this recording" depend on the order of the list.
+        self.recordings
+            .retain(|recording| !recording.uuid.trim().is_empty());
+        let mut seen_recordings = std::collections::HashSet::new();
+        self.recordings
+            .retain(|recording| seen_recordings.insert(recording.uuid.clone()));
         self.channels.sort_by_key(|channel| channel.index);
         // Hosts may publish a Replay document without the counters (the win32
         // window builds the settings JSON by hand), so repair them from the ids
@@ -787,6 +800,47 @@ pub struct PlaylistDto {
     pub default_transition: ClipTransitionDto,
 }
 
+/// One recording this session uses.
+///
+/// The clip carries the recording's id; this entry says where that recording lives,
+/// so playback opens a path the session knows instead of searching the drives. The
+/// fields after `storage` describe the recording as it was written, which is what the
+/// deck shows when the files are no longer there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayRecordingDto {
+    /// `rec-...`, the same id the clips and events carry.
+    #[serde(default)]
+    pub uuid: String,
+    /// Directory the recording lives in (the storage path it was written to).
+    #[serde(default)]
+    pub storage: String,
+    #[serde(default)]
+    pub angles: Vec<u32>,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+    #[serde(default)]
+    pub fps_num: u32,
+    #[serde(default)]
+    pub fps_den: u32,
+    /// Frames written, as the manifest reports them when recording stops.
+    #[serde(default)]
+    pub first_frame: u64,
+    #[serde(default)]
+    pub last_frame: u64,
+    /// Wall clock (milliseconds since the epoch) for ordering; 0 when unknown.
+    #[serde(default)]
+    pub created_ms: u64,
+}
+
+impl ReplayRecordingDto {
+    /// The full directory of this recording.
+    pub fn path(&self) -> std::path::PathBuf {
+        std::path::Path::new(&self.storage).join(&self.uuid)
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelDto {

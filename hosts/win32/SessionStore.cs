@@ -57,7 +57,10 @@ internal static class SessionStore
     public static Session Import(string exportPath, string sessionDest, string mediaDir)
     {
         var json = MixerNative.SessionImportText(exportPath, sessionDest, mediaDir);
-        return FromJson(json);
+        var session = FromJson(json);
+        if (ReplayModel.Parse(session) is { } replay)
+            ReplayModel.EnsureRecordings(session, replay);
+        return session;
     }
 
     public static bool FileHasAssets(string path) => MixerNative.SessionFileHasAssets(path);
@@ -113,6 +116,25 @@ internal static class SessionStore
             HostLog.Write(
                 "ERROR",
                 "session publish drops the scene camera; the document DTO is missing the field");
+        }
+        // A recording started through the API (or by another host) is not linked by the
+        // deck, so the publish links whatever is recording now. The id the clips carry
+        // then points at a drive the session knows.
+        if (Application.Current is App { Backend.IsRemote: false } && MixerNative.ReplayRecordingUuid() is { Length: > 0 } recording
+            && ReplayModel.Parse(session) is { } replayDocument)
+        {
+            var format = replayDocument["format"] as System.Text.Json.Nodes.JsonObject;
+            ReplayModel.AddRecording(
+                replayDocument,
+                recording,
+                ReplayModel.Storages(replayDocument).FirstOrDefault() ?? "",
+                ReplayModel.Angles(replayDocument).Select(angle => angle.Id).ToList(),
+                format?["width"]?.GetValue<uint>() ?? 0,
+                format?["height"]?.GetValue<uint>() ?? 0,
+                format?["fpsNum"]?.GetValue<uint>() ?? 0,
+                format?["fpsDen"]?.GetValue<uint>() ?? 0,
+                0);
+            json = ToJson(session);
         }
         MixerNative.SessionReplaceText(json);
         AdoptCanonicalReplay(session);
@@ -354,7 +376,13 @@ internal static class SessionStore
                 : MixerNative.SessionLoadText(path);
             var dto = JsonSerializer.Deserialize<Document>(json, Json)
                 ?? throw new InvalidOperationException(Loc.Error("Load session", 3));
-            return dto.ToSession();
+            var session = dto.ToSession();
+            // A session written before the recording list existed names its recordings
+            // only on the clips. Link them once, here, so playback and the deck use the
+            // list from then on.
+            if (ReplayModel.Parse(session) is { } replay)
+                ReplayModel.EnsureRecordings(session, replay);
+            return session;
         }
         catch (InvalidOperationException)
         {

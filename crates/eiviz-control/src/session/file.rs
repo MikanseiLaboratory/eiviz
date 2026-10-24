@@ -1613,6 +1613,22 @@ fn replay_to_pb(replay: &crate::session::replay::ReplayDto) -> pb::Replay {
                 clip_uid: cue.clip_uid.clone(),
             })
             .collect(),
+        recordings: replay
+            .recordings
+            .iter()
+            .map(|recording| pb::ReplayRecording {
+                uuid: recording.uuid.clone(),
+                storage: recording.storage.clone(),
+                angles: recording.angles.clone(),
+                width: recording.width,
+                height: recording.height,
+                fps_num: recording.fps_num,
+                fps_den: recording.fps_den,
+                first_frame: recording.first_frame,
+                last_frame: recording.last_frame,
+                created_ms: recording.created_ms,
+            })
+            .collect(),
     }
 }
 
@@ -1776,6 +1792,22 @@ fn replay_from_pb(replay: pb::Replay) -> Result<crate::session::replay::ReplayDt
                 scene_id: cue.scene_id,
                 state_id: cue.state_id,
                 clip_uid: cue.clip_uid,
+            })
+            .collect(),
+        recordings: replay
+            .recordings
+            .into_iter()
+            .map(|recording| crate::session::replay::ReplayRecordingDto {
+                uuid: recording.uuid,
+                storage: recording.storage,
+                angles: recording.angles,
+                width: recording.width,
+                height: recording.height,
+                fps_num: recording.fps_num,
+                fps_den: recording.fps_den,
+                first_frame: recording.first_frame,
+                last_frame: recording.last_frame,
+                created_ms: recording.created_ms,
             })
             .collect(),
     })
@@ -2129,6 +2161,18 @@ mod tests {
                 state_id: 8,
                 clip_uid: "clip-4".into(),
             }],
+            recordings: vec![ReplayRecordingDto {
+                uuid: "rec-4".into(),
+                storage: "D:/replay".into(),
+                angles: vec![3],
+                width: 1920,
+                height: 1080,
+                fps_num: 60000,
+                fps_den: 1001,
+                first_frame: 10,
+                last_frame: 40,
+                created_ms: 1_700_000_000_000,
+            }],
         };
         let back = replay_from_pb(replay_to_pb(&replay)).unwrap();
         assert_eq!(replay, back);
@@ -2145,7 +2189,7 @@ mod tests {
     #[test]
     fn replay_document_survives_a_save_and_a_load() {
         use crate::session::replay::{
-            ReplayRetention, ReplayTransitionKind, ReplayTransitionTiming,
+            ReplayRecordingDto, ReplayRetention, ReplayTransitionKind, ReplayTransitionTiming,
         };
         let json = br#"{
   "version": 2,

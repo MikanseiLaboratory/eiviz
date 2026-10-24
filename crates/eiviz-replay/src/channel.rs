@@ -213,6 +213,14 @@ impl Transport {
         self.rate
     }
 
+    /// The recording the on-air clip belongs to. Empty in live mode or before a cue.
+    pub fn recording_uuid(&self) -> &str {
+        self.current
+            .as_ref()
+            .map(|clip| clip.recording_uuid.as_str())
+            .unwrap_or("")
+    }
+
     pub fn is_live(&self) -> bool {
         self.live
     }

@@ -2046,7 +2046,29 @@ public partial class ReplayWindow : Window
         if (!App.IsRemote)
             MixerNative.ThrowIfFailed(MixerNative.ReplayConfigure(ReplayModel.Serialize(_replay)), "Replay configure");
         if (Backend?.ReplayRecord(true) != true)
+        {
             Warn(Refusal(Loc.T("replay.recordRefused")));
+            return;
+        }
+        // Link the recording the session is about to write: the id the clips will
+        // carry is written down with the drive it went to, so playback and the deck
+        // look it up instead of searching the drives for it.
+        var uuid = MixerNative.ReplayRecordingUuid();
+        var storage = ReplayModel.Storages(_replay).FirstOrDefault() ?? "";
+        var format = _replay["format"] as JsonObject;
+        if (ReplayModel.AddRecording(
+                _replay,
+                uuid,
+                storage,
+                ReplayModel.Angles(_replay).Select(angle => angle.Id).ToList(),
+                format?["width"]?.GetValue<uint>() ?? 0,
+                format?["height"]?.GetValue<uint>() ?? 0,
+                format?["fpsNum"]?.GetValue<uint>() ?? 0,
+                format?["fpsDen"]?.GetValue<uint>() ?? 0,
+                0))
+        {
+            SaveDocument();
+        }
     }
 
     private void RecordToggle_Click(object sender, RoutedEventArgs e)
