@@ -12,7 +12,8 @@ pub const PROFILE_LQ: u32 = 2;
 
 /// A stored packet the mixer can decode on its own device.
 pub const REPLAY_CODEC_VMX1: u32 = 0;
-/// A sender's original bitstream (passthrough). The replay decoder cannot decode it.
+/// A bitstream this mixer did not decode: a sender's original frames, or frames the
+/// mixer encoded on the GPU. Stored as they arrive.
 pub const REPLAY_CODEC_PASSTHROUGH: u32 = 1;
 
 pub const OVERFLOW_DROP: u32 = 0;
@@ -192,7 +193,7 @@ pub struct ReplayStats {
 
 /// One frame as it arrived from the sender, still encoded.
 ///
-/// Replay passthrough stores this instead of a picture the mixer composited, so the
+/// The store keeps this instead of a decoded picture, so the
 /// recording holds what the camera sent rather than a re-encode of it.
 #[derive(Clone, Debug, Default)]
 pub struct EncodedFrame {
@@ -346,7 +347,7 @@ pub trait ReplayStore: Send {
 
     /// Stores a frame the sender already encoded, without decoding or re-encoding it.
     ///
-    /// Passthrough angles record this way: the clip plays back the bitstream the
+    /// GPU-encoded angles record this way: the clip plays back the bitstream the
     /// camera sent, so the picture never passes through a second encoder. A store
     /// that cannot keep a bitstream says so instead of quietly re-encoding.
     fn write_encoded(

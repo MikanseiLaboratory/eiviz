@@ -464,11 +464,6 @@ enum AngleAudio {
   ANGLE_AUDIO_UNIT = 1;
 }
 
-enum AngleRecordMode {
-  ANGLE_RECORD_MODE_COMPOSITE = 0;
-  /// Keep the frames as they arrive, without re-encoding them. OMT inputs only.
-  ANGLE_RECORD_MODE_PASSTHROUGH = 1;
-}
 
 /// What an angle records. A scene angle records that scene's composited output; an
 /// input angle records the input's own picture without composing a scene.
@@ -561,7 +556,7 @@ message Angle {
   string name = 2;
   uint64 scene_id = 3;
   AngleAudio audio = 4;
-  AngleRecordMode record_mode = 5;
+  reserved 5; // was AngleRecordMode (passthrough), removed.
   uint64 audio_unit_id = 6;
   /// Where this angle records from. `scene_id` is used when this is SCENE,
   /// `input_id` when it is INPUT.

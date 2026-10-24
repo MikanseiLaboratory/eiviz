@@ -139,8 +139,6 @@ struct ReplayAngleInfo: Identifiable, Hashable {
     var sceneId: UInt64
     /// Input this angle records when `source` is `Input`.
     var inputId: UInt64 = 0
-    /// `Composite` or `Passthrough` (OMT inputs only).
-    var recordMode: String = "Composite"
     /// Mixing unit whose program mix feeds this angle. Zero means silent.
     var audioUnitId: UInt64
     /// `Gpu` encodes from the scene texture; `Cpu` reads it back first.
@@ -413,8 +411,7 @@ struct ReplayDocument {
                 source: object["source"]?.stringValue ?? "Scene",
                 sceneId: object["sceneId"]?.uint64Value ?? 0,
                 inputId: object["inputId"]?.uint64Value ?? 0,
-                recordMode: object["recordMode"]?.stringValue ?? "Composite",
-                // Silence is the only other source, so an explicit unit id is what
+                        // Silence is the only other source, so an explicit unit id is what
                 // matters.
                 audioUnitId: (object["audio"]?.stringValue ?? "Silent").caseInsensitiveCompare("Unit") == .orderedSame
                     ? (object["audioUnitId"]?.uint64Value ?? 0)
@@ -969,8 +966,7 @@ struct ReplayDocument {
                 "inputId": .number(Double(angle.inputId)),
                 "audio": .string(angle.audioUnitId == 0 ? "Silent" : "Unit"),
                 "audioUnitId": .number(Double(angle.audioUnitId)),
-                "recordMode": .string(angle.recordMode),
-                "encoder": .string(angle.encoder),
+                    "encoder": .string(angle.encoder),
             ])
         })
         if !angles.contains(where: { $0.id == activeAngleId }) {

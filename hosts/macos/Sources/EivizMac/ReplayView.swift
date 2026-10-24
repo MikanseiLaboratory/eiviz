@@ -1674,17 +1674,6 @@ struct ReplaySettingsView: View {
                                 }
                                 .labelsHidden()
                                 .frame(width: 170)
-                                .onChange(of: angle.sceneId) { _, _ in normalizeAngleMode(angle.id) }
-                                .onChange(of: angle.inputId) { _, _ in normalizeAngleMode(angle.id) }
-                                Picker("", selection: $angle.recordMode) {
-                                    Text(L10n.t("replay.recordComposite")).tag("Composite")
-                                    if angleIsOmt(angle) {
-                                        Text(L10n.t("replay.recordPassthrough")).tag("Passthrough")
-                                    }
-                                }
-                                .labelsHidden()
-                                .frame(width: 120)
-                                .help(L10n.t("replay.passthroughHelp"))
                                 // Where this angle is encoded: GPU keeps the picture on
                                 // the GPU from the scene to the stored packet.
                                 Picker("", selection: $angle.encoder) {
@@ -1846,10 +1835,6 @@ struct ReplaySettingsView: View {
         )
     }
 
-    private func angleIsOmt(_ angle: ReplayAngleInfo) -> Bool {
-        angle.source == "Input" && inputKind(angle.inputId) == .omt
-    }
-
     /// A new kind starts from the first source of that kind.
     private func resetAngleSource(_ angleId: UInt32) {
         guard let index = angles.firstIndex(where: { $0.id == angleId }) else { return }
@@ -1860,16 +1845,7 @@ struct ReplaySettingsView: View {
         } else {
             angle.sceneId = first
         }
-        angle.recordMode = "Composite"
         angles[index] = angle
-    }
-
-    /// Keeps the mode honest: passthrough exists only for an OMT input.
-    private func normalizeAngleMode(_ angleId: UInt32) {
-        guard let index = angles.firstIndex(where: { $0.id == angleId }) else { return }
-        if angles[index].recordMode == "Passthrough" && !angleIsOmt(angles[index]) {
-            angles[index].recordMode = "Composite"
-        }
     }
 
     /// Moves an angle to a drive. The assignment lives on the drives, so it is rewritten
@@ -1966,8 +1942,7 @@ struct ReplaySettingsView: View {
                 source: "Scene",
                 sceneId: scene?.id ?? 0,
                 inputId: 0,
-                recordMode: "Composite",
-                audioUnitId: 0
+                    audioUnitId: 0
             )
         )
         // A single drive takes the new angle: a setup with one drive should not need a

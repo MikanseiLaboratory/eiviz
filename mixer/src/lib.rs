@@ -7558,7 +7558,7 @@ mod tests {
   "units": [{ "id": 1, "name": "MU1" }],
   "replay": {
     "enabled": false,
-    "angles": [{ "id": 1, "name": "Cam 1", "sceneId": 1, "audio": "Silent", "recordMode": "Composite" }],
+    "angles": [{ "id": 1, "name": "Cam 1", "sceneId": 1, "audio": "Silent" }],
     "channels": [{ "index": 0, "inputId": 524289 }],
     "playlists": []
   }

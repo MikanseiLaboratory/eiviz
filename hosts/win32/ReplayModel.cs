@@ -126,7 +126,6 @@ internal sealed record ReplayAngleInfo(
     ulong AudioUnitId,
     string Source = "Scene",
     ulong InputId = 0,
-    string RecordMode = "Composite",
     string Encoder = "Cpu",
     JsonObject? Json = null)
 {
@@ -525,8 +524,7 @@ internal static class ReplayModel
                 // A document written before the source existed is a scene angle.
                 angle["source"]?.GetValue<string>() ?? "Scene",
                 angle["inputId"]?.GetValue<ulong>() ?? 0,
-                angle["recordMode"]?.GetValue<string>() ?? "Composite",
-                ReplayAngleInfo.EncoderOf(angle)));
+                    ReplayAngleInfo.EncoderOf(angle)));
         }
         return result;
     }

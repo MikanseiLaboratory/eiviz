@@ -138,7 +138,7 @@ fn the_recorded_sound_reaches_the_channel_meter() {
     let path = dir.display().to_string().replace('\\', "/");
     let config = CString::new(format!(
         r#"{{"enabled":true,"storage":[{{"path":"{path}","angleIds":[1]}}],
-"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Unit","audioUnitId":2,"recordMode":"Composite"}}],
+"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Unit","audioUnitId":2}}],
 "activeAngleId":1,
 "channels":[{{"index":0,"playlistId":null,"inputId":0}}],
 "playlists":[],"events":[],

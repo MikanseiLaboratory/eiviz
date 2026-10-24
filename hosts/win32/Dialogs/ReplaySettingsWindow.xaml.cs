@@ -136,7 +136,6 @@ public partial class ReplaySettingsWindow : Window
                 Name = angle.Label,
                 SourceKind = angle.Source,
                 SourceId = angle.Source == "Input" ? angle.InputId : angle.SceneId,
-                RecordMode = angle.RecordMode,
                 Encoder = angle.Encoder,
                 AudioUnitId = angle.AudioUnitId,
                 DriveIndex = driveOf.TryGetValue(angle.Id, out var index) ? index : -1,
@@ -169,7 +168,6 @@ public partial class ReplaySettingsWindow : Window
         row.AudioOptions = AudioOptions();
         row.DriveOptions = DriveOptions();
         row.SourceOptions = SourceOptions(row.SourceKind);
-        row.ModeOptions = ModeOptions(row.SourceKind, row.SourceId);
         row.EncoderOptions =
         [
             new("Gpu", Loc.T("replay.encoderGpu")),
@@ -216,20 +214,6 @@ public partial class ReplaySettingsWindow : Window
                 .Select(input => new Option<ulong>(input.Id, input.Name))]
             : [.. _session.Scenes.Select(scene => new Option<ulong>(scene.Id, scene.Name))];
 
-    /// <summary>Passthrough only exists for an OMT input: a scene is composited.</summary>
-    private IReadOnlyList<Option<string>> ModeOptions(string kind, ulong sourceId)
-    {
-        var omt = kind == "Input"
-            && _session.Inputs.FirstOrDefault(input => input.Id == sourceId)?.Kind == InputKind.OMT;
-        return omt
-            ?
-            [
-                new("Composite", Loc.T("replay.recordComposite")),
-                new("Passthrough", Loc.T("replay.recordPassthrough")),
-            ]
-            : [new("Composite", Loc.T("replay.recordComposite"))];
-    }
-
     private void AngleRow_Changed(object? sender, PropertyChangedEventArgs e)
     {
         _dirty = true;
@@ -238,8 +222,7 @@ public partial class ReplaySettingsWindow : Window
         if (e.PropertyName is nameof(AngleRow.SourceKind) or nameof(AngleRow.SourceId))
         {
             row.SourceOptions = SourceOptions(row.SourceKind);
-            row.ModeOptions = ModeOptions(row.SourceKind, row.SourceId);
-            row.NotifyOptions();
+                row.NotifyOptions();
         }
         if (e.PropertyName is nameof(AngleRow.DriveIndex) or nameof(AngleRow.Name))
             RefreshStorages();
@@ -511,7 +494,6 @@ public partial class ReplaySettingsWindow : Window
             Name = scene?.Name ?? string.Empty,
             SourceKind = "Scene",
             SourceId = scene?.Id ?? 0,
-            RecordMode = "Composite",
             AudioUnitId = 0,
             DriveIndex = _storages.Count == 1 ? 0 : -1,
         };
@@ -769,8 +751,7 @@ public partial class ReplaySettingsWindow : Window
                 ["inputId"] = angle.InputId,
                 ["audio"] = angle.AudioUnitId == 0 ? "Silent" : "Unit",
                 ["audioUnitId"] = angle.AudioUnitId,
-                ["recordMode"] = angle.RecordMode,
-                ["encoder"] = angle.Encoder,
+                        ["encoder"] = angle.Encoder,
             });
         }
         _replay["angles"] = angles;

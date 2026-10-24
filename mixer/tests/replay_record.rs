@@ -67,7 +67,7 @@ fn recording_keeps_the_frames_the_renderer_produced() {
     let path = dir.display().to_string().replace('\\', "/");
     let config = CString::new(format!(
         r#"{{"enabled":true,"storage":[{{"path":"{path}","angleIds":[1]}}],
-"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent","recordMode":"Composite"}}],
+"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent"}}],
 "channels":[{{"index":0,"playlistId":null,"inputId":0}}],
 "playlists":[],"events":[],
 "format":{{"width":320,"height":180,"fpsNum":60000,"fpsDen":1001,"profile":"Sq","segmentFrames":120}},
@@ -150,7 +150,7 @@ fn recording_refuses_a_document_without_a_format() {
     let path = dir.display().to_string().replace('\\', "/");
     let config = CString::new(format!(
         r#"{{"enabled":true,"storage":[{{"path":"{path}","angleIds":[1]}}],
-"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent","recordMode":"Composite"}}],
+"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent"}}],
 "channels":[{{"index":0,"playlistId":null,"inputId":0}}],
 "playlists":[],"events":[],
 "format":{{"width":0,"height":0,"fpsNum":0,"fpsDen":0,"profile":"Sq","segmentFrames":120}},
@@ -173,7 +173,7 @@ fn recording_refuses_a_document_without_a_format() {
     // records without restarting the mixer.
     let fixed = CString::new(format!(
         r#"{{"enabled":true,"storage":[{{"path":"{path}","angleIds":[1]}}],
-"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent","recordMode":"Composite"}}],
+"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent"}}],
 "channels":[{{"index":0,"playlistId":null,"inputId":0}}],
 "playlists":[],"events":[],
 "format":{{"width":320,"height":180,"fpsNum":60000,"fpsDen":1001,"profile":"Sq","segmentFrames":120}},
@@ -211,7 +211,7 @@ fn recording_refuses_an_angle_without_a_scene() {
     // Angle 1 names scene 9, which was never defined.
     let config = CString::new(format!(
         r#"{{"enabled":true,"storage":[{{"path":"{path}","angleIds":[1]}}],
-"angles":[{{"id":1,"name":"A","sceneId":9,"audio":"Silent","recordMode":"Composite"}}],
+"angles":[{{"id":1,"name":"A","sceneId":9,"audio":"Silent"}}],
 "channels":[{{"index":0,"playlistId":null,"inputId":0}}],
 "playlists":[],"events":[],
 "format":{{"width":320,"height":180,"fpsNum":60000,"fpsDen":1001,"profile":"Sq","segmentFrames":120}},
@@ -254,7 +254,7 @@ fn recording_refuses_an_angle_with_no_storage_assigned() {
     let path = dir.display().to_string().replace('\\', "/");
     let config = CString::new(format!(
         r#"{{"enabled":true,"storage":[{{"path":"{path}"}}],
-"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent","recordMode":"Composite"}}],
+"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent"}}],
 "channels":[{{"index":0,"playlistId":null,"inputId":0}}],
 "playlists":[],"events":[],
 "format":{{"width":320,"height":180,"fpsNum":60000,"fpsDen":1001,"profile":"Sq","segmentFrames":120}},

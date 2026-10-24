@@ -424,7 +424,6 @@ mod tests {
             scene_id: 1,
             audio: crate::session::replay::AngleAudio::Silent,
             audio_unit_id: 0,
-            record_mode: crate::session::replay::AngleRecordMode::Composite,
             encoder: crate::session::replay::AngleEncoder::Gpu,
         });
         replay.playlists.push(PlaylistDto {

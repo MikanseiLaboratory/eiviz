@@ -63,18 +63,6 @@ session_string_enum! {
 
 session_string_enum! {
     #[derive(Default)]
-    pub enum AngleRecordMode {
-        #[default]
-        Composite,
-        /// Keep the frames as they arrive, without re-encoding them. Only an input
-        /// that already delivers compressed frames (OMT) can do this, and the
-        /// operator chooses it per angle: nothing switches to it on its own.
-        Passthrough,
-    }
-}
-
-session_string_enum! {
-    #[derive(Default)]
     pub enum ClipSourceKind {
         #[default]
         Angle,
@@ -535,8 +523,6 @@ pub struct AngleDto {
     /// Mixing unit whose program mix feeds this angle when `audio` is `Unit`.
     #[serde(default)]
     pub audio_unit_id: u64,
-    #[serde(default)]
-    pub record_mode: AngleRecordMode,
     /// Where this angle is encoded. `Gpu` keeps the picture on the GPU from scene to
     /// stored packet; `Cpu` reads it back and encodes on the CPU. The choice is per
     /// angle because the CPU cost is per angle: two angles at 1080p60 already exceed
@@ -985,11 +971,6 @@ pub fn clip_overwritten(out_frame: u64, earliest_remaining: Option<u64>) -> bool
     earliest_remaining.is_some_and(|earliest| out_frame < earliest)
 }
 
-/// Passthrough stores the sender's bitstream. Playback stays refused.
-pub fn passthrough_playback_refused(mode: AngleRecordMode) -> bool {
-    mode == AngleRecordMode::Passthrough
-}
-
 pub fn replay_channel_gpu_id(index: u32) -> u64 {
     REPLAY_CHANNEL_BASE | u64::from(index.saturating_add(1))
 }
@@ -1373,7 +1354,6 @@ mod tests {
             scene_id: 1,
             audio: AngleAudio::Silent,
             audio_unit_id: 0,
-            record_mode: AngleRecordMode::Composite,
             encoder: crate::session::replay::AngleEncoder::Gpu,
         });
         let default = ClipTransitionDto {
@@ -1451,7 +1431,6 @@ mod tests {
             scene_id: 1,
             audio: AngleAudio::Silent,
             audio_unit_id: 0,
-            record_mode: AngleRecordMode::Composite,
             encoder: crate::session::replay::AngleEncoder::Cpu,
         });
         replay.normalize();
@@ -1469,7 +1448,6 @@ mod tests {
             scene_id: 2,
             audio: AngleAudio::Silent,
             audio_unit_id: 0,
-            record_mode: AngleRecordMode::Composite,
             encoder: crate::session::replay::AngleEncoder::Cpu,
         });
         replay.active_angle_id = None;
@@ -1494,7 +1472,6 @@ mod tests {
             scene_id: 1,
             audio: AngleAudio::Silent,
             audio_unit_id: 0,
-            record_mode: AngleRecordMode::Composite,
             encoder: crate::session::replay::AngleEncoder::Gpu,
         });
 
@@ -1530,7 +1507,6 @@ mod tests {
             scene_id: 2,
             audio: AngleAudio::Silent,
             audio_unit_id: 0,
-            record_mode: AngleRecordMode::Composite,
             encoder: crate::session::replay::AngleEncoder::Gpu,
         });
 
@@ -1676,12 +1652,10 @@ mod tests {
     }
 
     #[test]
-    fn an_overwritten_range_is_expired_and_passthrough_does_not_play() {
+    fn an_overwritten_range_is_expired() {
         assert!(clip_overwritten(40, Some(50)));
         assert!(!clip_overwritten(50, Some(50)));
         assert!(!clip_overwritten(40, None));
-        assert!(passthrough_playback_refused(AngleRecordMode::Passthrough));
-        assert!(!passthrough_playback_refused(AngleRecordMode::Composite));
     }
 
     #[test]
@@ -1698,7 +1672,6 @@ mod tests {
                 input_id: 0,
                 audio: AngleAudio::Silent,
                 audio_unit_id: 0,
-                record_mode: AngleRecordMode::Composite,
                 encoder: AngleEncoder::Cpu,
             },
             AngleDto {
@@ -1709,7 +1682,6 @@ mod tests {
                 input_id: 0,
                 audio: AngleAudio::Silent,
                 audio_unit_id: 0,
-                record_mode: AngleRecordMode::Composite,
                 encoder: AngleEncoder::Cpu,
             },
         ];

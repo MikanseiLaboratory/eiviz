@@ -110,7 +110,7 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
     // marked, so the playlist is written after the marks are taken.
     let open = CString::new(format!(
         r#"{{"enabled":true,"storage":[{{"path":"{path}","angleIds":[1]}}],
-"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent","recordMode":"Composite"}}],
+"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent"}}],
 "activeAngleId":1,
 "channels":[{{"index":0,"playlistId":null,"inputId":0}}],
 "playlists":[],"events":[],
@@ -150,7 +150,7 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
     let playlist = |timing: &str| {
         CString::new(format!(
             r#"{{"enabled":true,"storage":[{{"path":"{path}","angleIds":[1]}}],
-"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent","recordMode":"Composite"}}],
+"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent"}}],
 "activeAngleId":1,
 "channels":[{{"index":0,"playlistId":7,"inputId":0}}],
 "playlists":[{{"id":7,"name":"Replay","revision":1,"clips":[

@@ -66,7 +66,7 @@ fn an_input_angle_records_without_a_scene() {
     // One angle, recording the input directly: `source: Input` and no scene.
     let config = CString::new(format!(
         r#"{{"enabled":true,"storage":[{{"path":"{path}","angleIds":[1]}}],
-"angles":[{{"id":1,"name":"A","source":"Input","inputId":{SRC_COLOR},"audio":"Silent","recordMode":"Composite"}}],
+"angles":[{{"id":1,"name":"A","source":"Input","inputId":{SRC_COLOR},"audio":"Silent"}}],
 "channels":[{{"index":0,"playlistId":null,"inputId":0}}],
 "playlists":[],"events":[],
 "format":{{"width":320,"height":180,"fpsNum":60000,"fpsDen":1001,"profile":"Sq","segmentFrames":120}},

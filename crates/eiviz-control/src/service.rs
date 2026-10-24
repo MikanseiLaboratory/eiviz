@@ -1517,7 +1517,7 @@ mod tests {
             "enabled": true,
             "storage": [{ "path": "D:/replay", "angleIds": [1] }],
             "format": { "width": 1920, "height": 1080, "fpsNum": 60000, "fpsDen": 1001, "profile": "Sq", "segmentFrames": 120 },
-            "angles": [{ "id": 1, "name": "Cam 1", "sceneId": 1, "audio": "Silent", "recordMode": "Composite" }],
+            "angles": [{ "id": 1, "name": "Cam 1", "sceneId": 1, "audio": "Silent" }],
             "channels": [{ "index": 0, "playlistId": 7, "inputId": 524289 }],
             "playlists": [{ "id": 7, "name": "Replay", "revision": 1, "clips": [
               { "uid": "clip-1", "angleId": 1, "recordingUuid": "rec", "inFrame": 10, "outFrame": 40 },
@@ -1602,7 +1602,7 @@ mod tests {
     /// with a reason instead of leaving the document and the mixer apart.
     #[test]
     fn changing_the_replay_angles_while_recording_is_refused() {
-        use crate::session::replay::{AngleAudio, AngleDto, AngleRecordMode, AngleSourceKind};
+        use crate::session::replay::{AngleAudio, AngleDto, AngleSourceKind};
         on_big_stack(|| {
             let recording = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let fake = FakeMixer {
@@ -1620,7 +1620,6 @@ mod tests {
                 input_id: 0,
                 audio: AngleAudio::Silent,
                 audio_unit_id: 0,
-                record_mode: AngleRecordMode::Composite,
                 encoder: crate::session::replay::AngleEncoder::Gpu,
             };
             svc.replace_session(replay_doc(), None, "1").unwrap();

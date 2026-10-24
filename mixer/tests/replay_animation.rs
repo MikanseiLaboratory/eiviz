@@ -72,7 +72,7 @@ fn an_animation_step_cues_a_replay_clip() {
     let path = dir.display().to_string().replace('\\', "/");
     let config = CString::new(format!(
         r#"{{"enabled":true,"storage":[{{"path":"{path}","angleIds":[1]}}],
-"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent","recordMode":"Composite"}}],
+"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent"}}],
 "activeAngleId":1,
 "channels":[{{"index":0,"playlistId":7,"inputId":0}}],
 "playlists":[{{"id":7,"name":"Replay","revision":1,"clips":[

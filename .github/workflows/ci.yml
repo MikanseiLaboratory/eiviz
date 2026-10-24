@@ -156,7 +156,6 @@ jobs:
         run: >
           cargo test -p eiviz_mixer --locked
           --test replay_record --test replay_record_nomodule --test replay_input
-          --test replay_passthrough
           --test replay_flow --test replay_playout --test replay_offair
           --test replay_animation --test replay_audio
           --test vmix_replay

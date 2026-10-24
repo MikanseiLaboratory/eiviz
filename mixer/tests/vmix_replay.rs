@@ -44,7 +44,7 @@ fn the_http_api_cues_and_plays_a_marked_clip() {
   "units": [{ "id": 1, "name": "MU1" }],
   "replay": {
     "enabled": false,
-    "angles": [{ "id": 1, "name": "Cam 1", "sceneId": 1, "audio": "Silent", "recordMode": "Composite" }],
+    "angles": [{ "id": 1, "name": "Cam 1", "sceneId": 1, "audio": "Silent" }],
     "channels": [{ "index": 0, "playlistId": 7, "inputId": 524289 }],
     "playlists": [{ "id": 7, "name": "Replay", "revision": 1, "clips": [
       { "uid": "clip-1", "angleId": 1, "recordingUuid": "rec", "inFrame": 10, "outFrame": 40 },

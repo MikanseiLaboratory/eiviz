@@ -75,7 +75,6 @@ internal sealed class AngleRow : INotifyPropertyChanged
     private string _name = string.Empty;
     private string _sourceKind = "Scene";
     private ulong _sourceId;
-    private string _recordMode = "Composite";
     private string _encoder = "Cpu";
     private ulong _audioUnitId;
     private int _driveIndex = -1;
@@ -97,9 +96,7 @@ internal sealed class AngleRow : INotifyPropertyChanged
         {
             if (Set(ref _sourceKind, value))
             {
-                // The source list and the modes that make sense both change with it.
                 SourceId = 0;
-                RecordMode = "Composite";
             }
         }
     }
@@ -109,13 +106,6 @@ internal sealed class AngleRow : INotifyPropertyChanged
     {
         get => _sourceId;
         set => Set(ref _sourceId, value);
-    }
-
-    /// <summary>`Composite` or `Passthrough` (OMT inputs only).</summary>
-    public string RecordMode
-    {
-        get => _recordMode;
-        set => Set(ref _recordMode, value);
     }
 
     /// <summary>`Gpu` encodes from the scene texture; `Cpu` reads it back first.</summary>
@@ -151,7 +141,6 @@ internal sealed class AngleRow : INotifyPropertyChanged
 
     public IReadOnlyList<Option<ulong>> SourceOptions { get; set; } = [];
 
-    public IReadOnlyList<Option<string>> ModeOptions { get; set; } = [];
 
     public IReadOnlyList<Option<string>> EncoderOptions { get; set; } = [];
 
@@ -193,16 +182,6 @@ internal sealed class AngleRow : INotifyPropertyChanged
         }
     }
 
-    public Option<string>? ModeOption
-    {
-        get => ModeOptions.FirstOrDefault(option => option.Value == RecordMode);
-        set
-        {
-            if (value is not null)
-                RecordMode = value.Value;
-        }
-    }
-
     public Option<ulong>? AudioOption
     {
         get => AudioOptions.FirstOrDefault(option => option.Value == AudioUnitId);
@@ -234,13 +213,11 @@ internal sealed class AngleRow : INotifyPropertyChanged
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(KindOptions)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SourceOptions)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ModeOptions)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncoderOptions)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioOptions)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DriveOptions)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(KindOption)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SourceOption)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ModeOption)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncoderOption)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioOption)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(DriveOption)));

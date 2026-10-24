@@ -91,7 +91,7 @@ fn the_replay_picture_reaches_the_program_scene() {
     // falls back to has to keep working on its own.
     let config = CString::new(format!(
         r#"{{"enabled":true,"storage":[{{"path":"{path}","angleIds":[1]}}],
-"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent","recordMode":"Composite"}}],
+"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent"}}],
 "activeAngleId":1,
 "channels":[{{"index":0,"playlistId":null,"inputId":0}}],
 "playlists":[],"events":[],

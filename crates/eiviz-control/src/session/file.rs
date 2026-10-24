@@ -1518,10 +1518,6 @@ fn replay_to_pb(replay: &crate::session::replay::ReplayDto) -> pb::Replay {
                     crate::session::replay::AngleAudio::Silent => pb::AngleAudio::Silent as i32,
                     crate::session::replay::AngleAudio::Unit => pb::AngleAudio::Unit as i32,
                 },
-                record_mode: match angle.record_mode {
-                    AngleRecordMode::Composite => pb::AngleRecordMode::Composite as i32,
-                    AngleRecordMode::Passthrough => pb::AngleRecordMode::Passthrough as i32,
-                },
                 encoder: match angle.encoder {
                     crate::session::replay::AngleEncoder::Cpu => pb::AngleEncoder::Cpu as i32,
                     crate::session::replay::AngleEncoder::Gpu => pb::AngleEncoder::Gpu as i32,
@@ -1703,10 +1699,6 @@ fn replay_from_pb(replay: pb::Replay) -> Result<crate::session::replay::ReplayDt
                     _ => AngleAudio::Silent,
                 },
                 audio_unit_id: angle.audio_unit_id,
-                record_mode: match pb::AngleRecordMode::try_from(angle.record_mode) {
-                    Ok(pb::AngleRecordMode::Passthrough) => AngleRecordMode::Passthrough,
-                    _ => AngleRecordMode::Composite,
-                },
                 encoder: match pb::AngleEncoder::try_from(angle.encoder) {
                     Ok(pb::AngleEncoder::Gpu) => AngleEncoder::Gpu,
                     _ => AngleEncoder::Cpu,
@@ -2103,7 +2095,6 @@ mod tests {
                 input_id: 9,
                 audio: AngleAudio::Unit,
                 audio_unit_id: 2,
-                record_mode: AngleRecordMode::Passthrough,
                 encoder: AngleEncoder::Gpu,
             }],
             events: vec![ReplayEventDto {
@@ -2208,8 +2199,8 @@ mod tests {
     "warnings": { "remainingWarnSecs": 900, "remainingAlertSecs": 300, "remainingCriticalSecs": 60 },
     "retention": "OverwriteUnprotected",
     "angles": [
-      { "id": 1, "name": "Cam 1", "sceneId": 1, "audio": "Unit", "audioUnitId": 1, "recordMode": "Composite" },
-      { "id": 2, "name": "Cam 2", "sceneId": 1, "audio": "Silent", "recordMode": "Composite" }
+      { "id": 1, "name": "Cam 1", "sceneId": 1, "audio": "Unit", "audioUnitId": 1 },
+      { "id": 2, "name": "Cam 2", "sceneId": 1, "audio": "Silent" }
     ],
     "events": [
       { "id": 4, "recordingUuid": "rec-1", "inFrame": 100, "outFrame": 400, "name": "Goal", "tags": ["Score"], "protected": true }

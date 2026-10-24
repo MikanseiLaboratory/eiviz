@@ -237,16 +237,6 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.recordMode], Source={x:Static i18n:Loc.Source}}" Width="130">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <ComboBox ItemsSource="{Binding ModeOptions}" DisplayMemberPath="Label"
-                                                  SelectedItem="{Binding ModeOption}"
-                                                  Height="24" Margin="2,1"
-                                                  ToolTip="{Binding [replay.passthroughHelp], Source={x:Static i18n:Loc.Source}}"/>
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
                             <!-- Where this angle is encoded: GPU keeps the picture on
                                  the GPU from the scene to the stored packet. -->
                             <GridViewColumn Header="{Binding [replay.encoder], Source={x:Static i18n:Loc.Source}}" Width="110">

@@ -1,6 +1,4 @@
-use crate::session::replay::{
-    AngleRecordMode, AngleSourceKind, SEGMENT_FRAMES_MAX, SEGMENT_FRAMES_MIN,
-};
+use crate::session::replay::{AngleSourceKind, SEGMENT_FRAMES_MAX, SEGMENT_FRAMES_MIN};
 use crate::session::{
     AudioCaptureMode, Document, InputKind, MixSource, OutputSourceKind, OutputTransport,
 };
@@ -504,14 +502,6 @@ fn validate_replay(doc: &Document) -> Result<(), ValidationError> {
                         angle.id, angle.input_id
                     )));
                 }
-                if angle.record_mode == AngleRecordMode::Passthrough {
-                    // A scene is composited, so its frames never arrive encoded:
-                    // "passthrough" would have to mean "composite anyway".
-                    return Err(ValidationError::new(format!(
-                        "replay angle {} cannot use passthrough on a Scene",
-                        angle.id
-                    )));
-                }
                 if !doc.scenes.iter().any(|scene| scene.id == angle.scene_id) {
                     return Err(ValidationError::new(format!(
                         "replay angle {} scene {} does not exist",
@@ -549,15 +539,6 @@ fn validate_replay(doc: &Document) -> Result<(), ValidationError> {
                     return Err(ValidationError::new(format!(
                         "replay angle {} input {} has no picture",
                         angle.id, angle.input_id
-                    )));
-                }
-                if angle.record_mode == AngleRecordMode::Passthrough && input.kind != InputKind::OMT
-                {
-                    // Only OMT hands the mixer compressed frames today. Anything
-                    // else would have to be encoded, which is not passthrough.
-                    return Err(ValidationError::new(format!(
-                        "replay angle {} passthrough is only valid for an OMT input",
-                        angle.id
                     )));
                 }
                 if !sources.insert((1u8, angle.input_id)) {
@@ -1020,7 +1001,6 @@ mod tests {
                 scene_id: 1,
                 audio: crate::session::replay::AngleAudio::Silent,
                 audio_unit_id: 0,
-                record_mode: crate::session::replay::AngleRecordMode::Composite,
                 encoder: crate::session::replay::AngleEncoder::Gpu,
             });
         validate(&doc).unwrap();
@@ -1075,7 +1055,6 @@ mod tests {
             scene_id: 1,
             audio: AngleAudio::Silent,
             audio_unit_id: 0,
-            record_mode: AngleRecordMode::Composite,
             encoder: crate::session::replay::AngleEncoder::Gpu,
         });
         replay.active_angle_id = Some(1);
@@ -1175,7 +1154,6 @@ mod tests {
                 input_id: 524289,
                 audio: AngleAudio::Silent,
                 audio_unit_id: 0,
-                record_mode: AngleRecordMode::Composite,
                 encoder: crate::session::replay::AngleEncoder::Gpu,
             };
         }
@@ -1185,37 +1163,6 @@ mod tests {
         doc.replay.as_mut().unwrap().angles[0].input_id = 10;
         let err = validate(&doc).unwrap_err();
         assert!(err.message.contains("no picture"), "{}", err.message);
-    }
-
-    /// Passthrough means "store the frames as they arrive". Only OMT delivers
-    /// compressed frames, and a scene is composited, so neither may claim it.
-    #[test]
-    fn passthrough_is_only_for_an_omt_input() {
-        use crate::session::replay::*;
-        let mut doc = recordable_replay();
-        doc.inputs.push(
-            serde_json::from_value(serde_json::json!({ "id": 10, "name": "Cam", "kind": "UVC" }))
-                .unwrap(),
-        );
-        {
-            let replay = doc.replay.as_mut().unwrap();
-            replay.angles[0].source = AngleSourceKind::Input;
-            replay.angles[0].scene_id = 0;
-            replay.angles[0].input_id = 10;
-            replay.angles[0].record_mode = AngleRecordMode::Passthrough;
-        }
-        let err = validate(&doc).unwrap_err();
-        assert!(err.message.contains("passthrough"), "{}", err.message);
-
-        // The same on a scene angle is refused too.
-        let mut scene = recordable_replay();
-        scene.replay.as_mut().unwrap().angles[0].record_mode = AngleRecordMode::Passthrough;
-        let err = validate(&scene).unwrap_err();
-        assert!(err.message.contains("passthrough"), "{}", err.message);
-
-        // An OMT input is the one that may.
-        doc.inputs.last_mut().unwrap().kind = InputKind::OMT;
-        validate(&doc).unwrap();
     }
 
     /// Two angles recording one source would record the same picture twice and
@@ -1234,7 +1181,6 @@ mod tests {
                 input_id: 0,
                 audio: AngleAudio::Silent,
                 audio_unit_id: 0,
-                record_mode: AngleRecordMode::Composite,
                 encoder: crate::session::replay::AngleEncoder::Gpu,
             });
             replay.storage[0].angle_ids = vec![1, 2];
@@ -1374,7 +1320,6 @@ mod tests {
                 scene_id: 2,
                 audio: AngleAudio::Silent,
                 audio_unit_id: 0,
-                record_mode: AngleRecordMode::Composite,
                 encoder: crate::session::replay::AngleEncoder::Gpu,
             });
             replay.enabled = true;
