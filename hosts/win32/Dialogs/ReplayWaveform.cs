@@ -31,6 +31,8 @@ internal sealed class ReplayWaveform : FrameworkElement
     private static readonly Pen Wave = new(new SolidColorBrush(Color.FromRgb(0x6C, 0xD4, 0x8C)), 1);
     private static readonly Pen Mark = new(new SolidColorBrush(Color.FromRgb(0xFF, 0xD1, 0x54)), 1);
     private static readonly Pen Playhead = new(new SolidColorBrush(Color.FromRgb(0xE0, 0x60, 0x60)), 2);
+    /// <summary>The band between the marks: the clip being cut, at a glance.</summary>
+    private static readonly Brush Range = new SolidColorBrush(Color.FromRgb(0x33, 0x2C, 0x12));
 
     /// <summary>Raised while the operator drags across the waveform.</summary>
     public event Action<ulong>? SeekRequested;
@@ -238,6 +240,19 @@ internal sealed class ReplayWaveform : FrameworkElement
                 var y1 = middle - high * scale;
                 var y2 = middle - low * scale;
                 dc.DrawLine(Wave, new Point(column + 0.5, y1), new Point(column + 0.5, y2));
+            }
+            // The clip being cut, shaded. The marks alone are two hairlines; the band is what
+            // says "this stretch is my highlight" without the operator tracing either one.
+            if (_hasIn && _hasOut && _outFrame > _inFrame)
+            {
+                var left = Math.Max(from, (double)_inFrame);
+                var right = Math.Min(to, (double)_outFrame);
+                if (right > left)
+                {
+                    var x0 = (left - from) / framesPerColumn;
+                    var x1 = (right - from) / framesPerColumn;
+                    dc.DrawRectangle(Range, null, new System.Windows.Rect(x0, 0, x1 - x0, height));
+                }
             }
             DrawMarker(dc, Mark, _inFrame, from, to, height, _hasIn);
             DrawMarker(dc, Mark, _outFrame, from, to, height, _hasOut);
