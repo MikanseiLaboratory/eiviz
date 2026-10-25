@@ -1407,7 +1407,8 @@ impl ReplayEngine {
     ) {
         // The caller counts render frames for the life of the mixer; a recording
         // counts from its own first frame, which is what the store names its
-        // segments and index by.
+        // segments and index by. Read under the lock once, and the answer is carried
+        // through the hand-off so the bookkeeping below does not have to ask again.
         let frame_index = {
             let mut inner = self.lock();
             match inner.started_frame {
@@ -1426,12 +1427,14 @@ impl ReplayEngine {
             layout,
             data,
         });
+        // One critical section for the whole of this frame's bookkeeping. It used to be two,
+        // one per outcome on top of the one above: three acquisitions of the same mutex per
+        // angle per frame, on the thread that also runs the renderer.
+        let mut inner = self.lock();
         if !accepted {
-            let mut inner = self.lock();
             *inner.dropped_readback.entry(angle_id).or_default() += 1;
             inner.recent_drops = inner.recent_drops.saturating_add(1);
         } else {
-            let mut inner = self.lock();
             if !inner.has_frames {
                 inner.first_frame = frame_index;
                 inner.has_frames = true;
@@ -3210,7 +3213,17 @@ impl ChannelPlayout {
     ///
     /// The mixer lock is taken only after the replay lock is released. A jog
     /// that crosses the same boundary again fires once for that crossing.
-    fn fire_crossed_cues(&mut self, engine: &ReplayEngine, current: u64, period: Duration) {
+    /// Fires the timeline cues a source frame crosses. The cue tables are handed in: the
+    /// caller has just read them under the same lock as the transport it advanced.
+    fn fire_crossed_cues(
+        &mut self,
+        cues: &(
+            Vec<eiviz_control::session::replay::ReplayTimelineCueDto>,
+            Vec<eiviz_control::session::replay::PlaylistDto>,
+        ),
+        current: u64,
+        period: Duration,
+    ) {
         let Some(previous) = self.last_source.replace(current) else {
             return;
         };
@@ -3218,16 +3231,11 @@ impl ChannelPlayout {
             return;
         }
         let due = {
-            let inner = engine.lock();
             // Two seconds of frames is well above a late tick and well below a
             // loop, a cue or a jump to live, so only real playback fires states.
             let max_step = (2.0 / period.as_secs_f64().max(1e-6)) as u64;
             eiviz_control::session::replay::due_timeline_cues(
-                previous,
-                current,
-                &inner.config.timeline_cues,
-                &inner.config.playlists,
-                max_step,
+                previous, current, &cues.0, &cues.1, max_step,
             )
         };
         for (scene_id, state_id) in due {
@@ -3276,7 +3284,10 @@ impl ChannelPlayout {
         let audio = Arc::clone(&self.audio);
         // A configure that dropped this channel stops the loop, but one stale tick can
         // still land before that thread sees the flag.
-        let (mut transport, transport_revision, revision, last_frame, playback_generation) = {
+        // The cue tables come along with the transport: the cue that belongs to this tick's
+        // source frame is decided in the same moment, and reading them separately meant
+        // taking the same lock twice per channel per frame.
+        let (mut transport, transport_revision, revision, last_frame, playback_generation, cues) = {
             let inner = engine.lock();
             let Some(slot) = inner.channels.iter().find(|slot| slot.index == index) else {
                 return;
@@ -3287,6 +3298,10 @@ impl ChannelPlayout {
                 inner.playlist_revision,
                 inner.last_frame,
                 engine.playback_generation.load(Ordering::Relaxed),
+                (
+                    inner.config.timeline_cues.clone(),
+                    inner.config.playlists.clone(),
+                ),
             )
         };
         let gpu = engine.gpu_device();
@@ -3304,7 +3319,7 @@ impl ChannelPlayout {
             self.seen = (transport_revision, revision, playback_generation);
         }
         transport.note_recorded_frame(last_frame);
-        self.fire_crossed_cues(engine, transport.source_frame(), context.period);
+        self.fire_crossed_cues(&cues, transport.source_frame(), context.period);
         // A picture decoded during an earlier tick's spare time is shown straight away:
         // that is what keeps it on time when a decode runs long.
         if let Some(pending) = self.ahead.pop_front() {
