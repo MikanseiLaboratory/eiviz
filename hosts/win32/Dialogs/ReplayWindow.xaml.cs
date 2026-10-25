@@ -393,6 +393,33 @@ public partial class ReplayWindow : Window
         RefreshPlaylistChoices();
     }
 
+    /// <summary>
+    /// Keeps a clip selected, so the tag panel under the list edits the row the operator
+    /// is looking at rather than the row they last touched.
+    /// </summary>
+    private void PlaylistList_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        RefreshClipTags(PlaylistList.SelectedItem is ClipRow row ? row.Uid : "");
+
+    /// <summary>
+    /// Renames a marked event. The event list is where a highlight is found again during a
+    /// show, and "リプレイ 7" is not something anyone can pick out at speed.
+    /// </summary>
+    private void EventNameBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_replay is null || sender is not TextBox { Tag: EventRow row })
+            return;
+        var name = ((TextBox)sender).Text.Trim();
+        if (name.Length == 0 || name == row.Name)
+            return;
+        foreach (var entry in _replay["events"] as JsonArray ?? [])
+        {
+            if (entry is JsonObject item && (item["id"]?.GetValue<ulong>() ?? 0) == row.Id)
+                item["name"] = name;
+        }
+        row.Name = name;
+        SaveDocument();
+    }
+
     private void PlaylistAdd_Click(object sender, RoutedEventArgs e)
     {
         if (_replay is null)

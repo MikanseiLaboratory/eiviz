@@ -5,11 +5,16 @@
         xmlns:local="clr-namespace:Eiviz.Host.Dialogs"
         xmlns:preview="clr-namespace:Eiviz.Host.Preview"
         Title="{Binding [replay.windowTitle], Source={x:Static i18n:Loc.Source}}"
-        Width="1500" Height="1020" MinWidth="1180" MinHeight="820"
+        Width="1600" Height="900" MinWidth="1280" MinHeight="720"
         WindowStartupLocation="CenterScreen"
         ShowInTaskbar="True"
         PreviewKeyDown="Window_PreviewKeyDown"
         Background="{DynamicResource WindowBackground}">
+    <!-- A replay deck is watched and driven at the same time, so the picture gets the room
+         and every other readout is sized to what it actually needs. The layout is three
+         bands: the pictures and their transport, the two lists the operator works in, and
+         the timeline the marks are set on. It fits a 1280x720 window, which is what the
+         smallest laptop a production might run on offers. -->
     <Window.Resources>
         <Style x:Key="DeckList" TargetType="ListView">
             <Setter Property="Background" Value="{DynamicResource ListBackground}"/>
@@ -41,122 +46,149 @@
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,4,0,0"/>
         </Style>
-        <!-- Icons rather than words: an operator reads a transport at a glance, and the
-             tooltip carries the name. -->
+        <!-- The small uppercase label above a readout. Repeating it on every value is what
+             makes a dense deck readable without a legend. -->
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Foreground" Value="#8A8A94"/>
+            <Setter Property="Margin" Value="0,0,0,1"/>
+        </Style>
+        <!-- A timecode: the one font in the deck that must not shift as the digits change. -->
+        <Style x:Key="Timecode" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Consolas"/>
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
         <Style x:Key="IconButton" TargetType="Button">
             <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
-            <Setter Property="FontSize" Value="16"/>
-            <Setter Property="Width" Value="44"/>
-            <Setter Property="Height" Value="44"/>
-            <Setter Property="Margin" Value="0,0,6,0"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Width" Value="38"/>
+            <Setter Property="Height" Value="38"/>
+            <Setter Property="Margin" Value="0,0,4,0"/>
             <Setter Property="Padding" Value="0"/>
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
         </Style>
         <Style x:Key="TransportButton" TargetType="Button">
-            <Setter Property="Height" Value="44"/>
-            <Setter Property="MinWidth" Value="96"/>
-            <Setter Property="Margin" Value="0,0,8,0"/>
-            <Setter Property="Padding" Value="12,0"/>
+            <Setter Property="Height" Value="38"/>
+            <Setter Property="MinWidth" Value="74"/>
+            <Setter Property="Margin" Value="0,0,4,0"/>
+            <Setter Property="Padding" Value="10,0"/>
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
         </Style>
         <Style x:Key="SpeedButton" TargetType="Button">
-            <Setter Property="Width" Value="72"/>
-            <Setter Property="Height" Value="44"/>
-            <Setter Property="Margin" Value="0,0,6,0"/>
+            <Setter Property="Width" Value="54"/>
+            <Setter Property="Height" Value="38"/>
+            <Setter Property="Margin" Value="0,0,3,0"/>
             <Setter Property="Padding" Value="0"/>
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
         </Style>
         <Style x:Key="SmallIconButton" TargetType="Button">
             <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="Width" Value="32"/>
-            <Setter Property="Height" Value="32"/>
-            <Setter Property="Margin" Value="0,0,4,0"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Width" Value="26"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="Margin" Value="0,0,2,0"/>
             <Setter Property="Padding" Value="0"/>
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
         </Style>
-        <!-- A camera angle: a number, the way a replay controller labels its cameras. -->
+        <!-- A camera angle: the number is what an operator calls it, the name is what tells
+             two of them apart, so the tile carries both. -->
         <Style x:Key="AngleButton" TargetType="Button">
-            <Setter Property="Width" Value="48"/>
-            <Setter Property="Height" Value="44"/>
-            <Setter Property="FontSize" Value="16"/>
-            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="Width" Value="76"/>
+            <Setter Property="Height" Value="40"/>
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="Margin" Value="0,0,6,0"/>
             <Setter Property="Padding" Value="0"/>
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <!-- A heading that names a band of the deck. -->
+        <Style x:Key="BandTitle" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="#C8C8D0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
     </Window.Resources>
-    <Grid Margin="12">
+
+    <Grid Margin="10">
         <Grid.RowDefinitions>
+            <!-- Header: which channel, what it is doing, and the recording clock. -->
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="2*" MinHeight="260"/>
-            <RowDefinition Height="3*" MinHeight="240"/>
+            <!-- The pictures, and the marks that belong with them. -->
+            <RowDefinition Height="5*" MinHeight="200"/>
+            <!-- The two lists. -->
+            <RowDefinition Height="3*" MinHeight="150"/>
+            <!-- Timeline, transport and the health line. -->
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- Header: what this deck drives, what it is doing, and the way into the
-             recording settings. -->
-        <DockPanel Grid.Row="0" Margin="0,0,0,10">
+        <!-- ============================ header ============================ -->
+        <DockPanel Grid.Row="0" Margin="0,0,0,8" LastChildFill="False">
+            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="{Binding [replay.channel], Source={x:Static i18n:Loc.Source}}"
+                           VerticalAlignment="Center" Foreground="#8A8A94" FontSize="11"/>
+                <ComboBox x:Name="ChannelBox" Width="120" Height="30" Margin="6,0,0,0"
+                          VerticalContentAlignment="Center" SelectionChanged="ChannelBox_SelectionChanged"/>
+                <Border Width="1" Background="{DynamicResource ButtonBorder}" Margin="12,4,12,4"/>
+                <TextBlock x:Name="StateText" VerticalAlignment="Center" FontWeight="Bold" FontSize="14"/>
+            </StackPanel>
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock x:Name="FpsText" VerticalAlignment="Center" Margin="0,0,14,0" Foreground="#B0B0B8"/>
-                <TextBlock x:Name="RecordTcLabel" Text="{Binding [replay.recordTc], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <TextBlock x:Name="RecordTcText" FontFamily="Consolas" FontSize="20" VerticalAlignment="Center"
-                           Foreground="{DynamicResource HudForeground}"/>
-                <Button x:Name="CapacityButton" Height="34" MinWidth="170" Margin="16,0,0,0" Click="Capacity_Click"
+                <Border Background="#24000000" CornerRadius="3" Padding="8,2" Margin="0,0,10,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock x:Name="RecordTcLabel" VerticalAlignment="Center" Margin="0,0,6,0"
+                                   Foreground="#8A8A94" FontSize="11"
+                                   Text="{Binding [replay.recordTc], Source={x:Static i18n:Loc.Source}}"/>
+                        <TextBlock x:Name="RecordTcText" FontFamily="Consolas" FontSize="18"
+                                   VerticalAlignment="Center" Foreground="{DynamicResource HudForeground}"/>
+                    </StackPanel>
+                </Border>
+                <TextBlock x:Name="FpsText" VerticalAlignment="Center" Margin="0,0,12,0" Foreground="#8A8A94"/>
+                <Button x:Name="CapacityButton" Height="30" MinWidth="150" Click="Capacity_Click"
                         AutomationProperties.AutomationId="CapacityButton"
                         ToolTip="{Binding [replay.capacityIdle], Source={x:Static i18n:Loc.Source}}"
                         Content="{Binding [replay.capacityRun], Source={x:Static i18n:Loc.Source}}"/>
-                <Button x:Name="OpenSetupButton" Height="34" MinWidth="170" Margin="16,0,0,0" Click="ReplaySetup_Click"
+                <Button x:Name="OpenSetupButton" Height="30" MinWidth="150" Margin="6,0,0,0" Click="ReplaySetup_Click"
                         ToolTip="{Binding [replay.openSetupHint], Source={x:Static i18n:Loc.Source}}"
                         Content="{Binding [replay.openSetup], Source={x:Static i18n:Loc.Source}}"/>
             </StackPanel>
-            <TextBlock x:Name="CapacityText" DockPanel.Dock="Bottom" Margin="0,0,0,6" TextWrapping="Wrap"
-                       AutomationProperties.AutomationId="CapacityText" Foreground="#B0B0B8"/>
-            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="{Binding [replay.channel], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center"/>
-                <ComboBox x:Name="ChannelBox" Width="130" Height="34" Margin="8,0,0,0" SelectionChanged="ChannelBox_SelectionChanged"/>
-                <TextBlock x:Name="StateText" Margin="16,0,0,0" VerticalAlignment="Center" FontWeight="Bold" FontSize="15"/>
-            </StackPanel>
+            <!-- Where the recordings go and how much room is left: one line, in the middle
+                 of the header, because it changes while the show runs. -->
+            <TextBlock x:Name="CapacityText" VerticalAlignment="Center" HorizontalAlignment="Center"
+                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                       AutomationProperties.AutomationId="CapacityText" Foreground="#8A8A94" FontSize="11"/>
         </DockPanel>
 
-        <!-- The two pictures across the top: what the channel sends out, and the angle
-             being recorded. A replay controller is watched, so the pictures get the top
-             half and the lists get the bottom. -->
+        <!-- ============================ pictures ============================ -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="10"/>
+                <ColumnDefinition Width="8"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
-            <!-- Input on the left, output on the right: where the picture comes from,
-                 and what goes out, in the order the eye reads them. -->
+
+            <!-- What is being recorded. The camera tiles sit under it, where the hand
+                 already is, and the multiview takes the same cell when it is on. -->
             <Grid Grid.Column="0">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*" MinHeight="180"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
-                <DockPanel Grid.Row="0" Height="32">
-                    <TextBlock DockPanel.Dock="Left" FontWeight="Bold" VerticalAlignment="Center"
-                               Text="{Binding [replay.liveInput], Source={x:Static i18n:Loc.Source}}"/>
-                    <!-- The same shape of view the main window calls a multiview: every
-                         angle at once, so an operator sees what each camera has. -->
-                    <Button x:Name="MultiviewButton" DockPanel.Dock="Right" Height="32" MinWidth="120"
-                            HorizontalAlignment="Right" VerticalAlignment="Center" Padding="12,0" Margin="8,0,0,0" Click="Multiview_Click"
+                <DockPanel Grid.Row="0" Margin="0,0,0,4">
+                    <Button x:Name="MultiviewButton" DockPanel.Dock="Right" Height="26" MinWidth="100"
+                            Padding="10,0" HorizontalAlignment="Right" Click="Multiview_Click"
                             ToolTip="{Binding [replay.multiviewHint], Source={x:Static i18n:Loc.Source}}"
                             Content="{Binding [replay.multiview], Source={x:Static i18n:Loc.Source}}"/>
+                    <TextBlock Style="{StaticResource BandTitle}"
+                               Text="{Binding [replay.liveInput], Source={x:Static i18n:Loc.Source}}"/>
                 </DockPanel>
-                <!-- The multiview and the single picture share this cell. The picture stays
-                     measured while the multiview is shown (Hidden, not Collapsed): it is what
-                     sets the row height, and a collapsed one let the multiview resize the
-                     row on every toggle. -->
                 <Grid Grid.Row="1" ClipToBounds="True">
-                    <!-- The same container the main window uses: the picture keeps its
-                         shape and follows the window, instead of being stretched. -->
                     <preview:AspectBox x:Name="LiveBox">
                         <Border Style="{StaticResource MonitorBox}">
                             <preview:SwapchainHost x:Name="LiveMonitor"/>
@@ -167,43 +199,55 @@
                         <WrapPanel x:Name="AngleGridPanel"/>
                     </ScrollViewer>
                 </Grid>
-                <TextBlock Grid.Row="2" x:Name="LiveLabel" Style="{StaticResource Caption}"/>
+                <TextBlock Grid.Row="2" x:Name="LiveLabel" Style="{StaticResource Caption}" Margin="0,3,0,0"/>
+                <ScrollViewer Grid.Row="3" HorizontalScrollBarVisibility="Auto"
+                              VerticalScrollBarVisibility="Disabled" Margin="0,6,0,0">
+                    <WrapPanel x:Name="AnglePanel" Orientation="Horizontal"/>
+                </ScrollViewer>
             </Grid>
+
+            <!-- What goes out. The status line under it is the channel's own state, so the
+                 operator never has to look away from the picture to know if it is playing. -->
             <Grid Grid.Column="2">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*" MinHeight="180"/>
+                    <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" FontWeight="Bold" Height="32" VerticalAlignment="Center"
+                <TextBlock Grid.Row="0" Style="{StaticResource BandTitle}" Margin="0,0,0,4"
                            Text="{Binding [replay.output], Source={x:Static i18n:Loc.Source}}"/>
                 <preview:AspectBox Grid.Row="1">
                     <Border Style="{StaticResource MonitorBox}">
                         <preview:SwapchainHost x:Name="OutputMonitor"/>
                     </Border>
                 </preview:AspectBox>
-                <TextBlock Grid.Row="2" x:Name="OutputLabel" Style="{StaticResource Caption}"/>
+                <TextBlock Grid.Row="2" x:Name="OutputLabel" Style="{StaticResource Caption}" Margin="0,3,0,0"/>
             </Grid>
         </Grid>
 
-        <!-- Events and the playlist: one row per item, edited in the row. -->
-        <Grid Grid.Row="2" Margin="0,10,0,0">
+        <!-- ============================== lists ============================== -->
+        <Grid Grid.Row="2" Margin="0,8,0,0">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" MinWidth="420"/>
-                <ColumnDefinition Width="10"/>
-                <ColumnDefinition Width="1.5*" MinWidth="520"/>
+                <ColumnDefinition Width="1*" MinWidth="360"/>
+                <ColumnDefinition Width="8"/>
+                <ColumnDefinition Width="1.6*" MinWidth="520"/>
             </Grid.ColumnDefinitions>
 
+            <!-- Events: everything the recorder has marked. Narrow on purpose — the playlist
+                 is where the show is assembled, so it gets the wider column. -->
             <DockPanel Grid.Column="0">
-                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-                    <TextBlock FontWeight="Bold" VerticalAlignment="Center"
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                    <TextBlock Style="{StaticResource BandTitle}"
                                Text="{Binding [replay.events], Source={x:Static i18n:Loc.Source}}"/>
                 </DockPanel>
+                <TextBlock x:Name="EventEmptyText" DockPanel.Dock="Bottom" Style="{StaticResource Caption}"
+                           Visibility="Collapsed"
+                           Text="{Binding [replay.noEvents], Source={x:Static i18n:Loc.Source}}"/>
                 <ListView x:Name="EventList" Style="{StaticResource DeckList}" SelectionMode="Single"
-                          ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                     <ListView.View>
                         <GridView>
-                            <GridViewColumn Header="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" Width="104">
+                            <GridViewColumn Header="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" Width="96">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBox Name="EventInBox" Text="{Binding InText, Mode=OneWay}" Tag="{Binding}" FontFamily="Consolas"
@@ -213,7 +257,7 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.out], Source={x:Static i18n:Loc.Source}}" Width="104">
+                            <GridViewColumn Header="{Binding [replay.out], Source={x:Static i18n:Loc.Source}}" Width="96">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBox Name="EventOutBox" Text="{Binding OutText, Mode=OneWay}" Tag="{Binding}" FontFamily="Consolas"
@@ -223,40 +267,33 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.duration], Source={x:Static i18n:Loc.Source}}" Width="80">
+                            <GridViewColumn Header="{Binding [replay.duration], Source={x:Static i18n:Loc.Source}}" Width="76">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding DurationText}" FontFamily="Consolas" VerticalAlignment="Center" Margin="4,0"/>
+                                        <TextBlock Text="{Binding DurationText}" FontFamily="Consolas"
+                                                   VerticalAlignment="Center" Margin="4,0"/>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
                             <GridViewColumn Header="{Binding [replay.name], Source={x:Static i18n:Loc.Source}}" Width="150">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
-                                                 Height="24" Margin="2,1" VerticalContentAlignment="Center"/>
+                                        <TextBox Name="EventNameBox" Text="{Binding Name, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                                 Tag="{Binding}" Height="24" Margin="2,1" VerticalContentAlignment="Center"
+                                                 LostFocus="EventNameBox_LostFocus"/>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.protect], Source={x:Static i18n:Loc.Source}}" Width="70">
+                            <GridViewColumn Header="{Binding [replay.protect], Source={x:Static i18n:Loc.Source}}" Width="54">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <CheckBox IsChecked="{Binding Protected}" HorizontalAlignment="Center"
+                                        <CheckBox IsChecked="{Binding Protected, Mode=TwoWay}" HorizontalAlignment="Center"
                                                   VerticalAlignment="Center"
                                                   ToolTip="{Binding [replay.protectHint], Source={x:Static i18n:Loc.Source}}"/>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.tags], Source={x:Static i18n:Loc.Source}}" Width="120">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBox Text="{Binding TagsText, UpdateSourceTrigger=LostFocus}"
-                                                 Height="24" Margin="2,1" VerticalContentAlignment="Center"
-                                                 ToolTip="{Binding [replay.eventTagsHelp], Source={x:Static i18n:Loc.Source}}"/>
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                            <GridViewColumn Width="90">
+                            <GridViewColumn Width="86">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <StackPanel Orientation="Horizontal">
@@ -275,76 +312,61 @@
                             </GridViewColumn>
                         </GridView>
                     </ListView.View>
-                    </ListView>
-                    <!-- An empty list says what to do, rather than showing nothing. -->
-                    <TextBlock x:Name="EventEmptyText" DockPanel.Dock="Bottom" Style="{StaticResource Caption}" Visibility="Collapsed"
-                               Text="{Binding [replay.noEvents], Source={x:Static i18n:Loc.Source}}"/>
-                </DockPanel>
+                </ListView>
+            </DockPanel>
 
+            <!-- Playlist: the show. Only the columns an operator reads while it runs are
+                 here; the per-clip settings moved to the editor under the list, which is
+                 what let this stop scrolling sideways. -->
             <DockPanel Grid.Column="2">
-                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-                    <TextBlock FontWeight="Bold" VerticalAlignment="Center"
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                    <TextBlock Style="{StaticResource BandTitle}" VerticalAlignment="Center"
                                Text="{Binding [replay.playlist], Source={x:Static i18n:Loc.Source}}"/>
                     <StackPanel Orientation="Horizontal" Margin="8,0,0,0">
-                        <ComboBox x:Name="PlaylistBox" Width="190" Height="32" VerticalContentAlignment="Center" DisplayMemberPath="Name"
-                                  SelectionChanged="Playlist_Changed"
+                        <ComboBox x:Name="PlaylistBox" Width="160" Height="28" VerticalContentAlignment="Center"
+                                  DisplayMemberPath="Name" SelectionChanged="Playlist_Changed"
                                   ToolTip="{Binding [replay.playlistPickHelp], Source={x:Static i18n:Loc.Source}}"/>
-                        <TextBox x:Name="PlaylistNameBox" Width="150" Height="32" Margin="6,0,0,0" VerticalContentAlignment="Center"
-                                 LostFocus="PlaylistName_Changed"
+                        <TextBox x:Name="PlaylistNameBox" Width="120" Height="28" Margin="4,0,0,0"
+                                 VerticalContentAlignment="Center" LostFocus="PlaylistName_Changed"
                                  ToolTip="{Binding [replay.playlistNameHelp], Source={x:Static i18n:Loc.Source}}"/>
-                        <Button x:Name="PlaylistAddButton" Height="32" MinWidth="88" Margin="6,0,0,0" Padding="10,0"
+                        <Button x:Name="PlaylistAddButton" Height="28" MinWidth="40" Margin="4,0,0,0" Padding="8,0"
                                 VerticalContentAlignment="Center" Click="PlaylistAdd_Click"
                                 ToolTip="{Binding [replay.playlistAddHint], Source={x:Static i18n:Loc.Source}}"
                                 Content="{Binding [replay.playlistAdd], Source={x:Static i18n:Loc.Source}}"/>
-                        <Button x:Name="PlaylistRemoveButton" Height="32" MinWidth="72" Margin="6,0,0,0" Padding="10,0"
+                        <Button x:Name="PlaylistRemoveButton" Height="28" MinWidth="40" Margin="4,0,0,0" Padding="8,0"
                                 VerticalContentAlignment="Center" Click="PlaylistRemove_Click"
                                 ToolTip="{Binding [replay.playlistRemove], Source={x:Static i18n:Loc.Source}}"
                                 Content="{Binding [replay.playlistRemove], Source={x:Static i18n:Loc.Source}}"/>
-                        <!-- The whole list from its head: the issue's "smooth playback of
-                             several clips" needs a way to start it. -->
-                        <Button x:Name="PlaylistPlayButton" Height="32" MinWidth="140" Margin="12,0,0,0" Padding="12,0"
+                    </StackPanel>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button x:Name="PlaylistPlayButton" Height="28" MinWidth="86" Padding="10,0"
                                 VerticalContentAlignment="Center" Click="PlaylistPlay_Click"
                                 ToolTip="{Binding [replay.playlistPlayHint], Source={x:Static i18n:Loc.Source}}"
                                 Content="{Binding [replay.playlistPlay], Source={x:Static i18n:Loc.Source}}"/>
-                        <!-- Pause holds the picture where it is and resume continues from that
-                             frame, instead of starting the list over. -->
-                        <Button x:Name="PlaylistPauseButton" Height="32" MinWidth="110" Margin="6,0,0,0" Padding="10,0"
+                        <Button x:Name="PlaylistPauseButton" Height="28" MinWidth="66" Margin="4,0,0,0" Padding="8,0"
                                 VerticalContentAlignment="Center" Click="PlaylistPause_Click"
                                 ToolTip="{Binding [replay.pauseHint], Source={x:Static i18n:Loc.Source}}"
                                 Content="{Binding [replay.pause], Source={x:Static i18n:Loc.Source}}"/>
-                        <Button x:Name="PlaylistStopButton" Height="32" MinWidth="72" Margin="6,0,0,0" Padding="10,0"
+                        <Button x:Name="PlaylistStopButton" Height="28" MinWidth="52" Margin="4,0,0,0" Padding="8,0"
                                 VerticalContentAlignment="Center" Click="PlaylistStop_Click"
                                 ToolTip="{Binding [replay.playlistStopHint], Source={x:Static i18n:Loc.Source}}"
                                 Content="{Binding [replay.stop], Source={x:Static i18n:Loc.Source}}"/>
-                        <Button x:Name="PlaylistLoopButton" Height="32" MinWidth="88" Margin="6,0,0,0" Padding="10,0"
+                        <Button x:Name="PlaylistLoopButton" Height="28" MinWidth="60" Margin="4,0,0,0" Padding="8,0"
                                 VerticalContentAlignment="Center" Click="PlaylistLoop_Click"
                                 ToolTip="{Binding [replay.playlistLoopHint], Source={x:Static i18n:Loc.Source}}"
                                 Content="{Binding [replay.playlistLoop], Source={x:Static i18n:Loc.Source}}"/>
                     </StackPanel>
                 </DockPanel>
-                <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-                    <TextBlock Text="{Binding [replay.defaultTransition], Source={x:Static i18n:Loc.Source}}"
-                               VerticalAlignment="Center" Margin="0,0,6,0"/>
-                    <ComboBox x:Name="DefaultKindBox" Width="120" Height="32" Margin="0,0,6,0" VerticalContentAlignment="Center" SelectionChanged="DefaultTransition_Changed">
-                        <ComboBoxItem Content="{Binding [replay.transitionCut], Source={x:Static i18n:Loc.Source}}" Tag="Cut" IsSelected="True"/>
-                        <ComboBoxItem Content="{Binding [replay.transitionDissolve], Source={x:Static i18n:Loc.Source}}" Tag="Dissolve"/>
-                    </ComboBox>
-                    <ComboBox x:Name="DefaultTimingBox" Width="150" Height="32" Margin="0,0,6,0" VerticalContentAlignment="Center" SelectionChanged="DefaultTransition_Changed"
-                              ToolTip="{Binding [replay.timingHelp], Source={x:Static i18n:Loc.Source}}">
-                        <ComboBoxItem Content="{Binding [replay.timingOverwrap], Source={x:Static i18n:Loc.Source}}" Tag="Overwrap" IsSelected="True"/>
-                        <ComboBoxItem Content="{Binding [replay.timingAdditive], Source={x:Static i18n:Loc.Source}}" Tag="Additive"/>
-                    </ComboBox>
-                    <TextBox x:Name="DefaultFramesBox" Width="56" Height="32" Margin="0,0,6,0" Text="0" VerticalContentAlignment="Center" LostFocus="DefaultTransition_Changed"/>
-                    <TextBlock Text="{Binding [replay.transitionFrames], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center"/>
-                </WrapPanel>
-                <WrapPanel x:Name="ClipTagPanel" DockPanel.Dock="Bottom" Margin="0,6,0,0"/>
+                <TextBlock x:Name="PlaylistEmptyText" DockPanel.Dock="Bottom" Style="{StaticResource Caption}"
+                           Visibility="Collapsed"
+                           Text="{Binding [replay.noClips], Source={x:Static i18n:Loc.Source}}"/>
                 <ListView x:Name="PlaylistList" Style="{StaticResource DeckList}" SelectionMode="Single"
-                          ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                          SelectionChanged="PlaylistList_SelectionChanged">
                     <ListView.View>
                         <GridView>
-                            <!-- Which clip the channel is playing. Empty for the rest, so
-                                 the operator can see at a glance what is on air. -->
-                            <GridViewColumn Width="26">
+                            <!-- Which clip the channel is playing. -->
+                            <GridViewColumn Width="22">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding Marker}" FontFamily="Segoe MDL2 Assets"
@@ -353,7 +375,7 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" Width="100">
+                            <GridViewColumn Header="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" Width="92">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBox Name="ClipInBox" Text="{Binding InText, Mode=OneWay}" Tag="{Binding}" FontFamily="Consolas"
@@ -363,7 +385,7 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.out], Source={x:Static i18n:Loc.Source}}" Width="100">
+                            <GridViewColumn Header="{Binding [replay.out], Source={x:Static i18n:Loc.Source}}" Width="92">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBox Name="ClipOutBox" Text="{Binding OutText, Mode=OneWay}" Tag="{Binding}" FontFamily="Consolas"
@@ -373,14 +395,15 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.duration], Source={x:Static i18n:Loc.Source}}" Width="78">
+                            <GridViewColumn Header="{Binding [replay.duration], Source={x:Static i18n:Loc.Source}}" Width="74">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding DurationText}" FontFamily="Consolas" VerticalAlignment="Center" Margin="4,0"/>
+                                        <TextBlock Text="{Binding DurationText}" FontFamily="Consolas"
+                                                   VerticalAlignment="Center" Margin="4,0"/>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.angle], Source={x:Static i18n:Loc.Source}}" Width="140">
+                            <GridViewColumn Header="{Binding [replay.angle], Source={x:Static i18n:Loc.Source}}" Width="118">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <ComboBox Height="24" Margin="1" DisplayMemberPath="Label"
@@ -388,7 +411,7 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.speed], Source={x:Static i18n:Loc.Source}}" Width="86">
+                            <GridViewColumn Header="{Binding [replay.speed], Source={x:Static i18n:Loc.Source}}" Width="72">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <ComboBox Height="24" Margin="1" DisplayMemberPath="Label"
@@ -396,48 +419,16 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <!-- One column for the transition: kind, direction and length
-                                 belong together, and a clip row is already wide. -->
-                            <GridViewColumn Header="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}" Width="330">
+                            <GridViewColumn Header="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}" Width="92">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <StackPanel Orientation="Horizontal">
-                                            <ComboBox Width="120" Height="24" Margin="1" DisplayMemberPath="Label"
-                                                      ItemsSource="{Binding TransitionOptions}" SelectedItem="{Binding TransitionOption}"
-                                                      ToolTip="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}"/>
-                                            <ComboBox Width="104" Height="24" Margin="4,1,1,1" DisplayMemberPath="Label"
-                                                      Visibility="{Binding DirectionVisibility}"
-                                                      ItemsSource="{Binding DirectionOptions}" SelectedItem="{Binding DirectionOption}"
-                                                      ToolTip="{Binding [replay.directionHelp], Source={x:Static i18n:Loc.Source}}"/>
-                                            <ComboBox Width="96" Height="24" Margin="4,1,1,1" DisplayMemberPath="Label"
-                                                      ItemsSource="{Binding TimingOptions}" SelectedItem="{Binding TimingOption}"
-                                                      ToolTip="{Binding [replay.timingHelp], Source={x:Static i18n:Loc.Source}}"/>
-                                            <TextBox Width="52" Height="24" Margin="4,1,1,1" VerticalContentAlignment="Center"
-                                                     Visibility="{Binding LengthVisibility}"
-                                                     Text="{Binding TransitionFrames, UpdateSourceTrigger=LostFocus}"
-                                                     ToolTip="{Binding [replay.transitionFrames], Source={x:Static i18n:Loc.Source}}"/>
-                                        </StackPanel>
+                                        <ComboBox Height="24" Margin="1" DisplayMemberPath="Label"
+                                                  ItemsSource="{Binding TransitionOptions}" SelectedItem="{Binding TransitionOption}"
+                                                  ToolTip="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}"/>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.gain], Source={x:Static i18n:Loc.Source}}" Width="60">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBox Height="24" Margin="1" VerticalContentAlignment="Center"
-                                                 Text="{Binding GainDb, UpdateSourceTrigger=LostFocus}"/>
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.preservePitch], Source={x:Static i18n:Loc.Source}}" Width="64">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <CheckBox IsChecked="{Binding PreservePitch}" HorizontalAlignment="Center"
-                                                  VerticalAlignment="Center"
-                                                  ToolTip="{Binding [replay.preservePitch], Source={x:Static i18n:Loc.Source}}"/>
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.audio], Source={x:Static i18n:Loc.Source}}" Width="150">
+                            <GridViewColumn Header="{Binding [replay.audioShort], Source={x:Static i18n:Loc.Source}}" Width="70">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <ComboBox Height="24" Margin="1" DisplayMemberPath="Label"
@@ -446,32 +437,7 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.tags], Source={x:Static i18n:Loc.Source}}" Width="120">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <!-- The marker is drawn here, not stored in the row: the row's
-                                             value is what an edit writes back as a tag. -->
-                                        <StackPanel Orientation="Horizontal" Margin="4,0">
-                                            <TextBlock Text="&#x1F3F7;" Foreground="#B0B0B8"
-                                                       VerticalAlignment="Center">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock">
-                                                        <Setter Property="Visibility" Value="Visible"/>
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding TagsText}" Value="">
-                                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
-                                            <TextBlock Text="{Binding TagsText}" VerticalAlignment="Center"
-                                                       Foreground="#B0B0B8" TextTrimming="CharacterEllipsis"/>
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                            <GridViewColumn Width="112">
+                            <GridViewColumn Width="86">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <StackPanel Orientation="Horizontal">
@@ -491,110 +457,93 @@
                         </GridView>
                     </ListView.View>
                 </ListView>
-                <!-- An empty playlist says how clips get into it. -->
-                <TextBlock x:Name="PlaylistEmptyText" DockPanel.Dock="Bottom" Style="{StaticResource Caption}" Visibility="Collapsed"
-                           Text="{Binding [replay.noClips], Source={x:Static i18n:Loc.Source}}"/>
             </DockPanel>
         </Grid>
 
-        <!-- Every operation control at the bottom, in the order an operator works:
-             angle, marks, transport, export. -->
-        <StackPanel Grid.Row="3" Margin="0,10,0,0">
-            <DockPanel Margin="0,0,0,8">
-                <TextBlock DockPanel.Dock="Left" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0"
-                           Text="{Binding [replay.angles], Source={x:Static i18n:Loc.Source}}"/>
-                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                    <WrapPanel x:Name="AnglePanel" Orientation="Horizontal"/>
-                </ScrollViewer>
+        <!-- ============================ transport ============================ -->
+        <StackPanel Grid.Row="3" Margin="0,8,0,0">
+            <!-- The default transition new clips inherit, and the tag editor for the
+                 selected clip: settings that are chosen, not read at a glance. -->
+            <DockPanel Margin="0,0,0,6">
+                <WrapPanel DockPanel.Dock="Left" Orientation="Horizontal">
+                    <TextBlock Text="{Binding [replay.defaultTransition], Source={x:Static i18n:Loc.Source}}"
+                               VerticalAlignment="Center" Margin="0,0,6,0" Foreground="#8A8A94" FontSize="11"/>
+                    <ComboBox x:Name="DefaultKindBox" Width="104" Height="26" Margin="0,0,4,0"
+                              VerticalContentAlignment="Center" SelectionChanged="DefaultTransition_Changed">
+                        <ComboBoxItem Content="{Binding [replay.transitionCut], Source={x:Static i18n:Loc.Source}}" Tag="Cut" IsSelected="True"/>
+                        <ComboBoxItem Content="{Binding [replay.transitionDissolve], Source={x:Static i18n:Loc.Source}}" Tag="Dissolve"/>
+                    </ComboBox>
+                    <ComboBox x:Name="DefaultTimingBox" Width="130" Height="26" Margin="0,0,4,0"
+                              VerticalContentAlignment="Center" SelectionChanged="DefaultTransition_Changed"
+                              ToolTip="{Binding [replay.timingHelp], Source={x:Static i18n:Loc.Source}}">
+                        <ComboBoxItem Content="{Binding [replay.timingOverwrap], Source={x:Static i18n:Loc.Source}}" Tag="Overwrap" IsSelected="True"/>
+                        <ComboBoxItem Content="{Binding [replay.timingAdditive], Source={x:Static i18n:Loc.Source}}" Tag="Additive"/>
+                    </ComboBox>
+                    <TextBox x:Name="DefaultFramesBox" Width="48" Height="26" Margin="0,0,4,0" Text="0"
+                             VerticalContentAlignment="Center" LostFocus="DefaultTransition_Changed"/>
+                    <TextBlock Text="{Binding [replay.transitionFrames], Source={x:Static i18n:Loc.Source}}"
+                               VerticalAlignment="Center" Foreground="#8A8A94" FontSize="11"/>
+                </WrapPanel>
+                <WrapPanel x:Name="ClipTagPanel" DockPanel.Dock="Right" Orientation="Horizontal"
+                           HorizontalAlignment="Right" Margin="8,0,0,0"/>
             </DockPanel>
-            <!-- The whole recording, left edge to the live edge. The waveform below is
-                 a closer look at what is around the playhead. -->
-            <Grid Margin="0,0,0,6">
+
+            <!-- The whole recording, then the close look around the playhead. -->
+            <Grid Margin="0,0,0,4">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <Slider x:Name="RecordingSlider" Grid.Column="0" Height="30" VerticalAlignment="Center"
+                <Slider x:Name="RecordingSlider" Grid.Column="0" Height="24" VerticalAlignment="Center"
                         Minimum="0" Maximum="1000" IsSnapToTickEnabled="False"
                         ValueChanged="RecordingSlider_ValueChanged"
                         AutomationProperties.AutomationId="RecordingSlider"
                         AutomationProperties.Name="{Binding [replay.seekWhole], Source={x:Static i18n:Loc.Source}}"
                         ToolTip="{Binding [replay.seekWholeHint], Source={x:Static i18n:Loc.Source}}"/>
-                <Button x:Name="JumpLiveButton" Grid.Column="1" Height="30" MinWidth="150" Margin="10,0,0,0"
-                        Padding="10,0" Click="JumpLive_Click"
+                <Button x:Name="JumpLiveButton" Grid.Column="1" Height="26" MinWidth="130" Margin="8,0,0,0"
+                        Padding="8,0" Click="JumpLive_Click"
                         AutomationProperties.AutomationId="JumpLiveButton"
                         ToolTip="{Binding [replay.jumpLiveHint], Source={x:Static i18n:Loc.Source}}"
                         Content="{Binding [replay.jumpLive], Source={x:Static i18n:Loc.Source}}"/>
             </Grid>
-            <local:ReplayWaveform x:Name="Waveform" Height="52" Margin="0,0,0,8"
-                                           AutomationProperties.AutomationId="Waveform"
-                                           AutomationProperties.Name="{Binding [replay.waveformSeek], Source={x:Static i18n:Loc.Source}}"
-                                           ToolTip="{Binding [replay.waveformSeekHint], Source={x:Static i18n:Loc.Source}}"/>
-            <DockPanel>
-                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
-                    <Button x:Name="MarkInButton" Width="180" Height="52" FontSize="17" FontWeight="Bold"
+            <local:ReplayWaveform x:Name="Waveform" Height="48" Margin="0,0,0,6"
+                                  AutomationProperties.AutomationId="Waveform"
+                                  AutomationProperties.Name="{Binding [replay.waveformSeek], Source={x:Static i18n:Loc.Source}}"
+                                  ToolTip="{Binding [replay.waveformSeekHint], Source={x:Static i18n:Loc.Source}}"/>
+
+            <!-- Transport on the left, the numbers the operator acts on next to it, export
+                 on the right. Everything on one line so the eye does not travel. -->
+            <Grid Height="44">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                    <Button x:Name="MarkInButton" Width="106" Height="44" FontSize="15" FontWeight="Bold"
                             HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                             Click="MarkIn_Click"
                             ToolTip="{Binding [replay.markInHint], Source={x:Static i18n:Loc.Source}}"
                             Content="{Binding [replay.markIn], Source={x:Static i18n:Loc.Source}}"/>
-                    <Button x:Name="MarkOutButton" Width="180" Height="52" FontSize="17" FontWeight="Bold" Margin="8,0,0,0"
+                    <Button x:Name="MarkOutButton" Width="106" Height="44" FontSize="15" FontWeight="Bold" Margin="4,0,0,0"
                             HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                             Click="MarkOut_Click"
                             ToolTip="{Binding [replay.markOutHint], Source={x:Static i18n:Loc.Source}}"
                             Content="{Binding [replay.markOut], Source={x:Static i18n:Loc.Source}}"/>
-                    <Button x:Name="CancelMarkButton" Width="120" Height="52" Margin="8,0,0,0"
+                    <Button x:Name="CancelMarkButton" Width="80" Height="44" Margin="4,0,0,0"
                             HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                             Click="CancelMark_Click"
                             ToolTip="{Binding [replay.cancelMarkHint], Source={x:Static i18n:Loc.Source}}"
                             Content="{Binding [replay.cancelMark], Source={x:Static i18n:Loc.Source}}"/>
-                </StackPanel>
-                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <!-- The clock at the playhead: the same timecode the IN and OUT
-                         cells show, so scrubbing reads the time it was recorded. -->
-                    <StackPanel Width="128" Margin="0,0,16,0">
-                        <TextBlock Text="{Binding [replay.playhead], Source={x:Static i18n:Loc.Source}}" FontSize="11"/>
-                        <TextBlock x:Name="PlayheadTcText" FontFamily="Consolas" FontSize="18" Foreground="#7FD14B"/>
-                    </StackPanel>
-                    <!-- What is left of the clip on air. A producer works against the clock:
-                         four seconds left is what decides whether another replay fits. -->
-                    <StackPanel Width="104" Margin="0,0,12,0">
-                        <TextBlock Text="{Binding [replay.remainingInClip], Source={x:Static i18n:Loc.Source}}" FontSize="11"/>
-                        <TextBlock x:Name="RemainingTcText" FontFamily="Consolas" FontSize="18"/>
-                    </StackPanel>
-                    <StackPanel Width="120" Margin="0,0,12,0">
-                        <TextBlock Text="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" FontSize="11"/>
-                        <TextBlock x:Name="InTcText" FontFamily="Consolas" FontSize="17"/>
-                    </StackPanel>
-                    <StackPanel Width="120" Margin="0,0,12,0">
-                        <TextBlock Text="{Binding [replay.out], Source={x:Static i18n:Loc.Source}}" FontSize="11"/>
-                        <TextBlock x:Name="OutTcText" FontFamily="Consolas" FontSize="17"/>
-                    </StackPanel>
-                    <StackPanel Width="120">
-                        <TextBlock Text="{Binding [replay.duration], Source={x:Static i18n:Loc.Source}}" FontSize="11"/>
-                        <TextBlock x:Name="DurationTcText" FontFamily="Consolas" FontSize="17"/>
-                    </StackPanel>
-                </StackPanel>
-            </DockPanel>
-
-            <Grid Margin="0,10,0,0" Height="44">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="16"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="16"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="220"/>
-                </Grid.ColumnDefinitions>
-                <Button x:Name="RecordButton" Style="{StaticResource TransportButton}" Click="RecordToggle_Click"
-                        ToolTip="{Binding [replay.recordHint], Source={x:Static i18n:Loc.Source}}">
-                    <StackPanel Orientation="Horizontal">
-                        <Ellipse Width="12" Height="12" Fill="#E05252" Margin="0,1,8,0" VerticalAlignment="Center"/>
-                        <TextBlock Text="{Binding [replay.record], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </Button>
-                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <Border Width="1" Background="{DynamicResource ButtonBorder}" Margin="8,6,8,6"/>
+                    <Button x:Name="RecordButton" Style="{StaticResource TransportButton}" Click="RecordToggle_Click"
+                            ToolTip="{Binding [replay.recordHint], Source={x:Static i18n:Loc.Source}}">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="10" Height="10" Fill="#E05252" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding [replay.record], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
                     <Button x:Name="LiveButton" Style="{StaticResource TransportButton}" Click="Live_Click"
                             ToolTip="{Binding [replay.liveHint], Source={x:Static i18n:Loc.Source}}"
                             Content="{Binding [replay.live], Source={x:Static i18n:Loc.Source}}"/>
@@ -606,7 +555,7 @@
                     <Button x:Name="StepForwardButton" Style="{StaticResource IconButton}" Content="&#xE893;" Click="StepForward_Click"
                             ToolTip="{Binding [replay.stepForwardHint], Source={x:Static i18n:Loc.Source}}"/>
                 </StackPanel>
-                <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
                     <Button x:Name="Speed25Button" Style="{StaticResource SpeedButton}" Click="Speed_Click" Tag="250" Content="25%"
                             ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
                     <Button x:Name="Speed50Button" Style="{StaticResource SpeedButton}" Click="Speed_Click" Tag="500" Content="50%"
@@ -615,31 +564,57 @@
                             ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
                     <Button x:Name="Speed100Button" Style="{StaticResource SpeedButton}" Click="Speed_Click" Tag="1000" Content="100%"
                             ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
+                    <Slider x:Name="JogSlider" Width="120" Margin="8,0,0,0" VerticalAlignment="Center"
+                            Minimum="-30" Maximum="30" Value="0"
+                            TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="JogSlider_ValueChanged"
+                            ToolTip="{Binding [replay.jogHint], Source={x:Static i18n:Loc.Source}}"/>
                 </StackPanel>
-                <TextBlock Grid.Column="6" Text="{Binding [replay.jog], Source={x:Static i18n:Loc.Source}}"
-                           VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <Slider x:Name="JogSlider" Grid.Column="7" VerticalAlignment="Center" Minimum="-30" Maximum="30" Value="0"
-                        TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="JogSlider_ValueChanged"
-                        ToolTip="{Binding [replay.jogHint], Source={x:Static i18n:Loc.Source}}"/>
+                <!-- The numbers, in the order an operator reads them: where the playhead is,
+                     what is left of the clip, and the clip's own range. -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <StackPanel Margin="0,0,12,0">
+                        <TextBlock Text="{Binding [replay.playhead], Source={x:Static i18n:Loc.Source}}" Style="{StaticResource FieldLabel}"/>
+                        <TextBlock x:Name="PlayheadTcText" Style="{StaticResource Timecode}" FontSize="17" Foreground="#7FD14B"/>
+                    </StackPanel>
+                    <StackPanel Margin="0,0,12,0">
+                        <TextBlock Text="{Binding [replay.remainingInClip], Source={x:Static i18n:Loc.Source}}" Style="{StaticResource FieldLabel}"/>
+                        <TextBlock x:Name="RemainingTcText" Style="{StaticResource Timecode}" FontSize="17"/>
+                    </StackPanel>
+                    <StackPanel Margin="0,0,12,0">
+                        <TextBlock Text="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" Style="{StaticResource FieldLabel}"/>
+                        <TextBlock x:Name="InTcText" Style="{StaticResource Timecode}"/>
+                    </StackPanel>
+                    <StackPanel Margin="0,0,12,0">
+                        <TextBlock Text="{Binding [replay.out], Source={x:Static i18n:Loc.Source}}" Style="{StaticResource FieldLabel}"/>
+                        <TextBlock x:Name="OutTcText" Style="{StaticResource Timecode}"/>
+                    </StackPanel>
+                    <StackPanel>
+                        <TextBlock Text="{Binding [replay.duration], Source={x:Static i18n:Loc.Source}}" Style="{StaticResource FieldLabel}"/>
+                        <TextBlock x:Name="DurationTcText" Style="{StaticResource Timecode}"/>
+                    </StackPanel>
+                </StackPanel>
+                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                    <Button x:Name="ExportButton" Height="38" MinWidth="110" Padding="10,0"
+                            VerticalContentAlignment="Center" Click="Export_Click"
+                            AutomationProperties.AutomationId="ExportButton"
+                            ToolTip="{Binding [replay.exportHint], Source={x:Static i18n:Loc.Source}}"
+                            Content="{Binding [replay.export], Source={x:Static i18n:Loc.Source}}"/>
+                </StackPanel>
             </Grid>
 
-            <!-- Export is one button: the settings and the start/cancel live in their
-                 own window, so the deck keeps its room for the picture and the lists. -->
-            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                <Button x:Name="ExportButton" Height="32" MinWidth="160" Padding="12,0"
-                        VerticalContentAlignment="Center" Click="Export_Click"
-                        AutomationProperties.AutomationId="ExportButton"
-                        ToolTip="{Binding [replay.exportHint], Source={x:Static i18n:Loc.Source}}"
-                        Content="{Binding [replay.export], Source={x:Static i18n:Loc.Source}}"/>
-                <TextBlock x:Name="ExportStatusText" Margin="12,0,0,0" VerticalAlignment="Center"
-                           TextWrapping="Wrap"/>
-            </StackPanel>
-            <!-- The keys an operator works by, on screen: a production tool should not
-                 hide its shortcuts in a manual. -->
-            <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" Foreground="#B0B0B8"
+            <!-- One line that says whether the machine is keeping up, and one that names the
+                 keys. Both are always there: a production tool should not hide its own state
+                 or its shortcuts in a manual. -->
+            <DockPanel Margin="0,6,0,0">
+                <TextBlock x:Name="ExportStatusText" DockPanel.Dock="Right" Margin="12,0,0,0"
+                           VerticalAlignment="Center" Foreground="#8A8A94" FontSize="11"
+                           TextTrimming="CharacterEllipsis"/>
+                <TextBlock x:Name="HealthText" Foreground="#8A8A94" FontSize="11"
+                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+            </DockPanel>
+            <TextBlock Margin="0,2,0,0" TextWrapping="NoWrap" Foreground="#6A6A72" FontSize="11"
+                       TextTrimming="CharacterEllipsis"
                        Text="{Binding [replay.shortcutHelp], Source={x:Static i18n:Loc.Source}}"/>
-            <!-- Recording health: where the frames went. -->
-            <TextBlock x:Name="HealthText" Margin="0,6,0,0" TextWrapping="Wrap" Foreground="#B0B0B8"/>
         </StackPanel>
     </Grid>
 </Window>
