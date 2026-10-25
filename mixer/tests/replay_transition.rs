@@ -155,7 +155,7 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
 "channels":[{{"index":0,"playlistId":7,"inputId":0}}],
 "playlists":[{{"id":7,"name":"Replay","revision":1,"clips":[
   {{"uid":"clip-a","source":"Angle","angleId":1,"recordingUuid":"{uuid}","inFrame":{in_a},"outFrame":{out_a},
-    "speed":0.25,"gainDb":0.0,"transition":{{"kind":"Dissolve","timing":"{timing}","durationFrames":{DISSOLVE_FRAMES}}}}},
+    "speed":1.0,"gainDb":0.0,"transition":{{"kind":"Dissolve","timing":"{timing}","durationFrames":{DISSOLVE_FRAMES}}}}},
   {{"uid":"clip-b","source":"Angle","angleId":1,"recordingUuid":"{uuid}","inFrame":{in_b},"outFrame":{out_b},
     "speed":1.0,"gainDb":0.0,"transition":{{"kind":"Cut","timing":"Overwrap","durationFrames":0}}}}]}}],
 "events":[],
@@ -266,7 +266,11 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
             let budget = Duration::from_secs(30 * (attempt as u64 + 1));
             let deadline = Instant::now() + budget;
             while Instant::now() < deadline {
-                let pixel = scene_pixel(scene_id(2), 160, 90);
+                // The position is read before the picture, not after. `scene_pixel` is a GPU
+                // read-back and takes milliseconds on a software adapter; reading the pixel
+                // first paired a freshly composed picture with a position the transport had
+                // already moved past, which is how a run could sample the whole window and
+                // still report that it never saw a blend.
                 let mut channels = vec![MixerReplayChannelState::default(); 2];
                 let count = unsafe { mixer_replay_copy_channels(channels.as_mut_ptr(), 2) };
                 let position = if count >= 1 {
@@ -274,6 +278,7 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
                 } else {
                     0
                 };
+                let pixel = scene_pixel(scene_id(2), 160, 90);
                 if !started {
                     if position < in_a || position > out_a {
                         continue;
