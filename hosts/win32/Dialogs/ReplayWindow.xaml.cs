@@ -87,6 +87,12 @@ public partial class ReplayWindow : Window
     /// the poll put the bar back where it was and a click looked ignored.
     /// </summary>
     private ulong? _seekedFrame;
+
+    /// <summary>
+    /// The event Mark In opened and Mark Out will close. Null when no mark is open, and when
+    /// the range came from somewhere the deck did not open itself (Mark Last, a remote mark).
+    /// </summary>
+    private ulong? _openEventId;
     private ulong _outFrame;
     /// <summary>
     /// True between Mark In and Mark Out. The mark itself stays on screen after it
@@ -1599,13 +1605,9 @@ public partial class ReplayWindow : Window
         }
         // A mark that is still open is closed first: IN during a running replay is the
         // operator saying "that one, now the next", and dropping the previous range would
-        // lose it.
-        var previous = _inFrame;
-        if (previous is { } open && open != MarkUnknown && _markOpen)
-        {
-            if (Backend?.ReplayMarkOut(Loc.Format("replay.eventName", ReplayModel.Events(_replay).Count + 1), out _) == true)
-                RefreshEvents();
-        }
+        // lose it. Closing it goes through MarkOut so the event is filled in and filed once.
+        if (_markOpen && _inFrame is { } openIn && openIn != MarkUnknown)
+            MarkOut();
         _inFrame = frame ?? MarkUnknown;
         _markOpen = true;
         SetLit(MarkInButton, true, Color.FromRgb(0x7F, 0xD1, 0x4B));
@@ -1652,17 +1654,12 @@ public partial class ReplayWindow : Window
             ["protected"] = false,
         });
         _replay["events"] = events;
-        ReplayModel.AppendClip(
-            _replay,
-            ReplayModel.EnsurePlaylist(_replay, _playlistId, _channel),
-            id,
-            uuid,
-            inFrame,
-            inFrame,
-            angleId);
+        _openEventId = id;
+        // No playlist entry yet: a range without an end is in == out, and a zero-length clip
+        // cannot be cued. Mark Out files it, which is the moment the operator has said what
+        // the highlight is.
         SaveDocument();
         RefreshEvents();
-        RefreshPlaylist();
     }
 
     /// <summary>
@@ -1916,18 +1913,41 @@ public partial class ReplayWindow : Window
     {
         if (_replay is null)
             return;
-        var id = ReplayModel.ReserveEventId(_replay);
         var events = _replay["events"] as JsonArray ?? new JsonArray();
-        events.Add(new JsonObject
+        var id = ReplayModel.ReserveEventId(_replay);
+        // Mark In already filed this range with no end; this is the same event, so its row is
+        // filled in rather than a second one added beside it.
+        var opened = _openEventId;
+        _openEventId = null;
+        var closed = false;
+        if (opened is { } open)
         {
-            ["id"] = id,
-            ["recordingUuid"] = uuid,
-            ["inFrame"] = inFrame,
-            ["outFrame"] = outFrame,
-            ["name"] = name,
-            ["tags"] = new JsonArray(),
-            ["protected"] = false
-        });
+            foreach (var entry in events)
+            {
+                if (entry is not JsonObject item || (item["id"]?.GetValue<ulong>() ?? 0) != open)
+                    continue;
+                if ((item["inFrame"]?.GetValue<ulong>() ?? 0) != inFrame)
+                    continue;
+                item["outFrame"] = outFrame;
+                item["recordingUuid"] = uuid;
+                id = open;
+                closed = true;
+                break;
+            }
+        }
+        if (!closed)
+        {
+            events.Add(new JsonObject
+            {
+                ["id"] = id,
+                ["recordingUuid"] = uuid,
+                ["inFrame"] = inFrame,
+                ["outFrame"] = outFrame,
+                ["name"] = name,
+                ["tags"] = new JsonArray(),
+                ["protected"] = false
+            });
+        }
         _replay["events"] = events;
 
         if (!ReplayModel.AutoAddToPlaylist(_replay))
