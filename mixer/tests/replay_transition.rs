@@ -155,7 +155,7 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
 "channels":[{{"index":0,"playlistId":7,"inputId":0}}],
 "playlists":[{{"id":7,"name":"Replay","revision":1,"clips":[
   {{"uid":"clip-a","source":"Angle","angleId":1,"recordingUuid":"{uuid}","inFrame":{in_a},"outFrame":{out_a},
-    "speed":1.0,"gainDb":0.0,"transition":{{"kind":"Dissolve","timing":"{timing}","durationFrames":{DISSOLVE_FRAMES}}}}},
+    "speed":0.25,"gainDb":0.0,"transition":{{"kind":"Dissolve","timing":"{timing}","durationFrames":{DISSOLVE_FRAMES}}}}},
   {{"uid":"clip-b","source":"Angle","angleId":1,"recordingUuid":"{uuid}","inFrame":{in_b},"outFrame":{out_b},
     "speed":1.0,"gainDb":0.0,"transition":{{"kind":"Cut","timing":"Overwrap","durationFrames":0}}}}]}}],
 "events":[],
