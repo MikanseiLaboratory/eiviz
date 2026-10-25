@@ -1051,9 +1051,29 @@ public partial class ReplayWindow : Window
             {
                 Style = (Style)FindResource("AngleButton"),
                 Tag = angle.Id,
-                // The number is what an operator calls the camera; the name is the tooltip.
-                Content = $"{index}",
-                FontWeight = selected ? FontWeights.Bold : FontWeights.Normal,
+                // The number is what an operator calls the camera, so it stays the large
+                // line; the name goes underneath it because hovering for a tooltip is not
+                // something anyone does while a replay is running.
+                Content = new StackPanel
+                {
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = $"{index}",
+                            HorizontalAlignment = HorizontalAlignment.Center,
+                            FontWeight = selected ? FontWeights.Bold : FontWeights.Normal,
+                        },
+                        new TextBlock
+                        {
+                            Text = angle.Label,
+                            HorizontalAlignment = HorizontalAlignment.Center,
+                            FontSize = 10,
+                            Opacity = 0.75,
+                            TextTrimming = TextTrimming.CharacterEllipsis,
+                        },
+                    },
+                },
                 BorderThickness = new Thickness(selected ? 3 : 1),
                 BorderBrush = selected ? Brushes.LimeGreen : (Brush)FindResource("ButtonBorder"),
                 ToolTip = $"{index}: {angle.Label}",
