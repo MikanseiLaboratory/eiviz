@@ -634,12 +634,19 @@ public partial class ReplayWindow : Window
         switch (mode)
         {
             case "Clip":
-                if (PlaylistList.SelectedItem is ClipRow row
-                    && Clips().FirstOrDefault(item => item.Uid == row.Uid) is { } selected)
+                // The selected clip, or the first one when nothing is selected: an operator
+                // who opens the export dialog without picking a row wants a clip, not a
+                // sentence telling them what they forgot to do.
+                if ((PlaylistList.SelectedItem as ClipRow)?.Uid is { } uid
+                    && Clips().FirstOrDefault(item => item.Uid == uid) is { } selected)
                 {
                     // A single clip has nothing to join to, so its transition is not
                     // exported: there is no next clip for it to dissolve into.
                     request.AddClip(selected, null);
+                }
+                else if (Clips().FirstOrDefault() is { } first)
+                {
+                    request.AddClip(first, null);
                 }
                 break;
             case "PlaylistWithTransitions":

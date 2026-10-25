@@ -150,7 +150,14 @@ public partial class ReplayExportWindow : Window
         var request = _buildRequest(mode.Key);
         if (request.IsEmpty)
         {
-            ExportStatusText.Text = Loc.T("replay.exportNothing");
+            // "Nothing recorded" is only true when there is no recording. Choosing one clip
+            // with no clip selected is a different problem and needs a different sentence.
+            ExportStatusText.Text = Loc.T(mode.Key switch
+            {
+                "Clip" => "replay.exportNeedClip",
+                "Playlist" or "PlaylistWithTransitions" => "replay.exportNeedPlaylist",
+                _ => "replay.exportNothing",
+            });
             return;
         }
         if (_isRecording())
