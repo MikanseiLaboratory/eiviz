@@ -555,6 +555,12 @@
                         <TextBlock Text="{Binding [replay.playhead], Source={x:Static i18n:Loc.Source}}" FontSize="11"/>
                         <TextBlock x:Name="PlayheadTcText" FontFamily="Consolas" FontSize="18" Foreground="#7FD14B"/>
                     </StackPanel>
+                    <!-- What is left of the clip on air. A producer works against the clock:
+                         four seconds left is what decides whether another replay fits. -->
+                    <StackPanel Width="104" Margin="0,0,12,0">
+                        <TextBlock Text="{Binding [replay.remainingInClip], Source={x:Static i18n:Loc.Source}}" FontSize="11"/>
+                        <TextBlock x:Name="RemainingTcText" FontFamily="Consolas" FontSize="18"/>
+                    </StackPanel>
                     <StackPanel Width="120" Margin="0,0,12,0">
                         <TextBlock Text="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" FontSize="11"/>
                         <TextBlock x:Name="InTcText" FontFamily="Consolas" FontSize="17"/>

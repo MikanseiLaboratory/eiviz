@@ -813,12 +813,21 @@ public partial class ReplayWindow : Window
             return;
         }
         var state = Backend?.ReplayChannelState(_channel);
-        if (state is not { OutFrame: > 0 } air)
+        if (state is not { OutFrame: > 0, OutFrame: var outFrame } air || outFrame == 0)
         {
             PlayheadTcText.Text = "--:--:--:--";
+            RemainingTcText.Text = "--:--:--:--";
             return;
         }
         PlayheadTcText.Text = Stamp(air.PositionFrame, TransportRecording());
+        // What is left of the clip on air, as a duration rather than a time of day: a
+        // producer works against the clock, and four seconds left is what decides whether
+        // another replay fits before the next item. Played at half speed the same clip has
+        // twice as long to run, and that is the number being watched.
+        var left = air.OutFrame > air.PositionFrame ? air.OutFrame - air.PositionFrame : 0;
+        var rate = air.SpeedMilli > 0 ? air.SpeedMilli : 1000;
+        var wall = left * 1000UL / (ulong)rate;
+        RemainingTcText.Text = "-" + ReplayModel.Timecode(wall, ReplayModel.Fps(_replay, _session));
     }
     /// <summary>Holds the picture; presses again to continue from the same frame.</summary>
     private void PlaylistPause_Click(object sender, RoutedEventArgs e)
