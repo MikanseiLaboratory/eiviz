@@ -289,16 +289,18 @@ enum MixerFFI {
     /// mixer reports nothing.
     static func replayChannels() -> [EivizReplayChannelState] {
         let limit: Int = replayChannelLimit
-        // The count is taken here rather than inside the closure: the closure hands out a
-        // mutable pointer, and asking the type checker to follow that through to the slice
-        // below is more than it can do in one expression.
-        var buffer = [EivizReplayChannelState](
-            repeating: EivizReplayChannelState(), count: limit)
-        let count: UInt32 = buffer.withUnsafeMutableBufferPointer { pointer in
-            mixer_replay_copy_channels(pointer.baseAddress, UInt32(pointer.count))
+        let empty: EivizReplayChannelState = EivizReplayChannelState()
+        var buffer: [EivizReplayChannelState] = Array(
+            repeating: empty, count: limit)
+        // Every step is spelled out on its own line. Written as one expression the type
+        // checker gives up ("failed to produce diagnostic") rather than reporting anything
+        // useful, because the pointer's element type has to be inferred through the closure.
+        let count: UInt32 = buffer.withUnsafeMutableBufferPointer { pointer -> UInt32 in
+            let capacity: UInt32 = UInt32(pointer.count)
+            return mixer_replay_copy_channels(pointer.baseAddress, capacity)
         }
         guard count > 0 else { return [] }
-        let filled = Int(min(count, UInt32(limit)))
+        let filled: Int = Int(min(count, UInt32(limit)))
         return Array(buffer[0..<filled])
     }
 

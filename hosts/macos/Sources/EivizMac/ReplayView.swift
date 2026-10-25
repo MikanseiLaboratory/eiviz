@@ -78,7 +78,7 @@ struct ReplayView: View {
                     playlist
                 }
             }
-            transport
+            transportBar
         }
         .padding(12)
         .frame(minWidth: 1100, minHeight: 720)
@@ -562,7 +562,7 @@ struct ReplayView: View {
         """
     }
 
-    private var transport: some View {
+    private var transportBar: some View {
         VStack(spacing: 8) {
             waveform
             exportBar
