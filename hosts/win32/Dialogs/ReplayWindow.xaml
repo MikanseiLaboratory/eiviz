@@ -278,21 +278,12 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.name], Source={x:Static i18n:Loc.Source}}" Width="150">
+                            <GridViewColumn Header="{Binding [replay.name], Source={x:Static i18n:Loc.Source}}" Width="200">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBox Name="EventNameBox" Text="{Binding Name, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                                  Tag="{Binding}" Height="24" Margin="2,1" VerticalContentAlignment="Center"
                                                  LostFocus="EventNameBox_LostFocus"/>
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.protect], Source={x:Static i18n:Loc.Source}}" Width="54">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <CheckBox IsChecked="{Binding Protected, Mode=TwoWay}" HorizontalAlignment="Center"
-                                                  VerticalAlignment="Center"
-                                                  ToolTip="{Binding [replay.protectHint], Source={x:Static i18n:Loc.Source}}"/>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
@@ -450,10 +441,14 @@
                                             <ComboBox Width="86" Height="24" Margin="4,1,1,1" DisplayMemberPath="Label"
                                                       ItemsSource="{Binding TimingOptions}" SelectedItem="{Binding TimingOption}"
                                                       ToolTip="{Binding [replay.timingHelp], Source={x:Static i18n:Loc.Source}}"/>
-                                            <TextBox Width="46" Height="24" Margin="4,1,1,1" VerticalContentAlignment="Center"
+                                            <TextBox Width="42" Height="24" Margin="4,1,1,1" VerticalContentAlignment="Center"
+                                                     AutomationProperties.AutomationId="ClipTransitionFrames"
                                                      Visibility="{Binding LengthVisibility}"
                                                      Text="{Binding TransitionFrames, UpdateSourceTrigger=LostFocus}"
                                                      ToolTip="{Binding [replay.transitionFrames], Source={x:Static i18n:Loc.Source}}"/>
+                                            <TextBlock Text="{Binding [replay.framesShort], Source={x:Static i18n:Loc.Source}}"
+                                                       VerticalAlignment="Center" Margin="3,0,0,0" Foreground="#8A8A94"
+                                                       Visibility="{Binding LengthVisibility}"/>
                                         </StackPanel>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
@@ -542,105 +537,29 @@
                                   AutomationProperties.Name="{Binding [replay.waveformSeek], Source={x:Static i18n:Loc.Source}}"
                                   ToolTip="{Binding [replay.waveformSeekHint], Source={x:Static i18n:Loc.Source}}"/>
 
-            <!-- Transport on the left, the numbers the operator acts on next to it, export
-                 on the right. Everything on one line so the eye does not travel. -->
-            <Grid Height="44">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0" Orientation="Horizontal">
-                    <Button x:Name="MarkInButton" Width="106" Height="44" FontSize="15" FontWeight="Bold"
-                            HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                            Click="MarkIn_Click"
-                            ToolTip="{Binding [replay.markInHint], Source={x:Static i18n:Loc.Source}}"
-                            Content="{Binding [replay.markIn], Source={x:Static i18n:Loc.Source}}"/>
-                    <Button x:Name="MarkOutButton" Width="106" Height="44" FontSize="15" FontWeight="Bold" Margin="4,0,0,0"
-                            HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                            Click="MarkOut_Click"
-                            ToolTip="{Binding [replay.markOutHint], Source={x:Static i18n:Loc.Source}}"
-                            Content="{Binding [replay.markOut], Source={x:Static i18n:Loc.Source}}"/>
-                    <Button x:Name="CancelMarkButton" Width="80" Height="44" Margin="4,0,0,0"
-                            HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                            Click="CancelMark_Click"
-                            ToolTip="{Binding [replay.cancelMarkHint], Source={x:Static i18n:Loc.Source}}"
-                            Content="{Binding [replay.cancelMark], Source={x:Static i18n:Loc.Source}}"/>
-                    <!-- One button and the length it uses: "take the last few seconds" is the
-                         most common way a highlight is made during a break in play. -->
-                    <Button x:Name="MarkLastButton" Height="44" MinWidth="150" Margin="4,0,0,0" Padding="10,0"
-                            HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                            Click="MarkLast_Click"
-                            AutomationProperties.AutomationId="MarkLastButton"
-                            ToolTip="{Binding [replay.markLastHint], Source={x:Static i18n:Loc.Source}}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock x:Name="MarkLastLabel" VerticalAlignment="Center"/>
-                            <TextBlock Text=" " VerticalAlignment="Center"/>
-                            <TextBlock Text="{Binding [replay.secondsShort], Source={x:Static i18n:Loc.Source}}"
-                                       VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Button>
-                    <TextBox x:Name="MarkLastSecondsBox" Width="46" Height="44" Margin="4,0,0,0" Text="10"
-                             VerticalContentAlignment="Center" HorizontalContentAlignment="Center"
-                             AutomationProperties.AutomationId="MarkLastSecondsBox"
-                             ToolTip="{Binding [replay.markLastSecondsHint], Source={x:Static i18n:Loc.Source}}"/>
-                    <Border Width="1" Background="{DynamicResource ButtonBorder}" Margin="8,6,8,6"/>
-                    <Button x:Name="RecordButton" Style="{StaticResource TransportButton}" Click="RecordToggle_Click"
-                            ToolTip="{Binding [replay.recordHint], Source={x:Static i18n:Loc.Source}}">
-                        <StackPanel Orientation="Horizontal">
-                            <Ellipse Width="10" Height="10" Fill="#E05252" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                            <TextBlock Text="{Binding [replay.record], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </Button>
-                    <Button x:Name="LiveButton" Style="{StaticResource TransportButton}" Click="Live_Click"
-                            ToolTip="{Binding [replay.liveHint], Source={x:Static i18n:Loc.Source}}"
-                            Content="{Binding [replay.live], Source={x:Static i18n:Loc.Source}}"/>
-                    <Button x:Name="PlayButton" Style="{StaticResource TransportButton}" Click="Play_Click"
-                            ToolTip="{Binding [replay.playHint], Source={x:Static i18n:Loc.Source}}"
-                            Content="{Binding [replay.play], Source={x:Static i18n:Loc.Source}}"/>
-                    <Button x:Name="StepBackButton" Style="{StaticResource IconButton}" Content="&#xE892;" Click="StepBack_Click"
-                            ToolTip="{Binding [replay.stepBackHint], Source={x:Static i18n:Loc.Source}}"/>
-                    <Button x:Name="StepForwardButton" Style="{StaticResource IconButton}" Content="&#xE893;" Click="StepForward_Click"
-                            ToolTip="{Binding [replay.stepForwardHint], Source={x:Static i18n:Loc.Source}}"/>
-                </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
-                    <Button x:Name="Speed25Button" Style="{StaticResource SpeedButton}" Click="Speed_Click" Tag="250" Content="25%"
-                            ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
-                    <Button x:Name="Speed50Button" Style="{StaticResource SpeedButton}" Click="Speed_Click" Tag="500" Content="50%"
-                            ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
-                    <Button x:Name="Speed75Button" Style="{StaticResource SpeedButton}" Click="Speed_Click" Tag="750" Content="75%"
-                            ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
-                    <Button x:Name="Speed100Button" Style="{StaticResource SpeedButton}" Click="Speed_Click" Tag="1000" Content="100%"
-                            ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
-                    <Slider x:Name="JogSlider" Width="120" Margin="8,0,0,0" VerticalAlignment="Center"
-                            Minimum="-30" Maximum="30" Value="0"
-                            TickFrequency="1" IsSnapToTickEnabled="True" IsMoveToPointEnabled="True"
-                            ValueChanged="JogSlider_ValueChanged"
-                            ToolTip="{Binding [replay.jogHint], Source={x:Static i18n:Loc.Source}}"/>
-                </StackPanel>
-                <!-- The numbers, in the order an operator reads them: where the playhead is,
-                     what is left, and the clip's own range. They share the row with the
-                     transport, so they are right-aligned in their own column and never
-                     overlap the export button in the next one. -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <StackPanel Margin="0,0,10,0">
+            <!-- The numbers, on their own line above the controls: where the playhead is,
+                 what is left of the clip, what is left of the list, and the clip's range. A
+                 single row of controls cannot hold them and the buttons without overlapping,
+                 at any width this deck is allowed to have. -->
+            <Grid Margin="0,0,0,6">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <StackPanel Margin="0,0,14,0">
                         <TextBlock Text="{Binding [replay.playhead], Source={x:Static i18n:Loc.Source}}" Style="{StaticResource FieldLabel}"/>
-                        <TextBlock x:Name="PlayheadTcText" Style="{StaticResource Timecode}" FontSize="17" Foreground="#7FD14B"/>
+                        <TextBlock x:Name="PlayheadTcText" Style="{StaticResource Timecode}" FontSize="18" Foreground="#7FD14B"/>
                     </StackPanel>
-                    <StackPanel Margin="0,0,10,0">
+                    <StackPanel Margin="0,0,14,0">
                         <TextBlock Text="{Binding [replay.remainingInClip], Source={x:Static i18n:Loc.Source}}" Style="{StaticResource FieldLabel}"/>
-                        <TextBlock x:Name="RemainingTcText" Style="{StaticResource Timecode}" FontSize="17"/>
+                        <TextBlock x:Name="RemainingTcText" Style="{StaticResource Timecode}" FontSize="18"/>
                     </StackPanel>
-                    <StackPanel Margin="0,0,10,0">
+                    <StackPanel Margin="0,0,14,0">
                         <TextBlock Text="{Binding [replay.remainingInPlaylist], Source={x:Static i18n:Loc.Source}}" Style="{StaticResource FieldLabel}"/>
-                        <TextBlock x:Name="RemainingPlaylistTcText" Style="{StaticResource Timecode}" FontSize="17"/>
+                        <TextBlock x:Name="RemainingPlaylistTcText" Style="{StaticResource Timecode}" FontSize="18"/>
                     </StackPanel>
-                    <StackPanel Margin="0,0,10,0">
+                    <StackPanel Margin="0,0,14,0">
                         <TextBlock Text="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" Style="{StaticResource FieldLabel}"/>
                         <TextBlock x:Name="InTcText" Style="{StaticResource Timecode}"/>
                     </StackPanel>
-                    <StackPanel Margin="0,0,10,0">
+                    <StackPanel Margin="0,0,14,0">
                         <TextBlock Text="{Binding [replay.out], Source={x:Static i18n:Loc.Source}}" Style="{StaticResource FieldLabel}"/>
                         <TextBlock x:Name="OutTcText" Style="{StaticResource Timecode}"/>
                     </StackPanel>
@@ -649,16 +568,114 @@
                         <TextBlock x:Name="DurationTcText" Style="{StaticResource Timecode}"/>
                     </StackPanel>
                 </StackPanel>
-                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
-                    <Button x:Name="ExportButton" Height="38" MinWidth="110" Padding="10,0"
-                            VerticalContentAlignment="Center" Click="Export_Click"
-                            AutomationProperties.AutomationId="ExportButton"
-                            ToolTip="{Binding [replay.exportHint], Source={x:Static i18n:Loc.Source}}"
-                            Content="{Binding [replay.export], Source={x:Static i18n:Loc.Source}}"/>
-                </StackPanel>
+            </Grid>
+
+            <!-- The controls, in the three groups an operator works through: the recording and
+                 its playback, the clips being cut, then the speed they play at and the export. -->
+            <Grid Height="52">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Recording and playback. -->
+                <Border Grid.Column="0" Background="#1A1A20" CornerRadius="4" Padding="6,4">
+                    <StackPanel Orientation="Horizontal">
+                        <Button x:Name="RecordButton" Style="{StaticResource TransportButton}" Height="44" Click="RecordToggle_Click"
+                                ToolTip="{Binding [replay.recordHint], Source={x:Static i18n:Loc.Source}}">
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse Width="11" Height="11" Fill="#E05252" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="{Binding [replay.record], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="LiveButton" Style="{StaticResource TransportButton}" Height="44" Click="Live_Click"
+                                ToolTip="{Binding [replay.liveHint], Source={x:Static i18n:Loc.Source}}"
+                                Content="{Binding [replay.live], Source={x:Static i18n:Loc.Source}}"/>
+                        <Button x:Name="PlayButton" Style="{StaticResource TransportButton}" Height="44" Click="Play_Click"
+                                ToolTip="{Binding [replay.playHint], Source={x:Static i18n:Loc.Source}}"
+                                Content="{Binding [replay.play], Source={x:Static i18n:Loc.Source}}"/>
+                        <Button x:Name="StepBackButton" Style="{StaticResource IconButton}" Height="44" Width="44"
+                                Content="&#xE892;" Click="StepBack_Click"
+                                ToolTip="{Binding [replay.stepBackHint], Source={x:Static i18n:Loc.Source}}"/>
+                        <Button x:Name="StepForwardButton" Style="{StaticResource IconButton}" Height="44" Width="44"
+                                Content="&#xE893;" Click="StepForward_Click"
+                                ToolTip="{Binding [replay.stepForwardHint], Source={x:Static i18n:Loc.Source}}"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Marking clips. The "last N seconds" button and its length read as one
+                     control: the number sits inside the button's row, not beside it. -->
+                <Border Grid.Column="1" Background="#1A1A20" CornerRadius="4" Padding="6,4" Margin="8,0,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <Button x:Name="MarkInButton" Width="96" Height="44" FontSize="15" FontWeight="Bold"
+                                HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                Click="MarkIn_Click"
+                                ToolTip="{Binding [replay.markInHint], Source={x:Static i18n:Loc.Source}}"
+                                Content="{Binding [replay.markIn], Source={x:Static i18n:Loc.Source}}"/>
+                        <Button x:Name="MarkOutButton" Width="96" Height="44" FontSize="15" FontWeight="Bold" Margin="4,0,0,0"
+                                HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                Click="MarkOut_Click"
+                                ToolTip="{Binding [replay.markOutHint], Source={x:Static i18n:Loc.Source}}"
+                                Content="{Binding [replay.markOut], Source={x:Static i18n:Loc.Source}}"/>
+                        <Button x:Name="CancelMarkButton" Width="72" Height="44" Margin="4,0,0,0"
+                                HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                Click="CancelMark_Click"
+                                ToolTip="{Binding [replay.cancelMarkHint], Source={x:Static i18n:Loc.Source}}"
+                                Content="{Binding [replay.cancelMark], Source={x:Static i18n:Loc.Source}}"/>
+                        <Border Width="1" Background="{DynamicResource ButtonBorder}" Margin="8,6,8,6"/>
+                        <!-- One control: the length is part of the button's own row, styled to
+                             read as a field rather than floating beside it. -->
+                        <Border BorderBrush="{DynamicResource ButtonBorder}" BorderThickness="1" CornerRadius="3" Height="44">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBox x:Name="MarkLastSecondsBox" Width="44" Margin="6,0,0,0" Text="10"
+                                         BorderThickness="0" Background="Transparent"
+                                         VerticalContentAlignment="Center" HorizontalContentAlignment="Center"
+                                         AutomationProperties.AutomationId="MarkLastSecondsBox"
+                                         ToolTip="{Binding [replay.markLastSecondsHint], Source={x:Static i18n:Loc.Source}}"/>
+                                <TextBlock Text="{Binding [replay.secondsShort], Source={x:Static i18n:Loc.Source}}"
+                                           VerticalAlignment="Center" Foreground="#8A8A94" Margin="0,0,6,0"/>
+                                <Button x:Name="MarkLastButton" Height="42" MinWidth="0" Padding="10,0"
+                                        BorderThickness="0" Background="Transparent"
+                                        HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                                        Click="MarkLast_Click"
+                                        AutomationProperties.AutomationId="MarkLastButton"
+                                        ToolTip="{Binding [replay.markLastHint], Source={x:Static i18n:Loc.Source}}"
+                                        Content="{Binding [replay.markLast], Source={x:Static i18n:Loc.Source}}"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <!-- Speed and export. -->
+                <Border Grid.Column="3" Background="#1A1A20" CornerRadius="4" Padding="6,4">
+                    <StackPanel Orientation="Horizontal">
+                        <Button x:Name="Speed25Button" Style="{StaticResource SpeedButton}" Height="44" Click="Speed_Click" Tag="250" Content="25%"
+                                ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
+                        <Button x:Name="Speed50Button" Style="{StaticResource SpeedButton}" Height="44" Click="Speed_Click" Tag="500" Content="50%"
+                                ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
+                        <Button x:Name="Speed75Button" Style="{StaticResource SpeedButton}" Height="44" Click="Speed_Click" Tag="750" Content="75%"
+                                ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
+                        <Button x:Name="Speed100Button" Style="{StaticResource SpeedButton}" Height="44" Click="Speed_Click" Tag="1000" Content="100%"
+                                ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
+                        <Slider x:Name="JogSlider" Width="110" Margin="8,0,8,0" VerticalAlignment="Center"
+                                Minimum="-30" Maximum="30" Value="0"
+                                TickFrequency="1" IsSnapToTickEnabled="True" IsMoveToPointEnabled="True"
+                                ValueChanged="JogSlider_ValueChanged"
+                                ToolTip="{Binding [replay.jogHint], Source={x:Static i18n:Loc.Source}}"/>
+                        <Button x:Name="ExportButton" Height="44" MinWidth="110" Padding="10,0"
+                                VerticalContentAlignment="Center" Click="Export_Click"
+                                AutomationProperties.AutomationId="ExportButton"
+                                ToolTip="{Binding [replay.exportHint], Source={x:Static i18n:Loc.Source}}"
+                                Content="{Binding [replay.export], Source={x:Static i18n:Loc.Source}}"/>
+                    </StackPanel>
+                </Border>
             </Grid>
 
             <!-- One line that says whether the machine is keeping up, and one that names the
+                 keys. Both are always there: a production tool should not hide its own state
+                 or its shortcuts in a manual. -->            <!-- One line that says whether the machine is keeping up, and one that names the
                  keys. Both are always there: a production tool should not hide its own state
                  or its shortcuts in a manual. -->
             <DockPanel Margin="0,6,0,0">
