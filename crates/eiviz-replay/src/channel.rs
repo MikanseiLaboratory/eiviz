@@ -186,6 +186,12 @@ pub struct Transport {
     pub decode_samples: u64,
     /// Restart the playlist at its head when the last clip ends.
     pub looping: bool,
+    /// Keep the last clip running into the recording past its out point instead of stopping
+    /// there. Ignored while looping, which takes precedence.
+    pub hold_last: bool,
+    /// The last clip's own out point, kept so the extension can be re-applied as the
+    /// recording grows without the clip's end walking away from where the operator cut it.
+    held_out: u64,
     shown: Option<FramePlan>,
 }
 
@@ -207,6 +213,8 @@ impl Transport {
             decode_us_sum: 0,
             decode_samples: 0,
             looping: false,
+            hold_last: false,
+            held_out: 0,
             shown: None,
         }
     }
@@ -356,6 +364,27 @@ impl Transport {
 
     pub fn is_looping(&self) -> bool {
         self.looping
+    }
+
+    /// Whether the last clip keeps running past its out point.
+    pub fn is_holding_last(&self) -> bool {
+        self.hold_last
+    }
+
+    /// Keeps the last clip running past its out point, or stops doing so.
+    pub fn set_holding_last(&mut self, hold: bool) {
+        if self.hold_last == hold {
+            return;
+        }
+        self.hold_last = hold;
+        // Turning it off puts the clip's end back where the operator cut it.
+        if !hold
+            && self.held_out != 0
+            && let Some(last) = self.list.last_mut()
+        {
+            last.out_frame = self.held_out;
+        }
+        self.held_out = 0;
     }
 
     pub fn set_looping(&mut self, looping: bool) {
@@ -516,6 +545,27 @@ impl Transport {
                         self.shown = None;
                         guard += 1;
                         continue;
+                    }
+                    // Keeping the last clip running: its end moves out to the recording's
+                    // newest frame and the position carries on through the picture that
+                    // followed the cut, so the timecode climbs instead of stopping.
+                    if self.hold_last
+                        && self.last_frame > 0
+                        && let Some(last) = self.list.last_mut()
+                    {
+                        if self.held_out == 0 {
+                            self.held_out = last.out_frame;
+                        }
+                        if self.held_out < self.last_frame {
+                            last.out_frame = self.last_frame;
+                            // Ask for the frame just past the old out point: `span` is the
+                            // length before the extension, so the position has to be read off
+                            // the new one or the loop would hand back the same end forever.
+                            self.position = self.span() - 1.0;
+                            self.shown = None;
+                            guard += 1;
+                            continue;
+                        }
                     }
                     self.position = span;
                     self.playing = false;
@@ -866,6 +916,87 @@ mod tests {
             "a looping playlist returns to its first clip"
         );
         assert!(transport.is_playing());
+    }
+
+    #[test]
+    fn holding_the_last_clip_runs_on_past_its_out_point() {
+        let mut transport = Transport::new();
+        let a = clip("a", 0, 2, ClipTransition::CUT);
+        transport.set_clip(a.clone(), 0);
+        transport.set_playlist(vec![a.clone()]);
+        // The recording went on well past the clip's out point.
+        transport.note_recorded_frame(50);
+        transport.set_holding_last(true);
+        transport.set_playing(true);
+        assert_eq!(transport.step(1.0).unwrap().primary, Some((a.angle_id, 0)));
+        assert_eq!(transport.step(1.0).unwrap().primary, Some((a.angle_id, 1)));
+        // The out point is behind us, and it keeps going instead of stopping.
+        assert_eq!(transport.step(1.0).unwrap().primary, Some((a.angle_id, 2)));
+        assert!(transport.is_playing(), "it must not stop at the cut");
+        assert_ne!(
+            transport.source_frame(),
+            0,
+            "the picture has moved on from the clip's first frame"
+        );
+    }
+
+    #[test]
+    fn holding_the_last_clip_stops_at_the_end_of_the_recording() {
+        let mut transport = Transport::new();
+        let a = clip("a", 0, 2, ClipTransition::CUT);
+        transport.set_clip(a.clone(), 0);
+        transport.set_playlist(vec![a.clone()]);
+        // Nothing recorded past the out point, so there is nowhere to run to.
+        transport.note_recorded_frame(2);
+        transport.set_holding_last(true);
+        transport.set_playing(true);
+        transport.step(1.0);
+        transport.step(1.0);
+        transport.step(1.0);
+        assert!(
+            !transport.is_playing(),
+            "with no recorded frames past the cut it parks as before"
+        );
+    }
+
+    #[test]
+    fn looping_wins_over_holding_the_last_clip() {
+        let mut transport = Transport::new();
+        let a = clip("a", 0, 1, ClipTransition::CUT);
+        transport.set_playlist(vec![a.clone()]);
+        transport.set_clip(a.clone(), 0);
+        transport.note_recorded_frame(50);
+        transport.set_looping(true);
+        transport.set_holding_last(true);
+        transport.set_playing(true);
+        transport.step(1.0);
+        transport.step(1.0);
+        assert_eq!(
+            transport.step(1.0).unwrap().primary,
+            Some((a.angle_id, 0)),
+            "a looping list wraps rather than running on"
+        );
+    }
+
+    #[test]
+    fn turning_holding_last_off_puts_the_out_point_back() {
+        let mut transport = Transport::new();
+        let a = clip("a", 0, 2, ClipTransition::CUT);
+        transport.set_clip(a.clone(), 0);
+        transport.set_playlist(vec![a.clone()]);
+        transport.note_recorded_frame(50);
+        transport.set_holding_last(true);
+        transport.set_playing(true);
+        transport.step(1.0);
+        transport.step(1.0);
+        transport.step(1.0);
+        assert!(transport.is_playing());
+        transport.set_holding_last(false);
+        assert_eq!(
+            transport.clip().map(|clip| clip.out_frame),
+            Some(2),
+            "the clip ends where the operator cut it"
+        );
     }
 
     #[test]

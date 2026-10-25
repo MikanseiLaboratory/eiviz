@@ -470,6 +470,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_channel_cue", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int ReplayCue(uint channel, uint angleId, ulong inFrame, ulong outFrame, string recordingUuid);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_hold_last")]
+    internal static partial int ReplayHoldLast(uint channel, uint on);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_channel_transport")]
     internal static partial int ReplayTransport(uint channel, uint playing, int speedMilli, long seekFrame);
 

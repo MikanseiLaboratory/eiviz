@@ -5021,6 +5021,20 @@ pub unsafe extern "C" fn mixer_replay_mark_out(
 ///
 /// # Safety
 /// A plain C call: no pointers cross the boundary.
+/// Keeps the last clip running past its out point, or stops at it again.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_hold_last(channel: u32, on: u32) -> i32 {
+    ffi_guard(
+        "mixer_replay_hold_last",
+        ERR_INVALID_ARGUMENT,
+        || match crate::replay::engine().set_holding_last(channel, on != 0) {
+            Ok(()) => OK,
+            Err(code) => code,
+        },
+    )
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_replay_loop(channel: u32, on: u32) -> i32 {
     ffi_guard(
         "mixer_replay_loop",

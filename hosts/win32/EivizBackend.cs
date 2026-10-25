@@ -59,6 +59,8 @@ internal interface IEivizBackend
     bool ReplayJumpToNow(uint channel);
     /// <summary>Turns looping on or off for a channel's playlist.</summary>
     bool ReplayLoop(uint channel, bool on);
+    /// <summary>Keeps the last clip running past its out point, or stops at it again.</summary>
+    bool ReplayHoldLast(uint channel, bool on);
 
     /// <summary>Moves a channel by whole frames inside the clip it is playing.</summary>
     bool ReplayStep(uint channel, int delta);
@@ -509,6 +511,7 @@ internal sealed class LocalEivizBackend : IEivizBackend
 
     public bool ReplayJumpToNow(uint channel) => MixerNative.ReplayJumpToNow(channel) == 0;
     public bool ReplayLoop(uint channel, bool on) => MixerNative.ReplayLoop(channel, on ? 1u : 0u) == 0;
+    public bool ReplayHoldLast(uint channel, bool on) => MixerNative.ReplayHoldLast(channel, on ? 1u : 0u) == 0;
 
     public bool ReplayStep(uint channel, int delta) => MixerNative.ReplayChannelStep(channel, delta) == 0;
 
@@ -875,6 +878,13 @@ internal sealed class RemoteEivizBackend : IEivizBackend
     public bool ReplayJumpToNow(uint channel) => MixerRemote.ReplayJumpToNow(_handle, channel) == 0;
     /// <summary>A Remote drives the recording machine, which owns the playlist too.</summary>
     public bool ReplayLoop(uint channel, bool on)
+    {
+        _ = (channel, on);
+        return false;
+    }
+
+    /// <summary>The recording machine owns the transport; a Remote cannot change this.</summary>
+    public bool ReplayHoldLast(uint channel, bool on)
     {
         _ = (channel, on);
         return false;
@@ -1533,6 +1543,7 @@ internal sealed class DisconnectedRemoteBackend : IEivizBackend
     public bool ReplayTransport(uint channel, bool playing, int speedMilli, long seekFrame) { _ = (channel, playing, speedMilli, seekFrame); return false; }
     public bool ReplayJumpToNow(uint channel) { _ = channel; return false; }
     public bool ReplayLoop(uint channel, bool on) { _ = (channel, on); return false; }
+    public bool ReplayHoldLast(uint channel, bool on) { _ = (channel, on); return false; }
 
     public MixerReplayChannelState? ReplayChannelState(uint channel) { _ = channel; return null; }
     public bool ReplayStep(uint channel, int delta) { _ = (channel, delta); return false; }

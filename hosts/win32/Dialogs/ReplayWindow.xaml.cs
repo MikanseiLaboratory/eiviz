@@ -52,6 +52,8 @@ public partial class ReplayWindow : Window
     private ReplayTransportState _transport = ReplayTransportState.AtEdge;
     /// <summary>True while the playlist goes round again at its end.</summary>
     private bool _looping;
+    /// <summary>Keeps the last clip running past its out point instead of stopping there.</summary>
+    private bool _holdLast;
     /// <summary>
     /// Paints the remaining time between the 200 ms status ticks. A countdown that
     /// steps five times a second reads as a stopped clock; the position is known, so
@@ -2475,6 +2477,26 @@ public partial class ReplayWindow : Window
     /// Loops the playlist. The transport goes round again at the end instead of parking
     /// on the last frame; the button stays lit while it does.
     /// </summary>
+    /// <summary>
+    /// Keeps the last clip running into the recording past its out point, with the timecode
+    /// climbing, instead of stopping on the cut.
+    /// </summary>
+    private void PlaylistHold_Click(object sender, RoutedEventArgs e)
+    {
+        var next = !_holdLast;
+        if (Backend?.ReplayHoldLast(_channel, next) != true)
+        {
+            Warn(Refusal(Loc.T("replay.commandRefused")));
+            return;
+        }
+        _holdLast = next;
+        // Looping and holding answer the same question, and looping wins, so say which one
+        // is actually going to happen rather than lighting a button that will not be obeyed.
+        if (next && _looping)
+            Warn(Loc.T("replay.holdIgnoredWhileLooping"));
+        RefreshStatus();
+    }
+
     private void PlaylistLoop_Click(object sender, RoutedEventArgs e)
     {
         _looping = !_looping;

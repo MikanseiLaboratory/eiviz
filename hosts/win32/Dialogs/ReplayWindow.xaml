@@ -360,6 +360,13 @@
                                 VerticalContentAlignment="Center" Click="PlaylistLoop_Click"
                                 ToolTip="{Binding [replay.playlistLoopHint], Source={x:Static i18n:Loc.Source}}"
                                 Content="{Binding [replay.playlistLoop], Source={x:Static i18n:Loc.Source}}"/>
+                        <!-- What happens when the list ends, next to looping because it is the
+                             same question. Looping wins when both are on. -->
+                        <Button x:Name="PlaylistHoldButton" Height="28" MinWidth="72" Margin="4,0,0,0" Padding="8,0"
+                                VerticalContentAlignment="Center" Click="PlaylistHold_Click"
+                                AutomationProperties.AutomationId="PlaylistHoldButton"
+                                ToolTip="{Binding [replay.playlistHoldHint], Source={x:Static i18n:Loc.Source}}"
+                                Content="{Binding [replay.playlistHold], Source={x:Static i18n:Loc.Source}}"/>
                     </StackPanel>
                 </DockPanel>
                 <TextBlock x:Name="PlaylistEmptyText" DockPanel.Dock="Bottom" Style="{StaticResource Caption}"

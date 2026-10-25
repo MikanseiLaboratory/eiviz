@@ -828,6 +828,7 @@ impl ReplayEngine {
                 // The operator's channel settings outlive a reconfiguration: editing the
                 // playlist must not silently reset the speed or turn looping off.
                 let keep_looping = transport.is_looping();
+                let keep_holding = transport.is_holding_last();
                 let keep_rate = transport.rate();
                 let clips = playlist_clips(&config, channel.playlist_id);
                 // What the channel was actually given, transitions included: a playlist
@@ -847,6 +848,7 @@ impl ReplayEngine {
                 );
                 transport.set_playlist(clips);
                 transport.set_looping(keep_looping);
+                transport.set_holding_last(keep_holding);
                 transport.set_rate(keep_rate);
                 let audio = old
                     .iter()
@@ -1886,6 +1888,24 @@ impl ReplayEngine {
             .ok_or(ERR_INVALID_ARGUMENT)?;
         if slot.transport.is_looping() != looping {
             slot.transport.set_looping(looping);
+            slot.touch_transport();
+        }
+        Ok(())
+    }
+
+    /// Keeps the last clip running into the recording past its out point, or stops.
+    ///
+    /// Not looping: looping wraps the list to its head, this one holds the last clip and lets
+    /// the timecode climb through what was recorded after the cut.
+    pub fn set_holding_last(&self, channel: u32, hold: bool) -> Result<(), i32> {
+        let mut inner = self.lock();
+        let slot = inner
+            .channels
+            .iter_mut()
+            .find(|slot| slot.index == channel)
+            .ok_or(ERR_INVALID_ARGUMENT)?;
+        if slot.transport.is_holding_last() != hold {
+            slot.transport.set_holding_last(hold);
             slot.touch_transport();
         }
         Ok(())
