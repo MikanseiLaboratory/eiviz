@@ -230,11 +230,10 @@ public partial class ReplayWindow : Window
         var playing = state is { Playing: > 0 };
         foreach (var row in rows)
         {
-            var onAir = playing
-                && state is { } now
-                && now.InFrame == row.InFrame
-                && now.OutFrame == row.OutFrame
-                && now.AngleId == row.AngleId;
+            // The channel reports the identity of the clip it is playing. Comparing ranges
+            // instead missed the marker whenever the row on screen was not the one the
+            // transport had reached, and could not tell two clips of the same range apart.
+            var onAir = playing && state is { } now && now.ClipUidHash == ReplayClipRows.UidHash(row.Uid);
             var marker = onAir ? "▶" : "";
             if (row.Marker != marker)
             {

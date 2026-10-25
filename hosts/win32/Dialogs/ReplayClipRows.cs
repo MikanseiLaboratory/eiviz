@@ -14,6 +14,25 @@ namespace Eiviz.Host.Dialogs;
 internal static class ReplayClipRows
 {
     /// <summary>
+    /// FNV-1a 64 of a clip uid, which is how the mixer names the clip a channel is playing.
+    ///
+    /// The same function as `clip_uid_hash` in `mixer/src/replay/mod.rs`: the deck has to
+    /// answer "is this row on air" from what the mixer reports, and a uid string is the only
+    /// thing that tells two clips of the same range and angle apart.
+    /// </summary>
+    /// <param name="uid">The clip's uid.</param>
+    internal static ulong UidHash(string uid)
+    {
+        var hash = 0xcbf2_9ce4_8422_2325UL;
+        foreach (var value in System.Text.Encoding.UTF8.GetBytes(uid))
+        {
+            hash ^= value;
+            hash *= 0x0000_0100_0000_01b3UL;
+        }
+        return hash;
+    }
+
+    /// <summary>
     /// The speeds a clip can be cut at.
     ///
     /// Longer than the deck's transport offers on purpose: the transport is what the
