@@ -690,7 +690,7 @@ checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 
 [[package]]
 name = "eiviz-api"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64",
  "eiviz-control",
@@ -710,7 +710,7 @@ dependencies = [
 
 [[package]]
 name = "eiviz-control"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "prost",
  "prost-build",
@@ -749,7 +749,7 @@ version = "0.1.0"
 
 [[package]]
 name = "eiviz_mixer"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "arc-swap",
  "ash",
@@ -806,7 +806,7 @@ dependencies = [
 
 [[package]]
 name = "eiviz_remote"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "eiviz-api",
  "eiviz-control",
