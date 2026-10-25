@@ -21,6 +21,8 @@ struct ReplayView: View {
     @State private var speedMilli: Int32 = 1000
     /// Whether the channel loops its playlist. The mixer owns it; this mirrors it.
     @State private var looping = false
+    /// Whether the last clip keeps running past its out point. Also the mixer's; mirrored.
+    @State private var holdLast = false
     @State private var inFrame: UInt64?
     /// Marked out point. Kept so the operator can read back what was marked.
     @State private var outFrame: UInt64?
@@ -616,6 +618,17 @@ struct ReplayView: View {
                 .toggleStyle(.button)
                 .frame(width: 72, height: 36)
                 .help(L10n.t("replay.playlistLoopHint"))
+                // What happens when the list ends, next to looping because it is the same
+                // question. Looping wins when both are on.
+                Toggle(L10n.t("replay.playlistHold"), isOn: Binding(
+                    get: { holdLast },
+                    set: { next in
+                        holdLast = next
+                        _ = mixer.replayHoldLast(channel: channel, on: next)
+                    }))
+                .toggleStyle(.button)
+                .frame(width: 96, height: 36)
+                .help(L10n.t("replay.playlistHoldHint"))
                 Spacer(minLength: 8)
                 Text(L10n.t("replay.jog"))
                 Slider(value: $jogValue, in: -30...30, step: 1) { editing in

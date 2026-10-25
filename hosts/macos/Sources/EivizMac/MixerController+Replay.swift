@@ -344,6 +344,20 @@ extension MixerController {
         return MixerFFI.replayJumpToNow(channel: channel) == 0
     }
 
+    /// Goes round the playlist again at its end.
+    func replayLoop(channel: UInt32, on: Bool) -> Bool {
+        // The remote owns its own transport and cannot be told what to do with it.
+        if isRemote { return false }
+        return MixerFFI.replayLoop(channel: channel, on: on) == 0
+    }
+
+    /// Keeps the last clip running past its out point instead of stopping there. Not looping:
+    /// this one holds the last clip and lets the timecode climb through what followed the cut.
+    func replayHoldLast(channel: UInt32, on: Bool) -> Bool {
+        if isRemote { return false }
+        return MixerFFI.replayHoldLast(channel: channel, on: on) == 0
+    }
+
     func replayStats() -> EivizReplayStats? {
         isRemote ? nil : MixerFFI.replayStats()
     }

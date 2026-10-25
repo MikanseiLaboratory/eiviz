@@ -285,6 +285,11 @@ enum MixerFFI {
         mixer_replay_loop(channel, on ? 1 : 0)
     }
 
+    /// Keeps the last clip running past its out point instead of stopping there.
+    static func replayHoldLast(channel: UInt32, on: Bool) -> Int32 {
+        mixer_replay_hold_last(channel, on ? 1 : 0)
+    }
+
     /// Per-channel live state, so the deck shows what the mixer is doing. Empty when the
     /// mixer reports nothing.
     static func replayChannels() -> [EivizReplayChannelState] {
@@ -295,12 +300,14 @@ enum MixerFFI {
         // Every step is spelled out on its own line. Written as one expression the type
         // checker gives up ("failed to produce diagnostic") rather than reporting anything
         // useful, because the pointer's element type has to be inferred through the closure.
-        let count: UInt32 = buffer.withUnsafeMutableBufferPointer { pointer -> UInt32 in
+        // `mixer_replay_copy_channels` answers with `int32_t`, so the count is signed: a
+        // negative value means the call failed and there is nothing to report.
+        let copied: Int32 = buffer.withUnsafeMutableBufferPointer { pointer -> Int32 in
             let capacity: UInt32 = UInt32(pointer.count)
             return mixer_replay_copy_channels(pointer.baseAddress, capacity)
         }
-        guard count > 0 else { return [] }
-        let filled: Int = Int(min(count, UInt32(limit)))
+        guard copied > 0 else { return [] }
+        let filled: Int = Int(min(copied, Int32(limit)))
         return Array(buffer[0..<filled])
     }
 

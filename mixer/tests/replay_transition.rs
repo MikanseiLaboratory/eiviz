@@ -326,15 +326,21 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
         // each attempt gets a longer budget: the transition is the one thing this test
         // exists to see, and a runner that never samples it has not tested anything.
         held.push(held_here);
-        // A runner that never sampled the window has not looked at the dissolve at all.
-        // Passing here is what let the transition go unverified for as long as it did.
-        if mixed_total == 0 && inside_total < DISSOLVE_FRAMES as usize {
-            panic!(
-                "{timing}: no attempt sampled the {DISSOLVE_FRAMES}-frame dissolve \
-                 ({inside_total} frames in the window, {mixed_total} blended); the \
-                 transition was never observed"
-            );
-        }
+        // A sample costs a full PNG round trip (snapshot, write to disk, decode), so how many
+        // land in the window is decided by the machine rather than by the frame count: a slow
+        // runner may see a dozen of the thirty frames and still have looked. What must not
+        // pass is a run that never sampled the window at all, or one that looked and never
+        // saw a blend — those are the two ways this test went green without proving anything.
+        assert!(
+            inside_total > 0,
+            "{timing}: no attempt sampled the {DISSOLVE_FRAMES}-frame dissolve at all; the \
+             transition was never observed (out_a {out_a}, last {last:?})"
+        );
+        assert!(
+            mixed_total > 0,
+            "{timing}: the window was sampled {inside_total} times but no blend reached the \
+             picture (out_a {out_a}, last {last:?})"
+        );
 
         // Additive holds the outgoing clip's last frame while it inserts the
         // transition, so the channel reports clip A's out frame for its whole
