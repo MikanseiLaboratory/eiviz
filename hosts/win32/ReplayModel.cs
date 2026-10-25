@@ -440,13 +440,15 @@ internal static class ReplayModel
 
     public static IReadOnlyList<ReplayClipInfo> Clips(JsonObject root, ulong? playlistId)
     {
+        // `null` asks for every playlist, which is how a clip is found when the caller only
+        // knows its uid. Naming one collects from that one only.
+        var result = new List<ReplayClipInfo>();
         foreach (var item in Array(root, "playlists"))
         {
             if (item is not JsonObject playlist)
                 continue;
-            if (playlistId is not { } wanted || (playlist["id"]?.GetValue<ulong>() ?? 0) != wanted)
+            if (playlistId is { } wanted && (playlist["id"]?.GetValue<ulong>() ?? 0) != wanted)
                 continue;
-            var result = new List<ReplayClipInfo>();
             foreach (var entry in playlist["clips"] as JsonArray ?? [])
             {
                 if (entry is not JsonObject clip)
@@ -471,9 +473,10 @@ internal static class ReplayModel
                     clip["audio"]?.GetValue<string>() ?? "FollowAngle",
                     clip["audioAngleId"]?.GetValue<uint>() ?? 0));
             }
-            return result;
+            if (playlistId is not null)
+                break;
         }
-        return [];
+        return result;
     }
 
     public static JsonObject? Playlist(JsonObject root, ulong playlistId)

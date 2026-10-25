@@ -672,6 +672,7 @@ impl ReplayEngine {
             return Ok(());
         };
         let operations_reason = self.gate(&dto)?;
+        let operations_reason = self.gate(&dto)?;
         // Both are the operator's to set now, so a configure is what turns them on.
         profile::set_enabled(dto.profiling);
         self.lock().decode_ahead = dto.decode_ahead;
