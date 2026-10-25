@@ -3343,10 +3343,16 @@ impl ChannelPlayout {
         // `step` advances even when it decides to hold the picture, so the transport
         // must be written back on every path. Stepping every missed frame and keeping
         // the last plan catches up without showing each intermediate picture.
-        let mut plan = None;
+        //
+        // A transition is the exception. Keeping only the last plan meant that a tick late
+        // enough to cover the whole dissolve showed its end — a cut — and the blend was
+        // never drawn. The first mid-transition plan of the catch-up is kept instead, so a
+        // slow machine still shows the transition, just at fewer intermediate points. That
+        // is what the operator asked to see; a jump from A to B is not.
+        let mut plan: Option<channel::FramePlan> = None;
         for _ in 0..late {
             if let Some(next_plan) = transport.step(1.0) {
-                plan = Some(next_plan);
+                plan = keep_plan(plan, next_plan);
             }
         }
         let Some(plan) = plan else {
@@ -4001,6 +4007,23 @@ struct DecodedMeta {
 /// True while a plan is mid-transition and both clips are on screen.
 fn wants_secondary(plan: &channel::FramePlan) -> bool {
     plan.secondary.is_some() && plan.mix > 0.0 && plan.mix < 1.0
+}
+
+/// Which of the plans a catch-up tick stepped through is the one to draw.
+///
+/// A tick that overran covers more than one output frame, and showing every intermediate
+/// picture would only fall further behind, so the last one wins — except while a transition
+/// is running. Holding the first mid-transition plan means a machine slow enough to cover the
+/// whole dissolve in one tick still shows the blend rather than jumping from one clip to the
+/// next, which is what the operator asked to see.
+fn keep_plan(
+    held: Option<channel::FramePlan>,
+    next: channel::FramePlan,
+) -> Option<channel::FramePlan> {
+    match &held {
+        Some(current) if wants_secondary(current) => held,
+        _ => Some(next),
+    }
 }
 
 /// Decodes the frames a plan asks for directly into the caller's playout buffers.
@@ -5421,6 +5444,72 @@ mod gain_tests {
         assert!(gain_from_db(60.0) <= gain_from_db(12.0) + 1e-6);
         assert_eq!(gain_from_db(f32::NAN), 1.0);
         assert_eq!(gain_from_db(f32::INFINITY), 1.0);
+    }
+}
+
+#[cfg(test)]
+mod keep_plan_tests {
+    use super::*;
+
+    /// A frame of one clip on its own.
+    fn solo(angle: u32, frame: u64) -> channel::FramePlan {
+        channel::FramePlan {
+            primary: Some((angle, frame)),
+            secondary: None,
+            mix: 0.0,
+            kind: channel::TransitionKind::Cut,
+            direction: channel::TransitionDirection::Left,
+        }
+    }
+
+    /// Both clips on screen, part-way through a transition.
+    fn blend(angle: u32, from: u64, to: u64) -> channel::FramePlan {
+        channel::FramePlan {
+            primary: Some((angle, from)),
+            secondary: Some((angle, to)),
+            mix: 0.5,
+            kind: channel::TransitionKind::Dissolve,
+            direction: channel::TransitionDirection::Left,
+        }
+    }
+
+    #[test]
+    fn a_catch_up_keeps_the_last_frame_of_ordinary_playback() {
+        // Without a transition the tick catches up by showing only where it got to; drawing
+        // every intermediate frame would just fall further behind.
+        let mut plan = None;
+        for frame in 0..6 {
+            plan = keep_plan(plan, solo(1, frame));
+        }
+        assert_eq!(plan.unwrap().primary, Some((1, 5)));
+    }
+
+    #[test]
+    fn a_catch_up_keeps_the_blend_it_passed_through() {
+        // The tick was late enough to cover the whole dissolve. Showing only the last frame
+        // would be a cut, and the operator would never see the transition they set.
+        let mut plan = keep_plan(None, solo(1, 0));
+        for step in 0..6 {
+            plan = keep_plan(plan, blend(1, 10 + step, 20 + step));
+        }
+        let held = plan.unwrap();
+        assert!(
+            held.secondary.is_some() && held.mix > 0.0 && held.mix < 1.0,
+            "a mid-transition frame must survive the catch-up: {held:?}"
+        );
+        assert_eq!(
+            held.primary,
+            Some((1, 10)),
+            "the first blend of the catch-up is the one held"
+        );
+    }
+
+    #[test]
+    fn a_blend_is_not_replaced_by_the_frame_after_it() {
+        // The transition ended inside the same tick: still show the blend, not the cut.
+        let held = keep_plan(None, blend(1, 10, 20));
+        let after = keep_plan(held, solo(1, 21));
+        assert!(wants_secondary(&after.expect("a plan")));
     }
 }
 
