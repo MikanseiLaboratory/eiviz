@@ -63,6 +63,13 @@ public partial class ReplayExportWindow : Window
 
     private readonly System.Windows.Threading.DispatcherTimer _tick;
 
+    /// <summary>
+    /// The files still to write, one per angle for an all-angles export. The module runs one
+    /// export at a time and cancels whatever was running when a second is started, so the
+    /// next one may only be handed over once the current one has finished.
+    /// </summary>
+    private readonly Queue<(string Body, string Label)> _pending = new();
+
     private void Poll()
     {
         if (!IsBusy)
@@ -102,6 +109,14 @@ public partial class ReplayExportWindow : Window
     {
         if (!IsBusy)
             return;
+        // Another angle is waiting: hand it over and stay busy, so the files are written one
+        // after another instead of the later ones cancelling the earlier.
+        if (_pending.Count > 0)
+        {
+            var (body, label) = _pending.Dequeue();
+            _start(body, label);
+            return;
+        }
         IsBusy = false;
         _tick.Stop();
         ExportStartButton.IsEnabled = true;
@@ -182,15 +197,22 @@ public partial class ReplayExportWindow : Window
         IsBusy = true;
         ExportStartButton.IsEnabled = false;
         _tick.Start();
+        _pending.Clear();
         if (mode.Key == "AllAngles")
         {
-            // One file per angle, so a multi-camera export stays usable.
+            // One file per angle, so a multi-camera export stays usable. They queue: the
+            // module writes one file at a time and a second request cancels the first.
             foreach (var angle in _angles())
             {
                 var target = Path.Combine(
                     Path.GetDirectoryName(path) ?? "",
                     $"{Path.GetFileNameWithoutExtension(path)}-angle{angle.Id}{Path.GetExtension(path)}");
-                _start(Body(target), $"{angle.Label} → {Path.GetFileName(target)}");
+                _pending.Enqueue((Body(target), $"{angle.Label} → {Path.GetFileName(target)}"));
+            }
+            if (_pending.Count > 0)
+            {
+                var (body, label) = _pending.Dequeue();
+                _start(body, label);
             }
         }
         else
