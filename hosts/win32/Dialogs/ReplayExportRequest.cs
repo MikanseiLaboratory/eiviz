@@ -49,13 +49,15 @@ public sealed class ReplayExportRequest
                 ? 1.0
                 : Math.Pow(10.0, Math.Clamp(clip.GainDb, -60.0, 12.0) / 20.0)
         };
-        // "Follow the clip's own angle" is the writer's default, so the key is left out
-        // rather than naming the angle: a clip that follows its own picture is not a clip
-        // that was pointed at an angle, and writing one made every clip export its sound.
-        if (clip.AudioKind == "Silent")
-            node["audioAngleId"] = null;
-        else if (clip.AudioKind == "Angle")
-            node["audioAngleId"] = clip.AudioAngleId;
+        // Every clip names the angle its sound comes from. Leaving the key out for "follow
+        // the clip's own angle" meant an absent id, and the writer reads an absent id as
+        // silent — so the default export produced a muted track that looked correct.
+        node["audioAngleId"] = clip.AudioKind switch
+        {
+            "Silent" => null,
+            "Angle" => clip.AudioAngleId,
+            _ => clip.AngleId,
+        };
         if (transition is { } value)
         {
             node["transition"] = new JsonObject
