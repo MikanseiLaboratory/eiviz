@@ -211,8 +211,13 @@ internal static class SessionStore
             ? array.GetArrayLength()
             : 0;
 
-    /// The core normalizes the replay document on replace. The host keeps that
-    /// copy, so counters and repaired fields do not stay on the string it sent.
+    /// The core normalizes the replay document on replace, so the host keeps that copy
+    /// instead of the string it sent, which keeps repaired fields and counters.
+    ///
+    /// A `null` is the core saying Replay is gone: the last channel was removed and the
+    /// document went with it. Holding on to the string would publish the deleted Replay
+    /// back on the next save, and the core would then refuse the session, because a
+    /// Replay input cannot exist without its document.
     private static void AdoptCanonicalReplay(Session session)
     {
         try
@@ -222,9 +227,11 @@ internal static class SessionStore
                 return;
             using var document = JsonDocument.Parse(snapshot);
             if (!document.RootElement.TryGetProperty("replay", out var replay)
-                || replay.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+                || replay.ValueKind == JsonValueKind.Undefined)
+            {
                 return;
-            session.ReplayJson = replay.GetRawText();
+            }
+            session.ReplayJson = replay.ValueKind == JsonValueKind.Null ? "" : replay.GetRawText();
         }
         catch (JsonException)
         {
@@ -232,6 +239,28 @@ internal static class SessionStore
     }
 
     public static void ReplaceRuntime(Session session) => Publish(session);
+
+    /// <summary>
+    /// Applies one session mutation to the live document, then adopts what the core kept.
+    /// <para>
+    /// This is the way a window edits the document. Reading the document, changing it and
+    /// publishing it back loses anything another writer added in between, which is why
+    /// every window used to grow its own merge; the core now owns that rule.
+    /// </para>
+    /// </summary>
+    public static void MutateLocal(string mutation)
+    {
+        MixerNative.SessionMutateText(mutation);
+        AdoptCanonical(session: Application.Current is App app ? app.Session : null);
+    }
+
+    /// <summary>Takes the core's canonical document back onto the session.</summary>
+    private static void AdoptCanonical(Session? session)
+    {
+        if (session is null)
+            return;
+        AdoptCanonicalReplay(session);
+    }
 
     /// An enabled RTMP row with no encode profile never opens a socket. Create
     /// the same default profile the settings page uses and point those rows at it.

@@ -487,10 +487,13 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_angle_range")]
     internal static unsafe partial int ReplayAngleRange(uint angleId, ulong* first, ulong* last);
 
-    /// <summary>Jog proxy as UYVY. Zero when the recording has no proxy.</summary>
+    /// <summary>
+    /// Jog proxy as UYVY. Zero when the recording has no proxy. The stride is the source's
+    /// bytes per row, which a store may pad beyond width * 2.
+    /// </summary>
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_copy_proxy")]
     internal static unsafe partial int ReplayCopyProxy(
-        uint angleId, ulong frame, byte* pixels, nuint cap, uint* width, uint* height);
+        uint angleId, ulong frame, byte* pixels, nuint cap, uint* width, uint* height, uint* stride);
 
     /// <summary>Starts an MP4 export. The JSON names the file and its segments.</summary>
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_export_start", StringMarshalling = StringMarshalling.Utf8)]
@@ -766,6 +769,13 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_replace")]
     internal static unsafe partial int SessionReplace(byte* json, nuint length, ulong expectedRevision);
 
+    /// <summary>
+    /// Applies one session mutation. The core applies it to the live document, so an
+    /// edit another window made in the meantime is kept rather than replaced.
+    /// </summary>
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_mutate")]
+    internal static unsafe partial int SessionMutate(byte* json, nuint length);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_poll_events")]
     internal static unsafe partial int PollEvents(ulong after, byte* buffer, nuint capacity);
 
@@ -952,6 +962,22 @@ internal static partial class MixerNative
             fixed (byte* ptr = bytes)
             {
                 ThrowIfFailed(SessionReplace(ptr, (nuint)bytes.Length, expectedRevision), "Replace session");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Applies one mutation. The core refuses a mutation it cannot apply and says why,
+    /// which reaches the host through <see cref="LastErrorText"/>.
+    /// </summary>
+    internal static void SessionMutateText(string json)
+    {
+        var bytes = Encoding.UTF8.GetBytes(json);
+        unsafe
+        {
+            fixed (byte* ptr = bytes)
+            {
+                ThrowIfFailed(SessionMutate(ptr, (nuint)bytes.Length), "Mutate session");
             }
         }
     }

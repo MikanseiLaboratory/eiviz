@@ -1697,6 +1697,10 @@ fn replay_from_pb(replay: pb::Replay) -> Result<crate::session::replay::ReplayDt
                 input_id: angle.input_id,
                 audio: match pb::AngleAudio::try_from(angle.audio) {
                     Ok(pb::AngleAudio::Unit) => AngleAudio::Unit,
+                    // Every value the writer can produce has to be read back. `Source`
+                    // fell through to `Silent`, so an angle that records its source's
+                    // sound lost that setting on the next save and load.
+                    Ok(pb::AngleAudio::Source) => AngleAudio::Source,
                     _ => AngleAudio::Silent,
                 },
                 audio_unit_id: angle.audio_unit_id,
@@ -2009,7 +2013,7 @@ mod tests {
         let encoded = encode_file(&original).unwrap();
         assert!(encoded.starts_with(MAGIC));
         let decoded = decode_file(&encoded).unwrap();
-        assert_eq!(decoded.units[0].always_on_top, false);
+        assert!(!decoded.units[0].always_on_top);
         assert_eq!(decoded.units[0].preview_scene_id, 1);
         assert_eq!(decoded.units[0].program_scene_id, 1);
         assert!(!decoded.scenes[0].layers[0].size_linked);
@@ -2041,9 +2045,11 @@ mod tests {
     #[test]
     fn protobuf_roundtrip_keeps_replay_playback_flags() {
         let mut doc = parse(sample_json()).unwrap();
-        let mut replay = crate::session::replay::ReplayDto::default();
-        replay.decode_ahead = false;
-        replay.profiling = true;
+        let replay = crate::session::replay::ReplayDto {
+            decode_ahead: false,
+            profiling: true,
+            ..crate::session::replay::ReplayDto::default()
+        };
         doc.replay = Some(replay);
         let decoded = decode_file(&encode_file(&doc).unwrap()).unwrap();
         let replay = decoded.replay.expect("replay");
@@ -2088,16 +2094,30 @@ mod tests {
                 remaining_critical_secs: 10,
             },
             retention: ReplayRetention::OverwriteUnprotected,
-            angles: vec![AngleDto {
-                id: 3,
-                name: "Cam".into(),
-                source: AngleSourceKind::Input,
-                scene_id: 0,
-                input_id: 9,
-                audio: AngleAudio::Unit,
-                audio_unit_id: 2,
-                encoder: AngleEncoder::Gpu,
-            }],
+            angles: vec![
+                AngleDto {
+                    id: 3,
+                    name: "Cam".into(),
+                    source: AngleSourceKind::Input,
+                    scene_id: 0,
+                    input_id: 9,
+                    audio: AngleAudio::Unit,
+                    audio_unit_id: 2,
+                    encoder: AngleEncoder::Gpu,
+                },
+                // A second angle carries the other audio choice, so the round-trip test
+                // covers every value the document can hold rather than one of them.
+                AngleDto {
+                    id: 5,
+                    name: "Source".into(),
+                    source: AngleSourceKind::Scene,
+                    scene_id: 7,
+                    input_id: 0,
+                    audio: AngleAudio::Source,
+                    audio_unit_id: 0,
+                    encoder: AngleEncoder::Cpu,
+                },
+            ],
             events: vec![ReplayEventDto {
                 id: 4,
                 recording_uuid: "rec-4".into(),
@@ -2181,7 +2201,7 @@ mod tests {
     #[test]
     fn replay_document_survives_a_save_and_a_load() {
         use crate::session::replay::{
-            ReplayRecordingDto, ReplayRetention, ReplayTransitionKind, ReplayTransitionTiming,
+            ReplayRetention, ReplayTransitionKind, ReplayTransitionTiming,
         };
         let json = br#"{
   "version": 2,

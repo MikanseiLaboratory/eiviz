@@ -96,6 +96,16 @@ pub struct Clip {
     pub transition: ClipTransition,
 }
 
+/// Below this a speed or a rate is treated as unusable. A clip whose speed is zero would
+/// divide by zero to place the playhead, and a transport cannot mean "do not move" with a
+/// speed (pause is its own control), so every reader substitutes full speed instead.
+const MIN_SPEED: f64 = 1e-6;
+
+/// A speed the transport can divide by: never zero.
+fn usable_speed(speed: f64) -> f64 {
+    if speed.abs() < MIN_SPEED { 1.0 } else { speed }
+}
+
 impl Clip {
     /// Angle whose recording supplies this clip's audio. `None` means silence.
     pub fn audio_angle(&self) -> Option<u32> {
@@ -105,27 +115,19 @@ impl Clip {
             ClipAudioSource::Angle(id) => Some(id),
         }
     }
-}
 
-impl Clip {
     /// Output frames the clip occupies on its own, before any transition.
     /// `in_frame` and `out_frame` are both inclusive, so a span of 2 is 3 frames.
     pub fn length(&self) -> f64 {
         let span = (self.out_frame as f64 - self.in_frame as f64).abs() + 1.0;
-        let speed = self.speed.abs().max(1e-6);
-        (span / speed).max(1.0)
+        (span / usable_speed(self.speed).abs()).max(1.0)
     }
 
     /// Source frame `offset` output frames into the clip.
     /// Fractional source position, so playback audio can interpolate instead of
     /// stepping a whole frame at slow motion.
     pub fn source_position(&self, offset: f64) -> f64 {
-        let speed = if self.speed.abs() < 1e-6 {
-            1.0
-        } else {
-            self.speed
-        };
-        let value = self.in_frame as f64 + offset * speed;
+        let value = self.in_frame as f64 + offset * usable_speed(self.speed);
         let low = self.in_frame.min(self.out_frame) as f64;
         let high = self.in_frame.max(self.out_frame) as f64;
         value.clamp(low, high).max(0.0)
@@ -223,6 +225,13 @@ impl Transport {
 
     pub fn is_live(&self) -> bool {
         self.live
+    }
+
+    /// The angle whose recording a live view is following, or `None` when the
+    /// transport is not live. A live view has no clip, so this is what tells the
+    /// mixer which angle's sound belongs with the picture it is showing.
+    pub fn live_angle(&self) -> Option<u32> {
+        (self.live && self.live_angle != 0).then_some(self.live_angle)
     }
 
     /// Plays one clip that is not part of a playlist. The Replay API still needs
@@ -324,17 +333,13 @@ impl Transport {
             }
             return;
         }
-        let speed = if updated.speed.abs() < 1e-6 {
-            1.0
-        } else {
-            updated.speed
-        };
+        let speed = usable_speed(updated.speed);
         self.position = ((source as f64 - updated.in_frame as f64) / speed).max(0.0);
         self.current = Some(updated);
     }
 
     pub fn set_rate(&mut self, rate: f64) {
-        if rate.abs() > 1e-6 {
+        if rate.abs() > MIN_SPEED {
             self.rate = rate;
         }
     }
@@ -372,11 +377,7 @@ impl Transport {
     /// Seeks inside the current clip to an absolute source frame.
     pub fn seek_source(&mut self, frame: u64) {
         if let Some(current) = &self.current {
-            let speed = if current.speed.abs() < 1e-6 {
-                1.0
-            } else {
-                current.speed
-            };
+            let speed = usable_speed(current.speed);
             self.position = ((frame as f64 - current.in_frame as f64) / speed).max(0.0);
             self.shown = None;
         }
@@ -593,7 +594,7 @@ impl Transport {
     /// Source frames per output frame, signed: negative plays backwards.
     pub fn playback_speed(&self) -> f64 {
         let clip_speed = self.current.as_ref().map(|clip| clip.speed).unwrap_or(1.0);
-        if clip_speed.abs() < 1e-6 {
+        if clip_speed.abs() < MIN_SPEED {
             1.0
         } else {
             clip_speed * self.rate
@@ -965,7 +966,7 @@ mod tests {
         let frames = play_out(&mut transport);
         assert_eq!(frames.len(), 21 + 21 - 4, "overwrap takes time from both");
         assert_eq!(transport.clip().unwrap().uid, "b");
-        assert_eq!(transport.playing, false, "the playlist ran out");
+        assert!(!transport.playing, "the playlist ran out");
 
         // Additive: the same clips, with the 4 frames inserted between them.
         let mut transport = Transport::new();

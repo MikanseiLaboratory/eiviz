@@ -1,8 +1,7 @@
 //! Replay transport and the picture boundary.
 //!
 //! Nothing in this crate names a mixer type. The mixer implements [`FrameSink`]
-//! and [`FrameSource`] for whatever store it has open, and it uses [`channel`]
-//! for playout.
+//! for the store it is recording into, and uses [`channel`] for playout.
 
 pub mod channel;
 
@@ -29,12 +28,8 @@ pub trait FrameSink {
     ) -> Result<(), String>;
 }
 
-/// Playout pulls a picture back out for a channel input.
-pub trait FrameSource {
-    fn read_picture(&mut self, angle_id: u32, frame: u64, dst: &mut [u8]) -> Result<u32, String>;
-}
-
-/// Hands a picture to a sink. The mixer calls this instead of the store directly.
+/// Hands a picture to a sink. The mixer calls this instead of the store directly, so the
+/// two crates hand pictures over the same way.
 pub fn deliver_picture<S: FrameSink + ?Sized>(
     sink: &mut S,
     angle_id: u32,
@@ -43,17 +38,6 @@ pub fn deliver_picture<S: FrameSink + ?Sized>(
 ) -> Result<(), String> {
     sink.write_picture(angle_id, frame, picture)
 }
-
-/// Reads a picture back. `Ok` is the byte count written into `dst`.
-pub fn take_picture<S: FrameSource + ?Sized>(
-    source: &mut S,
-    angle_id: u32,
-    frame: u64,
-    dst: &mut [u8],
-) -> Result<u32, String> {
-    source.read_picture(angle_id, frame, dst)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,43 +58,28 @@ mod tests {
         }
     }
 
-    impl FrameSource for Memory {
-        fn read_picture(
-            &mut self,
-            _angle_id: u32,
-            _frame: u64,
-            dst: &mut [u8],
-        ) -> Result<u32, String> {
-            let n = self.written.len().min(dst.len());
-            dst[..n].copy_from_slice(&self.written[..n]);
-            Ok(n as u32)
-        }
-    }
-
     #[test]
     fn a_picture_crosses_the_boundary_without_a_mixer_type() {
         let mut memory = Memory {
             written: Vec::new(),
         };
         let pixels = [16u8, 128, 16, 128];
-        deliver_picture(
-            &mut memory,
-            1,
-            4,
-            Picture {
-                width: 2,
-                height: 1,
-                stride: 4,
-                layout: 0,
-                pixels: &pixels,
-                pts_100ns: 0,
-                fps_num: 60,
-                fps_den: 1,
-            },
-        )
-        .unwrap();
-        let mut out = [0u8; 4];
-        assert_eq!(take_picture(&mut memory, 1, 4, &mut out).unwrap(), 4);
-        assert_eq!(out, pixels);
+        memory
+            .write_picture(
+                1,
+                4,
+                Picture {
+                    width: 2,
+                    height: 1,
+                    stride: 4,
+                    layout: 0,
+                    pixels: &pixels,
+                    pts_100ns: 0,
+                    fps_num: 60,
+                    fps_den: 1,
+                },
+            )
+            .unwrap();
+        assert_eq!(memory.written, pixels);
     }
 }

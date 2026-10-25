@@ -1083,6 +1083,34 @@ pub(crate) fn replace_session_bytes(bytes: &[u8], expected_revision: u64) -> i32
     }
 }
 
+/// Applies one session mutation and answers with the code the host reads.
+///
+/// The mutation goes through the same path a Remote client uses, so a local edit and a
+/// remote one obey one set of rules: the same validation, the same Replay quota check,
+/// and the same conflict handling.
+pub(crate) fn mutate_session_bytes(bytes: &[u8]) -> i32 {
+    let mutation = match serde_json::from_slice::<eiviz_control::command::SessionMutation>(bytes) {
+        Ok(mutation) => mutation,
+        Err(error) => {
+            let message = format!("session mutation is not valid JSON: {error}");
+            crate::diag::error(&message);
+            report_session_error(&message);
+            return -ERR_INVALID_ARGUMENT;
+        }
+    };
+    match control().lock() {
+        Ok(mut svc) => match svc.mutate_session(mutation, None, "c-abi") {
+            Ok(_) => OK,
+            Err(error) => {
+                crate::diag::error(error.message());
+                report_session_error(error.message());
+                -error.to_abi()
+            }
+        },
+        Err(_) => -ERR_INVALID_ARGUMENT,
+    }
+}
+
 /// Records why a session change was refused, so `mixer_last_error` can hand the
 /// reason to the host instead of a code alone.
 fn report_session_error(message: &str) {

@@ -1,5 +1,3 @@
-using System.IO;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Automation;
@@ -45,8 +43,13 @@ public partial class ReplayWindow : Window
     private IReadOnlyList<ReplayPlaylistInfo> _playlistChoices = [];
     private uint _channel;
     private ulong? _inFrame;
-    /// <summary>True while the channel follows the recording edge instead of a clip.</summary>
-    private bool _live = true;
+    /// <summary>
+    /// Where the channel is: at the live edge, playing recorded material, or paused. One
+    /// value rather than a live flag and a playing flag, because the two could disagree and
+    /// did — a seek cleared one and not the other, and the deck then showed a live button
+    /// over a paused channel.
+    /// </summary>
+    private ReplayTransportState _transport = ReplayTransportState.AtEdge;
     /// <summary>True while the playlist goes round again at its end.</summary>
     private bool _looping;
     /// <summary>
@@ -58,7 +61,8 @@ public partial class ReplayWindow : Window
     private ulong _headerOut;
     private ulong _headerPosition;
     private long _headerAt;
-    private bool _headerPlaying;    /// <summary>The operator picked a camera in this window since it last loaded.</summary>
+    private bool _headerPlaying;
+    /// <summary>The operator picked a camera in this window since it last loaded.</summary>
     private bool _angleEdited;
     /// <summary>Events this window deleted, so a merge does not put them back.</summary>
     private readonly HashSet<ulong> _deletedEvents = [];
@@ -66,6 +70,14 @@ public partial class ReplayWindow : Window
     private readonly HashSet<string> _deletedClips = [];
     /// <summary>True while the input picture is a grid of every angle.</summary>
     private bool _multiview;
+    /// <summary>
+    /// One angle tile. Wider than 16:9 and shorter than a full picture, so a deck with
+    /// several angles keeps the event and playlist lists in view: those lists are where
+    /// the operator works, and a full-height picture per angle pushes them off the
+    /// window. The picture is scaled to fit inside, so nothing is cropped.
+    /// </summary>
+    private const double AngleTileWidth = 220;
+    private const double AngleTileHeight = 100;
     /// <summary>True while the seek slider is being moved to match the channel.</summary>
     private bool _sliderGuard;
     private ulong _outFrame;
@@ -74,7 +86,6 @@ public partial class ReplayWindow : Window
     /// is taken, so this, not <c>_inFrame</c>, decides whether Mark Out may run.
     /// </summary>
     private bool _markOpen;
-    private bool _playing;
     /// <summary>
     /// True while the mixer is recording. A Remote cannot read it, so it stays null
     /// there and the deck keeps both buttons available.
@@ -83,7 +94,7 @@ public partial class ReplayWindow : Window
     private int _speedMilli = 1000;
     private bool _loadingTransition;
     private TagCheckPanel? _clipTags;
-    private readonly List<ClipAudioChoice> _clipAudio = [];
+
     /// <summary>
     /// A message the operator has to see, held over the state line for a few ticks.
     /// The state line is rewritten every poll, so a notice that is not repeated
@@ -91,14 +102,12 @@ public partial class ReplayWindow : Window
     /// </summary>
     private string _notice = "";
     private int _noticeTicks;
-    /// Export states, matching the module's `EXPORT_*`.
-    private const uint ExportIdle = 0;
-    private const uint ExportRunning = 1;
-    private const uint ExportDone = 2;
-    private const uint ExportFailed = 3;
-    private const uint ExportCancelled = 4;
-    private readonly Queue<ExportJobSpec> _exportQueue = new();
-    private bool _exporting;
+    /// <summary>
+    /// The files an export writes, in order, and the progress of the one running. Several
+    /// files (one per angle) go out one after another, because the store runs one export at
+    /// a time.
+    /// </summary>
+    private readonly ReplayExportController _export = new();
 
     private static IEivizBackend? Backend => (Application.Current as App)?.Backend;
 
@@ -111,6 +120,8 @@ public partial class ReplayWindow : Window
         InitializeComponent();
         // The waveform doubles as the seek bar.
         Waveform.SeekRequested += OnWaveformSeek;
+        Waveform.InRequested += OnWaveformMarkIn;
+        Waveform.OutRequested += OnWaveformMarkOut;
         _headerTimer.Tick += (_, _) => UpdateHeader();
         Closed += (_, _) => _headerTimer.Stop();
 
@@ -177,13 +188,17 @@ public partial class ReplayWindow : Window
         var state = Backend?.ReplayChannelState(_channel);
         if (state is { } mixer)
         {
-            var wasPlaying = _playing;
-            _playing = mixer.Playing != 0;
+            var wasPlaying = _transport.Playing;
+            // The mixer knows whether the channel is advancing; the deck only knows what it
+            // last asked for, and the two drift when a clip ends or a recording stops. Where
+            // the picture came from is the operator's choice, so only the playing half is
+            // taken from the mixer.
+            _transport = ReplayTransportRules.Adopt(_transport, mixer.Playing != 0);
             _headerOut = mixer.OutFrame;
             _headerPosition = mixer.PositionFrame;
             _headerPlaying = mixer.Playing > 0;
             _headerAt = System.Diagnostics.Stopwatch.GetTimestamp();
-            if (wasPlaying != _playing)
+            if (wasPlaying != _transport.Playing)
             {
                 UpdatePlayButton();
                 UpdatePauseButton();
@@ -248,7 +263,7 @@ public partial class ReplayWindow : Window
         }
         OutputLabel.Text = channel is null
             ? Loc.T("replay.noChannels")
-            : Loc.Format("replay.outputLabel", channel.Label, _playing ? Loc.T("replay.playing") : Loc.T("replay.stopped"));
+            : Loc.Format("replay.outputLabel", channel.Label, _transport.Playing ? Loc.T("replay.playing") : Loc.T("replay.stopped"));
         // Whether the channel reaches the program is the operator's business: the deck
         // reports what the channel is sending, not where it is used.
 
@@ -288,20 +303,55 @@ public partial class ReplayWindow : Window
     {
         if (_replay is null)
             return;
-        var lists = ReplayModel.Playlists(_replay);
-        if (lists.Count == 0)
+        // Everything below sets the picker's selection itself, which raises SelectionChanged.
+        // That is the deck showing what the channel plays, not the operator picking a list, so
+        // it must not be written back as an edit.
+        _rebuildingPlaylists = true;
+        try
         {
-            ReplayModel.EnsurePlaylist(_replay);
+            var lists = ReplayModel.Playlists(_replay);
+            if (lists.Count == 0)
+            {
+                ReplayModel.EnsurePlaylist(_replay, _channel);
+                lists = ReplayModel.Playlists(_replay);
+            }
+            // A channel that names no playlist gets its own, not the project's first one. Handing
+            // it the first list made a second channel show — and add to — the first channel's
+            // playlist, so two operators on two channels fought over one list.
+            //
+            // The assignment is written straight back: `Tick` re-parses the document whenever it
+            // changes, so a channel pointed at a list only in this copy was overwritten by the
+            // next poll before anything saved it, and the channel stayed playlist-less for ever.
+            var assigned = false;
+            var current = ReplayModel.ChannelPlaylist(_replay, _channel)
+                ?? ReplayModel.EnsurePlaylist(_replay, _channel);
+            if (ReplayModel.ChannelPlaylist(_replay, _channel) != current)
+            {
+                ReplayModel.SetChannelPlaylist(_replay, _channel, current);
+                assigned = true;
+            }
+            if (assigned)
+            {
+                // Written back at once, through the same difference the deck always sends:
+                // `Tick` re-parses the document whenever it changes, so a channel pointed at a
+                // list only in this copy lost the assignment to the next poll before anything
+                // saved it, and the channel stayed playlist-less for ever.
+                _playlistId = current;
+                SaveDocument();
+            }
             lists = ReplayModel.Playlists(_replay);
+            _playlistId = current;
+            _playlistChoices = lists;
+            PlaylistBox.ItemsSource = lists;
+            PlaylistBox.DisplayMemberPath = nameof(ReplayPlaylistInfo.Label);
+            PlaylistBox.SelectedItem = lists.FirstOrDefault(list => list.Id == current) ?? lists[0];
+            PlaylistNameBox.Text = lists.FirstOrDefault(list => list.Id == current)?.Name ?? "";
+            PlaylistRemoveButton.IsEnabled = lists.Count > 1;
         }
-        var current = ReplayModel.ChannelPlaylist(_replay, _channel) ?? lists[0].Id;
-        _playlistId = current;
-        _playlistChoices = lists;
-        PlaylistBox.ItemsSource = lists;
-        PlaylistBox.DisplayMemberPath = nameof(ReplayPlaylistInfo.Label);
-        PlaylistBox.SelectedItem = lists.FirstOrDefault(list => list.Id == current) ?? lists[0];
-        PlaylistNameBox.Text = lists.FirstOrDefault(list => list.Id == current)?.Name ?? "";
-        PlaylistRemoveButton.IsEnabled = lists.Count > 1;
+        finally
+        {
+            _rebuildingPlaylists = false;
+        }
     }
 
     private void Playlist_Changed(object sender, SelectionChangedEventArgs e)
@@ -310,6 +360,12 @@ public partial class ReplayWindow : Window
             return;
         if (choice.Id == _playlistId)
             return;
+        // Rebuilding the picker to follow a channel change selects a list itself. That is the
+        // deck showing what the channel already plays, not the operator choosing a new one, so
+        // it must not move the channel — doing so put the previous channel's list back on the
+        // channel the operator had just switched to.
+        if (_rebuildingPlaylists)
+            return;
         // Switching the picker moves the *channel*: that is what plays a playlist.
         _playlistId = choice.Id;
         ReplayModel.SetChannelPlaylist(_replay, _channel, choice.Id);
@@ -317,6 +373,9 @@ public partial class ReplayWindow : Window
         SaveDocument();
         RefreshPlaylist();
     }
+
+    /// <summary>True while the picker is rebuilt, so its own selection is not an edit.</summary>
+    private bool _rebuildingPlaylists;
 
     private void PlaylistName_Changed(object sender, RoutedEventArgs e)
     {
@@ -443,6 +502,11 @@ public partial class ReplayWindow : Window
                 _deletedClips.Clear();
                 RefreshPlaylistChoices();
                 _lastJson = _session.ReplayJson;
+                // A second Replay input adds a channel to the document, so the picker has to
+                // follow. It used to be built only when the window opened, which left a deck
+                // that was already on screen offering channel A alone: the operator added
+                // Replay B and could not select it without closing and reopening the deck.
+                BuildChannels();
                 BuildAngles();
                 RefreshEvents();
                 RefreshPlaylist();
@@ -455,55 +519,8 @@ public partial class ReplayWindow : Window
         RefreshExport();
     }
 
-    /// <summary>
-    /// Export progress, and the queue that follows it. Several files (one per
-    /// angle) are written one after another, because the store runs one export at
-    /// a time.
-    /// </summary>
-    /// <summary>
-    /// Follows a running export. The window shows the progress; the deck's status line
-    /// carries the same sentence so an operator watching the picture still sees it.
-    /// </summary>
-    private void RefreshExport()
-    {
-        if (!_exporting)
-            return;
-        var progress = Backend?.ReplayExportProgress() ?? "";
-        if (string.IsNullOrEmpty(progress))
-            return;
-        using var document = JsonDocument.Parse(progress);
-        var root = document.RootElement;
-        var state = root.TryGetProperty("state", out var stateValue) ? stateValue.GetUInt32() : 0;
-        var done = root.TryGetProperty("done", out var doneValue) ? doneValue.GetUInt64() : 0;
-        var total = root.TryGetProperty("total", out var totalValue) ? totalValue.GetUInt64() : 0;
-        var skipped = root.TryGetProperty("skipped", out var skippedValue) ? skippedValue.GetUInt64() : 0;
-        var message = root.TryGetProperty("message", out var messageValue) ? messageValue.GetString() ?? "" : "";
-        switch (state)
-        {
-            case ExportRunning:
-                Report(Loc.Format("replay.exportRunning", done, total, skipped));
-                return;
-            case ExportDone:
-                _exporting = false;
-                if (_exportQueue.Count > 0)
-                {
-                    StartNextExport();
-                    return;
-                }
-                Report(Loc.Format("replay.exportDone", done, skipped));
-                return;
-            case ExportFailed:
-                _exporting = false;
-                _exportQueue.Clear();
-                Report(Loc.Format("replay.exportError", message));
-                return;
-            case ExportCancelled:
-                _exporting = false;
-                _exportQueue.Clear();
-                Report(Loc.T("replay.exportCancelled"));
-                return;
-        }
-    }
+    /// <summary>Follows the running export and puts its sentence on the deck's line.</summary>
+    private void RefreshExport() => _export.Poll(Backend);
 
     /// <summary>One export sentence for the window and the deck's own status line.</summary>
     private void Report(string text)
@@ -512,31 +529,6 @@ public partial class ReplayWindow : Window
         ExportStatusText.Text = text;
     }
 
-    private void StartNextExport()
-    {
-        if (_exportQueue.Count == 0)
-        {
-            _exporting = false;
-            return;
-        }
-        var next = _exportQueue.Dequeue();
-        if (Backend is not { } backend)
-        {
-            _exporting = false;
-            _exportQueue.Clear();
-            Report(Loc.T("replay.exportFailed"));
-            return;
-        }
-        if (!backend.ReplayExportStart(next.Json, out var error))
-        {
-            _exporting = false;
-            _exportQueue.Clear();
-            Report(error.Length > 0 ? error : Loc.T("replay.exportFailed"));
-            return;
-        }
-        _exporting = true;
-        Report(Loc.Format("replay.exportStarted", next.Label));
-    }
     /// <summary>The export settings window, while it is open.</summary>
     private ReplayExportWindow? _exportWindow;
 
@@ -561,13 +553,17 @@ public partial class ReplayWindow : Window
         var modes = new List<ExportModeChoice>
         {
             new("Clip", Loc.T("replay.exportClip")),
-            new("Playlist", Loc.T("replay.exportPlaylist")),
+            // Two playlist modes: the clips as they play, and the same clips joined by
+            // cuts. The first is what the operator watched; the second is what they get
+            // when a file has to be plain cuts.
+            new("PlaylistWithTransitions", Loc.T("replay.exportPlaylistTransitions")),
+            new("Playlist", Loc.T("replay.exportPlaylistCut")),
             new("Angle", Loc.T("replay.exportAngle")),
             new("AllAngles", Loc.T("replay.exportAllAngles")),
         };
         var window = new ReplayExportWindow(
             modes,
-            BuildSegments,
+            BuildRequest,
             ExportFormat,
             () => [.. ExportAngles().Select(angle => (angle.Id, angle.Label))],
             () => _recording == true,
@@ -577,32 +573,42 @@ public partial class ReplayWindow : Window
         window.Show();
     }
 
-    /// <summary>Hands one export body to the mixer and reports it in the window.</summary>
-    private void StartExport(string body, string label)
+    /// <summary>Hands one export body to the controller, which writes it in turn.</summary>
+    private void StartExport(string body, string label) => _export.Start(body, label, Backend);
+    /// <summary>
+    /// What the chosen mode exports, in order.
+    ///
+    /// The playlist modes hand the clips over with their transitions, speeds, gains and
+    /// audio choices, because that is what "export the playlist" means: the programme the
+    /// operator watched, not the same frames joined by cuts. The angle modes are plain
+    /// runs of a whole recording, where there is no playlist to reproduce.
+    /// </summary>
+    private ReplayExportRequest BuildRequest(string mode)
     {
-        _exportQueue.Enqueue(new ExportJobSpec(body, label));
-        if (_exporting)
-            return;
-        StartNextExport();
-    }
-    /// <summary>Segments the chosen mode writes, in order.</summary>
-    private List<(uint AngleId, ulong From, ulong To)> BuildSegments(string mode)
-    {
-        var result = new List<(uint, ulong, ulong)>();
+        var request = new ReplayExportRequest();
         if (_replay is null)
-            return result;
+            return request;
         switch (mode)
         {
             case "Clip":
                 if (PlaylistList.SelectedItem is ClipRow row
                     && Clips().FirstOrDefault(item => item.Uid == row.Uid) is { } selected)
                 {
-                    result.Add((selected.AngleId, selected.InFrame, selected.OutFrame));
+                    // A single clip has nothing to join to, so its transition is not
+                    // exported: there is no next clip for it to dissolve into.
+                    request.AddClip(selected, null);
                 }
                 break;
-            case "Playlist":
+            case "PlaylistWithTransitions":
                 foreach (var clip in Clips())
-                    result.Add((clip.AngleId, clip.InFrame, clip.OutFrame));
+                    request.AddClip(clip, ReplayTransitionExport.From(clip.Transition));
+                break;
+            case "Playlist":
+                // Cuts only is exported as plain runs of frames, not as clips with no
+                // transition: that way the request never asks the module to compose
+                // anything, and the file comes out the same either way.
+                foreach (var clip in Clips())
+                    request.AddSegment(clip.AngleId, clip.InFrame, clip.OutFrame);
                 break;
             case "Angle":
             case "AllAngles":
@@ -610,13 +616,13 @@ public partial class ReplayWindow : Window
                 {
                     var range = Backend?.ReplayAngleRange(angle.Id);
                     if (range is { } bounds)
-                        result.Add((angle.Id, bounds.First, bounds.Last));
+                        request.AddSegment(angle.Id, bounds.First, bounds.Last);
                     if (mode == "Angle")
                         break;
                 }
                 break;
         }
-        return result;
+        return request;
     }
 
     /// <summary>Angles in the order an export should walk them: the one on air first.</summary>
@@ -654,9 +660,6 @@ public partial class ReplayWindow : Window
     {
     }
 
-
-    private sealed record ExportJobSpec(string Json, string Label);
-
     private unsafe void RefreshStatus()
     {
         if (_replay is null)
@@ -684,7 +687,7 @@ public partial class ReplayWindow : Window
             _recording = stats.State == 1;
             StateText.Text = stats.State switch
             {
-                1 => RecordingText(stats),
+                1 => ReplayHealthText.Recording(stats),
                 2 => Loc.T("replay.stateStopped"),
                 _ => Loc.T("replay.stateIdle")
             };
@@ -729,7 +732,7 @@ public partial class ReplayWindow : Window
         SetLit(RecordButton, _recording == true, Color.FromRgb(0xE0, 0x52, 0x52));
         SetLit(MarkInButton, _markOpen, Color.FromRgb(0x7F, 0xD1, 0x4B));
         SetLit(CancelMarkButton, _markOpen, Color.FromRgb(0xE0, 0x52, 0x52));
-        SetLit(LiveButton, _live, Color.FromRgb(0x7F, 0xD1, 0x4B));
+        SetLit(LiveButton, _transport.Live, Color.FromRgb(0x7F, 0xD1, 0x4B));
 
         // Waveform of the angle the operator is watching, with the marks on it. The
         // peaks come from the recording machine, so a Remote has none to draw.
@@ -788,14 +791,15 @@ public partial class ReplayWindow : Window
         {
             var elapsed = (System.Diagnostics.Stopwatch.GetTimestamp() - _headerAt)
                 / (double)System.Diagnostics.Stopwatch.Frequency;
-            var advanced = elapsed * rate * (_speedMilli / 1000.0);
-            if (advanced > 0)
-                position += (ulong)advanced;
+            position += ReplayTransportMath.FramesAdvanced(elapsed, rate, _speedMilli);
         }
         if (_headerOut <= position || _headerOut <= _headerPosition)
             return;
+        // The guard above leaves something to count down, so this is always positive; the
+        // helper still answers 0 rather than wrapping if that ever stops holding.
+        var remaining = ReplayTransportMath.RemainingFrames(_headerOut, position);
         RecordTcLabel.Text = Loc.T("replay.clipRemaining");
-        RecordTcText.Text = "-" + ReplayModel.Timecode(_headerOut - position, fps);
+        RecordTcText.Text = "-" + ReplayModel.Timecode(remaining, fps);
     }
 
     /// <summary>
@@ -820,13 +824,13 @@ public partial class ReplayWindow : Window
     /// <summary>Holds the picture; presses again to continue from the same frame.</summary>
     private void PlaylistPause_Click(object sender, RoutedEventArgs e)
     {
-        var playing = !_playing;
-        if (Backend?.ReplayTransport(_channel, playing, _speedMilli, -1) != true)
+        var action = ReplayTransportRules.Toggle(_transport);
+        if (Backend?.ReplayTransport(_channel, action.Playing, _speedMilli, action.SeekFrame) != true)
         {
             Warn(Refusal(Loc.T("replay.commandRefused")));
             return;
         }
-        _playing = playing;
+        _transport = action.Next;
         UpdatePlayButton();
         UpdatePauseButton();
         RefreshOnAir();
@@ -834,8 +838,8 @@ public partial class ReplayWindow : Window
 
     private void UpdatePauseButton()
     {
-        PlaylistPauseButton.Content = Loc.T(_playing ? "replay.pause" : "replay.resume");
-        PlaylistPauseButton.ToolTip = Loc.T(_playing ? "replay.pauseHint" : "replay.resumeHint");
+        PlaylistPauseButton.Content = Loc.T(_transport.Playing ? "replay.pause" : "replay.resume");
+        PlaylistPauseButton.ToolTip = Loc.T(_transport.Playing ? "replay.pauseHint" : "replay.resumeHint");
     }
 
     /// <summary>
@@ -941,21 +945,6 @@ public partial class ReplayWindow : Window
             RefreshPlaylist();
         }
     }
-    /// <summary>
-    /// What the recorder is doing, in the operator's words. A disk that ran out of
-    /// room says so; a store that has not measured free space yet reports zero,
-    /// which must not read as "full".
-    /// </summary>
-    private static string RecordingText(MixerReplayStats stats)
-    {
-        if ((stats.Issues & ReplayIssues.StorageFull) != 0)
-            return Loc.T("replay.stateRecordingNoSpace");
-        if (stats.RemainingSecs == uint.MaxValue)
-            return Loc.T("replay.stateRecordingUnknown");
-        return Loc.Format(
-            "replay.stateRecording",
-            TimeSpan.FromSeconds(stats.RemainingSecs).ToString(@"h\:mm\:ss"));
-    }
 
     private uint ActiveAngleId()
     {
@@ -978,32 +967,8 @@ public partial class ReplayWindow : Window
         MixerReplayAngleStats angle,
         bool hasAngle)
     {
-        if (!hasAngle)
-        {
-            // Without a selected angle there is no delivery figure, but why the
-            // recorder is unhappy is still worth reading.
-            HealthText.Text = ReplayIssues.Text(stats.Issues);
-            return;
-        }
-        HealthText.Text = Loc.Format(
-            "replay.healthDelivery",
-            angle.FramesWritten,
-            stats.FramesOffered,
-            stats.FramesPushed,
-            angle.DroppedReadback)
-            + "  "
-            + Loc.Format(
-                "replay.healthDisk",
-                angle.DroppedEncode,
-                angle.DroppedWrite,
-                angle.Segments,
-                angle.EncodeQueueLen,
-                angle.EncodeQueueCap,
-                angle.WriteLatencyP95Ms);
-        // The numbers say how much was lost; the issues say why.
-        var issues = ReplayIssues.Text(stats.Issues);
-        if (issues.Length > 0)
-            HealthText.Text += "  " + issues;
+        // The sentence itself lives in ReplayHealthText, where both hosts build the same one.
+        HealthText.Text = ReplayHealthText.Line(stats, angle, hasAngle);
     }
 
     private void BuildChannels()
@@ -1011,16 +976,36 @@ public partial class ReplayWindow : Window
         if (_replay is null)
             return;
         var channels = ReplayModel.Channels(_replay);
-        _channel = channels.Count > 0 ? channels[0].Index : 0;
-        ChannelBox.ItemsSource = channels.Select(channel => new ChannelChoice(channel.Index, channel.Label)).ToList();
+        // The picker is rebuilt whenever the document changes — another input, a remote edit
+        // — so it has to keep the channel the operator is on. Snapping back to A on every
+        // rebuild would move the deck off channel B while they were working on it.
+        var previous = _channel;
+        var choices = channels.Select(channel => new ChannelChoice(channel.Index, channel.Label)).ToList();
+        var keep = choices.FindIndex(choice => choice.Index == previous);
+        ChannelBox.ItemsSource = choices;
         ChannelBox.DisplayMemberPath = nameof(ChannelChoice.Label);
-        ChannelBox.SelectedIndex = 0;
+        var index = keep >= 0 ? keep : 0;
+        ChannelBox.SelectedIndex = index;
+        _channel = choices.Count > 0 ? choices[index].Index : 0;
     }
 
     private void ChannelBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (ChannelBox.SelectedItem is ChannelChoice choice)
-            _channel = choice.Index;
+        if (ChannelBox.SelectedItem is not ChannelChoice choice)
+            return;
+        if (_channel == choice.Index)
+            return;
+        _channel = choice.Index;
+        // Each channel plays its own playlist, so the list on screen has to follow the
+        // channel. Without this the deck kept showing — and adding to — the playlist of the
+        // channel the operator had just left, which put channel B's clips on channel A's list
+        // and left B with nothing to play.
+        if (_replay is null)
+            return;
+        RefreshPlaylistChoices();
+        RefreshPlaylist();
+        RefreshStatus();
+        RetargetMonitors();
     }
 
     /// <summary>
@@ -1114,6 +1099,7 @@ public partial class ReplayWindow : Window
             row.DurationText = ReplayModel.Duration(entry.InFrame, entry.OutFrame, fps);
             row.Name = entry.Name;
             row.Protected = entry.Protected;
+            row.TagsText = string.Join(", ", entry.Tags);
             row.IsLoading = false;
             if (previous is null)
                 row.PropertyChanged += EventRow_Changed;
@@ -1138,6 +1124,19 @@ public partial class ReplayWindow : Window
                 entry["name"] = row.Name.Trim();
             if (e.PropertyName == nameof(EventRow.Protected))
                 entry["protected"] = row.Protected;
+            if (e.PropertyName == nameof(EventRow.TagsText))
+            {
+                // Written as the document holds tags: a list of trimmed names, with the
+                // blanks dropped so a stray comma does not create an empty tag.
+                var tags = new JsonArray();
+                foreach (var tag in row.TagsText.Split(','))
+                {
+                    var name = tag.Trim();
+                    if (name.Length > 0 && !tags.Any(item => item?.GetValue<string>() == name))
+                        tags.Add(name);
+                }
+                entry["tags"] = tags;
+            }
             SaveDocument();
             return;
         }
@@ -1146,26 +1145,47 @@ public partial class ReplayWindow : Window
     /// <summary>Deletes the event the row belongs to.</summary>
     private void EventDeleteRow_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button { Tag: EventRow row } || _replay is null)
+        if (sender is not Button { Tag: EventRow row })
             return;
+        if (!DeleteEvent(row))
+            return;
+        SaveDocument();
+        RefreshEvents();
+        RefreshPlaylist();
+    }
+
+    /// <summary>
+    /// Deletes an event, refusing a protected one.
+    ///
+    /// One path, because there were two: the row's button refused a protected event,
+    /// and the Delete key removed it anyway — and did not record the deletion, so the
+    /// merge put the event straight back with the next publish. A protected event is
+    /// the operator saying "the recording must not overwrite this"; deleting it from a
+    /// keypress is not that operator's decision to make.
+    /// </summary>
+    private bool DeleteEvent(EventRow row)
+    {
+        if (_replay is null)
+            return false;
         if (row.Protected)
         {
             Warn(Loc.T("replay.eventProtected"));
-            return;
+            return false;
         }
         if (_replay["events"] is not JsonArray events)
-            return;
+            return false;
         for (var index = 0; index < events.Count; index++)
         {
             if (events[index] is JsonObject entry && entry["id"]?.GetValue<ulong>() == row.Id)
             {
                 events.RemoveAt(index);
+                // Told to the merge, or the next publish reads the document still holding
+                // the event and treats it as one the window never meant to delete.
                 _deletedEvents.Add(row.Id);
-                SaveDocument();
-                RefreshEvents();
-                return;
+                return true;
             }
         }
+        return false;
     }
 
     /// <summary>Cues the clip this event stands for: the newest clip of that recording.</summary>
@@ -1181,7 +1201,10 @@ public partial class ReplayWindow : Window
             Warn(Refusal(Loc.T("replay.cueRefused")));
             return;
         }
-        _live = false;
+        // Cueing an event parks the picture on its first frame; it does not start playing,
+        // and it is no longer the live edge. Only the edge half moves, so the play state the
+        // transport was handed survives.
+        _transport = ReplayTransportRules.LeaveEdge(_transport).Next;
         RefreshStatus();
     }
 
@@ -1199,63 +1222,7 @@ public partial class ReplayWindow : Window
         {
             var row = existing.FirstOrDefault(candidate => candidate.Uid == clip.Uid)
                 ?? new ClipRow { Uid = clip.Uid, InFrame = clip.InFrame, OutFrame = clip.OutFrame, AngleId = clip.AngleId };
-            row.IsLoading = true;
-            row.RecordingUuid = clip.RecordingUuid;
-            row.InText = Stamp(clip.InFrame, clip.RecordingUuid);
-            row.OutText = Stamp(clip.OutFrame, clip.RecordingUuid);
-            var duration = ReplayModel.Duration(clip.InFrame, clip.OutFrame, fps);
-            row.DurationText = ClipIsExpired(clip) ? duration + " " + Loc.T("replay.expired") : duration;
-            row.AngleOptions = [.. angles.Select(angle => new Option<uint>(angle.Id, angle.Label))];
-            row.AngleOption = row.AngleOptions.FirstOrDefault(option => option.Value == clip.AngleId);
-            row.SpeedOptions =
-            [
-                new(250u, "25%"),
-                new(500u, "50%"),
-                new(750u, "75%"),
-                new(1000u, "100%"),
-                new(1500u, "150%"),
-                new(2000u, "200%"),
-            ];
-            row.SpeedOption = row.SpeedOptions.FirstOrDefault(option => option.Value == (uint)Math.Round(clip.Speed * 1000))
-                ?? row.SpeedOptions[3];
-            // The mixing unit's names, limited to the ones the replay path can draw: it
-            // composes two decoded frames, where the rest are GPU warps.
-            row.TransitionOptions =
-            [
-                new("Cut", Loc.T("replay.transitionCut")),
-                new("Dissolve", Loc.T("replay.transitionDissolve")),
-                new("Dip", Loc.T("replay.transitionDip")),
-                new("Wipe", Loc.T("replay.transitionWipe")),
-                new("Slide", Loc.T("replay.transitionSlide")),
-                new("Push", Loc.T("replay.transitionPush")),
-            ];
-            row.TransitionOption = row.TransitionOptions.FirstOrDefault(option => option.Value == clip.Transition.Kind)
-                ?? row.TransitionOptions[0];
-            row.DirectionOptions =
-            [
-                new("Left", Loc.T("replay.directionLeft")),
-                new("Right", Loc.T("replay.directionRight")),
-                new("Up", Loc.T("replay.directionUp")),
-                new("Down", Loc.T("replay.directionDown")),
-            ];
-            row.DirectionOption = row.DirectionOptions.FirstOrDefault(option => option.Value == clip.Transition.Direction)
-                ?? row.DirectionOptions[0];
-            row.TimingOptions =
-            [
-                new("Overwrap", Loc.T("replay.timingOverwrap")),
-                new("Additive", Loc.T("replay.timingAdditive")),
-            ];
-            row.TimingOption = row.TimingOptions.FirstOrDefault(option => option.Value == clip.Transition.Timing)
-                ?? row.TimingOptions[0];
-            row.TransitionFrames = clip.Transition.DurationFrames.ToString();
-            row.GainDb = clip.GainDb.ToString("0.#");
-            row.PreservePitch = clip.PreservePitch;
-            row.AudioOptions = ClipAudioOptions();
-            row.AudioOption = row.AudioOptions.FirstOrDefault(choice =>
-                choice.Kind == clip.AudioKind
-                && (choice.Kind != "Angle" || choice.AngleId == clip.AudioAngleId)) ?? row.AudioOptions[0];
-            row.TagsText = clip.Tags.Count == 0 ? "" : "🏷 " + string.Join(", ", clip.Tags);
-            row.IsLoading = false;
+            ReplayClipRows.Fill(row, clip, angles, fps, Stamp, ClipIsExpired);
             if (existing.All(candidate => candidate.Uid != clip.Uid))
                 row.PropertyChanged += ClipRow_Changed;
             rows.Add(row);
@@ -1267,64 +1234,17 @@ public partial class ReplayWindow : Window
         RefreshPlaylistChoices();
     }
 
-    /// <summary>
-    /// Audio sources a clip can take: follow the picture's angle, silence, or another
-    /// angle's recording.
-    /// </summary>
-    private List<ClipAudioChoice> ClipAudioOptions()
-    {
-        var choices = new List<ClipAudioChoice>
-        {
-            new("FollowAngle", 0, Loc.T("replay.audioFollow")),
-            new("Silent", 0, Loc.T("replay.audioSilent")),
-        };
-        if (_replay is not null)
-        {
-            foreach (var angle in ReplayModel.Angles(_replay))
-                choices.Add(new ClipAudioChoice("Angle", angle.Id, angle.Label));
-        }
-        return choices;
-    }
-
     /// <summary>Writes a clip edit back to the document, one field at a time.</summary>
     private void ClipRow_Changed(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (sender is not ClipRow row || row.IsLoading)
             return;
-        var clip = FindClipJson(row.Uid);
-        if (clip is null)
+        if (FindClipJson(row.Uid) is not { } clip)
             return;
-        switch (e.PropertyName)
-        {
-            case nameof(ClipRow.AngleOption) when row.AngleOption is { } angle:
-                clip["angleId"] = angle.Value;
-                break;
-            case nameof(ClipRow.SpeedOption) when row.SpeedOption is { } speed:
-                clip["speedMilli"] = speed.Value;
-                break;
-            case nameof(ClipRow.TransitionOption) when row.TransitionOption is { } transition:
-                SetClipTransition(clip, transition.Value, null, null);
-                break;
-            case nameof(ClipRow.TimingOption) when row.TimingOption is { } timing:
-                SetClipTransition(clip, null, timing.Value, null);
-                break;
-            case nameof(ClipRow.TransitionFrames):
-                SetClipTransition(clip, null, null, ParseFrames(row.TransitionFrames));
-                break;
-            case nameof(ClipRow.GainDb):
-                clip["gainDb"] = ParseGain(row.GainDb);
-                break;
-            case nameof(ClipRow.PreservePitch):
-                clip["preservePitch"] = row.PreservePitch;
-                break;
-            case nameof(ClipRow.AudioOption) when row.AudioOption is { } audio:
-                clip["audioKind"] = audio.Kind;
-                clip["audioAngleId"] = audio.AngleId;
-                break;
-            default:
-                return;
-        }
-        SaveDocument();
+        // The cell names and the units it writes are a contract with the core, so the mapping
+        // lives in ReplayClipEdit where it can be read on its own.
+        if (ReplayClipEdit.Apply(clip, e.PropertyName, row))
+            SaveDocument();
     }
 
     /// <summary>The clip object in the document, so a cell can write to it.</summary>
@@ -1341,31 +1261,6 @@ public partial class ReplayWindow : Window
         return null;
     }
 
-    /// <summary>
-    /// Writes the transition, keeping the parts the caller did not change. A cut has no
-    /// length, so choosing it clears the frames instead of leaving a stale duration.
-    /// </summary>
-    private static void SetClipTransition(JsonObject clip, string? kind, string? timing, uint? frames)
-    {
-        var current = ReplayTransitionInfo.Read(clip["transition"]);
-        var nextKind = kind ?? current.Kind;
-        var nextTiming = timing ?? current.Timing;
-        var nextFrames = frames ?? current.DurationFrames;
-        if (nextKind == "Cut")
-            nextFrames = 0;
-        clip["transition"] = new JsonObject
-        {
-            ["kind"] = nextKind,
-            ["timing"] = nextTiming,
-            ["durationFrames"] = nextFrames,
-        };
-    }
-
-    private static uint ParseFrames(string text) =>
-        uint.TryParse(text.Trim(), out var frames) ? Math.Min(frames, 600u) : 0u;
-
-    private static double ParseGain(string text) =>
-        double.TryParse(text.Trim(), out var gain) ? Math.Clamp(gain, -60, 12) : 0;
 
     private void ClipCueRow_Click(object sender, RoutedEventArgs e)
     {
@@ -1470,42 +1365,45 @@ public partial class ReplayWindow : Window
         // plays one clip and stops. Writing it down is what makes "play the playlist"
         // mean the whole list.
         ReplayModel.SetChannelPlaylist(_replay, _channel, _playlistId);
-        // Settings stay with the session. This window writes events, playlists and the
-        // channel's playlist onto that document, so an Apply from Replay Setup is not
-        // replaced by the copy this window loaded earlier.
-        var json = ReplayModel.Serialize(
-            ReplayModel.WithDeckEdits(_session, _replay, _angleEdited, _deletedEvents, _deletedClips));
-        var previous = _session.ReplayJson;
-        _session.ReplayJson = json;
-        _lastJson = json;
         try
         {
             if (App.IsRemote)
             {
                 if (_main is { } main)
+                {
                     main.RemoteMutate(
-                        "{\"kind\":\"updateReplayDeck\",\"deck\":" + ReplayModel.SerializeDeck(_replay) + "}",
+                        ReplayModel.DeckMutation(_replay, _angleEdited, _deletedEvents, _deletedClips),
                         Title);
+                }
                 return;
             }
-            SessionStore.NextPublishSource = "deck";
-            SessionStore.Publish(_session);
+            // The core applies the difference: what this window changed is written, an
+            // event another writer added in the meantime is kept, and the two deletions
+            // this window actually made are the only ones made. The host used to merge
+            // those rules itself, and its copy drifted from the core's.
+            var mutation = ReplayModel.DeckMutation(_replay, _angleEdited, _deletedEvents, _deletedClips);
+            MutateLocal(mutation);
             _angleEdited = false;
             _deletedEvents.Clear();
             _deletedClips.Clear();
         }
         catch (Exception error)
         {
-            _session.ReplayJson = previous;
-            _lastJson = previous;
-            // The core refused the document, so this edit is not on air. Say which
-            // edit and why, instead of leaving the window showing something the
-            // mixer never took.
+            // The core refused the edit, so it is not on air. Say which edit and why,
+            // instead of leaving the window showing something the mixer never took.
             HostLog.WriteException(error);
-            Warn(string.IsNullOrWhiteSpace(error.Message)
-                ? Loc.T("replay.publishRefused")
-                : error.Message);
+            ApplySessionSettings();
         }
+    }
+
+    /// <summary>
+    /// Applies one session mutation to the live document, then reads back what the core
+    /// kept so the window shows the document rather than what it asked for.
+    /// </summary>
+    private void MutateLocal(string mutation)
+    {
+        SessionStore.MutateLocal(mutation);
+        ApplySessionSettings();
     }
 
     private void MarkIn_Click(object sender, RoutedEventArgs e) => MarkIn();
@@ -1729,7 +1627,7 @@ public partial class ReplayWindow : Window
         }
         ReplayModel.AppendClip(
             _replay,
-            ReplayModel.EnsurePlaylist(_replay),
+            ReplayModel.EnsurePlaylist(_replay, _playlistId, _channel),
             id,
             uuid,
             inFrame,
@@ -1783,12 +1681,8 @@ public partial class ReplayWindow : Window
             Warn(Loc.T("replay.needEvent"));
             return;
         }
-        var events = _replay["events"] as JsonArray ?? new JsonArray();
-        for (var index = events.Count - 1; index >= 0; index--)
-        {
-            if (events[index] is JsonObject entry && (entry["id"]?.GetValue<ulong>() ?? 0) == row.Id)
-                events.RemoveAt(index);
-        }
+        if (!DeleteEvent(row))
+            return;
         SaveDocument();
         RefreshEvents();
         RefreshPlaylist();
@@ -1808,7 +1702,7 @@ public partial class ReplayWindow : Window
         }
         if (source is null)
             return;
-        var playlistId = ReplayModel.EnsurePlaylist(_replay);
+        var playlistId = ReplayModel.EnsurePlaylist(_replay, _playlistId, _channel);
         var playlist = ReplayModel.Playlist(_replay, playlistId);
         if (playlist is null)
             return;
@@ -1897,8 +1791,6 @@ public partial class ReplayWindow : Window
         DefaultFramesBox.IsEnabled = kind != "Cut";
     }
 
-    private sealed record ClipAudioChoice(string Kind, uint AngleId, string Label);
-
     private IReadOnlyList<ReplayClipInfo> Clips() =>
         _replay is null ? [] : ReplayModel.Clips(_replay, _playlistId);
 
@@ -1939,10 +1831,9 @@ public partial class ReplayWindow : Window
         {
             if (item is not JsonObject clip || (clip["uid"]?.GetValue<string>() ?? "") != uid)
                 continue;
-            var array = new JsonArray();
-            foreach (var tag in tags)
-                array.Add(tag);
-            clip["tags"] = array;
+            // The same normalisation the row edit uses, so a tag added from the tag picker and
+            // one typed into the row land identically in the document.
+            clip["tags"] = ReplayClipEdit.Tags(string.Join(", ", tags));
         }
         SaveDocument();
         RefreshPlaylist();
@@ -2125,7 +2016,6 @@ public partial class ReplayWindow : Window
             Warn(Refusal(Loc.T("replay.cueRefused")));
             return;
         }
-        _live = false;
         if (_multiview)
             RefreshAngleGrid();
         if (Backend?.ReplayTransport(_channel, true, _speedMilli, -1) != true)
@@ -2133,7 +2023,9 @@ public partial class ReplayWindow : Window
             Warn(Refusal(Loc.T("replay.commandRefused")));
             return;
         }
-        _playing = true;
+        // Only once the mixer took it: a deck that says "playing" over a channel it failed
+        // to start shows a Pause button that would do nothing.
+        _transport = ReplayTransportRules.PlayRecorded().Next;
         UpdatePlayButton();
         RefreshStatus();
     }
@@ -2156,6 +2048,11 @@ public partial class ReplayWindow : Window
     /// <summary>
     /// One live tile per angle. Each tile is its own monitor on the angle's scene, which
     /// is the picture the recorder is taking; a click makes that angle the active one.
+    ///
+    /// The tiles are wider than 16:9 and shorter than a letterboxed picture, because a
+    /// replay deck shows them above the event and playlist lists: a full-height picture
+    /// per angle pushes those lists off the window, and the lists are what the operator
+    /// works in. The picture is scaled to fit, so nothing is cropped.
     /// </summary>
     private void RefreshAngleGrid()
     {
@@ -2179,9 +2076,9 @@ public partial class ReplayWindow : Window
         foreach (var angle in ReplayModel.Angles(_replay))
         {
             var selected = angle.Id == active;
-            var surface = new SwapchainHost { Width = 220, Height = 124, Margin = new Thickness(4) };
+            var surface = new SwapchainHost { Width = AngleTileWidth, Height = AngleTileHeight, Margin = new Thickness(4) };
             FrameworkElement picture = surface;
-            if (_live)
+            if (_transport.Live)
             {
                 var monitorId = _session.NextMonitorId++;
                 surface.Loaded += (_, _) => surface.RetargetMonitor(monitorId, angle.LiveSourceId);
@@ -2197,8 +2094,8 @@ public partial class ReplayWindow : Window
                 picture = new TextBlock
                 {
                     Text = Loc.T("replay.proxyMissing"),
-                    Width = 220,
-                    Height = 124,
+                    Width = AngleTileWidth,
+                    Height = AngleTileHeight,
                     Margin = new Thickness(4),
                     TextWrapping = TextWrapping.Wrap,
                     TextAlignment = TextAlignment.Center,
@@ -2228,7 +2125,7 @@ public partial class ReplayWindow : Window
             AutomationProperties.SetAutomationId(tile, $"AngleTile{angle.Id}");
             AutomationProperties.SetName(tile, angle.Label);
             AngleGridPanel.Children.Add(tile);
-            if (_live)
+            if (_transport.Live)
                 _angleHosts.Add(surface);
         }
     }
@@ -2257,7 +2154,9 @@ public partial class ReplayWindow : Window
             Warn(Refusal(Loc.T("replay.commandRefused")));
             return;
         }
-        _playing = false;
+        // Stopped where it is. A stop parked on the live feed keeps the LIVE lamp lit: the
+        // operator paused on the edge, they did not move anywhere.
+        _transport = ReplayTransportRules.StopInPlace(_transport).Next;
         UpdatePlayButton();
         RefreshStatus();
     }
@@ -2276,14 +2175,14 @@ public partial class ReplayWindow : Window
             Warn(Refusal(Loc.T("replay.commandRefused")));
             return;
         }
-        // Play from the edge: the transport takes the recording on from now.
+        // Play from the edge: the transport takes the recording on from now. The deck says
+        // so too — a parked state here left the button reading "Play" over a running feed.
         if (Backend.ReplayTransport(_channel, true, _speedMilli, -1) != true)
         {
             Warn(Refusal(Loc.T("replay.commandRefused")));
             return;
         }
-        _live = true;
-        _playing = true;
+        _transport = ReplayTransportRules.JumpToLive().Next;
         UpdatePlayButton();
         UpdatePauseButton();
         if (_multiview)
@@ -2305,9 +2204,11 @@ public partial class ReplayWindow : Window
         var span = (double)(bounds.Last - bounds.First);
         var frame = bounds.First + (ulong)Math.Round(span * e.NewValue / RecordingSlider.Maximum);
         var target = (long)Math.Min(frame, long.MaxValue);
-        if (Backend?.ReplayTransport(_channel, _playing, _speedMilli, target) != true)
+        if (Backend?.ReplayTransport(_channel, _transport.Playing, _speedMilli, target) != true)
             return;
-        _live = false;
+        // Off the edge, but the transport was handed the play state it already had and keeps it:
+        // a drag while paused must not start the channel, and one while playing must not stop it.
+        _transport = ReplayTransportRules.LeaveEdge(_transport).Next;
         Waveform.PositionFrame = frame;
         UpdatePlayhead();
         if (_multiview)
@@ -2337,14 +2238,20 @@ public partial class ReplayWindow : Window
         _sliderGuard = false;
     }
 
-
-    /// <summary>Returns the channel to the recording edge.</summary>
+    /// <summary>
+    /// Parks the channel on the recording edge without starting it.
+    ///
+    /// This is the LIVE button: an operator reviewing what just happened presses it to get
+    /// back to the newest frame, and expects to land there paused, ready to mark. Starting
+    /// the feed is what JumpLive does, and the two are separate buttons for that reason.
+    /// </summary>
     private void Live()
     {
         if (Backend?.ReplayJumpToNow(_channel) != true)
             Warn(Refusal(Loc.T("replay.commandRefused")));
-        _live = true;
-        _playing = false;
+        // Parked on the edge, not running: the live flag says where the picture came from,
+        // the play state says whether it is advancing.
+        _transport = ReplayTransportRules.ParkAtEdge().Next;
         UpdatePlayButton();
         if (_multiview)
             RefreshAngleGrid();
@@ -2371,63 +2278,60 @@ public partial class ReplayWindow : Window
     private FrameworkElement? TryProxyTile(uint angleId)
     {
         var frame = Backend?.ReplayChannelState(_channel)?.PositionFrame ?? 0UL;
+        // Sized for the proxy the mixer produces; a store that pads its rows hands back a
+        // stride of its own, which is reported below rather than assumed.
         var buffer = new byte[480 * 270 * 2];
         uint width;
         uint height;
+        uint sourceStride;
         unsafe
         {
             fixed (byte* ptr = buffer)
             {
-                if (MixerNative.ReplayCopyProxy(angleId, frame, ptr, (nuint)buffer.Length, &width, &height) == 0)
+                if (MixerNative.ReplayCopyProxy(
+                        angleId, frame, ptr, (nuint)buffer.Length, &width, &height, &sourceStride) == 0)
                     return null;
             }
         }
-        if (width == 0 || height == 0 || (ulong)width * height * 2 > (ulong)buffer.Length)
+        if (width == 0 || height == 0 || sourceStride < (ulong)width * 2)
+            return null;
+        // The picture has to fit the buffer we handed the mixer, and its whole length has to
+        // fit an int before a span can name it. Both are checked as 64-bit so the
+        // multiplication cannot wrap on the way to the comparison.
+        var sourceLength = (ulong)sourceStride * height;
+        if (sourceLength > (ulong)buffer.Length || sourceLength > int.MaxValue)
             return null;
         var bitmap = new System.Windows.Media.Imaging.WriteableBitmap(
             (int)width, (int)height, 96, 96, System.Windows.Media.PixelFormats.Bgra32, null);
         bitmap.Lock();
-        unsafe
+        try
         {
-            var dst = (byte*)bitmap.BackBuffer;
-            var stride = bitmap.BackBufferStride;
-            for (var y = 0; y < height; y++)
+            unsafe
             {
-                for (var x = 0; x < width; x += 2)
-                {
-                    var i = ((int)y * (int)width + (int)x) * 2;
-                    var u = (int)buffer[i] - 128;
-                    var y0 = (int)buffer[i + 1];
-                    var v = (int)buffer[i + 2] - 128;
-                    var y1 = (int)buffer[i + 3];
-                    WriteBgra(dst, stride, (int)x, (int)y, y0, u, v);
-                    if (x + 1 < width)
-                        WriteBgra(dst, stride, (int)x + 1, (int)y, y1, u, v);
-                }
+                var stride = bitmap.BackBufferStride;
+                var dst = new Span<byte>((byte*)bitmap.BackBuffer, stride * (int)height);
+                // The source's own stride, so a padded store does not slide the tile.
+                if (!ReplayUyvy.ToBgra(
+                        buffer.AsSpan(0, (int)sourceLength),
+                        (int)width, (int)height, dst, stride, (int)sourceStride))
+                    return null;
             }
+            bitmap.AddDirtyRect(new System.Windows.Int32Rect(0, 0, (int)width, (int)height));
         }
-        bitmap.AddDirtyRect(new System.Windows.Int32Rect(0, 0, (int)width, (int)height));
-        bitmap.Unlock();
+        finally
+        {
+            // Unlock even when the conversion refused the buffers, or the bitmap stays
+            // locked and the next frame cannot write to it.
+            bitmap.Unlock();
+        }
         return new System.Windows.Controls.Image
         {
             Source = bitmap,
-            Width = 220,
-            Height = 124,
+            Width = AngleTileWidth,
+            Height = AngleTileHeight,
             Margin = new Thickness(4),
             Stretch = System.Windows.Media.Stretch.Uniform
         };
-    }
-
-    private static unsafe void WriteBgra(byte* dst, int stride, int x, int y, int luma, int u, int v)
-    {
-        var c = luma + (int)(1.402 * v);
-        var g = luma - (int)(0.344136 * u + 0.714136 * v);
-        var b = luma + (int)(1.772 * u);
-        var p = dst + y * stride + x * 4;
-        p[0] = (byte)Math.Clamp(b, 0, 255);
-        p[1] = (byte)Math.Clamp(g, 0, 255);
-        p[2] = (byte)Math.Clamp(c, 0, 255);
-        p[3] = 255;
     }
 
     private void Play_Click(object sender, RoutedEventArgs e) => TogglePlay();
@@ -2435,10 +2339,10 @@ public partial class ReplayWindow : Window
     /// <summary>Starts or pauses the channel, from the button or the space bar.</summary>
     private void TogglePlay()
     {
-        var playing = !_playing;
-        if (Backend?.ReplayTransport(_channel, playing, _speedMilli, -1) == true)
+        var action = ReplayTransportRules.Toggle(_transport);
+        if (Backend?.ReplayTransport(_channel, action.Playing, _speedMilli, action.SeekFrame) == true)
         {
-            _playing = playing;
+            _transport = action.Next;
         }
         else
         {
@@ -2463,6 +2367,74 @@ public partial class ReplayWindow : Window
     private void StepForward_Click(object sender, RoutedEventArgs e) => Step(1);
 
     /// <summary>
+    /// Marks In on the frame the operator pointed at in the waveform.
+    ///
+    /// The deck's Mark In takes the live edge, which is right when the operator is
+    /// watching for the moment to happen. This is the other way round: the recording is
+    /// already there, the waveform shows where the quiet gap is, and the operator points
+    /// at it. Both marks are kept as ordinary frames on the recording, so an event made
+    /// this way is the same event as one taken live.
+    /// </summary>
+    private void OnWaveformMarkIn(ulong frame)
+    {
+        if (_replay is null || Backend?.IsRemote == true)
+            return;
+        _inFrame = frame;
+        _outFrame = 0;
+        _markOpen = true;
+        SetLit(MarkInButton, true, Color.FromRgb(0x7F, 0xD1, 0x4B));
+        SetLit(CancelMarkButton, true, Color.FromRgb(0xE0, 0x52, 0x52));
+        var fps = ReplayModel.Fps(_replay, _session);
+        InTcText.Text = Stamp(frame, TransportRecording());
+        OutTcText.Text = "--:--:--:--";
+        DurationTcText.Text = "--:--:--:--";
+        MarkOutButton.IsEnabled = true;
+        // The playhead follows the mark, so the picture shows the frame being cut on.
+        Backend?.ReplayTransport(_channel, _transport.Playing, _speedMilli, (long)Math.Min(frame, long.MaxValue));
+        Waveform.PositionFrame = frame;
+        Waveform.InFrame = frame;
+        if (_multiview)
+            RefreshAngleGrid();
+    }
+
+    /// <summary>
+    /// Marks Out on the frame the operator pointed at, and files the event. Unlike the
+    /// Mark Out button this does not ask the mixer for its live edge: the range is the
+    /// one the operator selected. The mixer refuses a range whose frames are not on the
+    /// recording, so an empty or expired range is reported rather than filed.
+    /// </summary>
+    private void OnWaveformMarkOut(ulong frame)
+    {
+        if (_replay is null || Backend?.IsRemote == true || !_markOpen)
+            return;
+        if (frame <= _inFrame)
+        {
+            Warn(Loc.T("replay.markOutBeforeIn"));
+            return;
+        }
+        if (Backend?.ReplayTransport(_channel, _transport.Playing, _speedMilli, (long)Math.Min(frame, long.MaxValue)) != true)
+        {
+            Warn(Refusal(Loc.T("replay.markOutFailed")));
+            return;
+        }
+        var name = Loc.Format("replay.eventName", ReplayModel.Events(_replay).Count + 1);
+        var markIn = _inFrame ?? MarkUnknown;
+        CreateEvent(TransportRecording(), markIn, frame, name);
+        _outFrame = frame;
+        _markOpen = false;
+        SetLit(MarkInButton, false, Colors.Transparent);
+        SetLit(CancelMarkButton, false, Colors.Transparent);
+        var fps = ReplayModel.Fps(_replay, _session);
+        OutTcText.Text = Stamp(frame, TransportRecording());
+        DurationTcText.Text = ReplayModel.Timecode(frame - markIn, fps);
+        MarkOutButton.IsEnabled = false;
+        Waveform.OutFrame = frame;
+        Waveform.HasOut = true;
+        RefreshEvents();
+        RefreshPlaylist();
+    }
+
+    /// <summary>
     /// Seeks the channel to the frame under the pointer. A drag emits one call per mouse
     /// move, and the mixer only needs the latest, so it is throttled to about one per
     /// frame.
@@ -2474,9 +2446,10 @@ public partial class ReplayWindow : Window
             return;
         _lastSeekAt = now;
         var target = (long)Math.Min(frame, long.MaxValue);
-        if (Backend?.ReplayTransport(_channel, _playing, _speedMilli, target) != true)
+        if (Backend?.ReplayTransport(_channel, _transport.Playing, _speedMilli, target) != true)
             return;
-        _live = false;
+        // Off the edge; the play state the transport was handed is the one it keeps.
+        _transport = ReplayTransportRules.LeaveEdge(_transport).Next;
         Waveform.PositionFrame = frame;
         if (_multiview)
             RefreshAngleGrid();
@@ -2545,7 +2518,7 @@ public partial class ReplayWindow : Window
         // mark and jumped to it, which is not what the buttons say they do.
         if (Backend?.ReplayStep(_channel, delta) == true)
         {
-            _playing = false;
+            _transport = ReplayTransportRules.Stop().Next;
             UpdatePlayButton();
             return;
         }
@@ -2569,8 +2542,8 @@ public partial class ReplayWindow : Window
         var target = Math.Clamp(low + delta, 0, high);
         if (Backend?.ReplayTransport(_channel, false, _speedMilli, target) != true)
             Warn(Loc.T("replay.commandRefused"));
-        _live = false;
-        _playing = false;
+        _transport = ReplayTransportRules.Stop().Next;
+
         UpdatePlayButton();
         if (_multiview)
             RefreshAngleGrid();
@@ -2581,7 +2554,7 @@ public partial class ReplayWindow : Window
         if (sender is not Button { Tag: string tag } || !int.TryParse(tag, out var milli))
             return;
         _speedMilli = milli;
-        if (Backend?.ReplayTransport(_channel, _playing, _speedMilli, -1) != true)
+        if (Backend?.ReplayTransport(_channel, _transport.Playing, _speedMilli, -1) != true)
             Warn(Loc.T("replay.commandRefused"));
         RefreshSpeedButtons();
     }
@@ -2595,10 +2568,10 @@ public partial class ReplayWindow : Window
     {
         foreach (var (button, milli) in new[]
                  {
-                     (Speed25Button, 250),
-                     (Speed50Button, 500),
-                     (Speed75Button, 750),
-                     (Speed100Button, 1000),
+                     (Speed25Button, ReplayTransportMath.Speeds[0]),
+                     (Speed50Button, ReplayTransportMath.Speeds[1]),
+                     (Speed75Button, ReplayTransportMath.Speeds[2]),
+                     (Speed100Button, ReplayTransportMath.Speeds[3]),
                  })
         {
             var active = milli == _speedMilli;
@@ -2666,226 +2639,9 @@ public partial class ReplayWindow : Window
 
     private void UpdatePlayButton()
     {
-        PlayButton.Content = Loc.T(_playing ? "replay.pause" : "replay.play");
-        PlayButton.ToolTip = Loc.T(_playing ? "replay.pauseHint" : "replay.playHint");
+        PlayButton.Content = Loc.T(_transport.Playing ? "replay.pause" : "replay.play");
+        PlayButton.ToolTip = Loc.T(_transport.Playing ? "replay.pauseHint" : "replay.playHint");
         RefreshSpeedButtons();
     }
 
-    private sealed record ChannelChoice(uint Index, string Label);
-
-    /// <summary>
-    /// One event, edited in its own row. The name and the protection flag are cells, so
-    /// an operator renaming or protecting an event does it where the event is.
-    /// </summary>
-    private sealed class EventRow : System.ComponentModel.INotifyPropertyChanged
-    {
-        private string _name = "";
-        private bool _protected;
-        private bool _loading = true;
-
-        public ulong Id { get; init; }
-
-        /// <summary>The recording this event was cut from; its timecode uses that clock.</summary>
-        public string RecordingUuid { get; set; } = "";
-
-        /// <summary>The range the operator marked, for cueing the event itself.</summary>
-        public ulong InFrame { get; set; }
-
-        public string InText { get; set; } = "";
-
-        public string OutText { get; set; } = "";
-
-        public string DurationText { get; set; } = "";
-
-        /// <summary>In, out and length, read-only: they come from the mark.</summary>
-
-        public string Name
-        {
-            get => _name;
-            set => Set(ref _name, value);
-        }
-
-        public bool Protected
-        {
-            get => _protected;
-            set => Set(ref _protected, value);
-        }
-
-        /// <summary>True while the window fills the row, so no write goes back to the document.</summary>
-        public bool IsLoading
-        {
-            get => _loading;
-            set => _loading = value;
-        }
-
-        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
-
-        /// <summary>What a screen reader and the automation tree read out.</summary>
-        public override string ToString() =>
-            string.IsNullOrWhiteSpace(Name) ? $"{InText} → {OutText}" : $"{Name}  ({InText} → {OutText})";
-
-        private void Set<T>(ref T field, T value, [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
-        {
-            if (System.Collections.Generic.EqualityComparer<T>.Default.Equals(field, value))
-                return;
-            field = value;
-            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
-        }
-    }
-
-    /// <summary>
-    /// One clip, edited in its own row. Every field an operator changes — angle, speed,
-    /// transition, length, gain, pitch, audio — is a cell of the row it belongs to, so
-    /// nothing is "select a clip, then use the controls somewhere else".
-    /// </summary>
-    private sealed class ClipRow : System.ComponentModel.INotifyPropertyChanged
-    {
-        /// <summary>The recording this clip was cut from; its timecode uses that clock.</summary>
-        public string RecordingUuid { get; set; } = "";
-
-        private Option<uint>? _angle;
-        private Option<uint>? _speed;
-        private Option<string>? _transition;
-        private Option<string>? _direction;
-        private Option<string>? _timing;
-        private ClipAudioChoice? _audio;
-        private string _transitionFrames = "0";
-        private string _gainDb = "0";
-        private bool _preservePitch;
-        private bool _loading = true;
-        private string _marker = "";
-
-        public string Uid { get; init; } = "";
-
-        /// <summary>The clip's own range, so the row can be matched with the channel.</summary>
-        public ulong InFrame { get; init; }
-
-        public ulong OutFrame { get; init; }
-
-        public uint AngleId { get; init; }
-
-        /// <summary>Marker shown while the channel is playing this clip.</summary>
-        public string Marker
-        {
-            get => _marker;
-            set => Set(ref _marker, value);
-        }
-
-        public string InText { get; set; } = "";
-
-        public string OutText { get; set; } = "";
-
-        public string DurationText { get; set; } = "";
-
-        /// <summary>In, out and length, read-only: they come from the mark.</summary>
-
-        public IReadOnlyList<Option<uint>> AngleOptions { get; set; } = [];
-
-        public IReadOnlyList<Option<uint>> SpeedOptions { get; set; } = [];
-
-        public IReadOnlyList<Option<string>> TransitionOptions { get; set; } = [];
-
-        public IReadOnlyList<Option<string>> TimingOptions { get; set; } = [];
-
-        /// <summary>Which way a Wipe, Slide or Push travels.</summary>
-        public IReadOnlyList<Option<string>> DirectionOptions { get; set; } = [];
-
-        public IReadOnlyList<ClipAudioChoice> AudioOptions { get; set; } = [];
-
-        public string TagsText { get; set; } = "";
-
-        public Option<uint>? AngleOption
-        {
-            get => _angle;
-            set => Set(ref _angle, value);
-        }
-
-        public Option<uint>? SpeedOption
-        {
-            get => _speed;
-            set => Set(ref _speed, value);
-        }
-
-        public Option<string>? TransitionOption
-        {
-            get => _transition;
-            set
-        {
-            if (_transition == value)
-                return;
-            _transition = value;
-            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(TransitionOption)));
-            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(DirectionVisibility)));
-            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(LengthVisibility)));
-        }
-        }
-
-        public Option<string>? DirectionOption
-        {
-            get => _direction;
-            set => Set(ref _direction, value);
-        }
-
-        /// <summary>
-        /// Direction and length only mean something for some transitions: a cut has no
-        /// edge to move and no time to spend. The cells hide instead of showing a
-        /// setting the mixer would ignore, the way the main window does it.
-        /// </summary>
-        public Visibility DirectionVisibility =>
-            _transition is { Value: "Wipe" or "Slide" or "Push" } ? Visibility.Visible : Visibility.Collapsed;
-
-        public Visibility LengthVisibility =>
-            _transition is { Value: "Cut" } ? Visibility.Collapsed : Visibility.Visible;
-        public Option<string>? TimingOption
-        {
-            get => _timing;
-            set => Set(ref _timing, value);
-        }
-
-        public ClipAudioChoice? AudioOption
-        {
-            get => _audio;
-            set => Set(ref _audio, value);
-        }
-
-        /// <summary>Frames the transition lasts, as text so it can be typed.</summary>
-        public string TransitionFrames
-        {
-            get => _transitionFrames;
-            set => Set(ref _transitionFrames, value);
-        }
-
-        public string GainDb
-        {
-            get => _gainDb;
-            set => Set(ref _gainDb, value);
-        }
-
-        public bool PreservePitch
-        {
-            get => _preservePitch;
-            set => Set(ref _preservePitch, value);
-        }
-
-        /// <summary>True while the window fills the row: no write goes back to the document.</summary>
-        public bool IsLoading
-        {
-            get => _loading;
-            set => _loading = value;
-        }
-
-        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
-
-        /// <summary>What a screen reader and the automation tree read out.</summary>
-        public override string ToString() =>
-            $"{InText} → {OutText}  {AngleOption?.Label ?? ""}  {SpeedOption?.Label ?? ""}";
-
-        private void Set<T>(ref T field, T value, [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
-        {
-            if (System.Collections.Generic.EqualityComparer<T>.Default.Equals(field, value))
-                return;
-            field = value;
-            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
-        }
-    }
 }

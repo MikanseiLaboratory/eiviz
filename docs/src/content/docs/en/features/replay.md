@@ -57,7 +57,10 @@ The Replay window is the operator's surface.
 - **Play all** sends the clips of the selected playlist to the channel in order, each with its own transition. Playback goes to the channel and does not depend on the channel being on air (to show it on the program, add the Replay input to a scene layer and take that scene). The deck says so when the channel is in no scene at all.
 - **Transport**: play, pause, step one frame, jog, 25 %, 50 %, 100 %, and Live to jump back to the recording edge. Stepping and jogging stay inside the mark.
 - **Keyboard**: `I` and `O` mark, `Space` plays or pauses, `←` and `→` step one frame, and `L` returns to the recording edge.
-- **Export**: write the selected clip, the whole playlist, one angle, or every angle to an MP4. Export runs on the machine that owns the recording.
+- **Export**: write the selected clip, the whole playlist with its transitions, the whole playlist as cuts, one angle, or every angle to an MP4. Export runs on the machine that owns the recording.
+  - **With transitions** produces the picture as it played: each clip's transition, speed, clip gain and audio choice are carried into the file.
+  - **As cuts** joins the same clips with hard cuts, for a short file to check or hand on.
+  - Export runs at a lower priority than recording. Exporting while a recording runs can drop frames from the export, never from the recording.
 
 ## Transitions
 

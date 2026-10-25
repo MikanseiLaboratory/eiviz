@@ -567,20 +567,16 @@ struct ReplayDocument {
     }
 
     /// Renames a playlist. An empty name is refused rather than saved.
+    ///
+    /// The revision is deliberately left alone: it marks the playlist's contents, and a name
+    /// is not content. Bumping it would tell the core the clips changed when none did.
+    @discardableResult
     mutating func renamePlaylist(_ playlistId: UInt64, name: String) -> Bool {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
-        var playlists = array("playlists")
-        for index in playlists.indices {
-            guard var playlist = playlists[index].objectValue,
-                  (playlist["id"]?.uint64Value ?? 0) == playlistId
-            else { continue }
+        return updatePlaylist(playlistId: playlistId, bumpRevision: false) { playlist in
             playlist["name"] = .string(trimmed)
-            playlists[index] = .object(playlist)
-            raw["playlists"] = .array(playlists)
-            return true
         }
-        return false
     }
 
     /// How many channels play this playlist, so it is not deleted under one.
@@ -731,19 +727,19 @@ struct ReplayDocument {
 
     /// Adds a clip for an event at the end of the playlist. Returns false when no
     /// angle is selected, because the control layer refuses to guess one.
+    @discardableResult
     mutating func appendClip(playlistId: UInt64, event: ReplayEventInfo, angleId: UInt32) -> Bool {
         guard angleId != 0 else { return false }
-        guard var playlists = raw["playlists"]?.arrayValue else { return false }
-        for index in playlists.indices {
-            guard var playlist = playlists[index].objectValue,
-                  (playlist["id"]?.uint64Value ?? 0) == playlistId
-            else { continue }
+        // Chosen before the edit, not inside it: the uid is unique across every playlist, so it
+        // has to read the whole document, and the edit below has the document borrowed.
+        let uid = uniqueClipUid(event.id)
+        return updatePlaylist(playlistId: playlistId) { playlist in
             var clips = playlist["clips"]?.arrayValue ?? []
             // A new clip starts on the playlist's default transition, so an
             // operator who sets "always dissolve" gets it without editing every clip.
             let fallback = playlist["defaultTransition"] ?? ReplayTransitionInfo.cut.value
             clips.append(.object([
-                "uid": .string(uniqueClipUid(event.id)),
+                "uid": .string(uid),
                 "source": .string("Angle"),
                 "angleId": .number(Double(angleId)),
                 "recordingUuid": .string(event.recordingUuid),
@@ -755,41 +751,55 @@ struct ReplayDocument {
                 "transition": fallback,
             ]))
             playlist["clips"] = .array(clips)
-            playlist["revision"] = .number(Double((playlist["revision"]?.uint64Value ?? 0) + 1))
-            playlists[index] = .object(playlist)
-            raw["playlists"] = .array(playlists)
-            return true
         }
-        return false
     }
 
     mutating func removeClip(playlistId: UInt64, uid: String) {
-        guard var playlists = raw["playlists"]?.arrayValue else { return }
+        updatePlaylist(playlistId: playlistId) { playlist in
+            playlist["clips"] = .array((playlist["clips"]?.arrayValue ?? []).filter { item in
+                (item.objectValue?["uid"]?.stringValue ?? "") != uid
+            })
+        }
+    }
+
+    /// Applies an edit to one playlist.
+    ///
+    /// Every playlist edit bumps the revision, because the core uses it to tell an edit from a
+    /// stale copy. Doing that in one place is what keeps a new edit from forgetting it.
+    ///
+    /// Returns whether the playlist was there, so a caller that adds to it can report that it
+    /// did not.
+    @discardableResult
+    private mutating func updatePlaylist(
+        playlistId: UInt64,
+        bumpRevision: Bool = true,
+        _ edit: (inout [String: JSONValue]) -> Void
+    ) -> Bool {
+        guard var playlists = raw["playlists"]?.arrayValue else { return false }
+        var found = false
         for index in playlists.indices {
             guard var playlist = playlists[index].objectValue,
                   (playlist["id"]?.uint64Value ?? 0) == playlistId
             else { continue }
-            playlist["clips"] = .array((playlist["clips"]?.arrayValue ?? []).filter { item in
-                (item.objectValue?["uid"]?.stringValue ?? "") != uid
-            })
-            playlist["revision"] = .number(Double((playlist["revision"]?.uint64Value ?? 0) + 1))
+            found = true
+            edit(&playlist)
+            if bumpRevision {
+                playlist["revision"] = .number(Double((playlist["revision"]?.uint64Value ?? 0) + 1))
+            }
             playlists[index] = .object(playlist)
         }
         raw["playlists"] = .array(playlists)
+        return found
     }
 
-    /// Applies an edit to one clip. Playlists are rebuilt because the document is
-    /// a value tree.
+    /// Applies an edit to one clip. The document is a value tree, so the playlist holding it
+    /// is rebuilt — through `updatePlaylist`, which also bumps the revision the core watches.
     private mutating func updateClip(
         playlistId: UInt64,
         uid: String,
         _ edit: (inout [String: JSONValue]) -> Void
     ) {
-        guard var playlists = raw["playlists"]?.arrayValue else { return }
-        for index in playlists.indices {
-            guard var playlist = playlists[index].objectValue,
-                  (playlist["id"]?.uint64Value ?? 0) == playlistId
-            else { continue }
+        updatePlaylist(playlistId: playlistId) { playlist in
             var clips = playlist["clips"]?.arrayValue ?? []
             for clipIndex in clips.indices {
                 guard var clip = clips[clipIndex].objectValue,
@@ -799,46 +809,26 @@ struct ReplayDocument {
                 clips[clipIndex] = .object(clip)
             }
             playlist["clips"] = .array(clips)
-            playlist["revision"] = .number(Double((playlist["revision"]?.uint64Value ?? 0) + 1))
-            playlists[index] = .object(playlist)
         }
-        raw["playlists"] = .array(playlists)
     }
 
     /// Replaces a clip's tags. The catalog that suggests them lives on the
     /// session, the same way input and scene tags do.
     mutating func setClipTags(playlistId: UInt64, uid: String, tags: [String]) {
-        guard var playlists = raw["playlists"]?.arrayValue else { return }
-        for index in playlists.indices {
-            guard var playlist = playlists[index].objectValue,
-                  (playlist["id"]?.uint64Value ?? 0) == playlistId
-            else { continue }
-            var clips = playlist["clips"]?.arrayValue ?? []
-            for clipIndex in clips.indices {
-                guard var clip = clips[clipIndex].objectValue,
-                      (clip["uid"]?.stringValue ?? "") == uid
-                else { continue }
-                clip["tags"] = .array(tags.map { .string($0) })
-                clips[clipIndex] = .object(clip)
-            }
-            playlist["clips"] = .array(clips)
-            playlist["revision"] = .number(Double((playlist["revision"]?.uint64Value ?? 0) + 1))
-            playlists[index] = .object(playlist)
+        updateClip(playlistId: playlistId, uid: uid) { clip in
+            clip["tags"] = .array(tags.map { .string($0) })
         }
-        raw["playlists"] = .array(playlists)
     }
 
     /// Writes the playlist's default transition. New clips start on it.
+    ///
+    /// The revision is deliberately left alone: it marks the playlist's contents, and a clip
+    /// added from now on picks the default up. Bumping it here would tell the core the clips
+    /// changed when none did.
     mutating func setDefaultTransition(playlistId: UInt64, transition: ReplayTransitionInfo) {
-        guard var playlists = raw["playlists"]?.arrayValue else { return }
-        for index in playlists.indices {
-            guard var playlist = playlists[index].objectValue,
-                  (playlist["id"]?.uint64Value ?? 0) == playlistId
-            else { continue }
+        updatePlaylist(playlistId: playlistId, bumpRevision: false) { playlist in
             playlist["defaultTransition"] = transition.value
-            playlists[index] = .object(playlist)
         }
-        raw["playlists"] = .array(playlists)
     }
 
     /// Writes the clip gain in dB. The mixer clamps it, and the editor refuses
@@ -872,10 +862,16 @@ struct ReplayDocument {
         }
     }
 
-    /// Writes a clip's play speed in thousandths, so 1000 is real time.
+    /// Writes a clip's play speed as a multiple of real time, which is how the document
+    /// stores it. `milli` is the transport's thousandths, so 1000 is real time.
+    ///
+    /// The key is `speed`, not `speedMilli`: the core reads a multiple of real time and
+    /// drops a key it does not know, so thousandths made the deck move the row, publish,
+    /// and read the old speed straight back.
     mutating func setClipSpeed(playlistId: UInt64, uid: String, milli: Int32) {
+        let speed = ((Double(milli) / 1000.0) * 1000).rounded() / 1000
         updateClip(playlistId: playlistId, uid: uid) { clip in
-            clip["speedMilli"] = .number(Double(milli))
+            clip["speed"] = .number(speed)
         }
     }
 
@@ -894,25 +890,12 @@ struct ReplayDocument {
         }
     }
 
+    /// Writes a clip's transition. The transition is stored as the session writes it, so a
+    /// direction the operator picked travels with it rather than being dropped on the way in.
     mutating func setClipTransition(playlistId: UInt64, uid: String, transition: ReplayTransitionInfo) {
-        guard var playlists = raw["playlists"]?.arrayValue else { return }
-        for index in playlists.indices {
-            guard var playlist = playlists[index].objectValue,
-                  (playlist["id"]?.uint64Value ?? 0) == playlistId
-            else { continue }
-            var clips = playlist["clips"]?.arrayValue ?? []
-            for clipIndex in clips.indices {
-                guard var clip = clips[clipIndex].objectValue,
-                      (clip["uid"]?.stringValue ?? "") == uid
-                else { continue }
-                clip["transition"] = transition.value
-                clips[clipIndex] = .object(clip)
-            }
-            playlist["clips"] = .array(clips)
-            playlist["revision"] = .number(Double((playlist["revision"]?.uint64Value ?? 0) + 1))
-            playlists[index] = .object(playlist)
+        updateClip(playlistId: playlistId, uid: uid) { clip in
+            clip["transition"] = transition.value
         }
-        raw["playlists"] = .array(playlists)
     }
 
 

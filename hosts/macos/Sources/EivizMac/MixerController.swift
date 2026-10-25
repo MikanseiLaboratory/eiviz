@@ -524,6 +524,33 @@ final class MixerController: ObservableObject {
         return true
     }
 
+    /// Applies one session mutation to the live document.
+    ///
+    /// This is the way a window edits the document. Reading the document, changing it and
+    /// replacing it back loses anything another writer added in between, which is why every
+    /// window used to grow its own merge — in C#, in Swift and in the core — and why those
+    /// merges drifted. A mutation says what changed; the core decides what that means.
+    @discardableResult
+    func mutateLocal(_ mutation: String) -> Bool {
+        if isRemote {
+            return mutateRemote(mutation)
+        }
+        guard let data = mutation.data(using: .utf8) else { return false }
+        let code = data.withUnsafeBytes { ptr in
+            mixer_session_mutate(ptr.bindMemory(to: UInt8.self).baseAddress, data.count)
+        }
+        guard code == EIVIZ_OK else {
+            let detail = MixerFFI.lastErrorText()
+            presentError(
+                detail.isEmpty ? L10n.error("Mutate session", code) : detail,
+                title: L10n.t("msg.sessionRefused")
+            )
+            return false
+        }
+        adoptCanonicalReplay()
+        return true
+    }
+
     /// The core normalizes the replay document on replace. The host keeps that copy.
     private func adoptCanonicalReplay() {
         var buffer = [UInt8](repeating: 0, count: 8 * 1024 * 1024)
@@ -537,7 +564,14 @@ final class MixerController: ObservableObject {
               case .object(let object) = root,
               let replay = object["replay"]
         else { return }
-        if case .null = replay { return }
+        // A `null` is the core saying Replay is gone: the last channel was removed and the
+        // document went with it. Keeping the copy the host last had would publish the
+        // deleted Replay straight back, and the core would refuse the session because a
+        // Replay input cannot exist without its document.
+        if case .null = replay {
+            session.replay = nil
+            return
+        }
         session.replay = replay
     }
 

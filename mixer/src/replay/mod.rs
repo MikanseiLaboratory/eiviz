@@ -17,8 +17,7 @@ use std::time::{Duration, Instant};
 
 use eiviz_control::error::ControlError;
 use eiviz_control::session::replay::{
-    AngleSourceKind, ReplayDto, overflow_code, profile_code,
-    replay_channel_gpu_id, retention_code,
+    AngleSourceKind, ReplayDto, overflow_code, profile_code, replay_channel_gpu_id, retention_code,
 };
 use eiviz_pro_api::{
     EncodedFrame, Entitlements, LAYOUT_BGRA, PRO_BUSY, PRO_IO, PixelLayout, ProReplayAngle,
@@ -468,8 +467,8 @@ impl ReplayEngine {
                 peaks: HashMap::new(),
                 health: HealthMemory::default(),
                 started_at: None,
-            started_unix_ms: 0,
-            started_frame: None,
+                started_unix_ms: 0,
+                started_frame: None,
                 operations_reason: None,
             }),
             inbox: Arc::new(Inbox::new()),
@@ -766,7 +765,8 @@ impl ReplayEngine {
                     None => crate::diag::error("replay attach: no module is loaded"),
                 }
             }
-        }        let mut inner = self.lock();
+        }
+        let mut inner = self.lock();
         let mut old = std::mem::take(&mut inner.channels);
         // The recording store is opened with the angle set the operator had at the time,
         // and it keeps that list: a later configure with more angles left the extra ones
@@ -797,7 +797,10 @@ impl ReplayEngine {
                 });
         if stale_store {
             self.release_store();
-            *self.record_store.lock().unwrap_or_else(|error| error.into_inner()) = None;
+            *self
+                .record_store
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = None;
         }
         let mut inner = self.lock();
         inner.operations_reason = operations_reason;
@@ -1116,8 +1119,10 @@ impl ReplayEngine {
             ReplayFailure::io(format!("the Pro module refused the recording: {error}"))
         })?;
         self.stop_record.store(false, Ordering::Relaxed);
-        *self.record_store.lock().unwrap_or_else(|error| error.into_inner()) =
-            Some(Arc::new(Mutex::new(store)));
+        *self
+            .record_store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(Arc::new(Mutex::new(store)));
         self.ensure_workers();
         let mut inner = self.lock();
         inner.recording = true;
@@ -1178,7 +1183,12 @@ impl ReplayEngine {
     /// Releases the recorded material. Only when Replay is removed or the mixer
     /// shuts down: a stopped recorder keeps its frames.
     fn release_store(&self) {
-        if let Some(store) = self.record_store.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        if let Some(store) = self
+            .record_store
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
             if let Ok(mut store) = store.lock() {
                 let _ = store.close();
             }
@@ -1475,9 +1485,7 @@ impl ReplayEngine {
             .config
             .angles
             .iter()
-            .filter(|angle| {
-                angle.audio == eiviz_control::session::replay::AngleAudio::Source
-            })
+            .filter(|angle| angle.audio == eiviz_control::session::replay::AngleAudio::Source)
             .map(|angle| AudioSourceSpec {
                 angle_id: angle.id,
                 input_id: match angle.source {
@@ -1537,9 +1545,7 @@ impl ReplayEngine {
                 .config
                 .angles
                 .iter()
-                .filter(|angle| {
-                    angle.audio == eiviz_control::session::replay::AngleAudio::Source
-                })
+                .filter(|angle| angle.audio == eiviz_control::session::replay::AngleAudio::Source)
                 .filter_map(|angle| mixed.for_angle(angle.id).map(|pcm| (angle.id, pcm)))
                 .collect();
             for (angle_id, pcm) in sources {
@@ -1709,16 +1715,14 @@ impl ReplayEngine {
                 });
             // A recording listed on a drive that moved is looked for on the session's
             // other drives before it counts as missing. A direct path check only.
-            known
-                .filter(|candidate| candidate.is_dir())
-                .or_else(|| {
-                    inner
-                        .config
-                        .storage
-                        .iter()
-                        .map(|storage| std::path::Path::new(&storage.path).join(uuid))
-                        .find(|candidate| candidate.is_dir())
-                })
+            known.filter(|candidate| candidate.is_dir()).or_else(|| {
+                inner
+                    .config
+                    .storage
+                    .iter()
+                    .map(|storage| std::path::Path::new(&storage.path).join(uuid))
+                    .find(|candidate| candidate.is_dir())
+            })
         };
         let Some(directory) = directory else {
             return Ok(false);
@@ -1988,7 +1992,7 @@ impl ReplayEngine {
         angle_id: u32,
         frame: u64,
         dst: &mut [u8],
-    ) -> Result<(u32, u32), ReplayFailure> {
+    ) -> Result<(u32, u32, u32), ReplayFailure> {
         let store = self
             .record_store
             .lock()
@@ -2000,7 +2004,10 @@ impl ReplayEngine {
             .unwrap_or_else(|error| error.into_inner())
             .decode_proxy(angle_id, frame, dst)
             .map_err(|_| ReplayFailure::invalid("proxy is missing"))?;
-        Ok((decoded.width, decoded.height))
+        // The stride travels with the picture: a store that pads its rows hands back frames
+        // wider than `width * 2`, and a caller that assumed otherwise would read every row
+        // from the wrong offset and slide the tile diagonally.
+        Ok((decoded.width, decoded.height, decoded.stride))
     }
 
     /// Recorded frame range of one angle, for the export UI.
@@ -2489,7 +2496,10 @@ fn referenced_recordings(dto: &ReplayDto) -> Vec<(String, String)> {
             continue;
         }
         let storage = if recording.storage.trim().is_empty() {
-            dto.storage.first().map(|item| item.path.clone()).unwrap_or_default()
+            dto.storage
+                .first()
+                .map(|item| item.path.clone())
+                .unwrap_or_default()
         } else {
             recording.storage.clone()
         };
@@ -3742,7 +3752,72 @@ pub fn parse_export_spec(json: &str) -> Result<eiviz_pro_api::ReplayExportSpec, 
             });
         }
     }
-    if segments.is_empty() {
+    // The playlist with its transitions. A request that carries these asked for the
+    // programme as it played, so the engine exports from them and never falls back to the
+    // plain segments: a dissolve flattened into cuts is not the file that was asked for.
+    let mut clips = Vec::new();
+    if let Some(items) = value.get("clips").and_then(serde_json::Value::as_array) {
+        for item in items {
+            let angle_id = item
+                .get("angleId")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0) as u32;
+            let from_frame = item
+                .get("fromFrame")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let to_frame = item
+                .get("toFrame")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            if angle_id == 0 || to_frame < from_frame {
+                return Err(ERR_INVALID_ARGUMENT);
+            }
+            let speed_percent = item
+                .get("speedPercent")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(100)
+                .clamp(1, 10_000) as u32;
+            let transition = item.get("transition").and_then(|node| {
+                let kind = node.get("kind").and_then(serde_json::Value::as_u64)? as u32;
+                Some(eiviz_pro_api::ReplayExportTransition {
+                    kind,
+                    direction: node
+                        .get("direction")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0) as u32,
+                    timing: node
+                        .get("timing")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0) as u32,
+                    frames: node
+                        .get("frames")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0) as u32,
+                })
+            });
+            let audio_angle_id = match item.get("audioAngleId") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(node) => node.as_u64().map(|value| value as u32),
+            };
+            let gain = item
+                .get("gain")
+                .and_then(serde_json::Value::as_f64)
+                .map(|value| value as f32)
+                .filter(|value| value.is_finite())
+                .unwrap_or(1.0);
+            clips.push(eiviz_pro_api::ReplayExportClip {
+                angle_id,
+                from_frame,
+                to_frame,
+                speed_percent,
+                transition,
+                audio_angle_id,
+                gain,
+            });
+        }
+    }
+    if segments.is_empty() && clips.is_empty() {
         return Err(ERR_INVALID_ARGUMENT);
     }
     Ok(eiviz_pro_api::ReplayExportSpec {
@@ -3754,12 +3829,17 @@ pub fn parse_export_spec(json: &str) -> Result<eiviz_pro_api::ReplayExportSpec, 
         bitrate: number("bitrate").unwrap_or(20_000_000) as u32,
         sample_rate: number("sampleRate").unwrap_or(48_000) as u32,
         channels: number("channels").unwrap_or(2) as u32,
-            with_audio: value
+        with_audio: value
             .get("withAudio")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(true),
         segments,
-        codec: match value.get("codec").and_then(serde_json::Value::as_str).unwrap_or("H264") {
+        clips,
+        codec: match value
+            .get("codec")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("H264")
+        {
             "H264" | "h264" => 0,
             "Hevc" | "HEVC" | "H265" | "h265" => 1,
             _ => return Err(ERR_INVALID_ARGUMENT),
@@ -4107,6 +4187,18 @@ pub fn control_error_with(code: i32, message: &str) -> ControlError {
         ControlError::io(message)
     } else {
         ControlError::invalid(message)
+    }
+}
+
+/// The replay format's profile code (0 high, 1 standard, 2 low) as the codec's preset.
+///
+/// The same three codes the session stores and the store opens with, so a recording made at
+/// one profile is encoded at that profile rather than at whatever the encoder defaults to.
+pub fn vmx_profile(code: u32) -> vmx::Profile {
+    match code {
+        0 => vmx::Profile::Hq,
+        2 => vmx::Profile::Lq,
+        _ => vmx::Profile::Sq,
     }
 }
 
@@ -4464,6 +4556,25 @@ impl ReplayStore for FfiReplayStore {
                 to_frame: segment.to_frame,
             })
             .collect();
+        let clips: Vec<eiviz_pro_api::ProReplayExportClip> = spec
+            .clips
+            .iter()
+            .map(|clip| eiviz_pro_api::ProReplayExportClip {
+                angle_id: clip.angle_id,
+                from_frame: clip.from_frame,
+                to_frame: clip.to_frame,
+                speed_percent: clip.speed_percent,
+                has_transition: u32::from(clip.transition.is_some()),
+                transition_kind: clip.transition.map(|value| value.kind).unwrap_or(0),
+                transition_direction: clip.transition.map(|value| value.direction).unwrap_or(0),
+                transition_timing: clip.transition.map(|value| value.timing).unwrap_or(0),
+                transition_frames: clip.transition.map(|value| value.frames).unwrap_or(0),
+                audio_angle_id: clip
+                    .audio_angle_id
+                    .unwrap_or(eiviz_pro_api::EXPORT_AUDIO_SILENT),
+                gain: clip.gain,
+            })
+            .collect();
         let request = eiviz_pro_api::ProReplayExportRequest {
             struct_size: std::mem::size_of::<eiviz_pro_api::ProReplayExportRequest>() as u32,
             path: path.as_ptr(),
@@ -4478,6 +4589,11 @@ impl ReplayStore for FfiReplayStore {
             with_audio: u32::from(spec.with_audio),
             segments: segments.as_ptr(),
             segment_count: segments.len() as u32,
+            // The playlist with its transitions. A module that cannot composite must refuse
+            // the request rather than flatten it into cuts.
+            clips: clips.as_ptr(),
+            clip_count: clips.len() as u32,
+            reserved: 0,
             codec: spec.codec,
         };
         let status = unsafe { start(self.handle, &request) };
@@ -4690,14 +4806,7 @@ pub fn attach_ffi(
 }
 
 pub fn estimate_ffi(
-    path: &str,
-    width: u32,
-    height: u32,
-    fps_num: u32,
-    fps_den: u32,
-    profile: u32,
-    angles: u32,
-    reserve_bytes: u64,
+    query: &eiviz_pro_api::ReplayEstimateQuery,
 ) -> eiviz_pro_api::ProResult<eiviz_pro_api::ReplayEstimate> {
     let (api, module) = crate::pro_load::loaded_api()
         .ok_or_else(|| eiviz_pro_api::ProError::unavailable("replay module is not loaded"))?;
@@ -4713,15 +4822,15 @@ pub fn estimate_ffi(
     let status = unsafe {
         estimate(
             module,
-            path.as_ptr(),
-            path.len(),
-            width,
-            height,
-            fps_num,
-            fps_den,
-            profile,
-            angles,
-            reserve_bytes,
+            query.path.as_ptr(),
+            query.path.len(),
+            query.width,
+            query.height,
+            query.fps_num,
+            query.fps_den,
+            query.profile,
+            query.angles,
+            query.reserve_bytes,
             &mut out,
         )
     };
@@ -4738,9 +4847,7 @@ pub fn estimate_ffi(
 #[cfg(test)]
 mod recording_registry_tests {
     use super::*;
-    use eiviz_control::session::replay::{
-        ReplayRecordingDto, ReplayStorageDto,
-    };
+    use eiviz_control::session::replay::{ReplayRecordingDto, ReplayStorageDto};
 
     fn clip(uuid: &str) -> eiviz_control::session::replay::PlaylistDto {
         use eiviz_control::session::replay::*;

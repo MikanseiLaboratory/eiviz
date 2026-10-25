@@ -351,8 +351,14 @@ pub enum SessionMutation {
     /// Writes the deck: events, playlists, the selected angle, timeline cues and
     /// which playlist each existing channel plays. Settings and the channel list
     /// stay with Replay Setup and the Replay inputs.
+    ///
+    /// The deck is a snapshot, so it is applied as a difference: what this deck has is
+    /// written, what it never had is kept, and only the deletions it names in `edit` are
+    /// made. A deck that sends no `edit` deletes nothing.
     UpdateReplayDeck {
         deck: Box<crate::session::replay::ReplayDeckDto>,
+        #[serde(default)]
+        edit: Option<Box<crate::session::replay::ReplayDeckEditDto>>,
     },
     /// Chooses the angle the next mark records. The deck selects it by clicking a
     /// tile; a control client selects it here.

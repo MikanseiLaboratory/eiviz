@@ -602,7 +602,9 @@ session_string_enum! {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One event: a marked range of the recording timeline. It holds no picture and no
+/// sound, only where they are.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplayEventDto {
     pub id: u64,
@@ -926,7 +928,7 @@ pub struct ReplayTimelineCueDto {
 ///
 /// Events, playlists, the selected angle and which playlist a channel plays.
 /// Channels themselves are added and removed only with the Replay input.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplayDeckDto {
     #[serde(default)]
@@ -945,23 +947,75 @@ pub struct ReplayDeckDto {
     pub timeline_cues: Vec<ReplayTimelineCueDto>,
 }
 
+/// What a deck meant to delete.
+///
+/// Without this a deck cannot say the difference between "I removed this event" and "I
+/// never saw this event", and the core has to guess. Guessing one way dropped events
+/// another writer had just added; guessing the other way made deleting an event
+/// impossible.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayDeckEditDto {
+    #[serde(default)]
+    pub deleted_events: Vec<u64>,
+    #[serde(default)]
+    pub deleted_clips: Vec<String>,
+    /// False when the operator did not pick a camera in this window, so the selection
+    /// another deck made is left alone.
+    #[serde(default = "yes")]
+    pub angle_edited: bool,
+}
+
+impl ReplayDeckEditDto {
+    /// Removes what the deck deleted. Called before the deck is written, so an event this
+    /// deck deleted but still lists is not put back by the merge.
+    pub fn apply_to(self, replay: &mut ReplayDto) {
+        if self.deleted_events.is_empty() && self.deleted_clips.is_empty() {
+            return;
+        }
+        let events: std::collections::HashSet<u64> = self.deleted_events.into_iter().collect();
+        let clips: std::collections::HashSet<String> = self.deleted_clips.into_iter().collect();
+        replay.events.retain(|event| !events.contains(&event.id));
+        for list in &mut replay.playlists {
+            list.clips.retain(|clip| !clips.contains(&clip.uid));
+        }
+    }
+
+    /// The edit this deck represents when it says nothing: no deletions, and the angle
+    /// counts as edited because a deck that shows one is the one that picked it.
+    pub fn none() -> Self {
+        Self {
+            deleted_events: Vec::new(),
+            deleted_clips: Vec::new(),
+            angle_edited: true,
+        }
+    }
+}
+
 impl ReplayDeckDto {
     /// Writes the deck onto a document. Channel rows only update the playlist a
     /// channel already has; a deck snapshot cannot add or remove channels.
+    ///
+    /// The deck is a *snapshot*, and a snapshot taken a moment ago is not the document.
+    /// An event marked by the API, a clip filed by another window or a remote edit can
+    /// land between the moment the deck read the document and the moment it saved, and
+    /// replacing the arrays wholesale threw those away — the log showed it as
+    /// "events 3->0" on a plain deck save. So the edit is applied as a difference: what
+    /// the deck still has is written, what the deck dropped is decided by
+    /// [`ReplayDeckDto::removed_events`] / [`ReplayDeckDto::removed_clips`], and
+    /// everything else is left as it is.
     pub fn apply_to(self, replay: &mut ReplayDto) {
-        replay.events = self.events;
-        replay.playlists = self.playlists;
+        merge_events(replay, self.events);
+        merge_playlists(replay, self.playlists);
         // A deck that never picked a camera sends none. Clearing the selection because
         // of that silently moved the operator's angle to whatever normalize picks next.
         if self.active_angle_id.is_some() {
             replay.active_angle_id = self.active_angle_id;
         }
-        if self.next_event_id != 0 {
-            replay.next_event_id = self.next_event_id;
-        }
-        if self.next_playlist_id != 0 {
-            replay.next_playlist_id = self.next_playlist_id;
-        }
+        // The counters only move forward, so a stale deck cannot hand out an id that is
+        // already on something else.
+        replay.next_event_id = replay.next_event_id.max(self.next_event_id);
+        replay.next_playlist_id = replay.next_playlist_id.max(self.next_playlist_id);
         for incoming in self.channels {
             if let Some(channel) = replay
                 .channels
@@ -971,8 +1025,106 @@ impl ReplayDeckDto {
                 channel.playlist_id = incoming.playlist_id;
             }
         }
-        replay.timeline_cues = self.timeline_cues;
+        merge_timeline_cues(replay, self.timeline_cues);
     }
+
+    /// The events this deck no longer has, which the document still does, less the ones
+    /// the deck says it deleted on purpose.
+    ///
+    /// The deck cannot say "the document has an event I never saw" — only that it did
+    /// not mean to delete it. This is what separates the two.
+    pub fn removed_events(&self, replay: &ReplayDto) -> Vec<u64> {
+        let mine: std::collections::HashSet<u64> = self.events.iter().map(|e| e.id).collect();
+        replay
+            .events
+            .iter()
+            .filter(|event| !mine.contains(&event.id))
+            .map(|event| event.id)
+            .collect()
+    }
+
+    /// The clip uids this deck no longer has, which the document still does.
+    pub fn removed_clips(&self, replay: &ReplayDto) -> Vec<String> {
+        let mine: std::collections::HashSet<&str> = self
+            .playlists
+            .iter()
+            .flat_map(|list| list.clips.iter().map(|clip| clip.uid.as_str()))
+            .collect();
+        replay
+            .playlists
+            .iter()
+            .flat_map(|list| list.clips.iter())
+            .filter(|clip| !mine.contains(clip.uid.as_str()))
+            .map(|clip| clip.uid.clone())
+            .collect()
+    }
+}
+
+/// Writes the deck's events over the document's by id.
+///
+/// An event the document has and the deck does not was added elsewhere after the deck
+/// read the document; it stays. An event the deck has is written as the deck has it,
+/// because that is the edit. Removing one is the caller's decision, made with
+/// [`ReplayDeckDto::removed_events`].
+fn merge_events(replay: &mut ReplayDto, incoming: Vec<ReplayEventDto>) {
+    for event in incoming {
+        match replay
+            .events
+            .iter_mut()
+            .find(|existing| existing.id == event.id)
+        {
+            Some(existing) => *existing = event,
+            None => replay.events.push(event),
+        }
+    }
+}
+
+/// The same for playlists, matched by id, and for the clips inside them matched by uid
+/// so reordering a list in the deck is applied as a reorder rather than a delete.
+fn merge_playlists(replay: &mut ReplayDto, incoming: Vec<PlaylistDto>) {
+    for list in incoming {
+        match replay
+            .playlists
+            .iter_mut()
+            .find(|existing| existing.id == list.id)
+        {
+            Some(existing) => *existing = list,
+            None => replay.playlists.push(list),
+        }
+    }
+}
+
+/// Timeline cues, matched by id: a cue the deck added is written, one it did not know
+/// about is kept, and the deck's order wins for the ones it has.
+fn merge_timeline_cues(replay: &mut ReplayDto, incoming: Vec<ReplayTimelineCueDto>) {
+    // A cue with no id cannot be told apart from another, so the deck's list is taken as
+    // given once every one of them carries an id; otherwise only the identified ones are
+    // merged and the rest follow.
+    //
+    // An empty list is not "every cue has an id": a deck that does not send `timelineCues`
+    // at all deserializes to nothing, and reading that as a full list deleted every cue in
+    // the document on the next deck save. Only a deck that sent cues can say which it has.
+    if incoming.is_empty() {
+        return;
+    }
+    if incoming.iter().all(|cue| cue.id != 0) {
+        let mine: std::collections::HashSet<u64> = incoming.iter().map(|cue| cue.id).collect();
+        replay
+            .timeline_cues
+            .retain(|cue| mine.contains(&cue.id) || cue.id == 0);
+        for cue in incoming {
+            match replay
+                .timeline_cues
+                .iter_mut()
+                .find(|existing| existing.id == cue.id)
+            {
+                Some(existing) => *existing = cue,
+                None => replay.timeline_cues.push(cue),
+            }
+        }
+        return;
+    }
+    replay.timeline_cues = incoming;
 }
 
 /// True when playback moved across `boundary` since the previous frame.
@@ -1082,6 +1234,13 @@ pub const WRITE_BUFFER_MAX_MB: u32 = 8192;
 
 /// Add one explicit Replay channel input. The first call creates the replay
 /// document; no Replay state is present in a default session.
+///
+/// One call makes one channel. A project can hold A up to Z and the operator adds the
+/// ones they will use; nothing here creates a second channel for them. `vMix` starts a
+/// replay with A and B because its deck is built around a two-channel cut, but an extra
+/// channel is an extra input in every mixing unit and an extra decoder competing for the
+/// same GPU, so eiviz makes the operator ask for the one they want. The channels are still
+/// limited to 26 because that is how many letters the deck labels.
 pub fn add_channel_input(doc: &mut Document) -> Result<u32, String> {
     if doc.replay.is_none() {
         let format = seed_format(doc)?;
@@ -1212,6 +1371,11 @@ pub fn clear_all_cues(doc: &mut Document) -> usize {
 /// Remove the input's channel metadata. The caller decides whether removing
 /// the last channel has been explicitly confirmed; this function removes the
 /// whole optional replay document when it becomes empty.
+///
+/// The input itself goes with the document when the last channel leaves. A Replay
+/// input without a Replay document is a session that saves and then refuses to load
+/// (`validate` says "Replay input requires a Replay document"), so the two are removed
+/// together here rather than trusting every caller to remember the second half.
 pub fn remove_channel_input(doc: &mut Document, input_id: u64) -> bool {
     let Some(replay) = doc.replay.as_mut() else {
         return false;
@@ -1225,6 +1389,7 @@ pub fn remove_channel_input(doc: &mut Document, input_id: u64) -> bool {
     }
     if replay.channels.is_empty() {
         doc.replay = None;
+        doc.inputs.retain(|input| input.id != input_id);
     }
     true
 }
@@ -1333,8 +1498,10 @@ mod tests {
 
     #[test]
     fn reserve_event_id_never_repeats_an_existing_id() {
-        let mut replay = ReplayDto::default();
-        replay.next_event_id = 1;
+        let mut replay = ReplayDto {
+            next_event_id: 1,
+            ..ReplayDto::default()
+        };
         replay.events.push(event(7));
         assert_eq!(replay.reserve_event_id(), 8);
         assert_eq!(replay.reserve_event_id(), 9);
@@ -1349,7 +1516,7 @@ mod tests {
         let index = add_channel_input(&mut doc).unwrap();
         assert_eq!(index, 0);
         let id = doc.inputs[0].id;
-        assert!(id >= REPLAY_CHANNEL_BASE && id < REPLAY_CHANNEL_BASE + 0x1_0000);
+        assert!((REPLAY_CHANNEL_BASE..REPLAY_CHANNEL_BASE + 0x1_0000).contains(&id));
         assert_eq!(channel_letter(index), 'A');
         assert_eq!(doc.inputs[0].kind, InputKind::Replay);
         // The document arrives ready to record: the format comes from the unit.
@@ -1410,9 +1577,11 @@ mod tests {
     /// a clip added by Mark Out has to come out with it.
     #[test]
     fn a_marked_out_clip_inherits_the_playlists_default_transition() {
-        let mut replay = ReplayDto::default();
-        replay.auto_add_to_playlist = true;
-        replay.active_angle_id = Some(1);
+        let mut replay = ReplayDto {
+            auto_add_to_playlist: true,
+            active_angle_id: Some(1),
+            ..ReplayDto::default()
+        };
         replay.angles.push(AngleDto {
             id: 1,
             name: "A".into(),
@@ -1452,8 +1621,10 @@ mod tests {
     /// the operator asked for an event, not for a clip.
     #[test]
     fn a_marked_out_event_stays_out_of_the_playlist_when_not_asked() {
-        let mut replay = ReplayDto::default();
-        replay.auto_add_to_playlist = false;
+        let mut replay = ReplayDto {
+            auto_add_to_playlist: false,
+            ..ReplayDto::default()
+        };
         replay.playlists.push(PlaylistDto {
             id: 3,
             name: "Replay".into(),
@@ -1472,8 +1643,10 @@ mod tests {
     /// as an event: the deck shows the name it was given.
     #[test]
     fn a_marked_out_event_without_a_name_is_named_after_its_id() {
-        let mut replay = ReplayDto::default();
-        replay.auto_add_to_playlist = false;
+        let mut replay = ReplayDto {
+            auto_add_to_playlist: false,
+            ..ReplayDto::default()
+        };
         let id = replay.note_mark_out("rec", 0, 30, "   ").unwrap();
         assert_eq!(replay.events[0].name, format!("Replay {id}"));
         let id = replay.note_mark_out("rec", 40, 70, " Goal ").unwrap();
@@ -1529,8 +1702,10 @@ mod tests {
     /// which angle is watched cannot file one.
     #[test]
     fn a_marked_out_clip_needs_a_selected_angle() {
-        let mut replay = ReplayDto::default();
-        replay.auto_add_to_playlist = true;
+        let mut replay = ReplayDto {
+            auto_add_to_playlist: true,
+            ..ReplayDto::default()
+        };
         replay.angles.push(AngleDto {
             id: 1,
             name: "A".into(),
@@ -1563,9 +1738,11 @@ mod tests {
     /// The first marked-out clip creates the playlist it is filed in.
     #[test]
     fn a_marked_out_clip_creates_the_playlist_it_needs() {
-        let mut replay = ReplayDto::default();
-        replay.auto_add_to_playlist = true;
-        replay.active_angle_id = Some(2);
+        let mut replay = ReplayDto {
+            auto_add_to_playlist: true,
+            active_angle_id: Some(2),
+            ..ReplayDto::default()
+        };
         replay.angles.push(AngleDto {
             id: 2,
             name: "B".into(),
@@ -1676,9 +1853,11 @@ mod tests {
         assert!(!boundary_crossed(12, 12, 12));
         assert!(boundary_crossed(14, 11, 12));
         assert!(!boundary_crossed(13, 14, 12));
-        let mut clip = ClipDto::default();
-        clip.uid = "clip-a".into();
-        clip.in_frame = 40;
+        let clip = ClipDto {
+            uid: "clip-a".into(),
+            in_frame: 40,
+            ..ClipDto::default()
+        };
         let playlist = PlaylistDto {
             id: 1,
             name: "Show".into(),
@@ -1703,17 +1882,17 @@ mod tests {
             },
         ];
         assert_eq!(
-            due_timeline_cues(10, 12, &cues, &[playlist.clone()], 8),
+            due_timeline_cues(10, 12, &cues, std::slice::from_ref(&playlist), 8),
             vec![(7, 3)]
         );
-        assert!(due_timeline_cues(12, 12, &cues, &[playlist.clone()], 8).is_empty());
+        assert!(due_timeline_cues(12, 12, &cues, std::slice::from_ref(&playlist), 8).is_empty());
         // Playback order only: a rewind must not run the states backwards.
-        assert!(due_timeline_cues(14, 11, &cues, &[playlist.clone()], 8).is_empty());
+        assert!(due_timeline_cues(14, 11, &cues, std::slice::from_ref(&playlist), 8).is_empty());
         // A loop back to the start, or a jump to live: the playhead moved across
         // the cue without playing over it, so no state fires.
-        assert!(due_timeline_cues(10, 900, &cues, &[playlist.clone()], 8).is_empty());
+        assert!(due_timeline_cues(10, 900, &cues, std::slice::from_ref(&playlist), 8).is_empty());
         assert_eq!(
-            due_timeline_cues(30, 40, &cues, &[playlist], 16),
+            due_timeline_cues(30, 40, &cues, std::slice::from_ref(&playlist), 16),
             vec![(8, 4)]
         );
     }
@@ -1729,29 +1908,31 @@ mod tests {
     fn a_deck_snapshot_without_an_angle_keeps_the_selection() {
         // The remote deck sends the camera it has selected. A deck that never picked
         // one must not clear the choice another deck already made.
-        let mut replay = ReplayDto::default();
-        replay.angles = vec![
-            AngleDto {
-                id: 1,
-                name: String::new(),
-                source: AngleSourceKind::Scene,
-                scene_id: 0,
-                input_id: 0,
-                audio: AngleAudio::Silent,
-                audio_unit_id: 0,
-                encoder: AngleEncoder::Cpu,
-            },
-            AngleDto {
-                id: 2,
-                name: String::new(),
-                source: AngleSourceKind::Scene,
-                scene_id: 0,
-                input_id: 0,
-                audio: AngleAudio::Silent,
-                audio_unit_id: 0,
-                encoder: AngleEncoder::Cpu,
-            },
-        ];
+        let mut replay = ReplayDto {
+            angles: vec![
+                AngleDto {
+                    id: 1,
+                    name: String::new(),
+                    source: AngleSourceKind::Scene,
+                    scene_id: 0,
+                    input_id: 0,
+                    audio: AngleAudio::Silent,
+                    audio_unit_id: 0,
+                    encoder: AngleEncoder::Cpu,
+                },
+                AngleDto {
+                    id: 2,
+                    name: String::new(),
+                    source: AngleSourceKind::Scene,
+                    scene_id: 0,
+                    input_id: 0,
+                    audio: AngleAudio::Silent,
+                    audio_unit_id: 0,
+                    encoder: AngleEncoder::Cpu,
+                },
+            ],
+            ..ReplayDto::default()
+        };
         replay.active_angle_id = Some(2);
         let deck = ReplayDeckDto {
             events: Vec::new(),
@@ -1766,23 +1947,245 @@ mod tests {
         assert_eq!(replay.active_angle_id, Some(2));
     }
 
+    /// A deck that saves must not delete what it never saw.
+    ///
+    /// The deck holds a snapshot. An event marked by the API, or by another window, can
+    /// land between that snapshot and the save; replacing the array wholesale threw it
+    /// away, which is the "events 3->0" that a plain deck save produced.
+    #[test]
+    fn a_deck_save_keeps_events_it_never_saw() {
+        let mut replay = ReplayDto {
+            events: vec![
+                ReplayEventDto {
+                    id: 1,
+                    name: "first".into(),
+                    ..Default::default()
+                },
+                ReplayEventDto {
+                    id: 2,
+                    name: "marked by the API".into(),
+                    ..Default::default()
+                },
+            ],
+            next_event_id: 3,
+            ..ReplayDto::default()
+        };
+        // The deck read the document when only event 1 existed, and renamed it.
+        let deck = ReplayDeckDto {
+            events: vec![ReplayEventDto {
+                id: 1,
+                name: "renamed".into(),
+                ..Default::default()
+            }],
+            next_event_id: 2,
+            ..Default::default()
+        };
+        deck.apply_to(&mut replay);
+        assert_eq!(replay.events.len(), 2, "the unseen event stays");
+        assert_eq!(replay.events[0].name, "renamed", "the edit is applied");
+        assert_eq!(replay.events[1].name, "marked by the API");
+        // The counter only moves forward, so an id on nothing else is not handed out again.
+        assert_eq!(replay.next_event_id, 3);
+    }
+
+    /// A deletion is a decision, not an absence.
+    ///
+    /// The core is told which events the deck dropped with, because "not in the deck" also
+    /// describes an event the deck never had.
+    /// A clip's transition direction survives a deck save.
+    ///
+    /// The Windows deck offered the direction as a cell but never wrote it back, so an
+    /// operator could pick "Down" and watch it revert on the next read while nothing failed.
+    /// The field is `#[serde(default)]`, which is exactly why the silence was possible: the
+    /// core cannot tell a missing direction from a deliberate one.
+    #[test]
+    fn a_clip_keeps_the_direction_it_was_given() {
+        let mut replay = ReplayDto {
+            playlists: vec![PlaylistDto {
+                id: 1,
+                name: "Replay".into(),
+                revision: 1,
+                clips: vec![ClipDto {
+                    uid: "a".into(),
+                    transition: ClipTransitionDto {
+                        kind: ReplayTransitionKind::Wipe,
+                        direction: ReplayTransitionDirection::Left,
+                        ..Default::default()
+                    },
+                    ..ClipDto::default()
+                }],
+                default_transition: ClipTransitionDto::default(),
+            }],
+            ..ReplayDto::default()
+        };
+        let deck = ReplayDeckDto {
+            playlists: vec![PlaylistDto {
+                id: 1,
+                name: "Replay".into(),
+                revision: 2,
+                clips: vec![ClipDto {
+                    uid: "a".into(),
+                    transition: ClipTransitionDto {
+                        kind: ReplayTransitionKind::Wipe,
+                        direction: ReplayTransitionDirection::Down,
+                        timing: ReplayTransitionTiming::Overwrap,
+                        duration_frames: 15,
+                    },
+                    ..ClipDto::default()
+                }],
+                default_transition: ClipTransitionDto::default(),
+            }],
+            ..Default::default()
+        };
+        deck.apply_to(&mut replay);
+        let transition = &replay.playlists[0].clips[0].transition;
+        assert_eq!(
+            transition.direction,
+            ReplayTransitionDirection::Down,
+            "the direction the operator picked is the one the document keeps"
+        );
+        assert_eq!(transition.duration_frames, 15);
+    }
+
+    /// A deck that sends no cues keeps the ones the document has.
+    ///
+    /// `timelineCues` is `#[serde(default)]`, so a host that does not send it produces an
+    /// empty list. Treating that as "this deck has every cue, and has none" deleted the whole
+    /// list on the next deck save.
+    #[test]
+    fn a_deck_without_cues_keeps_the_documents_cues() {
+        let cue = |id: u64| ReplayTimelineCueDto {
+            id,
+            frame: id * 10,
+            scene_id: 1,
+            state_id: id,
+            clip_uid: String::new(),
+        };
+        let mut replay = ReplayDto {
+            timeline_cues: vec![cue(1), cue(2)],
+            ..ReplayDto::default()
+        };
+        // A deck that never mentions cues.
+        ReplayDeckDto::default().apply_to(&mut replay);
+        assert_eq!(
+            replay.timeline_cues.len(),
+            2,
+            "cues the deck did not send are not the deck's to delete"
+        );
+        // A deck that does send cues is applied as it has them.
+        let deck = ReplayDeckDto {
+            timeline_cues: vec![cue(2)],
+            ..Default::default()
+        };
+        deck.apply_to(&mut replay);
+        let ids: Vec<u64> = replay.timeline_cues.iter().map(|cue| cue.id).collect();
+        assert_eq!(
+            ids,
+            vec![2],
+            "the deck's own list replaces the one it edited"
+        );
+    }
+
+    #[test]
+    fn a_deck_says_which_events_it_meant_to_delete() {
+        let mut replay = ReplayDto {
+            events: vec![
+                ReplayEventDto {
+                    id: 1,
+                    name: "kept".into(),
+                    ..Default::default()
+                },
+                ReplayEventDto {
+                    id: 2,
+                    name: "deleted here".into(),
+                    ..Default::default()
+                },
+                ReplayEventDto {
+                    id: 3,
+                    name: "added elsewhere".into(),
+                    ..Default::default()
+                },
+            ],
+            ..ReplayDto::default()
+        };
+        let deck = ReplayDeckDto {
+            events: vec![ReplayEventDto {
+                id: 1,
+                name: "kept".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(deck.removed_events(&replay), vec![2, 3]);
+        // The caller deletes the one it meant to; the event it never saw is kept.
+        replay.events.retain(|event| event.id != 2);
+        deck.apply_to(&mut replay);
+        let ids: Vec<u64> = replay.events.iter().map(|event| event.id).collect();
+        assert_eq!(ids, vec![1, 3]);
+    }
+
+    /// The same rule for clips: one filed by another channel while the deck was open
+    /// survives an edit made in this one.
+    #[test]
+    fn a_deck_save_keeps_clips_it_never_saw() {
+        let clip = |uid: &str| ClipDto {
+            uid: uid.into(),
+            ..ClipDto::default()
+        };
+        let mut replay = ReplayDto {
+            playlists: vec![PlaylistDto {
+                id: 1,
+                name: "Replay".into(),
+                revision: 1,
+                clips: vec![clip("a"), clip("b")],
+                default_transition: ClipTransitionDto::default(),
+            }],
+            ..ReplayDto::default()
+        };
+        // The deck has only clip a.
+        let deck = ReplayDeckDto {
+            playlists: vec![PlaylistDto {
+                id: 1,
+                name: "Replay".into(),
+                revision: 2,
+                clips: vec![clip("a")],
+                default_transition: ClipTransitionDto::default(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(deck.removed_clips(&replay), vec!["b".to_string()]);
+        deck.apply_to(&mut replay);
+        let clips: Vec<&str> = replay.playlists[0]
+            .clips
+            .iter()
+            .map(|clip| clip.uid.as_str())
+            .collect();
+        assert_eq!(
+            clips,
+            vec!["a"],
+            "the deck's own list replaced the one it edited"
+        );
+    }
+
     #[test]
     fn a_recording_is_listed_once_and_never_without_an_id() {
-        let mut replay = ReplayDto::default();
-        replay.recordings = vec![
-            ReplayRecordingDto {
-                uuid: "rec-a".into(),
-                ..Default::default()
-            },
-            ReplayRecordingDto {
-                uuid: "rec-a".into(),
-                ..Default::default()
-            },
-            ReplayRecordingDto {
-                uuid: "   ".into(),
-                ..Default::default()
-            },
-        ];
+        let mut replay = ReplayDto {
+            recordings: vec![
+                ReplayRecordingDto {
+                    uuid: "rec-a".into(),
+                    ..Default::default()
+                },
+                ReplayRecordingDto {
+                    uuid: "rec-a".into(),
+                    ..Default::default()
+                },
+                ReplayRecordingDto {
+                    uuid: "   ".into(),
+                    ..Default::default()
+                },
+            ],
+            ..ReplayDto::default()
+        };
         replay.normalize();
         assert_eq!(replay.recordings.len(), 1);
         assert_eq!(replay.recordings[0].uuid, "rec-a");

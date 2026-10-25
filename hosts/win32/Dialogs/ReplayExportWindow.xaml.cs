@@ -17,7 +17,7 @@ namespace Eiviz.Host.Dialogs;
 public partial class ReplayExportWindow : Window
 {
     private readonly IReadOnlyList<ExportModeChoice> _modes;
-    private readonly Func<string, List<(uint AngleId, ulong From, ulong To)>> _buildSegments;
+    private readonly Func<string, ReplayExportRequest> _buildRequest;
     private readonly Func<(uint Width, uint Height, uint FpsNum, uint FpsDen, uint Bitrate)> _format;
     private readonly Func<IReadOnlyList<(uint Id, string Label)>> _angles;
     private readonly Func<bool> _isRecording;
@@ -27,21 +27,21 @@ public partial class ReplayExportWindow : Window
     /// Builds the window.
     /// </summary>
     /// <param name="modes">What the operator may export, already localised.</param>
-    /// <param name="buildSegments">Segments for a mode key, in order.</param>
+    /// <param name="buildRequest">What a mode key exports, in order.</param>
     /// <param name="format">Picture format and bitrate for the file.</param>
     /// <param name="angles">Angles an all-angles export writes, one file each.</param>
     /// <param name="isRecording">Whether a recording runs: the export asks first.</param>
     /// <param name="start">Hands one export body to the mixer, with a label for the UI.</param>
     public ReplayExportWindow(
         IReadOnlyList<ExportModeChoice> modes,
-        Func<string, List<(uint AngleId, ulong From, ulong To)>> buildSegments,
+        Func<string, ReplayExportRequest> buildRequest,
         Func<(uint Width, uint Height, uint FpsNum, uint FpsDen, uint Bitrate)> format,
         Func<IReadOnlyList<(uint Id, string Label)>> angles,
         Func<bool> isRecording,
         Action<string, string> start)
     {
         _modes = modes;
-        _buildSegments = buildSegments;
+        _buildRequest = buildRequest;
         _format = format;
         _angles = angles;
         _isRecording = isRecording;
@@ -50,7 +50,42 @@ public partial class ReplayExportWindow : Window
         ExportModeBox.ItemsSource = _modes;
         ExportModeBox.DisplayMemberPath = nameof(ExportModeChoice.Label);
         ExportModeBox.SelectedIndex = 0;
+        // The window follows its own export. The deck reports progress for the files it
+        // queued, but this window can start one nothing else is tracking — an export begun
+        // here while the deck's queue was empty was never reported, so the button stayed
+        // disabled and the operator saw no sentence at all.
+        _tick = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(200),
+        };
+        _tick.Tick += (_, _) => Poll();
     }
+
+    private readonly System.Windows.Threading.DispatcherTimer _tick;
+
+    private void Poll()
+    {
+        if (!IsBusy)
+            return;
+        var progress = Backend?.ReplayExportProgress() ?? "";
+        if (progress.Length == 0)
+            return;
+        var step = ReplayExportProgress.Parse(progress);
+        ShowProgress(step.State switch
+        {
+            1 => Loc.Format("replay.exportRunning", step.Done, step.Total, step.Skipped),
+            2 => Loc.Format("replay.exportDone", step.Done, step.Skipped),
+            3 => Loc.Format("replay.exportError", step.Message),
+            4 => Loc.T("replay.exportCancelled"),
+            _ => "",
+        });
+        // The state is what says the file is finished, not the sentence: the sentence is
+        // localised and formatted, so matching its text would only work in one language.
+        if (step.State is 2 or 3 or 4)
+            Release();
+    }
+
+    private static IEivizBackend? Backend => (Application.Current as App)?.Backend;
 
     /// <summary>Shows what a running export is doing. Called by the deck's poll.</summary>
     public void ShowProgress(string text)
@@ -61,6 +96,16 @@ public partial class ReplayExportWindow : Window
 
     /// <summary>Whether the window is waiting on an export to finish.</summary>
     public bool IsBusy { get; private set; }
+
+    /// <summary>Lets the operator start another file.</summary>
+    private void Release()
+    {
+        if (!IsBusy)
+            return;
+        IsBusy = false;
+        _tick.Stop();
+        ExportStartButton.IsEnabled = true;
+    }
 
     private void Browse_Click(object sender, RoutedEventArgs e)
     {
@@ -102,9 +147,8 @@ public partial class ReplayExportWindow : Window
             path += ".mp4";
             ExportPathBox.Text = path;
         }
-        var segments = string.Join(",", _buildSegments(mode.Key).Select(segment =>
-            $"{{\"angleId\":{segment.AngleId},\"fromFrame\":{segment.From},\"toFrame\":{segment.To}}}"));
-        if (segments.Length == 0)
+        var request = _buildRequest(mode.Key);
+        if (request.IsEmpty)
         {
             ExportStatusText.Text = Loc.T("replay.exportNothing");
             return;
@@ -122,12 +166,15 @@ public partial class ReplayExportWindow : Window
         }
         var codec = ExportCodecBox.SelectedIndex == 1 ? "Hevc" : "H264";
         var (width, height, fpsNum, fpsDen, bitrate) = _format();
+        var (segments, clips) = request.Members();
         string Body(string target) =>
             $"{{\"path\":{JsonSerializer.Serialize(target)},\"width\":{width},\"height\":{height}," +
             $"\"fpsNum\":{fpsNum},\"fpsDen\":{fpsDen},\"bitrate\":{bitrate},\"sampleRate\":48000," +
-            $"\"channels\":2,\"withAudio\":true,\"codec\":\"{codec}\",\"segments\":[{segments}]}}";
+            $"\"channels\":2,\"withAudio\":true,\"codec\":\"{codec}\"," +
+            $"\"segments\":{segments},\"clips\":{clips}}}";
         IsBusy = true;
         ExportStartButton.IsEnabled = false;
+        _tick.Start();
         if (mode.Key == "AllAngles")
         {
             // One file per angle, so a multi-camera export stays usable.
@@ -146,6 +193,14 @@ public partial class ReplayExportWindow : Window
     }
 
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
+
+    protected override void OnClosed(EventArgs e)
+    {
+        // The timer outlives the window's controls, and a tick after they are gone would
+        // write to them.
+        _tick.Stop();
+        base.OnClosed(e);
+    }
 }
 
 /// <summary>One entry of the "what to export" list.</summary>

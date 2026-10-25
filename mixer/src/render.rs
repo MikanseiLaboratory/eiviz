@@ -376,11 +376,7 @@ pub(crate) fn render_loop(
             // An input angle records the input's own picture, so that input has to
             // reach the composer even when no scene or monitor shows it: otherwise the
             // recorder finds no texture and the angle stays empty.
-            used_uploads.extend(
-                crate::replay::engine()
-                    .live_angle_input_ids()
-                    .into_iter(),
-            );
+            used_uploads.extend(crate::replay::engine().live_angle_input_ids().into_iter());
             let mut role_sources = presenters.attached_monitor_sources();
             role_sources.extend(thumbs_snap.keys().copied());
             let output_refs: Vec<(u32, u64)> = outputs_snap

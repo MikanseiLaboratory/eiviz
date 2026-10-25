@@ -549,7 +549,11 @@ impl AudioGraph {
                     let Some(samples) = self.popped.get(&layer.source_id) else {
                         continue;
                     };
-                    crate::simd::mix_stereo_gain(&mut pcm, samples, (layer.opacity.max(0.0)) * input.gain.max(0.0));
+                    crate::simd::mix_stereo_gain(
+                        &mut pcm,
+                        samples,
+                        (layer.opacity.max(0.0)) * input.gain.max(0.0),
+                    );
                 }
             }
             by_angle.insert(spec.angle_id, pcm);

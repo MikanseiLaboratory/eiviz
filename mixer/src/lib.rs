@@ -4804,6 +4804,9 @@ pub unsafe extern "C" fn mixer_replay_configure(json: *const c_char) -> i32 {
 
 /// Copies one jog-proxy picture as UYVY. Returns 1 when the proxy exists.
 /// A missing proxy returns 0 and does not decode the full-size picture.
+///
+/// `stride` is the source's bytes per row, which a store may pad beyond `width * 2`; it is
+/// reported rather than assumed so a host does not read each row from the wrong offset.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_replay_copy_proxy(
     angle_id: u32,
@@ -4812,16 +4815,28 @@ pub unsafe extern "C" fn mixer_replay_copy_proxy(
     cap: usize,
     width: *mut u32,
     height: *mut u32,
+    stride: *mut u32,
 ) -> i32 {
     ffi_guard("mixer_replay_copy_proxy", 0, || unsafe {
-        if out.is_null() || width.is_null() || height.is_null() || cap == 0 {
+        if out.is_null() || width.is_null() || height.is_null() || stride.is_null() || cap == 0 {
             return 0;
         }
         let dst = std::slice::from_raw_parts_mut(out, cap);
         match crate::replay::engine().copy_proxy(angle_id, frame, dst) {
-            Ok((w, h)) => {
+            Ok((w, h, row_bytes)) => {
+                // The store's stride is what the caller will index with, so this is where it
+                // has to make sense: at least one row's worth of texels, and small enough
+                // that the picture fits the buffer the caller actually supplied. Reporting a
+                // stride that describes bytes the caller never allocated would let it read
+                // past its own buffer.
+                let row_minimum = u64::from(w) * 2;
+                let extent = u64::from(row_bytes) * u64::from(h);
+                if u64::from(row_bytes) < row_minimum || extent > cap as u64 {
+                    return 0;
+                }
                 *width = w;
                 *height = h;
+                *stride = row_bytes;
                 1
             }
             Err(_) => 0,
@@ -4851,7 +4866,10 @@ pub unsafe extern "C" fn mixer_replay_angle_range(
     })
 }
 
-/// Starts an MP4 export. The JSON names the file and the segments to write.
+/// Measures what this machine can sustain for one replay recording, as JSON.
+///
+/// The Replay Setup window uses this to warn before an operator asks for more angles
+/// or a longer buffer than the disk and encoder can keep up with.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_bench_capacity(
     path: *const u8,
@@ -4892,6 +4910,7 @@ pub unsafe extern "C" fn mixer_bench_capacity(
     })
 }
 
+/// Starts an MP4 export. The JSON names the file and the segments to write.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_replay_export_start(json: *const c_char) -> i32 {
     ffi_guard("mixer_replay_export_start", ERR_IO, || {
@@ -5201,6 +5220,8 @@ pub unsafe extern "C" fn mixer_replay_estimate(
             String::from_utf8_lossy(std::slice::from_raw_parts(input.path, input.path_len))
                 .into_owned()
         };
+        // The mixer works this out itself: free space is the OS's to report and the rate model
+        // is the one the store will be opened with, so neither needs the Pro module.
         *out = crate::replay::ReplayEngine::estimate(
             &path,
             input.width,
@@ -6008,6 +6029,29 @@ unsafe fn mixer_session_replace_ffi(json: *const u8, len: usize, expected_revisi
     }
     let bytes = unsafe { std::slice::from_raw_parts(json, len) };
     crate::runtime::replace_session_bytes(bytes, expected_revision)
+}
+
+/// Applies one session mutation, given as `{"kind": "<MutationName>", ...}`.
+///
+/// A host that edits one part of the document — the Replay deck, one scene, the settings
+/// — used to read the whole document, change its part, and replace the whole document.
+/// Another writer landing an edit between the read and the replace lost it, so every host
+/// grew its own merge to compensate, in its own language, and those merges drifted. A
+/// mutation says what changed; the core is the only place that decides what that means
+/// for the document.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_mutate(json: *const u8, len: usize) -> i32 {
+    ffi_guard("mixer_session_mutate", ERR_DEVICE, || unsafe {
+        mixer_session_mutate_ffi(json, len)
+    })
+}
+
+unsafe fn mixer_session_mutate_ffi(json: *const u8, len: usize) -> i32 {
+    if json.is_null() || len == 0 {
+        return ERR_INVALID_ARGUMENT;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(json, len) };
+    crate::runtime::mutate_session_bytes(bytes)
 }
 
 #[unsafe(no_mangle)]

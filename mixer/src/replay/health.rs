@@ -72,16 +72,17 @@ pub fn step(memory: &mut HealthMemory, sample: &HealthSample, now_ms: u64) -> He
         .encode_cool_since
         .is_some_and(|started| now_ms.saturating_sub(started) >= 2_000)
         && sample.dropped_encode_recent == 0;
-    if encode_critical || encode_hot || (memory.issues & ISSUE_CPU_ENCODE != 0 && !encode_clear) {
-        if encode_critical || encode_hot || (memory.issues & ISSUE_CPU_ENCODE != 0 && !encode_clear)
-        {
-            issues |= ISSUE_CPU_ENCODE;
-            severity = severity.max(if encode_critical {
-                SEVERITY_CRITICAL
-            } else {
-                SEVERITY_WARNING
-            });
-        }
+    // The latch survives a sample that is merely not-yet-clear, so a warning does not
+    // flicker on and off while the encoder is still catching up.
+    let encode_hot =
+        encode_critical || encode_hot || (memory.issues & ISSUE_CPU_ENCODE != 0 && !encode_clear);
+    if encode_hot {
+        issues |= ISSUE_CPU_ENCODE;
+        severity = severity.max(if encode_critical {
+            SEVERITY_CRITICAL
+        } else {
+            SEVERITY_WARNING
+        });
     }
 
     // A buffered writer normally holds a few megabytes, so the buffer being non-empty
@@ -102,27 +103,13 @@ pub fn step(memory: &mut HealthMemory, sample: &HealthSample, now_ms: u64) -> He
         .is_some_and(|started| now_ms.saturating_sub(started) >= 1_000)
         || sample.write_latency_p95_ms > 250;
     let write_critical = sample.write_buffer_ratio >= 0.98 || sample.dropped_write_recent > 0;
-    let write_clear = memory
-        .write_cool_since
-        .is_some_and(|started| now_ms.saturating_sub(started) >= 2_000)
-        && sample.dropped_write_recent == 0;
-    // A storage warning must not outlive the trouble that caused it. The cool timer
-    // handles the ordinary case; this clears the latch as soon as the numbers are
-    // healthy, so a single hiccup at the start of a recording does not read as a
-    // failing disk for the rest of the session.
-    let write_healthy = sample.dropped_write_recent == 0 && sample.write_latency_p95_ms <= 250;
-    if write_critical
-        || write_hot
-        || (memory.issues & ISSUE_STORAGE_WRITE != 0 && !write_clear && !write_healthy)
-    {
-        if write_critical || write_hot {
-            issues |= ISSUE_STORAGE_WRITE;
-            severity = severity.max(if write_critical {
-                SEVERITY_CRITICAL
-            } else {
-                SEVERITY_WARNING
-            });
-        }
+    if write_critical || write_hot {
+        issues |= ISSUE_STORAGE_WRITE;
+        severity = severity.max(if write_critical {
+            SEVERITY_CRITICAL
+        } else {
+            SEVERITY_WARNING
+        });
     }
 
     if sample.dropped_readback_recent > 0 {

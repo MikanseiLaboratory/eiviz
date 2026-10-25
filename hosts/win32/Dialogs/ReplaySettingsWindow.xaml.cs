@@ -850,10 +850,12 @@ public partial class ReplaySettingsWindow : Window
             }
             else
             {
-                // Publishing the session reconfigures the mixer and validates the
-                // change, so the refusal (and its reason) comes back with it.
-                SessionStore.NextPublishSource = "setup";
-            SessionStore.Publish(_session);
+                // Only the settings travel. The core keeps the events, playlists and
+                // channel rows as they are, so a mark taken while this window was open
+                // survives an Apply; sending the whole document put them back to this
+                // window's copy, which is what the merge above had to compensate for.
+                SessionStore.MutateLocal(
+                    "{\"kind\":\"updateReplaySettings\",\"settings\":" + ReplayModel.SerializeSettings(_replay) + "}");
             }
         }
         catch (Exception error)

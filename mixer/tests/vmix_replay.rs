@@ -19,8 +19,7 @@ use common::{expect, load_test_module};
 use eiviz_mixer::{
     MixerReplayChannelState, mixer_api_configure, mixer_create, mixer_create_unit, mixer_destroy,
     mixer_replay_configure, mixer_replay_copy_channels, mixer_replay_copy_recording_uuid,
-    mixer_replay_record,
-    mixer_session_replace,
+    mixer_replay_record, mixer_session_replace,
 };
 
 const PORT: u32 = 18731;

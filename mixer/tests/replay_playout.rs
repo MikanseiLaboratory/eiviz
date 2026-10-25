@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use common::{
     cstring, expect, full_layer, is_black, is_red, load_test_module, mark_in_when_ready,
-    mark_out_after, mark_out_when_ready, scene_id, scene_pixel,
+    mark_out_after, scene_id, scene_pixel,
 };
 use eiviz_mixer::{
     GEN_SOLID, MixerReplayChannelState, SRC_COLOR, UnitState, mixer_create, mixer_create_unit,
@@ -109,7 +109,7 @@ fn the_replay_picture_reaches_the_program_scene() {
     thread::sleep(Duration::from_millis(1200));
     // A recording numbers its frames from its own first frame, so frame 0 is a
     // recorded frame: Mark In is allowed to sit on it.
-    let in_frame = mark_in_when_ready("replay_playout");
+    mark_in_when_ready("replay_playout");
     // A clip long enough to watch play: the rate assertions below need more than a
     // few frames of material, so the close waits for the recording to move on.
     let (uuid, in_frame, out_frame) = mark_out_after("replay_playout", 60);

@@ -181,65 +181,51 @@ extension MixerController {
         guard !json.isEmpty else { return nil }
         return ReplayExportProgress(json: json)
     }
-    /// Writes the deck: events, playlists, the selected angle and channel
-    /// playlists. Settings stay where Replay Setup put them.
+    /// Writes the deck: events, playlists, the selected angle and channel playlists.
+    /// Settings stay where Replay Setup put them.
+    ///
+    /// The deck is a snapshot, so the core applies it as a difference: what this deck has is
+    /// written, what it never had is kept, and only the deletions it names are made. The
+    /// merge that used to live here replaced whole arrays, so an event marked while the
+    /// window was open vanished on the next save; that rule belongs in one place, and that
+    /// place is the core.
     @discardableResult
-    func applyReplayDeck(_ document: ReplayDocument) -> Bool {
-        var base = ReplayDocument(session.replay) ?? document
-        for name in ["events", "playlists", "activeAngleId", "nextEventId", "nextPlaylistId", "timelineCues"] {
+    func applyReplayDeck(
+        _ document: ReplayDocument,
+        deletedEvents: [UInt64] = [],
+        deletedClips: [String] = [],
+        angleEdited: Bool = true
+    ) -> Bool {
+        var deck: [String: JSONValue] = [:]
+        for name in ["events", "playlists", "activeAngleId", "nextEventId", "nextPlaylistId", "channels", "timelineCues"] {
             if let value = document.raw[name] {
-                base.raw[name] = value
+                deck[name] = value
             }
         }
-        if let incoming = document.raw["channels"]?.arrayValue,
-           var channels = base.raw["channels"]?.arrayValue {
-            for item in incoming {
-                guard let row = item.objectValue, let index = row["index"]?.uint32Value else { continue }
-                for channelIndex in channels.indices {
-                    guard var channel = channels[channelIndex].objectValue,
-                          channel["index"]?.uint32Value == index else { continue }
-                    if let playlist = row["playlistId"] {
-                        channel["playlistId"] = playlist
-                    }
-                    channels[channelIndex] = .object(channel)
-                }
-            }
-            base.raw["channels"] = .array(channels)
-        }
-        session.replay = base.value
-        if isRemote {
-            var deck: [String: JSONValue] = [:]
-            for name in ["events", "playlists", "activeAngleId", "nextEventId", "nextPlaylistId", "channels", "timelineCues"] {
-                if let value = base.raw[name] {
-                    deck[name] = value
-                }
-            }
-            let payload = (try? JSONEncoder().encode(JSONValue.object(deck)))
-                .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-            return mutateRemote("{\"kind\":\"updateReplayDeck\",\"deck\":\(payload)}")
-        }
-        return replaceRuntime()
+        let deckJSON = encodeJSON(deck) ?? "{}"
+        // Said explicitly: "not in the deck" also describes an event this window never saw,
+        // and the core must not treat the two as the same thing.
+        let events = deletedEvents.map { "\($0)" }.joined(separator: ",")
+        let clips = deletedClips.map { ReplayJson.string($0) }.joined(separator: ",")
+        let edit = "{\"deletedEvents\":[\(events)],\"deletedClips\":[\(clips)],"
+            + "\"angleEdited\":\(angleEdited ? "true" : "false")}"
+        return mutateLocal("{\"kind\":\"updateReplayDeck\",\"deck\":\(deckJSON),\"edit\":\(edit)}")
+    }
+
+    /// Encodes a JSON object, or nil when it cannot be encoded.
+    private func encodeJSON(_ object: [String: JSONValue]) -> String? {
+        (try? JSONEncoder().encode(JSONValue.object(object)))
+            .flatMap { String(data: $0, encoding: .utf8) }
     }
 
     /// Writes the recording settings. Returns false when the core refused the
     /// document, so the caller can keep the window open and say why.
+    ///
+    /// Only the settings travel. The core keeps the events, playlists and channel rows as
+    /// they are, so a mark taken while this window was open survives an Apply.
     @discardableResult
     func applyReplay(_ document: ReplayDocument) -> Bool {
-        var base = ReplayDocument(session.replay) ?? document
-        for name in ["enabled", "storage", "format", "buffering", "retention", "warnings", "angles", "autoAddToPlaylist", "decodeAhead", "profiling"] {
-            if let value = document.raw[name] {
-                base.raw[name] = value
-            }
-        }
-        session.replay = base.value
-        if isRemote {
-            // A remote core owns the events and playlists too, so Replay Setup must
-            // not send them back from a copy that may already be stale.
-            return mutateRemote(
-                "{\"kind\":\"updateReplaySettings\",\"settings\":\(document.settingsJSON)}"
-            )
-        }
-        return replaceRuntime()
+        mutateLocal("{\"kind\":\"updateReplaySettings\",\"settings\":\(document.settingsJSON)}")
     }
 
     /// Clears the animation cues that name a Replay channel or clip. A cue whose

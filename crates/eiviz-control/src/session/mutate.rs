@@ -2,6 +2,7 @@
 
 use crate::command::SessionMutation;
 use crate::error::{ControlError, ControlResult};
+use crate::session::replay::ReplayDeckEditDto;
 use crate::session::{Document, InputDto, InputKind, MultiviewDto, SceneDto, UnitDto};
 
 pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResult<()> {
@@ -298,12 +299,23 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             replay.normalize();
             Ok(())
         }
-        SessionMutation::UpdateReplayDeck { deck } => {
+        SessionMutation::UpdateReplayDeck { deck, edit } => {
             let Some(replay) = document.replay.as_mut() else {
                 return Err(ControlError::invalid(
                     "add a Replay input before editing the Replay deck",
                 ));
             };
+            // Deletions first: an event this deck deleted but still lists would otherwise
+            // be written back by the merge that follows.
+            let edit = edit.unwrap_or_else(|| Box::new(ReplayDeckEditDto::none()));
+            let angle_edited = edit.angle_edited;
+            edit.apply_to(replay);
+            let mut deck = *deck;
+            if !angle_edited {
+                // This window did not pick a camera, so the selection another deck made
+                // is not its to overwrite.
+                deck.active_angle_id = None;
+            }
             deck.apply_to(replay);
             replay.normalize();
             Ok(())
@@ -814,6 +826,25 @@ mod tests {
         assert!(err.message().contains("DeleteReplay"), "{}", err.message());
     }
 
+    /// Removing the last channel takes its input with it.
+    ///
+    /// A Replay input without a Replay document is a session that saves and then refuses
+    /// to load, so the pair is removed together rather than left for a caller to
+    /// remember.
+    #[test]
+    fn removing_the_last_channel_removes_its_input_too() {
+        let mut doc = bars_with_replay();
+        let id = doc.inputs.last().unwrap().id;
+        assert!(crate::session::replay::remove_channel_input(&mut doc, id));
+        assert!(doc.replay.is_none(), "the document goes with the channel");
+        assert!(
+            !doc.inputs.iter().any(|item| item.kind == InputKind::Replay),
+            "a Replay input must not outlive its document"
+        );
+        // What the operator is left with is a session that loads.
+        crate::session::validate_for_apply(&doc).unwrap();
+    }
+
     #[test]
     fn replay_settings_cannot_create_the_document() {
         let mut doc = bars();
@@ -946,7 +977,8 @@ mod tests {
     }
 
     /// Changing a Replay input into another kind would leave its channel behind,
-    /// which no session can load. The operator removes the input instead.    #[test]
+    /// which no session can load. The operator removes the input instead.
+    #[test]
     fn a_replay_input_cannot_change_its_kind() {
         let mut doc = bars();
         let id = crate::session::replay::REPLAY_CHANNEL_BASE | 1;

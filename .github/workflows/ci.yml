@@ -148,18 +148,51 @@ jobs:
         # load a Pro module, which is process-wide and permanent. A release run skips
         # them, so this job is the one that exercises recording, marking and playout.
         #
-        # `replay_transition` is left out: it judges the dissolve from the composed
-        # program picture, and this runner renders through a software adapter that
-        # returns the picture in jumps coarse enough to miss a half-second blend
-        # entirely (measured: 75 samples inside the window, none of them a blend). It
-        # runs on the macOS job, where the picture comes from Metal, and locally.
+        # `replay_transition` is included: it judges the dissolve from the composed
+        # program picture, and this runner's software adapter can sample the window too
+        # coarsely to see a blend. The test now retries with a longer budget per attempt
+        # and fails when no attempt ever observed the dissolve, so a run that cannot look
+        # says so instead of passing.
         run: >
           cargo test -p eiviz_mixer --locked
           --test replay_record --test replay_record_nomodule --test replay_input
           --test replay_flow --test replay_playout --test replay_offair
-          --test replay_animation --test replay_audio
+          --test replay_animation --test replay_audio --test replay_transition
           --test vmix_replay
           -- --test-threads=1
+
+  macos-swift:
+    name: Mac host (Swift compile)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup NDI SDK
+        uses: ./.github/actions/setup-ndi-macos
+
+      - name: Install Rust 1.97
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          key: macos-swift
+
+      - name: Build the mixer dylib and the Swift host
+        # Swift type errors only need a compiler. The full `macos` job runs the mixer's
+        # release test suite first, which takes twenty minutes, so a missing import or a
+        # type in the wrong scope used to surface at the very end — the last pass of this
+        # work needed six follow-up commits for exactly that. This job builds the dylib
+        # the Swift package links against (a plain `cargo build`, no tests) and then the
+        # host, so it fails in minutes. Keep it small; put nothing slower in here.
+        run: |
+          chmod +x hosts/macos/build.sh
+          hosts/macos/build.sh
 
   macos:
     name: Test mixer and Mac host
@@ -221,6 +254,13 @@ jobs:
         # reset in the core on the next publish, so the two sides are compared rather
         # than trusted (the scene camera went missing that way).
         run: python3 scripts/check-session-dto.py
+
+      - name: Check every crate is rustfmt-clean
+        # rustfmt is a single tool with a single answer, so it is asked once for the whole
+        # workspace rather than per crate. A crate left out of a per-crate list drifts
+        # silently: the replay work left `mixer` and `eiviz-pro-api` unformatted while
+        # every other format step stayed green.
+        run: python3 scripts/check-rustfmt.py
 
       - name: Format control API
         run: cargo fmt -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless -p eiviz-replay -- --check

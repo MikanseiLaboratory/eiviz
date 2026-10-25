@@ -138,6 +138,22 @@ pub struct ReplayStorageTarget {
     pub path: String,
 }
 
+/// What a caller asks before a recording: where it would go, in what format, and over how
+/// many streams. These travel together, so they travel as one value rather than as eight
+/// loose arguments a caller can transpose.
+#[derive(Clone, Debug)]
+pub struct ReplayEstimateQuery {
+    pub path: String,
+    pub width: u32,
+    pub height: u32,
+    pub fps_num: u32,
+    pub fps_den: u32,
+    /// Replay format profile code.
+    pub profile: u32,
+    pub angles: u32,
+    pub reserve_bytes: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct ReplayAngleTarget {
     pub angle_id: u32,
@@ -270,6 +286,50 @@ pub struct ReplayExportSegment {
     pub to_frame: u64,
 }
 
+/// How a clip joins the one after it.
+///
+/// The codes are the session's, so a transition the operator picked on a clip reaches
+/// the writer unchanged. `frames` is the length it occupies on the exported timeline,
+/// which the writer holds or overlaps exactly as playback does; it is not a hint.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReplayExportTransition {
+    /// 0 Cut, 1 Dissolve, 2 Dip, 3 Wipe, 4 Slide, 5 Push.
+    pub kind: u32,
+    /// 0 Left, 1 Right, 2 Up, 3 Down. Ignored by the kinds that have no edge.
+    pub direction: u32,
+    /// [`EXPORT_TIMING_OVERWRAP`] or [`EXPORT_TIMING_ADDITIVE`].
+    pub timing: u32,
+    pub frames: u32,
+}
+
+/// `timing` for [`ReplayExportTransition`]: the two clips overlap, so the transition is
+/// taken out of both.
+pub const EXPORT_TIMING_OVERWRAP: u32 = 0;
+/// `timing` for [`ReplayExportTransition`]: the transition is inserted between the two
+/// clips, holding the outgoing clip's last frame and the incoming clip's first.
+pub const EXPORT_TIMING_ADDITIVE: u32 = 1;
+
+/// One playlist clip as an export sees it: the frames to read and everything that
+/// decides how they join the next clip.
+///
+/// This is the difference between "the playlist as a row of cuts" and "the playlist as
+/// it plays". A writer that only understands segments cannot reproduce a dissolve, so it
+/// must refuse a request that carries clips rather than quietly flatten it.
+#[derive(Clone, Debug)]
+pub struct ReplayExportClip {
+    pub angle_id: u32,
+    pub from_frame: u64,
+    pub to_frame: u64,
+    /// Percent of normal speed, as the session stores it (100 is real time).
+    pub speed_percent: u32,
+    /// The transition out of this clip into the next, or `None` for a hard cut.
+    pub transition: Option<ReplayExportTransition>,
+    /// Which angle supplies this clip's audio; `None` exports it silent.
+    pub audio_angle_id: Option<u32>,
+    /// Clip gain, linear.
+    pub gain: f32,
+}
+
 #[derive(Clone, Debug)]
 pub struct ReplayExportSpec {
     pub path: String,
@@ -281,7 +341,13 @@ pub struct ReplayExportSpec {
     pub sample_rate: u32,
     pub channels: u32,
     pub with_audio: bool,
+    /// Plain runs of frames, joined as hard cuts. Used when the caller does not ask for
+    /// the playlist's transitions.
     pub segments: Vec<ReplayExportSegment>,
+    /// The playlist as it plays, transitions included. A module that understands this
+    /// list writes it in preference to `segments`; one that does not must refuse the
+    /// request, because the operator asked for the transitions.
+    pub clips: Vec<ReplayExportClip>,
     /// 0 is H.264. 1 is HEVC. The writer uses the one named here and does not
     /// switch to the other when it is missing.
     pub codec: u32,
@@ -312,7 +378,12 @@ pub trait ReplayStore: Send {
         frame_index: u64,
         frame: &VideoFrame,
     ) -> ProResult<WriteOutcome>;
-    fn decode(&mut self, angle_id: u32, frame_index: u64, dst: &mut [u8]) -> ProResult<DecodedFrame>;
+    fn decode(
+        &mut self,
+        angle_id: u32,
+        frame_index: u64,
+        dst: &mut [u8],
+    ) -> ProResult<DecodedFrame>;
 
     /// Decodes the jog proxy. A store without one returns an error and does not
     /// decode the full-size picture in its place.
@@ -419,20 +490,8 @@ pub trait ReplayStore: Send {
 
 pub trait ReplayBackend: Send + Sync {
     fn open(&self, config: &ReplayStoreConfig) -> ProResult<Box<dyn ReplayStore>>;
-    /// Free space and a bitrate model for a plan of `angles` streams. The argument
-    /// list is the module ABI: it travels through `ProApi` field for field.
-    #[allow(clippy::too_many_arguments)]
-    fn estimate(
-        &self,
-        path: &str,
-        width: u32,
-        height: u32,
-        fps_num: u32,
-        fps_den: u32,
-        profile: u32,
-        angles: u32,
-        reserve_bytes: u64,
-    ) -> ProResult<ReplayEstimate>;
+    /// Free space and a bitrate model for the query's plan.
+    fn estimate(&self, query: &ReplayEstimateQuery) -> ProResult<ReplayEstimate>;
 }
 
 /// Usable bytes at `path`. `None` when the path cannot be queried.
@@ -466,14 +525,7 @@ fn free_bytes_windows(path: &std::path::Path) -> Option<u64> {
     let mut free = 0u64;
     let mut total = 0u64;
     let mut total_free = 0u64;
-    let ok = unsafe {
-        GetDiskFreeSpaceExW(
-            wide.as_ptr(),
-            &mut free,
-            &mut total,
-            &mut total_free,
-        )
-    };
+    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, &mut total, &mut total_free) };
     if ok == 0 { None } else { Some(free) }
 }
 

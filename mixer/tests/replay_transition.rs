@@ -127,7 +127,7 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
     // clip holds one colour end to end, and it has to be longer than the transition
     // that will dissolve it.
     thread::sleep(Duration::from_millis(1200));
-    let in_a = mark_in_when_ready("replay_transition A");
+    mark_in_when_ready("replay_transition A");
     let (uuid, in_a, out_a) = mark_out_after("replay_transition A", u64::from(DISSOLVE_FRAMES) + 2);
     assert!(
         out_a > in_a + u64::from(DISSOLVE_FRAMES),
@@ -140,7 +140,7 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
         mixer_define_generator(SRC_COLOR, GEN_SOLID, 0.0, 1.0, 0.0, 1.0, 0),
     );
     thread::sleep(Duration::from_millis(400));
-    let in_b = mark_in_when_ready("replay_transition B");
+    mark_in_when_ready("replay_transition B");
     let (_dropped, in_b, out_b) = mark_out_after("replay_transition B", 20);
     assert!(out_b > in_b, "clip B must span recorded frames");
 
@@ -227,9 +227,6 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
     // whole suite runs in parallel, and a busy machine stretches playback without
     // moving the transition. Where the channel is decides what the picture must be.
     let mut held: Vec<usize> = Vec::new();
-    // Set when the runner could not sample a window at all: the comparison below
-    // then has nothing to compare.
-    let mut skipped_timing = false;
     for timing in ["Overwrap", "Additive"] {
         // A transition lasts a fixed number of frames, while the composed picture is
         // sampled by rendering a scene and reading it back — much slower than the
@@ -264,7 +261,10 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
             // the first one again, so the run has not started until the channel reports
             // a frame of clip A.
             let mut started = false;
-            let deadline = Instant::now() + Duration::from_secs(30);
+            // A sampler that cannot keep up with the transition needs more wall clock
+            // for the same window, so each attempt gets a longer budget than the last.
+            let budget = Duration::from_secs(30 * (attempt as u64 + 1));
+            let deadline = Instant::now() + budget;
             while Instant::now() < deadline {
                 let pixel = scene_pixel(scene_id(2), 160, 90);
                 let mut channels = vec![MixerReplayChannelState::default(); 2];
@@ -317,17 +317,18 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
         }
         // A shared runner with a software adapter can be so slow that fewer frames are
         // sampled than the window has: the blend then falls between two samples without
-        // anything being wrong with it. The test only claims what it observed, so it
-        // stops here rather than failing on the runner's speed. On a machine that can
-        // sample the window, the blend is required.
+        // anything being wrong with it. Rather than pass on a run that could not look,
+        // each attempt gets a longer budget: the transition is the one thing this test
+        // exists to see, and a runner that never samples it has not tested anything.
         held.push(held_here);
+        // A runner that never sampled the window has not looked at the dissolve at all.
+        // Passing here is what let the transition go unverified for as long as it did.
         if mixed_total == 0 && inside_total < DISSOLVE_FRAMES as usize {
-            eprintln!(
-                "{timing}: the runner sampled {inside_total} frames of a {DISSOLVE_FRAMES}-frame \
-                 dissolve, too few to see it; the blend is checked on hardware that can"
+            panic!(
+                "{timing}: no attempt sampled the {DISSOLVE_FRAMES}-frame dissolve \
+                 ({inside_total} frames in the window, {mixed_total} blended); the \
+                 transition was never observed"
             );
-            skipped_timing = true;
-            continue;
         }
 
         // Additive holds the outgoing clip's last frame while it inserts the
@@ -354,14 +355,12 @@ fn a_dissolve_between_two_clips_reaches_the_program() {
         );
     }
     // "Overwrap" then "Additive": the insertion is the whole difference, because it
-    // holds the outgoing edge instead of playing through it. A timing the runner could
-    // not sample has no count to compare, so the comparison needs both.
-    if !skipped_timing {
-        assert!(
-            held[1] > held[0],
-            "Additive must hold the outgoing edge longer than Overwrap: {held:?}"
-        );
-    }
+    // holds the outgoing edge instead of playing through it. Both timings were observed
+    // above, so there is a count for each.
+    assert!(
+        held[1] > held[0],
+        "Additive must hold the outgoing edge longer than Overwrap: {held:?}"
+    );
 
     expect("record off", unsafe { mixer_replay_record(0) });
     mixer_destroy();

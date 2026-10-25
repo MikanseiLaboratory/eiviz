@@ -493,7 +493,9 @@ internal sealed class LocalEivizBackend : IEivizBackend
         var root = ReplayModel.Parse(app.Session);
         if (root is null)
             return false;
-        foreach (var clip in ReplayModel.Clips(root, ReplayModel.EnsurePlaylist(root)))
+        // A clip lives on whichever playlist holds it, not on the first one: cueing from
+        // channel B has to find B's clip even when the project's first list is A's.
+        foreach (var clip in ReplayModel.Clips(root, null))
         {
             if (clip.Uid != clipUid)
                 continue;

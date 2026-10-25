@@ -351,10 +351,8 @@ mod tests {
         });
         let data = slice.get_mapped_range().expect("map transition readback");
         let middle = (ROW * (H / 2)) as usize;
-        let row = data[middle..middle + (W * 4) as usize]
-            .chunks_exact(4)
-            .map(|p| [p[0], p[1], p[2], p[3]])
-            .collect();
+        let (texels, _) = data[middle..middle + (W * 4) as usize].as_chunks::<4>();
+        let row = texels.iter().map(|p| [p[0], p[1], p[2], p[3]]).collect();
         drop(data);
         readback.unmap();
         row

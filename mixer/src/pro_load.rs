@@ -424,25 +424,9 @@ impl eiviz_pro_api::ReplayBackend for LoadedPro {
 
     fn estimate(
         &self,
-        path: &str,
-        width: u32,
-        height: u32,
-        fps_num: u32,
-        fps_den: u32,
-        profile: u32,
-        angles: u32,
-        reserve_bytes: u64,
+        query: &eiviz_pro_api::ReplayEstimateQuery,
     ) -> eiviz_pro_api::ProResult<eiviz_pro_api::ReplayEstimate> {
-        crate::replay::estimate_ffi(
-            path,
-            width,
-            height,
-            fps_num,
-            fps_den,
-            profile,
-            angles,
-            reserve_bytes,
-        )
+        crate::replay::estimate_ffi(query)
     }
 }
 

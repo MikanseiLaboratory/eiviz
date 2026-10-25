@@ -582,6 +582,13 @@ unsafe extern "C" fn replay_write_audio(
         let track = store.entry(angle_id).or_default();
         let offset = frame_index as usize * channels;
         let end = offset.saturating_add(samples.len());
+        if frame_index == 0 {
+            // A new recording starts at its own frame 0. This store keeps one track per
+            // angle rather than one per recording, so the track is cleared at that first
+            // write: without this the tail of the previous, longer recording stayed on
+            // the track and a second recording played back someone else's sound.
+            track.clear();
+        }
         if track.len() < end {
             track.resize(end, 0.0);
         }

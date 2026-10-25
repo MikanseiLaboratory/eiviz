@@ -1,6 +1,7 @@
 import AppKit
 import EivizMixer
 import SwiftUI
+// `UTType.mpeg4Movie`, for the export save panel. AppKit does not re-export it.
 import UniformTypeIdentifiers
 
 /// Live replay operator surface. Mark In/Out and the transport sit at the bottom,
@@ -12,10 +13,14 @@ struct ReplayView: View {
     @State private var document: ReplayDocument?
     @State private var loadedJson = ""
     @State private var channel: UInt32 = 0
-    @State private var playing = false
+    /// Where the channel is: at the live edge or in recorded material, and whether it is
+    @State private var transport = ReplayTransportState.atEdge
+    /// When the mixer's own play state may be read back again. The deck trusts its own
+    /// answer until then, because the mixer reports a start a frame or two late.
+    @State private var settleUntil: Date?
     @State private var speedMilli: Int32 = 1000
-    /// True while the channel follows the recording edge. Jog and clip playback leave it.
-    @State private var followingLive = true
+    /// Whether the channel loops its playlist. The mixer owns it; this mirrors it.
+    @State private var looping = false
     @State private var inFrame: UInt64?
     /// Marked out point. Kept so the operator can read back what was marked.
     @State private var outFrame: UInt64?
@@ -40,11 +45,10 @@ struct ReplayView: View {
     @State private var exportMode = "Clip"
     @State private var exportCodec = "H264"
     @State private var exportPath = ""
-    @State private var exportStatus = ""
+    /// The files an export writes and the progress it reports.
+    @StateObject private var exporter = ReplayExportRunner()
     /// Recording health: where the frames went.
     @State private var health = ""
-    @State private var exportQueue: [ReplayExportJob] = []
-    @State private var exporting = false
     /// True while a selection change fills the editors, so they do not write back.
     @State private var loadingClip = false
     @State private var status = ""
@@ -161,7 +165,7 @@ struct ReplayView: View {
         return L10n.format(
             "replay.outputLabel",
             item.label,
-            L10n.t(playing ? "replay.playing" : "replay.stopped")
+            L10n.t(transport.playing ? "replay.playing" : "replay.stopped")
         )
     }
 
@@ -371,153 +375,24 @@ struct ReplayView: View {
                     .frame(width: 56, height: 32)
                     .onSubmit { applyDefaultTransition() }
             }
-            Table(clips) {
-                TableColumn(L10n.t("replay.in")) { clip in
-                    Text(ReplayTime.timecode(clip.inFrame, fps))
-                        .font(.system(.caption, design: .monospaced))
-                }
-                .width(88)
-                TableColumn(L10n.t("replay.out")) { clip in
-                    Text(clipOutText(clip))
-                        .font(.system(.caption, design: .monospaced))
-                }
-                .width(88)
-                TableColumn(L10n.t("replay.angle")) { clip in
-                    Picker("", selection: Binding(
-                        get: { clip.angleId },
-                        set: { setClipAngle(clip.uid, $0) }
-                    )) {
-                        ForEach(angles) { angle in
-                            Text(angle.label).tag(angle.id)
-                        }
-                    }
-                    .labelsHidden()
-                }
-                .width(130)
-                TableColumn(L10n.t("replay.speed")) { clip in
-                    Picker("", selection: Binding(
-                        get: { Int32((clip.speed * 1000).rounded()) },
-                        set: { setClipSpeed(clip.uid, $0) }
-                    )) {
-                        Text("25%").tag(Int32(250))
-                        Text("50%").tag(Int32(500))
-                        Text("75%").tag(Int32(750))
-                        Text("100%").tag(Int32(1000))
-                        Text("150%").tag(Int32(1500))
-                        Text("200%").tag(Int32(2000))
-                    }
-                    .labelsHidden()
-                }
-                .width(84)
-                TableColumn(L10n.t("replay.transition")) { clip in
-                    // One column for the transition: kind, direction, timing and length
-                    // belong together, and a table column builder takes at most ten.
-                    HStack(spacing: 4) {
-                        Picker("", selection: Binding(
-                            get: { clip.transition.kind },
-                            set: { setClipTransition(clip.uid, kind: $0, timing: nil, frames: nil) }
-                        )) {
-                            // The mixing unit's names, limited to the ones the replay path
-                            // can draw: it composes two decoded frames, where the rest are
-                            // GPU warps.
-                            Text(L10n.t("replay.transitionCut")).tag("Cut")
-                            Text(L10n.t("replay.transitionDissolve")).tag("Dissolve")
-                            Text(L10n.t("replay.transitionDip")).tag("Dip")
-                            Text(L10n.t("replay.transitionWipe")).tag("Wipe")
-                            Text(L10n.t("replay.transitionSlide")).tag("Slide")
-                            Text(L10n.t("replay.transitionPush")).tag("Push")
-                        }
-                        .labelsHidden()
-                        Picker("", selection: Binding(
-                            get: { clip.transition.direction },
-                            set: { setClipTransition(clip.uid, direction: $0) }
-                        )) {
-                            Text(L10n.t("replay.directionLeft")).tag("Left")
-                            Text(L10n.t("replay.directionRight")).tag("Right")
-                            Text(L10n.t("replay.directionUp")).tag("Up")
-                            Text(L10n.t("replay.directionDown")).tag("Down")
-                        }
-                        .labelsHidden()
-                        .help(L10n.t("replay.directionHelp"))
-                        Picker("", selection: Binding(
-                            get: { clip.transition.timing },
-                            set: { setClipTransition(clip.uid, kind: nil, timing: $0, frames: nil) }
-                        )) {
-                            Text(L10n.t("replay.timingOverwrap")).tag("Overwrap")
-                            Text(L10n.t("replay.timingAdditive")).tag("Additive")
-                        }
-                        .labelsHidden()
-                        .help(L10n.t("replay.timingHelp"))
-                        TextField("", value: Binding(
-                            get: { clip.transition.durationFrames },
-                            set: { setClipTransition(clip.uid, kind: nil, timing: nil, frames: $0) }
-                        ), format: .number)
-                        .frame(width: 48)
-                    }
-                }
-                .width(380)
-                TableColumn(L10n.t("replay.gain")) { clip in
-                    TextField("", value: Binding(
-                        get: { clip.gainDb },
-                        set: { setClipGain(clip.uid, $0) }
-                    ), format: .number.precision(.fractionLength(1)))
-                    .frame(width: 52)
-                }
-                .width(60)
-                TableColumn(L10n.t("replay.preservePitch")) { clip in
-                    Toggle("", isOn: Binding(
-                        get: { clip.preservePitch },
-                        set: { setClipPitch(clip.uid, $0) }
-                    ))
-                    .labelsHidden()
-                    .toggleStyle(.checkbox)
-                }
-                .width(56)
-                TableColumn(L10n.t("replay.audio")) { clip in
-                    Picker("", selection: Binding(
-                        get: { clip.audioKind == "Angle" ? "Angle:\(clip.audioAngleId)" : clip.audioKind },
-                        set: { setClipAudioChoice(clip.uid, $0) }
-                    )) {
-                        Text(L10n.t("replay.audioFollow")).tag("FollowAngle")
-                        Text(L10n.t("replay.audioSilent")).tag("Silent")
-                        ForEach(angles) { angle in
-                            Text(angle.label).tag("Angle:\(angle.id)")
-                        }
-                    }
-                    .labelsHidden()
-                    .help(L10n.t("replay.clipAudioHelp"))
-                }
-                .width(150)
-                TableColumn(L10n.t("replay.tags")) { clip in
-                    TextField("", text: Binding(
-                        get: { clip.tags.joined(separator: ", ") },
-                        set: { setClipTagsText(clip.uid, $0) }
-                    ))
-                    .frame(width: 120)
-                }
-                .width(130)
-                TableColumn("") { clip in
-                    HStack(spacing: 4) {
-                        Button {
-                            cue(clip)
-                        } label: {
-                            Image(systemName: "play.fill")
-                        }
-                        .help(L10n.t("replay.cueHint"))
-                        Button {
-                            removeClip(clip.uid)
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                        .help(L10n.t("replay.remove"))
-                    }
-                }
-                .width(70)
-            }
-            .frame(minHeight: 140)
-            if clips.isEmpty {
-                Text(L10n.t("replay.noClips")).font(.caption).foregroundStyle(EivizTheme.dim)
-            }
+            ReplayClipTable(
+                clips: clips,
+                angles: angles,
+                fps: fps,
+                handlers: ReplayClipTable.Handlers(
+                    outText: { clipOutText($0) },
+                    angle: { setClipAngle($0, $1) },
+                    speed: { setClipSpeed($0, $1) },
+                    transitionKind: { setClipTransition($0, kind: $1, timing: nil, frames: nil) },
+                    transitionDirection: { setClipTransition($0, direction: $1) },
+                    transitionTiming: { setClipTransition($0, kind: nil, timing: $1, frames: nil) },
+                    transitionFrames: { setClipTransition($0, kind: nil, timing: nil, frames: $1) },
+                    gain: { setClipGain($0, $1) },
+                    preservePitch: { setClipPitch($0, $1) },
+                    audio: { setClipAudioChoice($0, $1) },
+                    tags: { setClipTagsText($0, $1) },
+                    cue: { cue($0) },
+                    remove: { removeClip($0) }))
         }
     }
 
@@ -534,25 +409,28 @@ struct ReplayView: View {
                 .frame(width: 100, height: 32)
                 Picker("", selection: $exportMode) {
                     Text(L10n.t("replay.exportClip")).tag("Clip")
-                    Text(L10n.t("replay.exportPlaylist")).tag("Playlist")
+                    // Two playlist modes: the clips as they play, and the same clips
+                    // joined by cuts. The first is what the operator watched.
+                    Text(L10n.t("replay.exportPlaylistTransitions")).tag("PlaylistWithTransitions")
+                    Text(L10n.t("replay.exportPlaylistCut")).tag("Playlist")
                     Text(L10n.t("replay.exportAngle")).tag("Angle")
                     Text(L10n.t("replay.exportAllAngles")).tag("AllAngles")
                 }
                 .labelsHidden()
-                .frame(width: 180, height: 32)
+                .frame(width: 220, height: 32)
                 TextField(L10n.t("replay.exportPath"), text: $exportPath)
                     .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32)
                 Button(L10n.t("replay.browse")) { chooseExportPath() }
                     .frame(width: 88, height: 32)
                 Button(L10n.t("replay.exportStart")) { startExport() }
-                    .disabled(exporting)
+                    .disabled(exporter.busy)
                     .frame(width: 96, height: 32)
                 Button(L10n.t("replay.exportCancel")) { cancelExport() }
-                    .disabled(!exporting)
+                    .disabled(!exporter.busy)
                     .frame(width: 88, height: 32)
             }
-            if !exportStatus.isEmpty {
-                Text(exportStatus).font(.caption)
+            if !exporter.status.isEmpty {
+                Text(exporter.status).font(.caption)
             }
             if !health.isEmpty {
                 Text(health).font(.caption).foregroundStyle(EivizTheme.dim)
@@ -560,12 +438,6 @@ struct ReplayView: View {
         }
     }
 
-    /// One file to write. Several angles become several files, written in turn
-    /// because the store runs one export at a time.
-    private struct ReplayExportJob {
-        let json: String
-        let label: String
-    }
 
     private func chooseExportPath() {
         let panel = NSSavePanel()
@@ -583,16 +455,14 @@ struct ReplayView: View {
     }
 
     private func cancelExport() {
-        mixer.cancelReplayExport()
-        exportQueue = []
-        exporting = false
+        exporter.cancel(mixer: mixer)
     }
 
     private func startExport() {
         guard let document else { return }
         let path = exportPath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else {
-            exportStatus = L10n.t("replay.exportNeedPath")
+            exporter.report(L10n.t("replay.exportNeedPath"))
             return
         }
         if stats?.state == 1 {
@@ -603,111 +473,57 @@ struct ReplayView: View {
             if alert.runModal() != .alertFirstButtonReturn { return }
         }
         let segments = exportSegments(mode: exportMode, document: document)
-        guard !segments.isEmpty else {
-            exportStatus = L10n.t("replay.exportNothing")
+        let exports = exportClips(mode: exportMode)
+        guard !segments.isEmpty || !exports.isEmpty else {
+            exporter.report(L10n.t("replay.exportNothing"))
             return
         }
-        exportQueue = []
         if exportMode == "AllAngles" {
             // One file per angle, so a multi-camera export stays usable.
             let base = (path as NSString).deletingPathExtension
             let ext = (path as NSString).pathExtension
-            for angle in exportAngles(document) {
+            for angle in document.angles {
                 let target = "\(base)-angle\(angle.id).\(ext)"
-                exportQueue.append(
-                    ReplayExportJob(
-                        json: exportJson(path: target, document: document, segments: segmentsFor(angle, in: segments)),
-                        label: (target as NSString).lastPathComponent
-                    )
-                )
+                // A refusal is the mixer saying this file cannot be written at all, so the
+                // rest of the angles would fail the same way: stop rather than queue them.
+                guard exporter.start(
+                    json: exportJson(
+                        path: target, document: document, segments: segmentsFor(angle, in: segments)),
+                    label: (target as NSString).lastPathComponent,
+                    mixer: mixer)
+                else { break }
             }
         } else {
-            exportQueue = [
-                ReplayExportJob(
-                    json: exportJson(path: path, document: document, segments: segments),
-                    label: (path as NSString).lastPathComponent
-                )
-            ]
+            exporter.start(
+                json: exportJson(path: path, document: document, segments: segments, clips: exports),
+                label: (path as NSString).lastPathComponent,
+                mixer: mixer)
         }
-        startNextExport()
     }
 
-    private func startNextExport() {
-        guard !exportQueue.isEmpty else {
-            exporting = false
-            return
-        }
-        let job = exportQueue.removeFirst()
-        guard mixer.startReplayExport(job.json) else {
-            exporting = false
-            exportQueue = []
-            exportStatus = L10n.t("replay.exportFailed")
-            return
-        }
-        exporting = true
-        exportStatus = L10n.format("replay.exportStarted", job.label)
+    /// The playlist clips a mode exports, with the transition out of each one.
+    ///
+    /// A single clip has nothing to join to, so its transition is not exported: there is
+    /// no next clip for it to dissolve into.
+    private func exportClips(mode: String) -> [(clip: ReplayClipInfo, transition: ReplayTransitionInfo?)] {
+        ReplayExportPlan.clips(mode: mode, clips: clips, selectedClip: selectedClip)
     }
 
-    /// Export progress, and the queue that follows it.
+    /// Export progress, and the queue that follows it. The runner owns both.
     private func refreshExport() {
-        guard exporting, let progress = mixer.replayExportProgress() else { return }
-        switch progress.state {
-        case .running:
-            exportStatus = L10n.format(
-                "replay.exportRunning",
-                "\(progress.done)",
-                "\(progress.total)",
-                "\(progress.skipped)"
-            )
-        case .done:
-            if exportQueue.isEmpty {
-                exporting = false
-                exportStatus = L10n.format(
-                    "replay.exportDone",
-                    "\(progress.done)",
-                    "\(progress.skipped)"
-                )
-            } else {
-                startNextExport()
-            }
-        case .failed:
-            exporting = false
-            exportQueue = []
-            exportStatus = L10n.format("replay.exportError", progress.message)
-        case .cancelled:
-            exporting = false
-            exportQueue = []
-            exportStatus = L10n.t("replay.exportCancelled")
-        case .idle:
-            break
-        }
+        exporter.poll(mixer: mixer)
     }
 
     /// Segments the chosen mode writes, in order.
+    /// Whole recordings a mode exports. The planning itself lives in `ReplayExportPlan`, so
+    /// the window only supplies what it knows.
     private func exportSegments(mode: String, document: ReplayDocument) -> [(UInt32, UInt64, UInt64)] {
-        var result: [(UInt32, UInt64, UInt64)] = []
-        switch mode {
-        case "Clip":
-            if let uid = selectedClip, let clip = clips.first(where: { $0.uid == uid }) {
-                result.append((clip.angleId, clip.inFrame, clip.outFrame))
-            }
-        case "Playlist":
-            for clip in clips {
-                result.append((clip.angleId, clip.inFrame, clip.outFrame))
-            }
-        case "Angle", "AllAngles":
-            for angle in exportAngles(document) {
-                if let range = mixer.replayAngleRange(angle.id) {
-                    result.append((angle.id, range.first, range.last))
-                }
-                if mode == "Angle" {
-                    break
-                }
-            }
-        default:
-            break
-        }
-        return result
+        ReplayExportPlan.segments(
+            mode: mode,
+            clips: clips,
+            angles: document.angles,
+            active: document.activeAngleId,
+            range: { mixer.replayAngleRange($0) })
     }
 
     private func segmentsFor(
@@ -717,18 +533,11 @@ struct ReplayView: View {
         segments.filter { $0.0 == angle.id }
     }
 
-    /// Angles in the order an export should walk them: the one on air first.
-    private func exportAngles(_ document: ReplayDocument) -> [ReplayAngleInfo] {
-        let active = document.activeAngleId
-        let angles = document.angles
-        guard active != 0 else { return angles }
-        return angles.sorted { ($0.id == active ? 0 : 1) < ($1.id == active ? 0 : 1) }
-    }
-
     private func exportJson(
         path: String,
         document: ReplayDocument,
-        segments: [(UInt32, UInt64, UInt64)]
+        segments: [(UInt32, UInt64, UInt64)],
+        clips: [(clip: ReplayClipInfo, transition: ReplayTransitionInfo?)] = []
     ) -> String {
         let format = document.raw["format"]?.objectValue ?? [:]
         let width = format["width"]?.uint32Value ?? 1920
@@ -743,10 +552,13 @@ struct ReplayView: View {
         let list = segments
             .map { "{\"angleId\":\($0.0),\"fromFrame\":\($0.1),\"toFrame\":\($0.2)}" }
             .joined(separator: ",")
+        let clipList = clips.map { ReplayExportJson.clip($0.clip, $0.transition) }
+            .joined(separator: ",")
         return """
         {"path":\(ReplayJson.string(path)),"width":\(width),"height":\(height),\
         "fpsNum":\(fps.num),"fpsDen":\(fps.den),"bitrate":\(bitrate),\
-        "sampleRate":48000,"channels":2,"withAudio":true,"codec":"\(exportCodec)","segments":[\(list)]}
+        "sampleRate":48000,"channels":2,"withAudio":true,"codec":"\(exportCodec)",\
+        "segments":[\(list)],"clips":[\(clipList)]}
         """
     }
 
@@ -779,7 +591,7 @@ struct ReplayView: View {
                 Button(L10n.t("replay.live")) { live() }
                     .keyboardShortcut("l", modifiers: [])
                     .frame(width: 96, height: 36)
-                Button(L10n.t(playing ? "replay.pause" : "replay.play")) { togglePlay() }
+                Button(L10n.t(transport.playing ? "replay.pause" : "replay.play")) { togglePlay() }
                     .keyboardShortcut(.space, modifiers: [])
                     .frame(width: 108, height: 36)
                 Button("◀") { step(-1) }
@@ -794,6 +606,16 @@ struct ReplayView: View {
                 Button("50%") { setSpeed(500) }.frame(width: 64, height: 36)
                 Button("75%") { setSpeed(750) }.frame(width: 64, height: 36)
                 Button("100%") { setSpeed(1000) }.frame(width: 64, height: 36)
+                // Loops the playlist at its end, the way the deck's own button does.
+                Toggle(L10n.t("replay.playlistLoop"), isOn: Binding(
+                    get: { looping },
+                    set: { next in
+                        looping = next
+                        _ = mixer.replayLoop(channel: channel, on: next)
+                    }))
+                .toggleStyle(.button)
+                .frame(width: 72, height: 36)
+                .help(L10n.t("replay.playlistLoopHint"))
                 Spacer(minLength: 8)
                 Text(L10n.t("replay.jog"))
                 Slider(value: $jogValue, in: -30...30, step: 1) { editing in
@@ -849,38 +671,11 @@ struct ReplayView: View {
             health = ""
             return
         }
-        let active = document?.activeAngleId ?? 0
-        let wanted = active != 0 ? active : (document?.angles.first?.id ?? 0)
-        let issues = ReplayIssues.text(snapshot.stats.issues)
-        guard let angle = snapshot.angles.first(where: { $0.angle_id == wanted }) else {
-            // Without a selected angle there is no delivery figure, but why the
-            // recorder is unhappy is still worth reading.
-            health = issues
-            return
-        }
-        var line = L10n.format(
-            "replay.healthDelivery",
-            "\(angle.frames_written)",
-            "\(snapshot.stats.frames_offered)",
-            "\(snapshot.stats.frames_pushed)",
-            "\(angle.dropped_readback)"
-        ) + "  " + L10n.format(
-            "replay.healthDisk",
-            "\(angle.dropped_encode)",
-            "\(angle.dropped_write)",
-            "\(angle.segments)",
-            "\(angle.encode_queue_len)",
-            "\(angle.encode_queue_cap)",
-            "\(angle.write_latency_p95_ms)"
-        )
-        // The numbers say how much was lost; the issues say why.
-        if !issues.isEmpty {
-            line += "  " + issues
-        }
-        if snapshot.stats.frames_dropped_recent > 0 {
-            line += "  " + L10n.format("replay.dropped", "\(snapshot.stats.frames_dropped_recent)")
-        }
-        health = line
+        let wanted = ReplayHealth.watchedAngle(
+            active: document?.activeAngleId ?? 0,
+            angles: document?.angles ?? [])
+        let angle = snapshot.angles.first(where: { $0.angle_id == wanted })
+        health = ReplayHealth.line(stats: snapshot.stats, angle: angle)
     }
 
     private func refresh() {
@@ -895,6 +690,24 @@ struct ReplayView: View {
         }
         if channels.isEmpty {
             load()
+        }
+        // The mixer owns the transport, so the deck reads the play state back instead of
+        // trusting the button it last pressed. A Remote cannot read it and keeps its own.
+        //
+        // A channel the deck has just started is left alone for a moment: the mixer takes a
+        // frame or two to report the change, and reading it too soon put the button back to
+        // "Play" over a feed that was already running, so the next press paused it.
+        if let settleUntil, Date() < settleUntil {
+            // Inside the grace period after Live or Play: the deck's own answer stands.
+        } else {
+            settleUntil = nil
+            if !mixer.isRemote,
+               let state = MixerFFI.replayChannels().first(where: { $0.channel_index == channel }) {
+                transport = ReplayTransportRules.adopt(transport, mixerPlaying: state.playing != 0)
+                if state.speed_milli > 0 {
+                    speedMilli = state.speed_milli
+                }
+            }
         }
         refreshExport()
         // The peaks live with the recording, so a Remote has no waveform to draw.
@@ -970,12 +783,109 @@ struct ReplayView: View {
         }
         .frame(height: 56)
         .background(Color.black.opacity(0.35))
+        // Clicking the waveform moves the playhead; Shift-click sets Mark In there and
+        // Control-click sets Mark Out. The waveform is where the quiet moment is visible,
+        // so a cut is struck where the operator is looking instead of seeking, looking
+        // away to the buttons, and pressing one while the playhead runs on. The modifier
+        // is read from the live event because SwiftUI's tap gesture does not report it.
+        .overlay(
+            GeometryReader { proxy in
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onEnded { drag in
+                                seekOrMark(at: drag.location, size: proxy.size, modifiers: NSEvent.modifierFlags)
+                            }
+                    )
+            }
+        )
     }
 
-    private func save(_ updated: ReplayDocument) {
+    /// What a click on the waveform does.
+    private enum WaveformMark {
+        case `in`
+        case out
+    }
+
+    /// Maps a point on the waveform to a recording frame, then acts on it.
+    ///
+    /// The waveform draws only the buckets the store still holds, and the store may have
+    /// dropped some from the front, so column zero is not frame zero: the dropped count
+    /// is the offset, exactly as the drawing uses.
+    private func seekOrMark(at point: CGPoint, size: CGSize, modifiers: NSEvent.ModifierFlags) {
+        guard size.width > 1, let document else { return }
+        let buckets = peakMins.count
+        guard buckets > 0 else { return }
+        let bucketRate = Double(MixerFFI.replayPeakRate())
+        let framesPerSecond = max(1.0, ReplayTime.rate(document.fps))
+        guard bucketRate > 0 else { return }
+        let ratio = min(max(point.x / size.width, 0), 1)
+        let bucket = Double(peakDropped) + ratio * Double(buckets)
+        let frame = UInt64(max(0, bucket * framesPerSecond / bucketRate).rounded())
+        let mark: WaveformMark? =
+            modifiers.contains(.shift) ? .in : (modifiers.contains(.control) ? .out : nil)
+        switch mark {
+        case .in:
+            inFrame = frame
+            outFrame = nil
+            markOpen = true
+            seekKeepingPlay(Int64(frame))
+        case .out:
+            guard markOpen, let inFrame, frame > inFrame else {
+                status = L10n.t("replay.markOutBeforeIn")
+                return
+            }
+            // The range is the one the operator selected, so the event is written from it
+            // here rather than from the mixer's own live mark.
+            outFrame = frame
+            markOpen = false
+            createEvent(inFrame: inFrame, outFrame: frame)
+        case nil:
+            seekKeepingPlay(Int64(frame))
+        }
+    }
+
+    /// Seeks the playhead without changing whether the channel is playing.
+    ///
+    /// Dragging the waveform or taking a mark moves the picture off the live edge, so the
+    /// strip draws proxies from here on. It does not start or stop anything, though: an
+    /// operator who was paused stays paused, and one who was playing keeps playing from the
+    /// new frame. The transport was handed that play state, and the deck keeps it.
+    private func seekKeepingPlay(_ frame: Int64) {
+        let action = ReplayTransportRules.leaveEdge(transport)
+        if !mixer.replayTransport(
+            channel: channel, playing: action.playing, speedMilli: speedMilli, seekFrame: frame)
+        {
+            status = L10n.t("replay.commandRefused")
+        }
+        transport = action.next
+    }
+
+    /// Writes the document back after an edit.
+    ///
+    /// A deletion is a decision, not an absence: the core cannot tell "the deck dropped this
+    /// event" from "the deck never had it", so the caller says which ids it removed. Without
+    /// that, saving after a deletion either resurrected the event or deleted one marked by
+    /// somebody else in the meantime.
+    private func save(
+        _ updated: ReplayDocument,
+        deletedEvents: [UInt64] = [],
+        deletedClips: [String] = []
+    ) {
         document = updated
         loadedJson = updated.json
-        mixer.applyReplayDeck(updated)
+        if !mixer.applyReplayDeck(
+            updated,
+            deletedEvents: deletedEvents,
+            deletedClips: deletedClips)
+        {
+            // The core refused the edit, so it is not on air. Read back what it kept rather
+            // than leaving the window showing something the mixer never took.
+            status = L10n.t("replay.commandRefused")
+            document = mixer.replayDocument
+            loadedJson = document?.json ?? ""
+        }
     }
 
     private func selectAngle(_ id: UInt32) {
@@ -1051,6 +961,34 @@ struct ReplayView: View {
         }
     }
 
+    /// Files an event for a range the operator chose on the waveform.
+    ///
+    /// The Mark Out button takes the mixer's own live edge. A range picked on the
+    /// waveform is already on the recording, so it is written here instead of asking the
+    /// core for a mark it would place somewhere else.
+    private func createEvent(inFrame start: UInt64, outFrame end: UInt64) {
+        guard var current = document else { return }
+        let name = L10n.format("replay.eventName", "\(current.events.count + 1)")
+        // The range belongs to the recording that is open. A Remote cannot read it, and
+        // a range with no recording behind it cannot be played, so it is refused rather
+        // than filed against nothing.
+        let uuid = mixer.replayRecordingUuid()
+        guard !uuid.isEmpty else {
+            status = L10n.t("replay.markOutFailed")
+            return
+        }
+        let id = current.appendEvent(uuid: uuid, inFrame: start, outFrame: end, name: name)
+        if current.autoAddToPlaylist {
+            let angleId = current.activeAngle
+            if angleId == 0 {
+                status = L10n.t("replay.needAngle")
+            } else if let event = current.events.first(where: { $0.id == id }) {
+                _ = current.appendClip(playlistId: current.ensurePlaylist(), event: event, angleId: angleId)
+            }
+        }
+        save(current)
+    }
+
     // MARK: - Row edits
     //
     // Each list edits the row it belongs to, so these take the id of the item rather
@@ -1073,7 +1011,7 @@ struct ReplayView: View {
         current.removeEvent(id)
         // A clip keeps its own recording, range and angle, so it survives the event it
         // came from; only the reference to an event that is gone goes away.
-        save(current)
+        save(current, deletedEvents: [id])
     }
 
     private func removeClip(_ uid: String) {
@@ -1081,7 +1019,7 @@ struct ReplayView: View {
         current.removeClip(playlistId: playlistId, uid: uid)
         // An animation step that cued this clip has nothing left to fire.
         mixer.clearReplayCues(clipUid: uid)
-        save(current)
+        save(current, deletedClips: [uid])
     }
 
     private func setClipAngle(_ uid: String, _ angleId: UInt32) {
@@ -1274,7 +1212,7 @@ struct ReplayView: View {
         current.removeClip(playlistId: playlistId, uid: uid)
         // An animation step that cued this clip has nothing left to fire.
         mixer.clearReplayCues(clipUid: uid)
-        save(current)
+        save(current, deletedClips: [uid])
         selectedClip = nil
     }
 
@@ -1400,18 +1338,36 @@ struct ReplayView: View {
     }
 
     private func live() {
-        if !mixer.replayJumpToNow(channel: channel) {
+        guard mixer.replayJumpToNow(channel: channel) else {
+            status = L10n.t("replay.commandRefused")
+            return
+        }
+        // Play from the edge, as the deck does: the transport takes the recording on from
+        // now. Without this the live picture appears only once the poll notices the mixer
+        // started the channel, and the button reads "Play" in the meantime, so a second
+        // press pauses the feed the operator just asked for.
+        //
+        // The jump and the play are two mixer calls, and only the jump can fail: it is the
+        // one that needs the recording. If it fails there is no edge to play from, so the
+        // deck says why and leaves its state alone rather than claiming to be live.
+        let action = ReplayTransportRules.jumpToLive()
+        if mixer.replayTransport(
+            channel: channel, playing: action.playing, speedMilli: speedMilli, seekFrame: action.seekFrame)
+        {
+            transport = action.next
+            settleUntil = Date().addingTimeInterval(1.0)
+        } else {
             status = L10n.t("replay.commandRefused")
         }
-        followingLive = true
-        playing = false
     }
 
     private func togglePlay() {
-        let next = !playing
-        if mixer.replayTransport(channel: channel, playing: next, speedMilli: speedMilli, seekFrame: -1) {
-            playing = next
-            if next { followingLive = false }
+        let action = ReplayTransportRules.toggle(transport)
+        if mixer.replayTransport(
+            channel: channel, playing: action.playing, speedMilli: speedMilli, seekFrame: -1)
+        {
+            transport = action.next
+            settleUntil = Date().addingTimeInterval(1.0)
         } else {
             // The channel never started, so the button must not say "Pause".
             status = L10n.t("replay.playRefused")
@@ -1427,15 +1383,18 @@ struct ReplayView: View {
             status = L10n.t("replay.stepNeedsLocalMark")
             return
         }
-        followingLive = false
+        // Stepping leaves the live edge and holds where it lands.
         var target = max(0, Int64(start) + delta)
         if let end = outFrame, end > start {
             target = min(target, Int64(end))
         }
-        if !mixer.replayTransport(channel: channel, playing: false, speedMilli: speedMilli, seekFrame: target) {
+        let action = ReplayTransportRules.seek()
+        if !mixer.replayTransport(
+            channel: channel, playing: action.playing, speedMilli: speedMilli, seekFrame: target)
+        {
             status = L10n.t("replay.commandRefused")
         }
-        playing = false
+        transport = action.next
     }
 
     private func step(_ delta: Int64) {
@@ -1444,7 +1403,7 @@ struct ReplayView: View {
 
     private func setSpeed(_ milli: Int32) {
         speedMilli = milli
-        if !mixer.replayTransport(channel: channel, playing: playing, speedMilli: speedMilli, seekFrame: -1) {
+        if !mixer.replayTransport(channel: channel, playing: transport.playing, speedMilli: speedMilli, seekFrame: -1) {
             status = L10n.t("replay.commandRefused")
         }
     }
@@ -1452,7 +1411,7 @@ struct ReplayView: View {
     /// Live tiles stay the scene. Jog tiles decode the proxy, or say it is missing.
     @ViewBuilder
     private func angleTile(index: Int, angle: ReplayAngleInfo, selected: Bool) -> some View {
-        if followingLive || mixer.isRemote {
+        if transport.live || mixer.isRemote {
             Text("\(index)")
                 .font(.title3)
                 .fontWeight(selected ? .bold : .regular)
@@ -1473,13 +1432,17 @@ struct ReplayView: View {
         var bytes = [UInt8](repeating: 0, count: 480 * 270 * 2)
         var width: UInt32 = 0
         var height: UInt32 = 0
+        // A store may pad its rows, so the source's own stride is read rather than assumed.
+        var stride: UInt32 = 0
         let frame = stats?.recording_frame ?? 0
         let ok = bytes.withUnsafeMutableBufferPointer { ptr in
-            mixer_replay_copy_proxy(angleId, frame, ptr.baseAddress, ptr.count, &width, &height)
+            mixer_replay_copy_proxy(
+                angleId, frame, ptr.baseAddress, ptr.count, &width, &height, &stride)
         }
         guard ok == 1, width > 0, height > 0 else { return nil }
-        let pixels = uyvyToBgra(bytes, width: Int(width), height: Int(height))
-        guard let rep = NSBitmapImageRep(
+        guard let pixels = ReplayUyvy.toRgba(
+                  bytes, width: Int(width), height: Int(height), stride: Int(stride)),
+              let rep = NSBitmapImageRep(
             bitmapDataPlanes: nil,
             pixelsWide: Int(width),
             pixelsHigh: Int(height),
@@ -1521,549 +1484,5 @@ struct ReplayView: View {
         seekMarked(Int64(delta))
     }
 
-    private func uyvyToBgra(_ src: [UInt8], width: Int, height: Int) -> [UInt8] {
-        var dst = [UInt8](repeating: 255, count: width * height * 4)
-        for y in 0..<height {
-            var x = 0
-            while x + 1 < width {
-                let i = (y * width + x) * 2
-                guard i + 3 < src.count else { break }
-                let u = Int(src[i]) - 128
-                let y0 = Int(src[i + 1])
-                let v = Int(src[i + 2]) - 128
-                let y1 = Int(src[i + 3])
-                writeBgra(&dst, width: width, x: x, y: y, luma: y0, u: u, v: v)
-                writeBgra(&dst, width: width, x: x + 1, y: y, luma: y1, u: u, v: v)
-                x += 2
-            }
-        }
-        return dst
-    }
-
-    private func writeBgra(_ dst: inout [UInt8], width: Int, x: Int, y: Int, luma: Int, u: Int, v: Int) {
-        let r = min(255, max(0, luma + (1402 * v) / 1000))
-        let g = min(255, max(0, luma - (344 * u + 714 * v) / 1000))
-        let b = min(255, max(0, luma + (1772 * u) / 1000))
-        let p = (y * width + x) * 4
-        guard p + 3 < dst.count else { return }
-        dst[p] = UInt8(r)
-        dst[p + 1] = UInt8(g)
-        dst[p + 2] = UInt8(b)
-        dst[p + 3] = 255
-    }
 }
 
-/// Project-scoped replay configuration. It only exists while the project has a
-/// Replay input, so it is a dedicated window rather than a settings tab.
-struct ReplaySettingsView: View {
-    @EnvironmentObject private var mixer: MixerController
-
-    @State private var document: ReplayDocument?
-    @State private var storages: [ReplayDocument.StorageSpec] = []
-    @State private var profile = "Sq"
-    /// Segment length in frames, as text so the operator can type it.
-    @State private var segmentFrames = "120"
-    @State private var warnSecs = "600"
-    @State private var alertSecs = "300"
-    @State private var criticalSecs = "60"
-    @State private var retention = "StopWhenFull"
-    @State private var queue = "6"
-    @State private var buffer = "512"
-    @State private var reserve = "2048"
-    @State private var overflow = "DropFrames"
-    @State private var autoAdd = false
-    @State private var angles: [ReplayAngleInfo] = []
-    @State private var status = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(planText).font(.callout)
-            if !status.isEmpty {
-                // Apply and every refusal report here, where it cannot be missed.
-                Text(status).fontWeight(.bold).foregroundStyle(EivizTheme.dim)
-            }
-            GroupBox(L10n.t("replay.storage")) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(L10n.t("replay.storageHelp"))
-                        .font(.caption)
-                        .foregroundStyle(EivizTheme.dim)
-                    // Each drive is edited in its own row: the path is the row's text field,
-                    // and the angles that record there are shown in the same row.
-                    List {
-                        ForEach($storages) { $storage in
-                            HStack(spacing: 6) {
-                                TextField(L10n.t("settings.replayPath"), text: $storage.path)
-                                    .frame(minWidth: 240)
-                                    .help(L10n.t("replay.pickStorageHint"))
-                                Text(storage.angleIds.map(String.init).joined(separator: ", "))
-                                    .foregroundStyle(EivizTheme.dim)
-                                Spacer()
-                                Button(L10n.t("replay.browse")) { browseInto(storage.id) }
-                                Button(L10n.t("replay.removeStorage")) { removeStorageRow(storage.id) }
-                            }
-                        }
-                    }
-                    .frame(minHeight: 90)
-                    Button(L10n.t("replay.addStorageRow")) { browseInto(nil) }
-                    HStack {
-                        Picker(L10n.t("settings.replayProfile"), selection: $profile) {
-                            Text("HQ").tag("Hq")
-                            Text("SQ").tag("Sq")
-                            Text("LQ").tag("Lq")
-                        }
-                        Picker(L10n.t("replay.retention"), selection: $retention) {
-                            Text(L10n.t("replay.retentionStop")).tag("StopWhenFull")
-                            Text(L10n.t("replay.retentionOverwrite")).tag("Overwrite")
-                            Text(L10n.t("replay.retentionProtect")).tag("OverwriteUnprotected")
-                        }
-                    }
-                    HStack {
-                        TextField(L10n.t("settings.replayQueue"), text: $queue).frame(width: 80)
-                        TextField(L10n.t("settings.replayBuffer"), text: $buffer).frame(width: 90)
-                        TextField(L10n.t("replay.reserve"), text: $reserve).frame(width: 100)
-                        Picker(L10n.t("replay.overflow"), selection: $overflow) {
-                            Text(L10n.t("replay.overflowDrop")).tag("DropFrames")
-                            Text(L10n.t("replay.overflowStop")).tag("StopRecording")
-                        }
-                    }
-                    HStack(alignment: .top) {
-                        // One format for every angle, taken from the first Mixing Unit.
-                        // It is shown rather than edited here.
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(L10n.t("replay.formatFromUnit")).font(.caption)
-                            Text(formatText).font(.system(.body, design: .monospaced))
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(L10n.t("replay.segmentFrames")).font(.caption)
-                            TextField("120", text: $segmentFrames)
-                                .frame(width: 90)
-                                .help(L10n.t("replay.segmentFramesRange"))
-                        }
-                    }
-                    HStack {
-                        Text(L10n.t("replay.warnings")).font(.caption)
-                        TextField("600", text: $warnSecs).frame(width: 70)
-                        TextField("300", text: $alertSecs).frame(width: 70)
-                        TextField("60", text: $criticalSecs).frame(width: 70)
-                    }
-                    Text(L10n.t("replay.warningsHelp")).font(.caption)
-                    Text(L10n.t("replay.retentionHelp")).font(.caption)
-                }
-            }
-            GroupBox(L10n.t("replay.angles")) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(L10n.t("replay.anglesHelp")).font(.caption)
-                    // Every angle is edited in its own row: name, what it records, how, its
-                    // audio and its drive are cells, not a separate panel.
-                    List {
-                        ForEach($angles) { $angle in
-                            HStack(spacing: 6) {
-                                TextField(L10n.t("replay.name"), text: $angle.name)
-                                    .frame(width: 130)
-                                Picker("", selection: $angle.source) {
-                                    Text(L10n.t("replay.sourceScene")).tag("Scene")
-                                    Text(L10n.t("replay.sourceInput")).tag("Input")
-                                }
-                                .labelsHidden()
-                                .frame(width: 90)
-                                .onChange(of: angle.source) { _, _ in resetAngleSource(angle.id) }
-                                Picker("", selection: sourceBinding($angle)) {
-                                    ForEach(sources(for: angle), id: \.id) { source in
-                                        Text(source.name).tag(source.id)
-                                    }
-                                }
-                                .labelsHidden()
-                                .frame(width: 170)
-                                // Where this angle is encoded: GPU keeps the picture on
-                                // the GPU from the scene to the stored packet.
-                                Picker("", selection: $angle.encoder) {
-                                    Text(L10n.t("replay.encoderGpu")).tag("Gpu")
-                                    Text(L10n.t("replay.encoderCpu")).tag("Cpu")
-                                }
-                                .labelsHidden()
-                                .frame(width: 90)
-                                .help(L10n.t("replay.encoderHelp"))
-                                Picker("", selection: $angle.audioUnitId) {
-                                    Text(L10n.t("replay.audioSilent")).tag(UInt64(0))
-                                    ForEach(mixer.session.units) { unit in
-                                        Text(unit.name).tag(unit.id)
-                                    }
-                                }
-                                .labelsHidden()
-                                .frame(width: 140)
-                                .help(L10n.t("replay.audioHelp"))
-                                Picker("", selection: driveBinding(angle.id)) {
-                                    Text(L10n.t("replay.driveUnassigned")).tag(-1)
-                                    ForEach(Array(storages.enumerated()), id: \.offset) { index, storage in
-                                        Text("\(index + 1): \(storage.path)").tag(index)
-                                    }
-                                }
-                                .labelsHidden()
-                                .frame(width: 150)
-                                .help(L10n.t("replay.storageHelp"))
-                                Button(L10n.t("replay.removeAngle")) { removeAngle(angle.id) }
-                            }
-                        }
-                    }
-                    .frame(minHeight: 150)
-                    HStack {
-                        Button(L10n.t("replay.addAngleRow")) { addAngle() }
-                        Text(L10n.t("replay.angleRowHelp")).font(.caption)
-                    }
-                }
-            }
-            Toggle(L10n.t("replay.autoAdd"), isOn: $autoAdd)
-            Text(L10n.t("replay.autoAddHelp")).font(.caption)
-            if let active = document?.activeAngleId, active != 0 {
-                Text(L10n.format("replay.activeAngle", document?.angleLabel(active) ?? ""))
-            } else {
-                Text(L10n.t("replay.noActiveAngle"))
-            }
-            if !status.isEmpty {
-                Text(status).font(.caption)
-            }
-            Spacer()
-            HStack {
-                Spacer()
-                // Cancelling discards the edits: nothing was published, so the
-                // window just goes away.
-                Button(L10n.t("dialog.cancel")) { mixer.closeReplaySettings() }
-                Button(L10n.t("replay.apply")) { apply() }
-                    .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(14)
-        .frame(minWidth: 620, minHeight: 520)
-        .onAppear { load() }
-    }
-
-    private var planText: String {        guard let limits = mixer.replayLimits() else { return "" }
-        if limits.angles == 0 || limits.channels == 0 {
-            return L10n.t("replay.planDenied")
-        }
-        return L10n.format("replay.planLimits", "\(limits.angles)", "\(limits.channels)")
-    }
-
-    /// The format Replay records in: the first Mixing Unit's picture and rate. It is
-    /// shown rather than edited, because every angle shares one format.
-    private var formatText: String {
-        guard let unit = mixer.session.units.first else {
-            return L10n.t("replay.needMixingUnit")
-        }
-        return "\(unit.width) x \(unit.height)   \(unit.fpsNum)/\(unit.fpsDen)"
-    }
-
-    private func sceneName(_ sceneId: UInt64) -> String {
-        mixer.session.scenes.first { $0.id == sceneId }?.name
-            ?? L10n.format("replay.sceneMissing", "\(sceneId)")
-    }
-
-    private func load() {
-        guard let current = mixer.replayDocument else {
-            status = L10n.t("replay.missing")
-            return
-        }
-        document = current
-        storages = current.storages
-        profile = current.profile
-        segmentFrames = "\(current.segmentFrames)"
-        let warnings = current.raw["warnings"]?.objectValue
-        warnSecs = "\(warnings?["remainingWarnSecs"]?.uint32Value ?? 600)"
-        alertSecs = "\(warnings?["remainingAlertSecs"]?.uint32Value ?? 300)"
-        criticalSecs = "\(warnings?["remainingCriticalSecs"]?.uint32Value ?? 60)"
-        retention = current.retention
-        let buffering = current.buffering
-        queue = "\(buffering.queue)"
-        buffer = "\(buffering.buffer)"
-        reserve = "\(buffering.reserve)"
-        overflow = buffering.overflow
-        autoAdd = current.autoAddToPlaylist
-        angles = current.angles
-    }
-
-    private func inputKind(_ inputId: UInt64) -> InputKind? {
-        mixer.session.inputs.first { $0.id == inputId }?.kind
-    }
-
-    private func inputName(_ inputId: UInt64) -> String {
-        mixer.session.inputs.first { $0.id == inputId }?.name
-            ?? L10n.format("replay.inputMissing", "\(inputId)")
-    }
-
-    /// One entry of the add row's source list.
-    private struct SourceOption: Identifiable {
-        let id: UInt64
-        let name: String
-    }
-
-    /// What a row can record: scenes, or the inputs that have a picture. A Replay
-    /// channel is not a camera, and an audio input has nothing to record.
-    private func sources(for angle: ReplayAngleInfo) -> [SourceOption] {
-        if angle.source == "Input" {
-            return mixer.session.inputs
-                .filter { $0.kind != .replay && $0.kind != .audio }
-                .map { SourceOption(id: $0.id, name: $0.name) }
-        }
-        return mixer.session.scenes.map { SourceOption(id: $0.id, name: $0.name) }
-    }
-
-    /// The scene or input a row points at, depending on its kind. The row keeps one id
-    /// per kind so switching back and forth does not lose the other choice.
-    private func sourceBinding(_ angle: Binding<ReplayAngleInfo>) -> Binding<UInt64> {
-        Binding(
-            get: {
-                angle.wrappedValue.source == "Input"
-                    ? angle.wrappedValue.inputId
-                    : angle.wrappedValue.sceneId
-            },
-            set: { value in
-                if angle.wrappedValue.source == "Input" {
-                    angle.wrappedValue.inputId = value
-                } else {
-                    angle.wrappedValue.sceneId = value
-                }
-            }
-        )
-    }
-
-    /// Which drive a row records to. The document keeps the assignment on the drives, so
-    /// this reads and writes there rather than on the angle.
-    private func driveBinding(_ angleId: UInt32) -> Binding<Int> {
-        Binding(
-            get: { driveOf(angleId) },
-            set: { index in assignDrive(angleId, index) }
-        )
-    }
-
-    /// A new kind starts from the first source of that kind.
-    private func resetAngleSource(_ angleId: UInt32) {
-        guard let index = angles.firstIndex(where: { $0.id == angleId }) else { return }
-        var angle = angles[index]
-        let first = sources(for: angle).first?.id ?? 0
-        if angle.source == "Input" {
-            angle.inputId = first
-        } else {
-            angle.sceneId = first
-        }
-        angles[index] = angle
-    }
-
-    /// Moves an angle to a drive. The assignment lives on the drives, so it is rewritten
-    /// there: an angle belongs to exactly one.
-    private func assignDrive(_ angleId: UInt32, _ index: Int) {
-        for slot in storages.indices {
-            storages[slot].angleIds.removeAll { $0 == angleId }
-        }
-        if index >= 0 && index < storages.count {
-            storages[index].angleIds.append(angleId)
-        }
-    }
-
-    private func driveIndex(_ storage: ReplayDocument.StorageSpec) -> Int {
-        storages.firstIndex(of: storage) ?? 0
-    }
-
-    /// Drive an angle records to. Angles that name no drive report zero, which the
-    /// list shows as such: Apply refuses a setup with an unassigned angle.
-    private func driveOf(_ angleId: UInt32) -> Int {
-        storages.firstIndex { $0.angleIds.contains(angleId) } ?? -1
-    }
-
-    /// Asks for a folder the way every other path on this host is chosen. Picking one
-    /// fills the row it was asked from, or adds a row when none was named.
-    private func browseInto(_ storageId: String?) {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = true
-        panel.prompt = L10n.t("replay.pickStorage")
-        panel.message = L10n.t("replay.pickStorageHint")
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        let trimmed = url.path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        guard !storages.contains(where: { $0.id != storageId && $0.path.caseInsensitiveCompare(trimmed) == .orderedSame }) else {
-            status = L10n.t("replay.duplicateStorage")
-            return
-        }
-        if let storageId, let index = storages.firstIndex(where: { $0.id == storageId }) {
-            storages[index].path = trimmed
-        } else {
-            storages.append(ReplayDocument.StorageSpec(path: trimmed, angleIds: []))
-            // The first drive takes the angles that have none: a setup with one drive
-            // should not need a second step per angle.
-            if storages.count == 1 {
-                storages[0].angleIds = angles.map(\.id).sorted()
-            }
-        }
-        status = L10n.format("replay.storageAdded", trimmed)
-    }
-
-    /// Removes a drive by its row, moving any angle that recorded there to the first one.
-    private func removeStorageRow(_ storageId: String) {
-        guard storages.count > 1, let index = storages.firstIndex(where: { $0.id == storageId }) else {
-            status = L10n.t("replay.needStorable")
-            return
-        }
-        let removed = storages.remove(at: index)
-        for angle in removed.angleIds {
-            assignDrive(angle, 0)
-        }
-    }
-
-    /// Audio source label for the angle list.
-    private func audioLabel(_ unitId: UInt64) -> String {
-        if unitId == 0 {
-            return L10n.t("replay.audioSilent")
-        }
-        return mixer.session.units.first { $0.id == unitId }?.name
-            ?? L10n.format("replay.audioUnit", "\(unitId)")
-    }
-
-    /// Adds a row for a new angle. It starts on the next unused scene, so the common case
-    /// needs no edits at all, and the row is there to be changed in place if it is not the
-    /// one they wanted.
-    private func addAngle() {
-        guard !storages.isEmpty else {
-            status = L10n.t("replay.needDriveForAngle")
-            return
-        }
-        if let limits = mixer.replayLimits(), limits.angles != .max, angles.count >= Int(limits.angles) {
-            status = L10n.format("replay.planLimits", "\(limits.angles)", "\(limits.channels)")
-            return
-        }
-        let used = Set(angles.filter { $0.source == "Scene" }.map(\.sceneId))
-        let scene = mixer.session.scenes.first { !used.contains($0.id) }
-        let id = (angles.map(\.id).max() ?? 0) + 1
-        angles.append(
-            ReplayAngleInfo(
-                id: id,
-                name: scene?.name ?? "",
-                source: "Scene",
-                sceneId: scene?.id ?? 0,
-                inputId: 0,
-                    audioUnitId: 0
-            )
-        )
-        // A single drive takes the new angle: a setup with one drive should not need a
-        // second step per angle.
-        if storages.count == 1 {
-            storages[0].angleIds.append(id)
-        }
-        status = L10n.format("replay.angleAdded", scene?.name ?? "")
-    }
-
-    /// Removes one angle by id, from its own row's button.
-    private func removeAngle(_ angleId: UInt32) {
-        guard let angle = angles.first(where: { $0.id == angleId }) else { return }
-        // A clip that plays this angle, or takes its sound from it, would be left
-        // pointing at nothing, so the angle waits until those clips are gone.
-        let users = clipCount(using: angle.id)
-        if users > 0 {
-            status = L10n.format("replay.angleInUse", "\(users)")
-            return
-        }
-        angles.removeAll { $0.id == angle.id }
-        // A drive that still listed it would fail validation on Apply.
-        for index in storages.indices {
-            storages[index].angleIds.removeAll { $0 == angle.id }
-        }
-    }
-
-    /// How many clips play this angle, or take their sound from it.
-    private func clipCount(using angleId: UInt32) -> Int {
-        guard let document else { return 0 }
-        var count = 0
-        for playlistId in document.playlistIds {
-            for clip in document.clips(playlistId: playlistId) {
-                let picture = clip.angleId == angleId
-                let audio = clip.audioKind == "Angle" && clip.audioAngleId == angleId
-                if picture || audio {
-                    count += 1
-                }
-            }
-        }
-        return count
-    }
-
-    private func apply() {
-        guard var current = document else { return }
-        guard let queueValue = UInt32(queue), (2...60).contains(queueValue),
-              let bufferValue = UInt32(buffer), (64...8192).contains(bufferValue),
-              let reserveValue = UInt32(reserve)
-        else {
-            status = L10n.t("replay.badBuffering")
-            return
-        }
-        // The segment length is the operator's setting: the recorder no longer
-        // substitutes one when it is missing or out of range.
-        guard let segmentValue = UInt32(segmentFrames), (30...1800).contains(segmentValue) else {
-            status = L10n.t("replay.segmentFramesRange")
-            return
-        }
-        guard let unit = mixer.session.units.first else {
-            // Every angle records one format, and the format comes from the Mixing
-            // Unit. Without one there is nothing to record in.
-            status = L10n.t("replay.needMixingUnit")
-            return
-        }
-        let usable = storages.filter { !$0.path.trimmingCharacters(in: .whitespaces).isEmpty }
-        if !usable.isEmpty && angles.isEmpty {
-            status = L10n.t("replay.needStorable")
-            return
-        }
-        // Only angles that still exist are assigned, so a removed one cannot be
-        // left behind on a drive and fail validation.
-        let known = Set(angles.map { $0.id })
-        for index in storages.indices {
-            storages[index].angleIds.removeAll { !known.contains($0) }
-        }
-        // One drive takes every angle: the operator added the drive for this
-        // recording, and a recording never guesses which disk to write to.
-        if storages.count == 1 {
-            storages[0].angleIds = angles.map(\.id).sorted()
-        }
-        current.setStorages(storages)
-        var format = current.raw["format"]?.objectValue ?? [:]
-        // The whole format travels: a document that keeps a zero resolution or a zero
-        // segment length can never record, and the mixer would only be able to say so
-        // much later.
-        format["width"] = .number(Double(unit.width))
-        format["height"] = .number(Double(unit.height))
-        format["fpsNum"] = .number(Double(unit.fpsNum))
-        format["fpsDen"] = .number(Double(unit.fpsDen))
-        format["profile"] = .string(profile)
-        format["segmentFrames"] = .number(Double(segmentValue))
-        current.raw["format"] = .object(format)
-        guard let warnValue = UInt32(warnSecs),
-              let alertValue = UInt32(alertSecs),
-              let criticalValue = UInt32(criticalSecs)
-        else {
-            status = L10n.t("replay.warningsHelp")
-            return
-        }
-        current.raw["warnings"] = .object([
-            "remainingWarnSecs": .number(Double(warnValue)),
-            "remainingAlertSecs": .number(Double(alertValue)),
-            "remainingCriticalSecs": .number(Double(criticalValue)),
-        ])
-        current.raw["buffering"] = .object([
-            "encodeQueueFrames": .number(Double(queueValue)),
-            "writeBufferMb": .number(Double(bufferValue)),
-            "overflowPolicy": .string(overflow),
-            "reserveMb": .number(Double(reserveValue)),
-        ])
-        current.setRetention(retention)
-        current.setAngles(angles)
-        current.setAutoAddToPlaylist(autoAdd)
-        document = current
-        // Applying either works or says why. A window that closes without a word
-        // leaves the operator unable to tell the two apart.
-        if mixer.applyReplay(current) {
-            AppKitDialog.toast(L10n.t("replay.applied"))
-            mixer.closeReplaySettings()
-        } else {
-            status = L10n.t("replay.publishRefused")
-        }
-    }
-}

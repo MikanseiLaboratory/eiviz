@@ -275,6 +275,31 @@ enum MixerFFI {
         mixer_replay_channel_jump_to_now(channel)
     }
 
+    /// Moves a channel by `delta` frames inside the clip it is playing.
+    static func replayStep(channel: UInt32, delta: Int32) -> Int32 {
+        mixer_replay_channel_step(channel, delta)
+    }
+
+    /// Loops the channel's playlist at its end.
+    static func replayLoop(channel: UInt32, on: Bool) -> Int32 {
+        mixer_replay_loop(channel, on ? 1 : 0)
+    }
+
+    /// Per-channel live state, so the deck shows what the mixer is doing. Empty when the
+    /// mixer reports nothing.
+    static func replayChannels() -> [EivizReplayChannelState] {
+        var buffer = [EivizReplayChannelState](
+            repeating: EivizReplayChannelState(), count: replayChannelLimit)
+        let count = buffer.withUnsafeMutableBufferPointer { pointer in
+            mixer_replay_copy_channels(pointer.baseAddress, UInt32(pointer.count))
+        }
+        guard count > 0 else { return [] }
+        return Array(buffer.prefix(Int(min(count, UInt32(buffer.count)))))
+    }
+
+    /// Channels A-Z. Matches the core's own limit, so the buffer is never short.
+    private static let replayChannelLimit = 26
+
     /// Recorded frame range of one angle, or nil when it has no frames.
     static func replayAngleRange(angleId: UInt32) -> (first: UInt64, last: UInt64)? {
         var first: UInt64 = 0

@@ -174,7 +174,11 @@ mod tests {
         }
         peaks.push(&block[offset..], 2);
         peaks.flush();
-        assert_eq!(peaks.bucket_count(), 1, "one bucket of samples is one bucket");
+        assert_eq!(
+            peaks.bucket_count(),
+            1,
+            "one bucket of samples is one bucket"
+        );
         let mut min = [0.0f32; 1];
         let mut max = [0.0f32; 1];
         assert_eq!(peaks.copy(0, &mut min, &mut max), 1);

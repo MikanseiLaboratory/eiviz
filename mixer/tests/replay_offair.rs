@@ -122,15 +122,14 @@ fn an_angle_that_is_not_on_air_still_records() {
     // that disappears without a reason.
     const IN_FLIGHT: u64 = 9;
     assert!(
-        stats.frames_offered + u64::from(angles[0].dropped_readback) <= stats.frames_pushed,
+        stats.frames_offered + angles[0].dropped_readback <= stats.frames_pushed,
         "offered {} + readback lost {} must not exceed pushed {}",
         stats.frames_offered,
         angles[0].dropped_readback,
         stats.frames_pushed
     );
     assert!(
-        stats.frames_offered + u64::from(angles[0].dropped_readback) + IN_FLIGHT
-            >= stats.frames_pushed,
+        stats.frames_offered + angles[0].dropped_readback + IN_FLIGHT >= stats.frames_pushed,
         "every handed-over frame is recorded or counted: offered {}, lost {}, pushed {}",
         stats.frames_offered,
         angles[0].dropped_readback,

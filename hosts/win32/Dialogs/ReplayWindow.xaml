@@ -247,6 +247,15 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
+                            <GridViewColumn Header="{Binding [replay.tags], Source={x:Static i18n:Loc.Source}}" Width="120">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBox Text="{Binding TagsText, UpdateSourceTrigger=LostFocus}"
+                                                 Height="24" Margin="2,1" VerticalContentAlignment="Center"
+                                                 ToolTip="{Binding [replay.eventTagsHelp], Source={x:Static i18n:Loc.Source}}"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
                             <GridViewColumn Width="90">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
@@ -440,7 +449,25 @@
                             <GridViewColumn Header="{Binding [replay.tags], Source={x:Static i18n:Loc.Source}}" Width="120">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding TagsText}" VerticalAlignment="Center" Margin="4,0" Foreground="#B0B0B8"/>
+                                        <!-- The marker is drawn here, not stored in the row: the row's
+                                             value is what an edit writes back as a tag. -->
+                                        <StackPanel Orientation="Horizontal" Margin="4,0">
+                                            <TextBlock Text="&#x1F3F7;" Foreground="#B0B0B8"
+                                                       VerticalAlignment="Center">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding TagsText}" Value="">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Text="{Binding TagsText}" VerticalAlignment="Center"
+                                                       Foreground="#B0B0B8" TextTrimming="CharacterEllipsis"/>
+                                        </StackPanel>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>

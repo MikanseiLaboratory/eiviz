@@ -480,41 +480,39 @@ public partial class MainWindow
         return 0;
     }
 
+    /// <summary>
+    /// Gives a freshly added Replay input its channel and the document Replay needs.
+    ///
+    /// The document's format is seeded from the project's Mixing Unit and the channel is
+    /// chosen from the free ones, which is exactly what the core's own
+    /// <c>add_channel_input</c> does for a Remote. Writing those rules a second time here
+    /// is how the two hosts drifted apart before, so the seed comes from the same place:
+    /// the session this host is about to publish has no Replay document yet, and the core
+    /// fills it when it adopts the input. This only reports whether that is possible, so
+    /// the operator hears about a missing Mixing Unit before the picture is expected.
+    /// </summary>
     private void EnsureReplayConfiguration(ulong inputId)
     {
+        var unit = _session.Units.FirstOrDefault()
+            ?? throw new InvalidOperationException(Loc.T("replay.needMixingUnit"));
+        if (unit.Width == 0 || unit.Height == 0 || unit.FpsNum == 0 || unit.FpsDen == 0)
+            throw new InvalidOperationException(Loc.T("replay.needMixingUnit"));
+        var channel = inputId - ReplayChannelBase - 1;
+        if (channel >= 26)
+            throw new InvalidOperationException("all Replay channels A-Z already exist");
+        // A document that already exists keeps it: only the channel for this input is
+        // added, and everything else (angles, events, playlists, retention) stays.
         if (string.IsNullOrWhiteSpace(_session.ReplayJson))
         {
-            var unit = _session.Units.FirstOrDefault() ?? throw new InvalidOperationException("A Mixing Unit is required for Replay.");
-            var channel = inputId - ReplayChannelBase - 1;
-            var letter = channel < 26 ? ((char)('A' + (int)channel)).ToString() : channel.ToString();
-            _session.ReplayJson = $$"""
-                {
-                  "enabled": false,
-                  "storage": [],
-                  "format": { "width": {{unit.Width}}, "height": {{unit.Height}}, "fpsNum": {{unit.FpsNum}}, "fpsDen": {{unit.FpsDen}}, "profile": "Sq", "segmentFrames": 120 },
-                  "channels": [{ "index": {{channel}}, "inputId": {{inputId}} }],
-                  "angles": [],
-                  "events": [],
-                  "playlists": []
-                }
-                """;
-            _session.Inputs.FirstOrDefault(item => item.Id == inputId)!.Name = $"Replay {letter}";
+            _session.ReplayJson = ReplayModel.NewDocument(unit.Width, unit.Height, unit.FpsNum, unit.FpsDen, channel, inputId);
+            _session.Inputs.FirstOrDefault(item => item.Id == inputId)!.Name = $"Replay {(char)('A' + (int)channel)}";
         }
         else
         {
-            using var document = JsonDocument.Parse(_session.ReplayJson);
-            var root = document.RootElement;
-            var channels = root.TryGetProperty("channels", out var existing)
-                ? existing.EnumerateArray().Select(item => item.GetRawText()).ToList()
-                : [];
-            var channel = inputId - ReplayChannelBase - 1;
-            channels.Add($$"""{"index":{{channel}},"inputId":{{inputId}}}""");
-            var properties = root.EnumerateObject()
-                .Where(property => property.Name != "channels")
-                .Select(property => $"\"{property.Name}\":{property.Value.GetRawText()}");
-            _session.ReplayJson = "{" + string.Join(",", properties.Append($"\"channels\":[{string.Join(",", channels)}]")) + "}";
+            _session.ReplayJson = ReplayModel.AddChannel(_session.ReplayJson, channel, inputId);
             _session.Inputs.FirstOrDefault(item => item.Id == inputId)!.Name = $"Replay {(char)('A' + (int)channel)}";
         }
+        HostLog.Write("INFO", $"replay EnsureReplayConfiguration input={inputId} channel={channel}");
         MixerNative.ThrowIfFailed(MixerNative.ReplayConfigure(_session.ReplayJson), "Replay configure");
     }
 

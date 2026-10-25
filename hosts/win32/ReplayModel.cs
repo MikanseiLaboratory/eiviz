@@ -144,7 +144,7 @@ internal sealed record ReplayAngleInfo(
     public string Label => string.IsNullOrWhiteSpace(Name) ? $"Angle {Id}" : Name;
 }
 
-internal sealed record ReplayEventInfo(ulong Id, string RecordingUuid, ulong InFrame, ulong OutFrame, string Name, bool Protected);
+internal sealed record ReplayEventInfo(ulong Id, string RecordingUuid, ulong InFrame, ulong OutFrame, string Name, bool Protected, IReadOnlyList<string> Tags);
 
 /// <summary>One playlist a project holds: its name and how many clips are filed in it.</summary>
 internal sealed record ReplayPlaylistInfo(ulong Id, string Name, int Clips)
@@ -223,6 +223,81 @@ internal static class ReplayModel
     public static string Serialize(JsonObject root) => root.ToJsonString();
 
     /// <summary>
+    /// A Replay document with one channel and nothing recorded yet.
+    ///
+    /// The format comes from the project's Mixing Unit, which is the rule the core's own
+    /// <c>seed_format</c> applies: Replay records at the programme's size and rate unless
+    /// the operator says otherwise. Replay is off until the operator turns it on, so
+    /// adding the input never starts recording.
+    /// </summary>
+    public static string NewDocument(
+        uint width,
+        uint height,
+        uint fpsNum,
+        uint fpsDen,
+        ulong channel,
+        ulong inputId) =>
+        new JsonObject
+        {
+            ["enabled"] = false,
+            ["storage"] = new JsonArray(),
+            ["format"] = new JsonObject
+            {
+                ["width"] = width,
+                ["height"] = height,
+                ["fpsNum"] = fpsNum,
+                ["fpsDen"] = fpsDen,
+                // Standard quality: the same default the session model carries.
+                ["profile"] = "Sq",
+                ["segmentFrames"] = 120
+            },
+            ["channels"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["index"] = channel,
+                    ["inputId"] = inputId
+                }
+            },
+            ["angles"] = new JsonArray(),
+            ["events"] = new JsonArray(),
+            ["playlists"] = new JsonArray()
+        }.ToJsonString();
+
+    /// <summary>
+    /// The same document with one more channel. Everything else is left untouched, so a
+    /// second Replay input does not reset the operator's angles, events or playlists.
+    /// </summary>
+    public static string AddChannel(string json, ulong channel, ulong inputId)
+    {
+        if (ParseText(json) is not { } root)
+            return json;
+        var channels = root["channels"] as JsonArray ?? [];
+        channels.Add(new JsonObject
+        {
+            ["index"] = channel,
+            ["inputId"] = inputId
+        });
+        root["channels"] = channels;
+        return Serialize(root);
+    }
+
+    /// <summary>Parses a Replay document that is not attached to a session yet.</summary>
+    private static JsonObject? ParseText(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+        try
+        {
+            return JsonNode.Parse(json) as JsonObject;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// The settings part of a Replay document, for the `updateReplaySettings`
     /// mutation. A remote core owns the events and playlists, so Replay Setup must
     /// not send them back from a copy that may already be stale.
@@ -243,187 +318,36 @@ internal static class ReplayModel
     }
 
     /// <summary>
-    /// The document to publish from the deck.
+    /// Builds the deck mutation for a save.
     ///
-    /// Replay Setup owns the drives, the angles, the format and the flags. The deck
-    /// owns events, playlists and which playlist a channel plays. Publishing the
-    /// deck's whole snapshot put a Replay Setup apply back to whatever the deck had
-    /// loaded.
+    /// The deck owns events, playlists and which playlist a channel plays; Replay Setup
+    /// owns the drives, the angles and the format. Sending the deck's whole document put
+    /// a Replay Setup apply back to whatever the deck had loaded, and merging the arrays
+    /// here instead meant writing the core's own rules — by id, forward-only counters,
+    /// deletions said explicitly — a second time, in C#. That copy is what drifted: an
+    /// event marked by the API while the window was open vanished on the next deck save.
+    /// The core now applies the difference, so this only says what the deck changed.
     /// </summary>
-    public static JsonObject WithDeckEdits(
-        Session session,
+    /// <param name="deck">The document as the deck currently has it.</param>
+    /// <param name="angleEdited">Whether this window picked a camera.</param>
+    /// <param name="deletedEvents">Events the operator deleted here.</param>
+    /// <param name="deletedClips">Clips the operator deleted here.</param>
+    public static string DeckMutation(
         JsonObject deck,
         bool angleEdited = true,
         IReadOnlySet<ulong>? deletedEvents = null,
         IReadOnlySet<string>? deletedClips = null)
     {
-        var current = Parse(session);
-        if (current is null)
-            return deck;
-        // The deck window owns the events and the playlists, but its copy can be older
-        // than the document: an API mark, a remote edit or a refused publish leaves the
-        // window holding fewer events than are on air. Replacing the arrays with that
-        // copy deleted those events (and then the clips they carried), which the log
-        // showed as "events 3->0" on a plain deck save. Merge by id instead, and let
-        // the window say which ones it meant to delete.
-        MergeEvents(current, deck, deletedEvents);
-        MergeRecordings(current, deck);
-        MergePlaylists(current, deck, deletedClips);
-        if (angleEdited && deck["activeAngleId"] is { } angle)
-            current["activeAngleId"] = angle.DeepClone();
-        // The counters only ever move forward: a stale window must not reuse an id.
-        foreach (var name in new[] { "nextEventId", "nextPlaylistId" })
+        var body = SerializeDeck(deck);
+        var deletions = new JsonObject
         {
-            var mine = current[name]?.GetValue<ulong>() ?? 0;
-            var theirs = deck[name]?.GetValue<ulong>() ?? 0;
-            current[name] = Math.Max(mine, theirs);
-        }
-        CopyChannelPlaylists(deck, current);
-        return current;
-    }
-
-
-    /// <summary>
-    /// Applies the window's events onto the document by id. An event the window does
-    /// not have is kept unless the window deleted it.
-    /// </summary>
-    private static void MergeEvents(JsonObject current, JsonObject deck, IReadOnlySet<ulong>? deleted)
-    {
-        if (deck["events"] is not JsonArray incoming)
-            return;
-        var byId = new Dictionary<ulong, JsonObject>();
-        var order = new List<ulong>();
-        if (current["events"] is JsonArray existing)
-        {
-            foreach (var item in existing.OfType<JsonObject>())
-            {
-                var id = item["id"]?.GetValue<ulong>() ?? 0;
-                if (deleted?.Contains(id) == true || byId.ContainsKey(id))
-                    continue;
-                byId[id] = (JsonObject)item.DeepClone();
-                order.Add(id);
-            }
-        }
-        foreach (var item in incoming.OfType<JsonObject>())
-        {
-            var id = item["id"]?.GetValue<ulong>() ?? 0;
-            if (deleted?.Contains(id) == true)
-                continue;
-            if (!byId.ContainsKey(id))
-                order.Add(id);
-            byId[id] = (JsonObject)item.DeepClone();
-        }
-        var merged = new JsonArray();
-        foreach (var id in order)
-            merged.Add(byId[id]);
-        current["events"] = merged;
-    }
-
-    /// <summary>
-    /// Adds the recordings the window linked to the document, by id. A recording the
-    /// window linked while it was open (it started one) is not in the document yet;
-    /// without this the clip it just made points at an id the session never wrote.
-    /// </summary>
-    private static void MergeRecordings(JsonObject current, JsonObject deck)
-    {
-        if (deck["recordings"] is not JsonArray incoming)
-            return;
-        var recordings = current["recordings"] as JsonArray ?? new JsonArray();
-        foreach (var item in incoming.OfType<JsonObject>())
-        {
-            var uuid = item["uuid"]?.GetValue<string>()?.Trim() ?? "";
-            if (uuid.Length == 0)
-                continue;
-            JsonObject? existing = null;
-            foreach (var candidate in recordings.OfType<JsonObject>())
-            {
-                if (string.Equals(candidate["uuid"]?.GetValue<string>()?.Trim(), uuid, StringComparison.Ordinal))
-                    existing = candidate;
-            }
-            if (existing is null)
-            {
-                recordings.Add(item.DeepClone());
-                continue;
-            }
-            foreach (var pair in item)
-            {
-                if (pair.Key != "uuid")
-                    existing[pair.Key] = pair.Value?.DeepClone();
-            }
-        }
-        current["recordings"] = recordings;
-    }
-    /// <summary>
-    /// Applies the window's playlists by id and its clips by uid, so a clip the API
-    /// added (or one recorded a moment ago) survives a save from this window.
-    /// </summary>
-    private static void MergePlaylists(
-        JsonObject current,
-        JsonObject deck,
-        IReadOnlySet<string>? deletedClips)
-    {
-        if (deck["playlists"] is not JsonArray incoming)
-            return;
-        if (current["playlists"] is not JsonArray playlists)
-        {
-            current["playlists"] = incoming.DeepClone();
-            return;
-        }
-        foreach (var deckList in incoming.OfType<JsonObject>())
-        {
-            var id = deckList["id"]?.GetValue<ulong>() ?? 0;
-            var existing = playlists.OfType<JsonObject>()
-                .FirstOrDefault(item => (item["id"]?.GetValue<ulong>() ?? 0) == id);
-            if (existing is null)
-            {
-                playlists.Add(deckList.DeepClone());
-                continue;
-            }
-            var byUid = new Dictionary<string, JsonObject>();
-            var order = new List<string>();
-            if (existing["clips"] is JsonArray currentClips)
-            {
-                foreach (var clip in currentClips.OfType<JsonObject>())
-                {
-                    var uid = clip["uid"]?.GetValue<string>() ?? "";
-                    if (deletedClips?.Contains(uid) == true || byUid.ContainsKey(uid))
-                        continue;
-                    byUid[uid] = (JsonObject)clip.DeepClone();
-                    order.Add(uid);
-                }
-            }
-            if (deckList["clips"] is JsonArray deckClips)
-            {
-                foreach (var clip in deckClips.OfType<JsonObject>())
-                {
-                    var uid = clip["uid"]?.GetValue<string>() ?? "";
-                    if (deletedClips?.Contains(uid) == true)
-                        continue;
-                    if (!byUid.ContainsKey(uid))
-                        order.Add(uid);
-                    byUid[uid] = (JsonObject)clip.DeepClone();
-                }
-            }
-            var mergedClips = new JsonArray();
-            foreach (var uid in order)
-                mergedClips.Add(byUid[uid]);
-            // Only a real edit moves the revision: the mixer reads it to decide whether
-            // the running clip has to be rebuilt, and bumping it on every save reset the
-            // playlist under the playhead.
-            var before = (existing["clips"] as JsonArray)?.ToJsonString() ?? "";
-            var after = mergedClips.ToJsonString();
-            existing["clips"] = mergedClips;
-            foreach (var name in new[] { "name", "defaultTransition" })
-            {
-                if (deckList[name] is { } value)
-                    existing[name] = value.DeepClone();
-            }
-            var mine = existing["revision"]?.GetValue<ulong>() ?? 0;
-            var theirs = deckList["revision"]?.GetValue<ulong>() ?? 0;
-            existing["revision"] = string.Equals(before, after, StringComparison.Ordinal)
-                ? Math.Max(mine, theirs)
-                : Math.Max(mine, theirs) + 1;
-        }
+            // Said explicitly: "not in the deck" also describes an event this window never
+            // saw, and the core must not treat the two as the same thing.
+            ["deletedEvents"] = new JsonArray([.. (deletedEvents ?? new HashSet<ulong>()).Select(id => (JsonNode?)JsonValue.Create(id))]),
+            ["deletedClips"] = new JsonArray([.. (deletedClips ?? new HashSet<string>()).Select(uid => (JsonNode?)JsonValue.Create(uid))]),
+            ["angleEdited"] = angleEdited
+        };
+        return $"{{\"kind\":\"updateReplayDeck\",\"deck\":{body},\"edit\":{deletions.ToJsonString()}}}";
     }
 
     /// <summary>
@@ -445,46 +369,6 @@ internal static class ReplayModel
         return deck.ToJsonString();
     }
 
-    /// <summary>
-    /// Points each existing channel at the playlist the deck has for that index.
-    /// Channels themselves belong to the Replay inputs, so a deck snapshot must not
-    /// add or remove them.
-    /// </summary>
-    private static void CopyChannelPlaylists(JsonObject deck, JsonObject current)
-    {
-        if (current["channels"] is not JsonArray channels)
-            return;
-        foreach (var item in channels)
-        {
-            if (item is not JsonObject channel)
-                continue;
-            if (channel["index"] is not JsonValue indexValue || !indexValue.TryGetValue<uint>(out var index))
-                continue;
-            var source = ChannelObject(deck, index);
-            if (source is null)
-                continue;
-            if (source["playlistId"] is { } playlist)
-                channel["playlistId"] = playlist.DeepClone();
-            else
-                channel.Remove("playlistId");
-        }
-    }
-
-    private static JsonObject? ChannelObject(JsonObject root, uint index)
-    {
-        if (root["channels"] is not JsonArray channels)
-            return null;
-        foreach (var item in channels)
-        {
-            if (item is not JsonObject channel)
-                continue;
-            if (channel["index"] is JsonValue indexValue
-                && indexValue.TryGetValue<uint>(out var found)
-                && found == index)
-                return channel;
-        }
-        return null;
-    }
 
     private static JsonArray Array(JsonObject root, string name) =>
         root[name] as JsonArray ?? [];
@@ -545,7 +429,11 @@ internal static class ReplayModel
                 entry["inFrame"]?.GetValue<ulong>() ?? 0,
                 entry["outFrame"]?.GetValue<ulong>() ?? 0,
                 entry["name"]?.GetValue<string>() ?? "",
-                entry["protected"]?.GetValue<bool>() ?? false));
+                entry["protected"]?.GetValue<bool>() ?? false,
+                (entry["tags"] as JsonArray ?? [])
+                    .Select(tag => tag?.GetValue<string>() ?? "")
+                    .Where(tag => tag.Length > 0)
+                    .ToList()));
         }
         return result;
     }
@@ -1025,25 +913,61 @@ internal static class ReplayModel
         return uid;
     }
 
-    public static ulong EnsurePlaylist(JsonObject root)
+    /// <summary>
+    /// The playlist a channel should add to: the one it already plays, or a new one.
+    ///
+    /// A project can hold several channels, and each plays its own list. Returning the first
+    /// playlist no matter what — which this did — filed channel B's clips into channel A's
+    /// list, so an operator on B watched their clip appear somewhere they were not looking.
+    /// </summary>
+    /// <param name="root">The Replay document.</param>
+    /// <param name="channelIndex">The channel the operator is working on.</param>
+    public static ulong EnsurePlaylist(JsonObject root, uint channelIndex)
     {
-        foreach (var item in Array(root, "playlists"))
-        {
-            if (item is JsonObject playlist)
-                return playlist["id"]?.GetValue<ulong>() ?? 1;
-        }
+        if (ChannelPlaylist(root, channelIndex) is { } existing && Playlist(root, existing) is not null)
+            return existing;
         var id = ReservePlaylistId(root);
         var list = new JsonArray();
         var document = root["playlists"] as JsonArray ?? new JsonArray();
         document.Add(new JsonObject
         {
             ["id"] = id,
-            ["name"] = "Replay",
+            ["name"] = $"Replay {(char)('A' + (int)Math.Min(channelIndex, 25))}",
             ["revision"] = 1UL,
             ["clips"] = list
         });
         root["playlists"] = document;
+        // Point the channel at it, so the two do not drift the moment it is created.
+        SetChannelPlaylist(root, channelIndex, id);
         return id;
+    }
+
+    /// <summary>
+    /// The playlist to add an event to: the channel's own.
+    ///
+    /// The channel decides, not the picker. An operator who has just switched to channel B is
+    /// still looking at a picker that shows the old list for a moment, and taking that list
+    /// filed B's clip on A's playlist — the clip was then played, and exported, from a channel
+    /// the operator was not using.
+    /// </summary>
+    /// <param name="root">The Replay document.</param>
+    /// <param name="openPlaylistId">The playlist the deck is showing, or 0.</param>
+    /// <param name="channelIndex">The channel the deck is on.</param>
+    public static ulong EnsurePlaylist(JsonObject root, ulong openPlaylistId, uint channelIndex)
+    {
+        if (ChannelPlaylist(root, channelIndex) is { } playing && Playlist(root, playing) is not null)
+            return playing;
+        // A channel with no list of its own takes the one on screen only when no other channel
+        // already plays it: a one-channel project then behaves as it always did, and a second
+        // channel gets a list of its own instead of sharing the first one's.
+        if (openPlaylistId != 0
+            && Playlist(root, openPlaylistId) is not null
+            && Channels(root).All(channel => channel.PlaylistId != openPlaylistId))
+        {
+            SetChannelPlaylist(root, channelIndex, openPlaylistId);
+            return openPlaylistId;
+        }
+        return EnsurePlaylist(root, channelIndex);
     }
 
     /// <summary>Every playlist the project holds, in the order the document lists them.</summary>
@@ -1071,6 +995,14 @@ internal static class ReplayModel
     /// points at one, so the deck shows the channel's rather than whichever happens to
     /// be first.
     /// </summary>
+    /// <summary>
+    /// The playlist a channel is pointed at, or null when it is pointed at none.
+    ///
+    /// A channel that names no playlist is not "playing the first one": it is playing nothing,
+    /// and the caller decides what to do about that. Answering with the first list made the
+    /// project look as though channel B already had a list — it had A's — so nothing ever made
+    /// B one, and B's clips were filed and played from A.
+    /// </summary>
     public static ulong? ChannelPlaylist(JsonObject root, uint channelIndex)
     {
         foreach (var item in Array(root, "channels"))
@@ -1081,11 +1013,10 @@ internal static class ReplayModel
                 continue;
             var id = channel["playlistId"]?.GetValue<ulong>() ?? 0;
             if (id != 0)
-                return id;
-            break;
+                return Playlist(root, id) is not null ? id : null;
+            return null;
         }
-        // A channel that names none, or names one that is gone, plays the first.
-        return Playlists(root).FirstOrDefault()?.Id;
+        return null;
     }
 
     /// <summary>Points a channel at a playlist, creating the channel entry when needed.</summary>

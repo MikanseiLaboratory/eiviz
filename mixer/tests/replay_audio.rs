@@ -17,15 +17,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use common::{
-    cstring, expect, full_layer, load_test_module, mark_in_when_ready, mark_out_after,
-    mark_out_when_ready, scene_id,
+    cstring, expect, full_layer, load_test_module, mark_in_when_ready, mark_out_after, scene_id,
 };
 use eiviz_mixer::{
     AudioPeak, GEN_SOLID, OverlayDesc, SRC_COLOR, UnitState, mixer_audio_set_input,
     mixer_copy_audio_peaks, mixer_create, mixer_create_unit, mixer_define_generator,
     mixer_define_scene, mixer_destroy, mixer_generator_set_tone, mixer_replay_channel_cue,
-    mixer_replay_channel_transport, mixer_replay_configure, mixer_replay_mark_in,
-    mixer_replay_mark_out, mixer_replay_record, mixer_unit_set_state,
+    mixer_replay_channel_transport, mixer_replay_configure, mixer_replay_record,
+    mixer_unit_set_state,
 };
 
 /// The channel's own source id, which is also the id its audio arrives under.
@@ -179,7 +178,7 @@ fn the_recorded_sound_reaches_the_channel_meter() {
 
     expect("record on", unsafe { mixer_replay_record(1) });
     thread::sleep(Duration::from_millis(1500));
-    let in_frame = mark_in_when_ready("replay_audio");
+    mark_in_when_ready("replay_audio");
     let (uuid, in_frame, out_frame) = mark_out_after("replay_audio", 30);
     assert!(out_frame > in_frame, "the mark must span recorded frames");
 
@@ -209,8 +208,6 @@ fn the_recorded_sound_reaches_the_channel_meter() {
     }
 
     expect("record off", unsafe { mixer_replay_record(0) });
-    mixer_destroy();
-    let _ = std::fs::remove_dir_all(&dir);
 
     assert!(
         peak > 0.05,
@@ -228,4 +225,13 @@ fn the_recorded_sound_reaches_the_channel_meter() {
         quiet <= 0.01,
         "a paused channel must be silent, meter still reads {quiet}"
     );
+
+    // A second recording is exercised at the engine level by
+    // `sound_is_filed_on_the_recordings_own_timeline`: the test module keeps one audio
+    // track per angle rather than one per recording, so it cannot model two recordings
+    // faithfully.
+
+    expect("record off", unsafe { mixer_replay_record(0) });
+    mixer_destroy();
+    let _ = std::fs::remove_dir_all(&dir);
 }

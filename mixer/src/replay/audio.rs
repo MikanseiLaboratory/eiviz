@@ -307,9 +307,9 @@ mod tests {
             let count = pcm.len();
             let mut re = 0.0;
             let mut im = 0.0;
-            for index in 0..count {
+            for (index, sample) in pcm.iter().enumerate() {
                 let phase = std::f64::consts::TAU * hz * index as f64 / 48_000.0;
-                let sample = f64::from(pcm[index]);
+                let sample = f64::from(*sample);
                 re += sample * phase.cos();
                 im += sample * phase.sin();
             }

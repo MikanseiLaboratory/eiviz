@@ -82,27 +82,24 @@ fn recording_keeps_the_frames_the_renderer_produced() {
     // Wait until enough frames have been offered to judge the accounting. Two seconds is
     // plenty on a GPU adapter, but a software one under load produces far fewer frames,
     // and "too short to judge" is a property of the runner, not of the recorder.
-    let mut stats = MixerReplayStats::default();
-    let mut angles = vec![MixerReplayAngleStats::default(); 4];
     let deadline = std::time::Instant::now() + Duration::from_secs(40);
-    loop {
-        stats = MixerReplayStats::default();
-        angles = vec![MixerReplayAngleStats::default(); 4];
+    let (stats, angles) = loop {
+        let mut stats = MixerReplayStats::default();
+        let mut angles = vec![MixerReplayAngleStats::default(); 4];
         unsafe { mixer_replay_copy_stats(&mut stats, angles.as_mut_ptr(), 4) };
         if stats.frames_offered >= 30 || std::time::Instant::now() >= deadline {
-            break;
+            // The call reports OK; the count of angle entries is in the stats.
+            break (stats, angles);
         }
         thread::sleep(Duration::from_millis(250));
-    }
+    };
 
-    // The call reports OK; the count of angle entries is in the stats.
-    unsafe { mixer_replay_copy_stats(&mut stats, angles.as_mut_ptr(), 4) };
     expect("record off", unsafe { mixer_replay_record(0) });
     mixer_destroy();
 
     let offered = stats.frames_offered;
     let pushed = stats.frames_pushed;
-    let lost = u64::from(angles[0].dropped_readback);
+    let lost = angles[0].dropped_readback;
     assert_eq!(stats.angle_count, 1, "one angle is configured");
     assert_eq!(angles[0].angle_id, 1);
     assert!(

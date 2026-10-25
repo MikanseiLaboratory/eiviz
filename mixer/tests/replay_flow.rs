@@ -11,15 +11,11 @@ use std::ffi::CString;
 use std::thread;
 use std::time::Duration;
 
-use common::{
-    cstring, expect, full_layer, load_test_module, mark_in_when_ready, mark_out_after,
-    mark_out_when_ready,
-};
+use common::{cstring, expect, full_layer, load_test_module, mark_in_when_ready, mark_out_after};
 use eiviz_mixer::{
     MixerReplayChannelState, SCENE_BASE, SRC_BARS, UnitState, mixer_create, mixer_create_unit,
     mixer_define_scene, mixer_destroy, mixer_replay_channel_cue, mixer_replay_channel_transport,
-    mixer_replay_configure, mixer_replay_copy_channels, mixer_replay_mark_in,
-    mixer_replay_mark_out, mixer_replay_record, mixer_unit_set_state,
+    mixer_replay_configure, mixer_replay_copy_channels, mixer_replay_record, mixer_unit_set_state,
 };
 
 #[test]
@@ -67,7 +63,7 @@ fn an_operator_records_marks_and_plays_back() {
     // any fixed sleep to produce one.
     // A recording numbers its frames from its own first frame, so frame 0 is a
     // recorded frame: Mark In is allowed to sit on it.
-    let in_frame = mark_in_when_ready("replay_flow");
+    mark_in_when_ready("replay_flow");
     let (uuid, in_frame, out_frame) = mark_out_after("replay_flow", 40);
     assert!(
         out_frame > in_frame,

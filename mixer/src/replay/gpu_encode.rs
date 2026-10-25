@@ -52,11 +52,6 @@ fn queue_for(angles: usize) -> usize {
 /// encoder, and more threads only add contention.
 const THREADS: usize = 4;
 
-/// The number of encoder threads to use.
-fn thread_count() -> usize {
-    THREADS
-}
-
 /// One frame waiting to be encoded.
 struct Job {
     angle_id: u32,
@@ -83,11 +78,7 @@ static QUEUES: OnceLock<Vec<Pending>> = OnceLock::new();
 
 /// The replay format's profile code (0 high, 1 standard, 2 low) as the codec's preset.
 fn profile_of(code: u32) -> Profile {
-    match code {
-        0 => Profile::Hq,
-        2 => Profile::Lq,
-        _ => Profile::Sq,
-    }
+    crate::replay::vmx_profile(code)
 }
 
 fn make_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
@@ -217,7 +208,7 @@ fn ensure_encoder(device: &wgpu::Device, queue: &wgpu::Queue) {
     if QUEUES.get().is_some() {
         return;
     }
-    let queues: Vec<Pending> = (0..thread_count())
+    let queues: Vec<Pending> = (0..THREADS)
         .map(|_| Arc::new((Mutex::new(VecDeque::new()), Condvar::new())))
         .collect();
     if QUEUES.set(queues).is_err() {
@@ -248,10 +239,10 @@ fn encode_loop(pending: Pending, device: wgpu::Device, queue: wgpu::Queue) {
             guard.pop_front()
         };
         let Some(job) = job else { break };
-        if !codecs.contains_key(&job.angle_id) {
+        if let std::collections::hash_map::Entry::Vacant(slot) = codecs.entry(job.angle_id) {
             match build_codec(job.angle_id) {
                 Some(codec) => {
-                    codecs.insert(job.angle_id, codec);
+                    slot.insert(codec);
                 }
                 None => {
                     return_to_ring(job.angle_id, job.texture);
@@ -314,7 +305,7 @@ fn build_codec(angle_id: u32) -> Option<Codec> {
             let cpus = std::thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(2);
-            codec.set_threads((cpus / thread_count().max(1)).clamp(1, 6));
+            codec.set_threads((cpus / THREADS).clamp(1, 6));
             Some(codec)
         }
         Err(error) => {
@@ -325,6 +316,15 @@ fn build_codec(angle_id: u32) -> Option<Codec> {
             None
         }
     }
+}
+
+/// Bytes the encoder rings will hold for this configuration, so a caller can refuse a
+/// setting that would not fit instead of discovering it when the driver fails.
+pub fn ring_bytes(config: &eiviz_control::session::replay::ReplayDto) -> u64 {
+    let angles = config.angles.len().max(1);
+    let ring = ring_for(angles) as u64;
+    let frame = u64::from(config.format.width.max(1)) * u64::from(config.format.height.max(1)) * 4;
+    angles as u64 * ring * frame
 }
 
 #[cfg(test)]
@@ -346,12 +346,4 @@ mod tests {
         assert!(queue_for(8) >= queue_for(16));
         assert!(queue_for(64) >= 2);
     }
-}
-/// Bytes the encoder rings will hold for this configuration, so a caller can refuse a
-/// setting that would not fit instead of discovering it when the driver fails.
-pub fn ring_bytes(config: &eiviz_control::session::replay::ReplayDto) -> u64 {
-    let angles = config.angles.len().max(1);
-    let ring = ring_for(angles) as u64;
-    let frame = u64::from(config.format.width.max(1)) * u64::from(config.format.height.max(1)) * 4;
-    angles as u64 * ring * frame
 }

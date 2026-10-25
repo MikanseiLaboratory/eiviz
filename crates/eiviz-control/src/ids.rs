@@ -319,13 +319,14 @@ mod tests {
         );
     }
 
+    /// The replay bands are laid out at compile time, so the relationship between them
+    /// is checked where they are defined rather than asserted in a test that could never
+    /// see a different build.
     #[test]
-    fn replay_bands_stay_clear_of_every_other_band() {
-        // Remote preview/program/multiview sources own 0x0005_0000 and remote
-        // mixing units own 0x0007_0000.
-        assert!(REPLAY_CHANNEL_BASE > MULTIVIEW_BASE);
-        assert_ne!(REPLAY_CHANNEL_BASE, 0x0005_0000);
-        assert_ne!(REPLAY_RECORD_BASE, 0x0007_0000);
-        assert!(REPLAY_RECORD_BASE >= REPLAY_CHANNEL_BASE + 0x1_0000);
+    fn replay_bands_are_laid_out_in_order() {
+        const _: () = assert!(REPLAY_CHANNEL_BASE > MULTIVIEW_BASE);
+        const _: () = assert!(REPLAY_CHANNEL_BASE != 0x0005_0000);
+        const _: () = assert!(REPLAY_RECORD_BASE != 0x0007_0000);
+        const _: () = assert!(REPLAY_RECORD_BASE >= REPLAY_CHANNEL_BASE + 0x1_0000);
     }
 }

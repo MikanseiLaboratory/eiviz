@@ -35,6 +35,12 @@ internal sealed class ReplayWaveform : FrameworkElement
     /// <summary>Raised while the operator drags across the waveform.</summary>
     public event Action<ulong>? SeekRequested;
 
+    /// <summary>Shift-click: mark In on the frame under the pointer.</summary>
+    public event Action<ulong>? InRequested;
+
+    /// <summary>Ctrl-click: mark Out on the frame under the pointer.</summary>
+    public event Action<ulong>? OutRequested;
+
     public ReplayWaveform()
     {
         ClipToBounds = true;
@@ -143,9 +149,28 @@ internal sealed class ReplayWaveform : FrameworkElement
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonDown(e);
+        var frame = FrameAt(e.GetPosition(this).X);
+        // A plain click moves the playhead, which is how an operator finds a quiet
+        // moment. Shift marks In there and Ctrl marks Out there, so a cut can be struck
+        // straight off the waveform: the waveform is where the quiet moment is visible,
+        // and the frame under the pointer is the one being looked at. Without this an
+        // operator had to seek, look away to the buttons, and press one; the playhead
+        // kept running in between, so the cut landed somewhere other than the gap.
+        if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+        {
+            InRequested?.Invoke(frame);
+            e.Handled = true;
+            return;
+        }
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            OutRequested?.Invoke(frame);
+            e.Handled = true;
+            return;
+        }
         CaptureMouse();
         Focus();
-        SeekRequested?.Invoke(FrameAt(e.GetPosition(this).X));
+        SeekRequested?.Invoke(frame);
         e.Handled = true;
     }
 
