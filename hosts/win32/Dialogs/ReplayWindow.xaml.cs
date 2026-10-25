@@ -80,6 +80,13 @@ public partial class ReplayWindow : Window
     private const double AngleTileHeight = 100;
     /// <summary>True while the seek slider is being moved to match the channel.</summary>
     private bool _sliderGuard;
+
+    /// <summary>
+    /// Where the operator last put the playhead by dragging or clicking the bar, or null when
+    /// they have not seeked. A paused channel does not move its own position, so without this
+    /// the poll put the bar back where it was and a click looked ignored.
+    /// </summary>
+    private ulong? _seekedFrame;
     private ulong _outFrame;
     /// <summary>
     /// True between Mark In and Mark Out. The mark itself stays on screen after it
@@ -194,6 +201,10 @@ public partial class ReplayWindow : Window
             // the picture came from is the operator's choice, so only the playing half is
             // taken from the mixer.
             _transport = ReplayTransportRules.Adopt(_transport, mixer.Playing != 0);
+            // A channel that is advancing is the authority on where the playhead is; the
+            // operator's paused seek no longer applies.
+            if (mixer.Playing != 0)
+                _seekedFrame = null;
             _headerOut = mixer.OutFrame;
             _headerPosition = mixer.PositionFrame;
             _headerPlaying = mixer.Playing > 0;
@@ -2512,6 +2523,7 @@ public partial class ReplayWindow : Window
         // Off the edge, but the transport was handed the play state it already had and keeps it:
         // a drag while paused must not start the channel, and one while playing must not stop it.
         _transport = ReplayTransportRules.LeaveEdge(_transport).Next;
+        _seekedFrame = frame;
         Waveform.PositionFrame = frame;
         UpdatePlayhead();
         if (_multiview)
@@ -2531,7 +2543,10 @@ public partial class ReplayWindow : Window
             _sliderGuard = false;
             return;
         }
-        var position = Backend?.ReplayChannelState(_channel)?.PositionFrame ?? bounds.Last;
+        // The channel's own position while it plays; the operator's seek while it is paused.
+        // Reading the channel's position unconditionally is what undid every paused seek.
+        var live = Backend?.ReplayChannelState(_channel)?.PositionFrame ?? bounds.Last;
+        var position = _transport.Playing || _seekedFrame is not { } seeked ? live : seeked;
         var span = (double)(bounds.Last - bounds.First);
         var value = position <= bounds.First
             ? 0.0
