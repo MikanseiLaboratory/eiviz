@@ -288,13 +288,18 @@ enum MixerFFI {
     /// Per-channel live state, so the deck shows what the mixer is doing. Empty when the
     /// mixer reports nothing.
     static func replayChannels() -> [EivizReplayChannelState] {
+        let limit: Int = replayChannelLimit
+        // The count is taken here rather than inside the closure: the closure hands out a
+        // mutable pointer, and asking the type checker to follow that through to the slice
+        // below is more than it can do in one expression.
         var buffer = [EivizReplayChannelState](
-            repeating: EivizReplayChannelState(), count: replayChannelLimit)
-        let count = buffer.withUnsafeMutableBufferPointer { pointer in
+            repeating: EivizReplayChannelState(), count: limit)
+        let count: UInt32 = buffer.withUnsafeMutableBufferPointer { pointer in
             mixer_replay_copy_channels(pointer.baseAddress, UInt32(pointer.count))
         }
         guard count > 0 else { return [] }
-        return Array(buffer.prefix(Int(min(count, UInt32(buffer.count)))))
+        let filled = Int(min(count, UInt32(limit)))
+        return Array(buffer[0..<filled])
     }
 
     /// Channels A-Z. Matches the core's own limit, so the buffer is never short.
