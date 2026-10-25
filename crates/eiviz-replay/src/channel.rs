@@ -377,12 +377,15 @@ impl Transport {
             return;
         }
         self.hold_last = hold;
-        // Turning it off puts the clip's end back where the operator cut it.
-        if !hold
-            && self.held_out != 0
-            && let Some(last) = self.list.last_mut()
-        {
-            last.out_frame = self.held_out;
+        // Turning it off puts the clip's end back where the operator cut it. The clip on air
+        // is a copy of the list entry once it is playing, so both have to be put back.
+        if !hold && self.held_out != 0 {
+            if let Some(clip) = self.current.as_mut() {
+                clip.out_frame = self.held_out;
+            }
+            if let Some(clip) = self.list.last_mut() {
+                clip.out_frame = self.held_out;
+            }
         }
         self.held_out = 0;
     }
@@ -546,26 +549,31 @@ impl Transport {
                         guard += 1;
                         continue;
                     }
-                    // Keeping the last clip running: its end moves out to the recording's
-                    // newest frame and the position carries on through the picture that
-                    // followed the cut, so the timecode climbs instead of stopping.
+                    // Keeping the last clip running: its end follows the newest recorded
+                    // frame, so the playhead carries on through the picture that followed the
+                    // cut and the timecode climbs instead of stopping.
+                    //
+                    // The clip's end is extended rather than the position being faked, because
+                    // `source()` and the timecode both read the clip's range. The loop is left
+                    // here on purpose: the extension already covers this frame, so going round
+                    // again would only re-test the same end and grow it a second time.
                     if self.hold_last
                         && self.last_frame > 0
-                        && let Some(last) = self.list.last_mut()
+                        && self.last_frame >= self.span() as u64
                     {
                         if self.held_out == 0 {
-                            self.held_out = last.out_frame;
+                            self.held_out = self.current.as_ref().map_or(0, |clip| clip.out_frame);
                         }
-                        if self.held_out < self.last_frame {
-                            last.out_frame = self.last_frame;
-                            // Ask for the frame just past the old out point: `span` is the
-                            // length before the extension, so the position has to be read off
-                            // the new one or the loop would hand back the same end forever.
-                            self.position = self.span() - 1.0;
-                            self.shown = None;
-                            guard += 1;
-                            continue;
+                        let grown = self.last_frame;
+                        if let Some(clip) = self.current.as_mut() {
+                            clip.out_frame = clip.out_frame.max(grown);
                         }
+                        if let Some(clip) = self.list.last_mut() {
+                            clip.out_frame = clip.out_frame.max(grown);
+                        }
+                        self.shown = None;
+                        self.position = self.span();
+                        break;
                     }
                     self.position = span;
                     self.playing = false;
