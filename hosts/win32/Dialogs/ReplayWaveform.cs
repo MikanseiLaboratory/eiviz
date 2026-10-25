@@ -148,10 +148,48 @@ internal sealed class ReplayWaveform : FrameworkElement
         return (ulong)Math.Max(0, bounded);
     }
 
+    /// <summary>How close to a mark a press has to be, in pixels, to grab it.</summary>
+    private const double GrabRadius = 6.0;
+
+    /// <summary>Which mark the pointer is dragging, if any.</summary>
+    private int _dragging;
+
+    /// <summary>Pixel position of a frame in the window the waveform is showing.</summary>
+    private double PixelOf(ulong frame)
+    {
+        var center = CenterFrame;
+        var half = Math.Max(1.0, WindowSeconds * _fps);
+        var framesPerColumn = (2 * half) / Math.Max(1.0, ActualWidth);
+        return (frame - (center - half)) / framesPerColumn;
+    }
+
+    /// <summary>The mark under a horizontal position, or 0 for none.</summary>
+    private int MarkAt(double x)
+    {
+        if (_hasIn && Math.Abs(PixelOf(_inFrame) - x) <= GrabRadius)
+            return 1;
+        if (_hasOut && Math.Abs(PixelOf(_outFrame) - x) <= GrabRadius)
+            return 2;
+        return 0;
+    }
+
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonDown(e);
-        var frame = FrameAt(e.GetPosition(this).X);
+        var position = e.GetPosition(this);
+        // A press on a mark grabs it, so the range can be trimmed where it is visible. A press
+        // on the mark also seeks there, which is how an operator checks a cut point.
+        var grabbed = MarkAt(position.X);
+        if (grabbed != 0 && (Keyboard.Modifiers & ModifierKeys.Shift) == 0)
+        {
+            _dragging = grabbed;
+            CaptureMouse();
+            Focus();
+            SeekRequested?.Invoke(grabbed == 1 ? _inFrame : _outFrame);
+            e.Handled = true;
+            return;
+        }
+        var frame = FrameAt(position.X);
         // A plain click moves the playhead, which is how an operator finds a quiet
         // moment. Shift marks In there and Ctrl marks Out there, so a cut can be struck
         // straight off the waveform: the waveform is where the quiet moment is visible,
@@ -180,14 +218,35 @@ internal sealed class ReplayWaveform : FrameworkElement
     {
         base.OnMouseMove(e);
         if (!IsMouseCaptured)
+        {
+            // The pointer over a mark is a handle, so it says so.
+            Cursor = MarkAt(e.GetPosition(this).X) != 0 ? Cursors.SizeWE : Cursors.Arrow;
             return;
-        SeekRequested?.Invoke(FrameAt(e.GetPosition(this).X));
+        }
+        var frame = FrameAt(e.GetPosition(this).X);
+        if (_dragging == 1)
+        {
+            // In cannot pass Out: a clip with a negative length is not a clip.
+            if (!_hasOut || frame < _outFrame)
+                InRequested?.Invoke(frame);
+            e.Handled = true;
+            return;
+        }
+        if (_dragging == 2)
+        {
+            if (!_hasIn || frame > _inFrame)
+                OutRequested?.Invoke(frame);
+            e.Handled = true;
+            return;
+        }
+        SeekRequested?.Invoke(frame);
         e.Handled = true;
     }
 
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonUp(e);
+        _dragging = 0;
         if (IsMouseCaptured)
             ReleaseMouseCapture();
         e.Handled = true;

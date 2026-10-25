@@ -244,7 +244,10 @@
                            Visibility="Collapsed"
                            Text="{Binding [replay.noEvents], Source={x:Static i18n:Loc.Source}}"/>
                 <ListView x:Name="EventList" Style="{StaticResource DeckList}" SelectionMode="Single"
-                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                          AutomationProperties.AutomationId="EventList"
+                          MouseDoubleClick="EventList_MouseDoubleClick"
+                          SelectionChanged="EventList_SelectionChanged">
                     <ListView.View>
                         <GridView>
                             <GridViewColumn Header="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" Width="96">
@@ -333,6 +336,17 @@
                                 VerticalContentAlignment="Center" Click="PlaylistAdd_Click"
                                 ToolTip="{Binding [replay.playlistAddHint], Source={x:Static i18n:Loc.Source}}"
                                 Content="{Binding [replay.playlistAdd], Source={x:Static i18n:Loc.Source}}"/>
+                        <!-- Whether a new clip joins the end of the list or slots in by its
+                             timecode. A show is usually assembled in order; a highlight found
+                             late belongs where it happened. -->
+                        <ComboBox x:Name="ClipOrderBox" Width="128" Height="28" Margin="4,0,0,0"
+                                  VerticalContentAlignment="Center"
+                                  AutomationProperties.AutomationId="ClipOrderBox"
+                                  ToolTip="{Binding [replay.clipOrderHint], Source={x:Static i18n:Loc.Source}}"
+                                  SelectionChanged="ClipOrder_Changed">
+                            <ComboBoxItem Content="{Binding [replay.clipOrderAppend], Source={x:Static i18n:Loc.Source}}" Tag="Append" IsSelected="True"/>
+                            <ComboBoxItem Content="{Binding [replay.clipOrderTimecode], Source={x:Static i18n:Loc.Source}}" Tag="Timecode"/>
+                        </ComboBox>
                         <Button x:Name="PlaylistRemoveButton" Height="28" MinWidth="40" Margin="4,0,0,0" Padding="8,0"
                                 VerticalContentAlignment="Center" Click="PlaylistRemove_Click"
                                 ToolTip="{Binding [replay.playlistRemove], Source={x:Static i18n:Loc.Source}}"
@@ -419,12 +433,28 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}" Width="92">
+                            <!-- A transition is its kind, where it comes from, how long it holds
+                                 and whether it overlaps the next clip. Leaving only the kind here
+                                 made the other three unreachable. -->
+                            <GridViewColumn Header="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}" Width="330">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <ComboBox Height="24" Margin="1" DisplayMemberPath="Label"
-                                                  ItemsSource="{Binding TransitionOptions}" SelectedItem="{Binding TransitionOption}"
-                                                  ToolTip="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}"/>
+                                        <StackPanel Orientation="Horizontal">
+                                            <ComboBox Width="100" Height="24" Margin="1" DisplayMemberPath="Label"
+                                                      ItemsSource="{Binding TransitionOptions}" SelectedItem="{Binding TransitionOption}"
+                                                      ToolTip="{Binding [replay.transition], Source={x:Static i18n:Loc.Source}}"/>
+                                            <ComboBox Width="74" Height="24" Margin="4,1,1,1" DisplayMemberPath="Label"
+                                                      Visibility="{Binding DirectionVisibility}"
+                                                      ItemsSource="{Binding DirectionOptions}" SelectedItem="{Binding DirectionOption}"
+                                                      ToolTip="{Binding [replay.directionHelp], Source={x:Static i18n:Loc.Source}}"/>
+                                            <ComboBox Width="86" Height="24" Margin="4,1,1,1" DisplayMemberPath="Label"
+                                                      ItemsSource="{Binding TimingOptions}" SelectedItem="{Binding TimingOption}"
+                                                      ToolTip="{Binding [replay.timingHelp], Source={x:Static i18n:Loc.Source}}"/>
+                                            <TextBox Width="46" Height="24" Margin="4,1,1,1" VerticalContentAlignment="Center"
+                                                     Visibility="{Binding LengthVisibility}"
+                                                     Text="{Binding TransitionFrames, UpdateSourceTrigger=LostFocus}"
+                                                     ToolTip="{Binding [replay.transitionFrames], Source={x:Static i18n:Loc.Source}}"/>
+                                        </StackPanel>
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
@@ -537,6 +567,24 @@
                             Click="CancelMark_Click"
                             ToolTip="{Binding [replay.cancelMarkHint], Source={x:Static i18n:Loc.Source}}"
                             Content="{Binding [replay.cancelMark], Source={x:Static i18n:Loc.Source}}"/>
+                    <!-- One button and the length it uses: "take the last few seconds" is the
+                         most common way a highlight is made during a break in play. -->
+                    <Button x:Name="MarkLastButton" Height="44" MinWidth="150" Margin="4,0,0,0" Padding="10,0"
+                            HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
+                            Click="MarkLast_Click"
+                            AutomationProperties.AutomationId="MarkLastButton"
+                            ToolTip="{Binding [replay.markLastHint], Source={x:Static i18n:Loc.Source}}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock x:Name="MarkLastLabel" VerticalAlignment="Center"/>
+                            <TextBlock Text=" " VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding [replay.secondsShort], Source={x:Static i18n:Loc.Source}}"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <TextBox x:Name="MarkLastSecondsBox" Width="46" Height="44" Margin="4,0,0,0" Text="10"
+                             VerticalContentAlignment="Center" HorizontalContentAlignment="Center"
+                             AutomationProperties.AutomationId="MarkLastSecondsBox"
+                             ToolTip="{Binding [replay.markLastSecondsHint], Source={x:Static i18n:Loc.Source}}"/>
                     <Border Width="1" Background="{DynamicResource ButtonBorder}" Margin="8,6,8,6"/>
                     <Button x:Name="RecordButton" Style="{StaticResource TransportButton}" Click="RecordToggle_Click"
                             ToolTip="{Binding [replay.recordHint], Source={x:Static i18n:Loc.Source}}">

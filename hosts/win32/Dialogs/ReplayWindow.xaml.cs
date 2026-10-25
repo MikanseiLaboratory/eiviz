@@ -1182,9 +1182,13 @@ public partial class ReplayWindow : Window
             var row = previous ?? new EventRow { Id = entry.Id };
             row.IsLoading = true;
             row.InFrame = entry.InFrame;
+            row.OutFrame = entry.OutFrame;
             row.RecordingUuid = entry.RecordingUuid;
             row.InText = Stamp(entry.InFrame, entry.RecordingUuid);
-            row.OutText = Stamp(entry.OutFrame, entry.RecordingUuid);
+            // A range whose end is still to come says so, rather than showing the start twice.
+            row.OutText = entry.OutFrame > entry.InFrame
+                ? Stamp(entry.OutFrame, entry.RecordingUuid)
+                : Loc.T("replay.markOutOpen");
             row.DurationText = ReplayModel.Duration(entry.InFrame, entry.OutFrame, fps);
             row.Name = entry.Name;
             row.Protected = entry.Protected;
@@ -1648,6 +1652,167 @@ public partial class ReplayWindow : Window
         SaveDocument();
         RefreshEvents();
         RefreshPlaylist();
+    }
+
+    /// <summary>
+    /// Starts a clip a few seconds before the playhead, which is how most highlights are made
+    /// during a break in play: the thing just happened, and the operator wants the run up to
+    /// it rather than the frame they pressed on.
+    ///
+    /// The length comes from the box next to the button. The range is recorded through the same
+    /// two marks as the IN and OUT buttons: seek back, mark in, come forward again, mark out.
+    /// </summary>
+    private void MarkLast_Click(object sender, RoutedEventArgs e)
+    {
+        if (_replay is null)
+            return;
+        var here = Backend?.ReplayChannelState(_channel)?.PositionFrame ?? 0UL;
+        if (here == 0)
+        {
+            Warn(Refusal(Loc.T("replay.markInFailed")));
+            return;
+        }
+        var fps = ReplayModel.Fps(_replay, _session);
+        var back = (ulong)Math.Round(MarkLastSeconds() * ReplayModel.Rate(fps));
+        var from = here > back ? here - back : 0;
+        var playing = _transport.Playing;
+        if (Backend?.ReplayTransport(_channel, false, _speedMilli, (long)Math.Min(from, long.MaxValue)) != true)
+        {
+            Warn(Refusal(Loc.T("replay.commandRefused")));
+            return;
+        }
+        if (Backend?.ReplayMarkIn() is not { } start)
+        {
+            Warn(Refusal(Loc.T("replay.markInFailed")));
+            return;
+        }
+        if (Backend?.ReplayTransport(_channel, false, _speedMilli, (long)Math.Min(here, long.MaxValue)) != true)
+        {
+            Warn(Refusal(Loc.T("replay.commandRefused")));
+            return;
+        }
+        var name = Loc.Format("replay.eventName", ReplayModel.Events(_replay).Count + 1);
+        if (Backend?.ReplayMarkOut(name, out var created) != true || created is not { } made)
+        {
+            Warn(Refusal(Loc.T("replay.markOutFailed")));
+            return;
+        }
+        _inFrame = made.InFrame;
+        _outFrame = made.OutFrame;
+        _markOpen = false;
+        MarkOutButton.IsEnabled = false;
+        InTcText.Text = Stamp(made.InFrame, made.Uuid);
+        OutTcText.Text = Stamp(made.OutFrame, made.Uuid);
+        DurationTcText.Text = ReplayModel.Timecode(made.OutFrame - made.InFrame, fps);
+        // The mixer made the event, so the deck files the clip for it here.
+        FileMarkerClip(made.Uuid, made.InFrame, made.OutFrame);
+        if (playing)
+            Backend?.ReplayTransport(_channel, true, _speedMilli, -1);
+        RefreshEvents();
+        RefreshPlaylist();
+        RefreshStatus();
+    }
+
+    /// <summary>The length <see cref="MarkLast_Click"/> takes, clamped to something usable.</summary>
+    private double MarkLastSeconds()
+    {
+        if (!double.TryParse(MarkLastSecondsBox.Text, out var seconds) || !double.IsFinite(seconds))
+            return 10;
+        if (seconds < 0.5)
+            return 0.5;
+        return seconds > 600 ? 600 : seconds;
+    }
+
+    /// <summary>
+    /// Files a finished range on the playlist, at the end or in timecode order as the operator
+    /// chose. A show is usually built in the order it happened, but a highlight found late
+    /// belongs where it occurred, not where it was noticed.
+    /// </summary>
+    private void FileMarkerClip(string uuid, ulong inFrame, ulong outFrame)
+    {
+        if (_replay is null || !ReplayModel.AutoAddToPlaylist(_replay))
+            return;
+        var angleId = ReplayModel.ActiveAngle(_replay);
+        if (angleId == 0)
+            return;
+        var id = ReplayModel.ReserveEventId(_replay);
+        var events = _replay["events"] as JsonArray ?? new JsonArray();
+        events.Add(new JsonObject
+        {
+            ["id"] = id,
+            ["recordingUuid"] = uuid,
+            ["inFrame"] = inFrame,
+            ["outFrame"] = outFrame,
+            ["name"] = Loc.Format("replay.eventName", events.Count + 1),
+            ["tags"] = new JsonArray(),
+            ["protected"] = false,
+        });
+        _replay["events"] = events;
+        ReplayModel.AppendClip(
+            _replay,
+            ReplayModel.EnsurePlaylist(_replay, _playlistId, _channel),
+            id,
+            uuid,
+            inFrame,
+            outFrame,
+            angleId,
+            ClipOrderByTimecode());
+        SaveDocument();
+    }
+
+    /// <summary>Whether new clips slot into the playlist by timecode.</summary>
+    private bool ClipOrderByTimecode() =>
+        (ClipOrderBox.SelectedItem as ComboBoxItem)?.Tag as string == "Timecode";
+
+    /// <summary>Whether a clip is filed at the end or in timecode order.</summary>
+    private void ClipOrder_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        // The choice is read when a clip is filed, so there is nothing to store.
+    }
+
+    /// <summary>
+    /// Shows the range of the event the operator picked, so the readouts under the deck name
+    /// the range the next command will act on.
+    /// </summary>
+    private void EventList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (EventList.SelectedItem is not EventRow row || _replay is null)
+            return;
+        if (row.OutFrame <= row.InFrame)
+            return;
+        InTcText.Text = Stamp(row.InFrame, row.RecordingUuid);
+        OutTcText.Text = Stamp(row.OutFrame, row.RecordingUuid);
+        DurationTcText.Text = ReplayModel.Timecode(
+            row.OutFrame - row.InFrame, ReplayModel.Fps(_replay, _session));
+    }
+
+    /// <summary>
+    /// Plays the event that was double-clicked. An event is a range of the recording rather than
+    /// a playlist entry, so it is cued where it starts and then started, which is what "play this
+    /// one" means when the operator points at it.
+    /// </summary>
+    private void EventList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (EventList.SelectedItem is not EventRow row || _replay is null)
+            return;
+        if (row.OutFrame <= row.InFrame)
+        {
+            Warn(Refusal(Loc.T("replay.markOutOpen")));
+            return;
+        }
+        var target = (long)Math.Min(row.InFrame, long.MaxValue);
+        if (Backend?.ReplayTransport(_channel, true, _speedMilli, target) != true)
+        {
+            Warn(Refusal(Loc.T("replay.commandRefused")));
+            return;
+        }
+        // The transport now runs the recording from the event's first frame: the same two
+        // things a cue does, in one press.
+        _transport = ReplayTransportRules.PlayRecorded().Next;
+        UpdatePlayButton();
+        RefreshStatus();
+        UpdatePlayhead();
+        SyncRecordingSlider();
     }
 
     private void MarkOut()
@@ -2232,18 +2397,13 @@ public partial class ReplayWindow : Window
             }
             else
             {
-                // Jog and search show the proxy. A recording without one stays a label;
-                // the full-size picture is not decoded into the tile.
-                picture = new TextBlock
-                {
-                    Text = Loc.T("replay.proxyMissing"),
-                    Width = AngleTileWidth,
-                    Height = AngleTileHeight,
-                    Margin = new Thickness(4),
-                    TextWrapping = TextWrapping.Wrap,
-                    TextAlignment = TextAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
+                // Nothing recorded to look at yet — a deck opened before the first mark, or a
+                // proxy the store has not written. The camera's own picture is what the
+                // operator is watching anyway, so the tile shows that rather than a label
+                // saying the deck cannot help.
+                var monitorId = _session.NextMonitorId++;
+                surface.Loaded += (_, _) => surface.RetargetMonitor(monitorId, angle.LiveSourceId);
+                picture = surface;
             }
             var label = new TextBlock
             {

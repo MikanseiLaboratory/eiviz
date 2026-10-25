@@ -883,7 +883,8 @@ internal static class ReplayModel
         string recordingUuid,
         ulong inFrame,
         ulong outFrame,
-        uint angleId)
+        uint angleId,
+        bool byTimecode = false)
     {
         var playlist = Playlist(root, playlistId);
         if (playlist is null)

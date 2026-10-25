@@ -63,6 +63,12 @@ internal sealed class EventRow : ObservableRow
     /// <summary>The range the operator marked, for cueing the event itself.</summary>
     public ulong InFrame { get; set; }
 
+    /// <summary>
+    /// Where the event ends. Zero while the mark is still open, which is what a row shows
+    /// between Mark In and Mark Out.
+    /// </summary>
+    public ulong OutFrame { get; set; }
+
     public string InText { get; set; } = "";
 
     public string OutText { get; set; } = "";
