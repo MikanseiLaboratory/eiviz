@@ -5016,12 +5016,10 @@ pub unsafe extern "C" fn mixer_replay_mark_out(
     })
 }
 
-#[unsafe(no_mangle)]
-/// Turns looping on or off for a replay channel's playlist.
+/// Keeps the last clip running past its out point, or stops at it again.
 ///
 /// # Safety
 /// A plain C call: no pointers cross the boundary.
-/// Keeps the last clip running past its out point, or stops at it again.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_replay_hold_last(channel: u32, on: u32) -> i32 {
     ffi_guard(
@@ -5034,6 +5032,10 @@ pub unsafe extern "C" fn mixer_replay_hold_last(channel: u32, on: u32) -> i32 {
     )
 }
 
+/// Turns looping on or off for a replay channel's playlist.
+///
+/// # Safety
+/// A plain C call: no pointers cross the boundary.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_replay_loop(channel: u32, on: u32) -> i32 {
     ffi_guard(
