@@ -844,6 +844,7 @@ public partial class ReplayWindow : Window
         {
             PlayheadTcText.Text = "--:--:--:--";
             RemainingTcText.Text = "--:--:--:--";
+            RemainingPlaylistTcText.Text = "--:--:--:--";
             return;
         }
         PlayheadTcText.Text = Stamp(air.PositionFrame, TransportRecording());
@@ -854,7 +855,40 @@ public partial class ReplayWindow : Window
         var left = air.OutFrame > air.PositionFrame ? air.OutFrame - air.PositionFrame : 0;
         var rate = air.SpeedMilli > 0 ? air.SpeedMilli : 1000;
         var wall = left * 1000UL / (ulong)rate;
-        RemainingTcText.Text = "-" + ReplayModel.Timecode(wall, ReplayModel.Fps(_replay, _session));
+        var fps = ReplayModel.Fps(_replay, _session);
+        RemainingTcText.Text = "-" + ReplayModel.Timecode(wall, fps);
+        // What is left of the whole playlist after this clip: the segment's real budget,
+        // because one more replay only fits if the list still has room.
+        var after = PlaylistFramesAfter(air);
+        RemainingPlaylistTcText.Text = "-" + ReplayModel.Timecode(wall + after, fps);
+    }
+
+    /// <summary>
+    /// Frames the playlist still has to run after the clip on air, at the speed each clip
+    /// is authored at. The list is the deck's own document, so this needs nothing new from
+    /// the mixer; a clip whose speed makes it longer counts for that longer run.
+    /// </summary>
+    private ulong PlaylistFramesAfter(MixerReplayChannelState air)
+    {
+        if (_replay is null)
+            return 0;
+        var clips = ReplayModel.Clips(_replay, _playlistId);
+        var passed = false;
+        ulong total = 0;
+        foreach (var clip in clips)
+        {
+            if (!passed)
+            {
+                passed = clip.InFrame <= air.PositionFrame && air.PositionFrame <= clip.OutFrame;
+                continue;
+            }
+            if (clip.OutFrame <= clip.InFrame)
+                continue;
+            var span = clip.OutFrame - clip.InFrame;
+            var speed = clip.Speed > 0 ? clip.Speed : 1.0;
+            total += (ulong)Math.Round(span / speed);
+        }
+        return total;
     }
     /// <summary>Holds the picture; presses again to continue from the same frame.</summary>
     private void PlaylistPause_Click(object sender, RoutedEventArgs e)
@@ -1548,18 +1582,72 @@ public partial class ReplayWindow : Window
             Warn(Refusal(Loc.T("replay.markInFailed")));
             return;
         }
+        // A mark that is still open is closed first: IN during a running replay is the
+        // operator saying "that one, now the next", and dropping the previous range would
+        // lose it.
+        var previous = _inFrame;
+        if (previous is { } open && open != MarkUnknown && _markOpen)
+        {
+            if (Backend?.ReplayMarkOut(Loc.Format("replay.eventName", ReplayModel.Events(_replay).Count + 1), out _) == true)
+                RefreshEvents();
+        }
         _inFrame = frame ?? MarkUnknown;
         _markOpen = true;
         SetLit(MarkInButton, true, Color.FromRgb(0x7F, 0xD1, 0x4B));
         SetLit(CancelMarkButton, true, Color.FromRgb(0xE0, 0x52, 0x52));
         // A new Mark In starts a new range: the old Mark Out no longer applies.
         _outFrame = 0;
-        _markOpen = true;
         var fps = ReplayModel.Fps(_replay, _session);
         InTcText.Text = frame is { } value ? Stamp(value, TransportRecording()) : Loc.T("replay.markInRemote");
-        OutTcText.Text = "--:--:--:--";
+        OutTcText.Text = Loc.T("replay.markOutOpen");
         DurationTcText.Text = "--:--:--:--";
         MarkOutButton.IsEnabled = true;
+        // The clip exists from this moment, with its end open, so it is already in the
+        // playlist and can be cued while the action is still running.
+        if (frame is { } startFrame)
+            CreateOpenEvent(startFrame);
+    }
+
+    /// <summary>
+    /// Files the clip a Mark In just opened, with the end still to come.
+    ///
+    /// The mixer's own event is created on Mark Out; this is the deck's row for it, so the
+    /// playlist shows the highlight while it is being made. Mark Out fills the same event
+    /// in rather than adding a second one — the two are matched by the in frame.
+    /// </summary>
+    private void CreateOpenEvent(ulong inFrame)
+    {
+        if (_replay is null || !ReplayModel.AutoAddToPlaylist(_replay))
+            return;
+        var angleId = ReplayModel.ActiveAngle(_replay);
+        if (angleId == 0)
+            return;
+        var id = ReplayModel.ReserveEventId(_replay);
+        var uuid = MixerNative.ReplayRecordingUuid() ?? "";
+        var events = _replay["events"] as JsonArray ?? new JsonArray();
+        events.Add(new JsonObject
+        {
+            ["id"] = id,
+            ["recordingUuid"] = uuid,
+            ["inFrame"] = inFrame,
+            // 0 is "no end yet": the row shows an open range until Mark Out sets it.
+            ["outFrame"] = 0UL,
+            ["name"] = Loc.Format("replay.eventName", events.Count + 1),
+            ["tags"] = new JsonArray(),
+            ["protected"] = false,
+        });
+        _replay["events"] = events;
+        ReplayModel.AppendClip(
+            _replay,
+            ReplayModel.EnsurePlaylist(_replay, _playlistId, _channel),
+            id,
+            uuid,
+            inFrame,
+            inFrame,
+            angleId);
+        SaveDocument();
+        RefreshEvents();
+        RefreshPlaylist();
     }
 
     private void MarkOut()

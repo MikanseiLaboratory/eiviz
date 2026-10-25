@@ -496,6 +496,7 @@
                 </Grid.ColumnDefinitions>
                 <Slider x:Name="RecordingSlider" Grid.Column="0" Height="24" VerticalAlignment="Center"
                         Minimum="0" Maximum="1000" IsSnapToTickEnabled="False"
+                        IsMoveToPointEnabled="True"
                         ValueChanged="RecordingSlider_ValueChanged"
                         AutomationProperties.AutomationId="RecordingSlider"
                         AutomationProperties.Name="{Binding [replay.seekWhole], Source={x:Static i18n:Loc.Source}}"
@@ -566,25 +567,32 @@
                             ToolTip="{Binding [replay.speedHint], Source={x:Static i18n:Loc.Source}}"/>
                     <Slider x:Name="JogSlider" Width="120" Margin="8,0,0,0" VerticalAlignment="Center"
                             Minimum="-30" Maximum="30" Value="0"
-                            TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="JogSlider_ValueChanged"
+                            TickFrequency="1" IsSnapToTickEnabled="True" IsMoveToPointEnabled="True"
+                            ValueChanged="JogSlider_ValueChanged"
                             ToolTip="{Binding [replay.jogHint], Source={x:Static i18n:Loc.Source}}"/>
                 </StackPanel>
                 <!-- The numbers, in the order an operator reads them: where the playhead is,
-                     what is left of the clip, and the clip's own range. -->
+                     what is left, and the clip's own range. They share the row with the
+                     transport, so they are right-aligned in their own column and never
+                     overlap the export button in the next one. -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <StackPanel Margin="0,0,12,0">
+                    <StackPanel Margin="0,0,10,0">
                         <TextBlock Text="{Binding [replay.playhead], Source={x:Static i18n:Loc.Source}}" Style="{StaticResource FieldLabel}"/>
                         <TextBlock x:Name="PlayheadTcText" Style="{StaticResource Timecode}" FontSize="17" Foreground="#7FD14B"/>
                     </StackPanel>
-                    <StackPanel Margin="0,0,12,0">
+                    <StackPanel Margin="0,0,10,0">
                         <TextBlock Text="{Binding [replay.remainingInClip], Source={x:Static i18n:Loc.Source}}" Style="{StaticResource FieldLabel}"/>
                         <TextBlock x:Name="RemainingTcText" Style="{StaticResource Timecode}" FontSize="17"/>
                     </StackPanel>
-                    <StackPanel Margin="0,0,12,0">
+                    <StackPanel Margin="0,0,10,0">
+                        <TextBlock Text="{Binding [replay.remainingInPlaylist], Source={x:Static i18n:Loc.Source}}" Style="{StaticResource FieldLabel}"/>
+                        <TextBlock x:Name="RemainingPlaylistTcText" Style="{StaticResource Timecode}" FontSize="17"/>
+                    </StackPanel>
+                    <StackPanel Margin="0,0,10,0">
                         <TextBlock Text="{Binding [replay.in], Source={x:Static i18n:Loc.Source}}" Style="{StaticResource FieldLabel}"/>
                         <TextBlock x:Name="InTcText" Style="{StaticResource Timecode}"/>
                     </StackPanel>
-                    <StackPanel Margin="0,0,12,0">
+                    <StackPanel Margin="0,0,10,0">
                         <TextBlock Text="{Binding [replay.out], Source={x:Static i18n:Loc.Source}}" Style="{StaticResource FieldLabel}"/>
                         <TextBlock x:Name="OutTcText" Style="{StaticResource Timecode}"/>
                     </StackPanel>

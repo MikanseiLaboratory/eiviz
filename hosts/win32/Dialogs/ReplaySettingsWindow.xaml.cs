@@ -496,7 +496,10 @@ public partial class ReplaySettingsWindow : Window
             Name = scene?.Name ?? string.Empty,
             SourceKind = "Scene",
             SourceId = scene?.Id ?? 0,
-            AudioUnitId = 0,
+            // The angle records its source's own sound unless the operator says otherwise.
+            // It used to start on "Silent", which is why a fresh configuration recorded a
+            // picture with no audio and the deck's waveform had nothing to draw.
+            AudioMode = "Source",
             DriveIndex = _storages.Count == 1 ? 0 : -1,
         };
         row.PropertyChanged += AngleRow_Changed;
