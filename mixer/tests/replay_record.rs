@@ -12,6 +12,10 @@
 
 mod common;
 
+/// Slots a recording readback keeps at the angle counts this test uses. The recorder sizes
+/// its ring from `readback::record_slots(angles)`; one angle is at the deep end.
+const READBACK_DEPTH: u64 = 16;
+
 use std::ffi::CString;
 use std::thread;
 use std::time::Duration;
@@ -108,18 +112,18 @@ fn recording_keeps_the_frames_the_renderer_produced() {
     );
     // Every frame handed to the readback is either recorded or counted as a readback
     // loss: a frame that disappears without a reason would be a silent hole in the
-    // recording. The readback ring holds eight copies and the one being handed over
-    // right now is the ninth, so a frame still in flight is expected; what must not
-    // happen is a frame with no reason at all. How many frames a second the adapter
+    // recording. The ring depth follows the angle count, and the frame being handed over
+    // right now is one more than that, so a frame still in flight is expected; what must
+    // not happen is a frame with no reason at all. How many frames a second the adapter
     // manages is not this test's business (a software one is slow, and its drops are
     // counted, not hidden).
-    const IN_FLIGHT: u64 = 9;
+    let in_flight = READBACK_DEPTH + 1;
     assert!(
         offered + lost <= pushed,
         "offered {offered} + readback lost {lost} must not exceed pushed {pushed}"
     );
     assert!(
-        offered + lost + IN_FLIGHT >= pushed,
+        offered + lost + in_flight >= pushed,
         "every handed-over frame is recorded or counted: offered {offered}, lost {lost}, \
          pushed {pushed}"
     );
