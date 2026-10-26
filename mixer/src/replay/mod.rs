@@ -10,7 +10,7 @@ mod stretch;
 pub mod transition_pass;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -329,15 +329,18 @@ struct Inner {
     recording: bool,
     uuid: String,
     mark_in: Option<u64>,
-    has_frames: bool,
-    last_frame: u64,
-    first_frame: u64,
-    dropped_readback: HashMap<u32, u64>,
+    /// Set once the first frame of a recording arrives. Same meaning as `first_frame`
+    /// being non-zero, but a recording can legitimately start at frame 0, so a flag is kept.
+    has_frames: std::sync::atomic::AtomicBool,
+    last_frame: AtomicU64,
+    first_frame: AtomicU64,
+    /// Per-angle readback losses. A counter, so it does not need the mutex.
+    dropped_readback: Mutex<HashMap<u32, u64>>,
     /// Frames the readback handed over while recording.
-    offered: u64,
+    offered: AtomicU64,
     /// Frames handed to the readback while recording.
-    pushed: u64,
-    recent_drops: u32,
+    pushed: AtomicU64,
+    recent_drops: AtomicU32,
     recent_at: Instant,
     epoch: Instant,
     write_drop_seen: u64,
@@ -362,7 +365,8 @@ struct Inner {
     /// The render frame the recording began on. A recording numbers its frames from
     /// its own first frame, so a clip's frame numbers match the segments the store
     /// wrote; the render counter keeps running across recordings.
-    started_frame: Option<u64>,
+    /// `u64::MAX` until the recording's first frame names it.
+    started_frame: AtomicU64,
     /// Why record and play are refused while the document stays loaded.
     /// Community and a missing Pro module set this. A plan that simply has too
     /// many channels refuses the document instead.
@@ -450,13 +454,13 @@ impl ReplayEngine {
                 recording: false,
                 uuid: String::new(),
                 mark_in: None,
-                has_frames: false,
-                last_frame: 0,
-                first_frame: 0,
-                dropped_readback: HashMap::new(),
-                offered: 0,
-                pushed: 0,
-                recent_drops: 0,
+                has_frames: std::sync::atomic::AtomicBool::new(false),
+                last_frame: std::sync::atomic::AtomicU64::new(0),
+                first_frame: std::sync::atomic::AtomicU64::new(0),
+                dropped_readback: Mutex::new(HashMap::new()),
+                offered: std::sync::atomic::AtomicU64::new(0),
+                pushed: std::sync::atomic::AtomicU64::new(0),
+                recent_drops: std::sync::atomic::AtomicU32::new(0),
                 recent_at: Instant::now(),
                 epoch: Instant::now(),
                 write_drop_seen: 0,
@@ -472,7 +476,7 @@ impl ReplayEngine {
                 health: HealthMemory::default(),
                 started_at: None,
                 started_unix_ms: 0,
-                started_frame: None,
+                started_frame: std::sync::atomic::AtomicU64::new(u64::MAX),
                 operations_reason: None,
             }),
             inbox: Arc::new(Inbox::new()),
@@ -1159,11 +1163,13 @@ impl ReplayEngine {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|elapsed| elapsed.as_millis() as u64)
             .unwrap_or(0);
-        inner.first_frame = 0;
-        inner.last_frame = 0;
-        inner.has_frames = false;
+        inner.first_frame.store(0, Ordering::Relaxed);
+        inner.last_frame.store(0, Ordering::Relaxed);
+        inner.has_frames.store(false, Ordering::Relaxed);
+        inner.offered.store(0, Ordering::Relaxed);
+        inner.pushed.store(0, Ordering::Relaxed);
         // The first frame this recording sees becomes its frame 0.
-        inner.started_frame = None;
+        inner.started_frame.store(u64::MAX, Ordering::Relaxed);
         inner.stats.state = REPLAY_STATE_RECORDING;
         inner.stats.stop_reason = REPLAY_STOP_NONE;
         inner.stats.remaining_is_estimate = 1;
@@ -1343,12 +1349,12 @@ impl ReplayEngine {
                 return false;
             }
             // A recording numbers frames from its own start, like the readback path.
-            let frame_index = match inner.started_frame {
-                Some(start) => frame_index.saturating_sub(start),
-                None => {
-                    inner.started_frame = Some(frame_index);
+            let frame_index = match inner.started_frame.load(Ordering::Relaxed) {
+                u64::MAX => {
+                    inner.started_frame.store(frame_index, Ordering::Relaxed);
                     0
                 }
+                start => frame_index.saturating_sub(start),
             };
             (
                 inner.width,
@@ -1384,13 +1390,12 @@ impl ReplayEngine {
                 let mut inner = self.lock();
                 *inner.angle_written.entry(angle_id).or_insert(0) += 1;
                 inner.stats.frames_written = inner.stats.frames_written.saturating_add(1);
-                if !inner.has_frames {
-                    inner.first_frame = frame_index;
-                    inner.has_frames = true;
+                if !inner.has_frames.swap(true, Ordering::Relaxed) {
+                    inner.first_frame.store(frame_index, Ordering::Relaxed);
                 }
-                inner.last_frame = inner.last_frame.max(frame_index);
-                inner.stats.recording_frame = inner.last_frame;
-                inner.stats.last_frame = inner.last_frame;
+                inner.last_frame.fetch_max(frame_index, Ordering::Relaxed);
+                inner.stats.recording_frame = inner.last_frame.load(Ordering::Relaxed);
+                inner.stats.last_frame = inner.stats.recording_frame;
                 true
             }
             Ok(WriteOutcome::Dropped) => {
@@ -1420,19 +1425,29 @@ impl ReplayEngine {
         stride: usize,
         layout: PixelLayout,
     ) {
-        // The caller counts render frames for the life of the mixer; a recording
-        // counts from its own first frame, which is what the store names its
-        // segments and index by. Read under the lock once, and the answer is carried
-        // through the hand-off so the bookkeeping below does not have to ask again.
-        let frame_index = {
-            let mut inner = self.lock();
-            match inner.started_frame {
-                Some(start) => frame_index.saturating_sub(start),
-                None => {
-                    inner.started_frame = Some(frame_index);
-                    0
-                }
+        // The caller counts render frames for the life of the mixer; a recording counts from
+        // its own first frame, which is what the store names its segments and index by.
+        //
+        // Nothing here takes the engine mutex. The copy pool calls this once per angle per
+        // frame, and the deck's UI thread needs that same mutex for its status poll: with the
+        // mutex in the way the deck took up to three seconds to answer a click while twelve
+        // angles were recording. Every field below is a counter or a high-water mark, so it
+        // is recorded with atomics instead.
+        let inner = self.lock();
+        let start = inner.started_frame.load(Ordering::Relaxed);
+        let frame_index = if start == u64::MAX {
+            // First frame of this recording names frame 0 for the store.
+            match inner.started_frame.compare_exchange(
+                u64::MAX,
+                frame_index,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => 0,
+                Err(raced) => frame_index.saturating_sub(raced),
             }
+        } else {
+            frame_index.saturating_sub(start)
         };
         let accepted = self.inbox.offer(RecordFrame {
             angle_id,
@@ -1442,25 +1457,24 @@ impl ReplayEngine {
             layout,
             data,
         });
-        // One critical section for the whole of this frame's bookkeeping. It used to be two,
-        // one per outcome on top of the one above: three acquisitions of the same mutex per
-        // angle per frame, on the thread that also runs the renderer.
-        let mut inner = self.lock();
         if !accepted {
-            *inner.dropped_readback.entry(angle_id).or_default() += 1;
-            inner.recent_drops = inner.recent_drops.saturating_add(1);
-        } else {
-            if !inner.has_frames {
-                inner.first_frame = frame_index;
-                inner.has_frames = true;
+            {
+                let mut drops = inner
+                    .dropped_readback
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                *drops.entry(angle_id).or_default() += 1;
             }
-            inner.last_frame = inner.last_frame.max(frame_index);
-            inner.stats.recording_frame = inner.last_frame;
-            inner.stats.last_frame = inner.last_frame;
-            // Offered counts what the readback delivered; the encoder's own count
-            // comes from the module, so the difference says where frames are lost.
-            inner.offered += 1;
+            inner.recent_drops.fetch_add(1, Ordering::Relaxed);
+            return;
         }
+        if !inner.has_frames.swap(true, Ordering::Relaxed) {
+            inner.first_frame.store(frame_index, Ordering::Relaxed);
+        }
+        inner.last_frame.fetch_max(frame_index, Ordering::Relaxed);
+        // Offered counts what the readback delivered; the encoder's own count comes from the
+        // module, so the difference says where frames are lost.
+        inner.offered.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Records that a GPU angle could not encode, so the health line can say why a
@@ -1472,8 +1486,7 @@ impl ReplayEngine {
 
     /// Counts a frame handed to the readback. `frames_offered` should match it.
     pub fn note_pushed(&self) {
-        let mut inner = self.lock();
-        inner.pushed += 1;
+        self.lock().pushed.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Records readback frames that finished but were replaced before the disk
@@ -1482,10 +1495,16 @@ impl ReplayEngine {
         if count == 0 {
             return;
         }
-        let mut inner = self.lock();
-        *inner.dropped_readback.entry(angle_id).or_default() += count;
+        let inner = self.lock();
+        {
+            let mut drops = inner
+                .dropped_readback
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            *drops.entry(angle_id).or_default() += count;
+        }
         let capped = count.min(u64::from(u32::MAX)) as u32;
-        inner.recent_drops = inner.recent_drops.saturating_add(capped);
+        inner.recent_drops.fetch_add(capped, Ordering::Relaxed);
     }
 
     /// Records a GPU angle that had no free encode ring texture. This is not a
@@ -1540,7 +1559,7 @@ impl ReplayEngine {
                 .map(|angle| (angle.id, angle.audio_unit_id))
                 .collect();
             // Angles that follow a mixing unit take that unit's program mix.
-            let frame_index = inner.last_frame;
+            let frame_index = inner.last_frame.load(Ordering::Relaxed);
             for (angle_id, unit_id) in targets {
                 let Some(pcm) = by_unit.get(&unit_id) else {
                     continue;
@@ -1655,12 +1674,12 @@ impl ReplayEngine {
     /// has nothing to mark.
     pub fn mark_in(&self) -> Result<u64, ReplayFailure> {
         let mut inner = self.lock();
-        if !inner.has_frames {
+        if !inner.has_frames.load(Ordering::Relaxed) {
             return Err(ReplayFailure::io(
                 "there is nothing to mark yet: the recording has no frames",
             ));
         }
-        let frame = inner.last_frame;
+        let frame = inner.last_frame.load(Ordering::Relaxed);
         inner.mark_in = Some(frame);
         inner.stats.mark_in_frame = frame;
         inner.stats.mark_in_valid = 1;
@@ -1676,7 +1695,7 @@ impl ReplayEngine {
         let in_frame = inner
             .mark_in
             .ok_or_else(|| ReplayFailure::invalid("no Mark In is open"))?;
-        let out_frame = inner.last_frame.max(in_frame);
+        let out_frame = inner.last_frame.load(Ordering::Relaxed).max(in_frame);
         if out_frame <= in_frame {
             return Err(ReplayFailure::invalid(
                 "the mark is empty: nothing was recorded after Mark In",
@@ -1954,7 +1973,7 @@ impl ReplayEngine {
 
     pub fn jump_to_now(&self, channel: u32) -> Result<(), i32> {
         let mut inner = self.lock();
-        let frame = inner.last_frame.saturating_sub(3);
+        let frame = inner.last_frame.load(Ordering::Relaxed).saturating_sub(3);
         let angle = inner
             .config
             .angles
@@ -2415,13 +2434,15 @@ fn apply_pro_stats(inner: &mut Inner, snapshot: &ReplayStats) {
     inner.stats.write_rate_bps = snapshot.write_rate_bps;
     inner.stats.write_rate_instant_bps = snapshot.write_rate_instant_bps;
     inner.stats.frames_written = snapshot.frames_written;
-    inner.stats.frames_offered = inner.offered;
-    inner.stats.frames_pushed = inner.pushed;
+    inner.stats.frames_offered = inner.offered.load(Ordering::Relaxed);
+    inner.stats.frames_pushed = inner.pushed.load(Ordering::Relaxed);
     inner.stats.started_unix_ms = inner.started_unix_ms;
     inner.stats.frames_dropped = snapshot.frames_dropped;
     inner.stats.frames_dropped_recent = snapshot.frames_dropped_recent;
     inner.stats.first_frame = snapshot.first_frame;
-    inner.stats.last_frame = snapshot.last_frame.max(inner.last_frame);
+    inner.stats.last_frame = snapshot
+        .last_frame
+        .max(inner.last_frame.load(Ordering::Relaxed));
     inner.stats.channel_count = inner.channels.len() as u32;
     let rate = estimate_rate_bps(
         profile_code(inner.config.format.profile),
@@ -2503,6 +2524,8 @@ fn angle_stats(
         frames_written: angle.frames_written,
         dropped_readback: inner
             .dropped_readback
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
             .get(&angle.angle_id)
             .copied()
             .unwrap_or(0),
@@ -2772,7 +2795,7 @@ fn health_loop(stop: Arc<AtomicBool>) {
                         .max()
                         .unwrap_or(0),
                     dropped_write_recent,
-                    dropped_readback_recent: inner.recent_drops,
+                    dropped_readback_recent: inner.recent_drops.load(Ordering::Relaxed),
                     remaining_secs: inner.stats.remaining_secs,
                     warn_secs: inner.config.warnings.remaining_warn_secs,
                     alert_secs: inner.config.warnings.remaining_alert_secs,
@@ -2795,7 +2818,7 @@ fn health_loop(stop: Arc<AtomicBool>) {
             let write_drops: u64 = inner.angles.iter().map(|angle| angle.dropped_write).sum();
             inner.write_drop_seen = write_drops;
             if inner.recent_at.elapsed() >= Duration::from_secs(5) {
-                inner.recent_drops = 0;
+                inner.recent_drops.store(0, Ordering::Relaxed);
                 inner.recent_at = Instant::now();
             }
             health_step(&mut inner.health, &sample, now_ms)
@@ -3314,7 +3337,7 @@ impl ChannelPlayout {
                 slot.transport.clone(),
                 slot.transport_revision,
                 inner.playlist_revision,
-                inner.last_frame,
+                inner.last_frame.load(Ordering::Relaxed),
                 engine.playback_generation.load(Ordering::Relaxed),
                 (
                     inner.config.timeline_cues.clone(),

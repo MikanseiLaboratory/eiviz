@@ -443,10 +443,14 @@ fn pool() -> &'static mpsc::Sender<CopyJob> {
     static POOL: OnceLock<mpsc::Sender<CopyJob>> = OnceLock::new();
     POOL.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<CopyJob>();
+        // One lane per core up to twelve. The copy is a straight memory read of a mapped
+        // buffer, so it scales with threads; four lanes were chosen while the pool also had
+        // to contend for the engine mutex, and once that contention was removed four became
+        // the limit instead of the lock.
         let lanes = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(2)
-            .clamp(2, 4);
+            .clamp(4, 12);
         let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
         for lane in 0..lanes {
             let rx = std::sync::Arc::clone(&rx);
