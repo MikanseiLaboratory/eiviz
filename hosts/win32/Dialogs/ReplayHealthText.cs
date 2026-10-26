@@ -47,7 +47,19 @@ internal static class ReplayHealthText
     {
         var issues = ReplayIssues.Text(stats.Issues);
         if (!hasAngle)
-            return issues;
+        {
+            // No angle reading to show, but the recording still knows what it wrote. Saying
+            // nothing reads as "nothing is being recorded", which is a different fact.
+            if (stats.FramesWritten == 0 && stats.FramesOffered == 0)
+                return issues;
+            var totals = Loc.Format(
+                "replay.healthDelivery",
+                stats.FramesWritten,
+                stats.FramesOffered,
+                stats.FramesPushed,
+                0);
+            return issues.Length > 0 ? totals + "  " + issues : totals;
+        }
         var line = Loc.Format(
             "replay.healthDelivery",
             angle.FramesWritten,

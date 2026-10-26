@@ -746,7 +746,9 @@ public partial class ReplayWindow : Window
             RecordTcText.Text = Stamp(stats.RecordingFrame, string.IsNullOrEmpty(MixerNative.ReplayRecordingUuid()) ? null : MixerNative.ReplayRecordingUuid());
             if (stats.FramesDroppedRecent > 0)
                 StateText.Text += "  " + Loc.Format("replay.dropped", stats.FramesDroppedRecent);
-            var count = Math.Min(stats.AngleCount, 8u);
+            // The buffer holds 32; capping the scan at 8 meant a deck with more angles
+            // than that never found its selected one and showed zeros.
+            var count = Math.Min(stats.AngleCount, 32u);
             for (var index = 0; index < count; index++)
             {
                 if (angleBuffer[index].AngleId == selectedAngle)

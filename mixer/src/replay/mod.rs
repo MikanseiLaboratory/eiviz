@@ -2433,7 +2433,9 @@ fn apply_pro_stats(inner: &mut Inner, snapshot: &ReplayStats) {
     inner.stats.reserve_bytes = snapshot.reserve_bytes;
     inner.stats.write_rate_bps = snapshot.write_rate_bps;
     inner.stats.write_rate_instant_bps = snapshot.write_rate_instant_bps;
-    inner.stats.frames_written = snapshot.frames_written;
+    // Whichever is larger is the truth: a module that under-reports must not hide frames that
+    // are on disk, and a store that has flushed more than this engine saw is ahead.
+    inner.stats.frames_written = snapshot.frames_written.max(inner.stats.frames_written);
     inner.stats.frames_offered = inner.offered.load(Ordering::Relaxed);
     inner.stats.frames_pushed = inner.pushed.load(Ordering::Relaxed);
     inner.stats.started_unix_ms = inner.started_unix_ms;
