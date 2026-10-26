@@ -54,16 +54,20 @@ internal static class ReplayHealthText
                 return issues;
             var totals = Loc.Format(
                 "replay.healthDelivery",
-                stats.FramesWritten,
                 stats.FramesOffered,
+                stats.FramesWritten,
                 stats.FramesPushed,
                 0);
             return issues.Length > 0 ? totals + "  " + issues : totals;
         }
+        // The format is "readback {0}/{2} (written {1}, readback lost {3})": the first slot is
+        // what the readback delivered, the second what was written. They were passed the other
+        // way round, so "written" showed the readback's figure — which on the GPU path is zero,
+        // because the picture never leaves the GPU.
         var line = Loc.Format(
             "replay.healthDelivery",
-            angle.FramesWritten,
             stats.FramesOffered,
+            angle.FramesWritten,
             stats.FramesPushed,
             angle.DroppedReadback)
             + "  "
