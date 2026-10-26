@@ -1250,11 +1250,16 @@ fn emit_replay(
     device: &GpuDevice,
     targets: &[crate::replay::RecordTarget],
 ) {
+    // One poll for the whole device, then the per-store work. Polling inside the loop ran a
+    // device poll per angle per frame.
+    if !targets.is_empty() {
+        let _ = device.device.poll(wgpu::PollType::Poll);
+    }
     for target in targets {
         let Some(rb) = readbacks.get_mut(target.readback_key) else {
             continue;
         };
-        rb.advance(device);
+        rb.advance_polled();
         let replaced = rb.take_replaced();
         if replaced > 0 {
             crate::replay::engine().note_replaced(target.angle_id, replaced);
@@ -1262,10 +1267,9 @@ fn emit_replay(
         // Every frame that finished goes to the recorder, in order. Taking one
         // per tick made the recording follow the readback latency instead of the
         // render rate, which lost frames even when nothing was overloaded.
-        let stride = match target.layout {
-            eiviz_pro_api::PixelLayout::Bgra => (target.width.max(1) * 4) as usize,
-            eiviz_pro_api::PixelLayout::Uyvy => (target.width.max(1) * 2) as usize,
-        };
+        // The readback hands over its mapped rows as they are, so the stride is the padded
+        // one its buffer was created with.
+        let stride = rb.stride();
         while let Some((data, pts, captured)) = rb.take_latest() {
             // Stamp the frame the picture actually came from. Labelling it with
             // the frame that happened to be rendering when the readback completed

@@ -175,8 +175,19 @@ impl UnitReadback {
         self.slots[index].pending = true;
     }
 
+    /// Polls the device for completed readbacks.
+    ///
+    /// The poll is the expensive part and it belongs to the device, not to one store, so the
+    /// caller runs [`poll_device`] once and then [`Self::advance_polled`] for each store. Doing
+    /// the poll inside every store meant one device poll per angle per frame; with eight
+    /// replay angles that was sixteen milliseconds of a sixteen-millisecond frame.
     pub fn advance(&mut self, device: &GpuDevice) {
         let _ = device.device.poll(wgpu::PollType::Poll);
+        self.advance_polled();
+    }
+
+    /// The per-store work, for a caller that has already polled the device.
+    pub fn advance_polled(&mut self) {
         for i in 0..self.slots.len() {
             self.inspected = self.inspected.saturating_add(1);
             if self.slots[i].pending {
@@ -198,19 +209,15 @@ impl UnitReadback {
                 let slice = self.slots[i].buffer.slice(..);
                 if let Ok(view) = slice.get_mapped_range() {
                     let copy_started = std::time::Instant::now();
-                    let row = self.width as usize * self.bytes_per_pixel as usize;
-                    let mut packed = vec![0u8; row * self.height as usize];
-                    for y in 0..self.height as usize {
-                        let src = y * self.stride as usize;
-                        let dst = y * row;
-                        if let Some(line) = view.get(src..src + row) {
-                            packed[dst..dst + row].copy_from_slice(line);
-                        }
-                    }
-                    if self.bytes_per_pixel >= 4 {
-                        for pixel in packed.chunks_exact_mut(4) {
-                            pixel.swap(0, 2);
-                        }
+                    // One copy of the mapped rows, stride and all. The repack to tightly
+                    // packed rows and the channel order the recorder wants are both handled
+                    // by the encoder, which reads the stride it is given; doing them here put
+                    // a full-frame pass per angle on the render thread, and with eight replay
+                    // angles that was 13 ms of a 16.67 ms frame.
+                    let bytes = self.stride as usize * self.height as usize;
+                    let mut packed = vec![0u8; bytes];
+                    if let Some(src) = view.get(..bytes) {
+                        packed.copy_from_slice(src);
                     }
                     drop(view);
                     crate::replay::profile::readback(copy_started.elapsed());
@@ -260,6 +267,11 @@ impl UnitReadback {
     }
 
     /// Oldest finished frame, so a consumer that writes them out keeps order.
+    /// Row stride of the mapped rows this store hands over.
+    pub fn stride(&self) -> usize {
+        self.stride as usize
+    }
+
     pub fn take_latest(&mut self) -> Option<(Vec<u8>, i64, u64)> {
         let frame = self.mapped.pop_front();
         if frame.is_some() {
