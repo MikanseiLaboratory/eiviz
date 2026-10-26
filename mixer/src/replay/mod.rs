@@ -2500,18 +2500,6 @@ fn apply_pro_stats(inner: &mut Inner, snapshot: &ReplayStats) {
         // on disk, and a store that has flushed more than this engine saw is ahead.
         let ours = inner.angle_written.get(&angle_id).copied().unwrap_or(0);
         let mut stats = angle_stats(reported, &inner, scene_gpu_id);
-        if angle_id == 1 && stats.segments > 0 && stats.segments % 3 == 0 {
-            crate::diag::info(&format!(
-                "replay angle {angle_id}: module={} engine={ours} segments={}",
-                stats.frames_written, stats.segments
-            ));
-        }
-        if stats.frames_written == 0 && ours > 0 {
-            crate::diag::warn_throttled(
-                "replay-ours-only",
-                &format!("replay writes: angle {angle_id} module=0 engine={ours}"),
-            );
-        }
         stats.frames_written = stats.frames_written.max(ours);
         angles.push(stats);
     }
