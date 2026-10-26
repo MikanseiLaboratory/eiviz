@@ -2588,7 +2588,7 @@ impl eiviz_replay::FrameSink for StoreSink<'_> {
         &mut self,
         angle_id: u32,
         frame: u64,
-        picture: eiviz_replay::Picture<'_>,
+        picture: eiviz_replay::Picture,
     ) -> Result<(), String> {
         let layout = match picture.layout {
             1 => PixelLayout::Bgra,
@@ -2602,7 +2602,10 @@ impl eiviz_replay::FrameSink for StoreSink<'_> {
             pts_100ns: self.pts_100ns,
             fps_num: self.fps_num,
             fps_den: self.fps_den,
-            data: std::sync::Arc::new(picture.pixels.to_vec()),
+            // The readback already built this buffer. Copying it again here put a
+            // full picture per angle through the single record thread: 33 MB a frame
+            // at eight 1080p angles.
+            data: std::sync::Arc::new(picture.pixels),
         };
         self.store
             .write_video(angle_id, frame, &view)
@@ -2666,7 +2669,7 @@ fn record_loop(inbox: Arc<Inbox>, stop_record: Arc<AtomicBool>, stop_workers: Ar
                         PixelLayout::Uyvy => 0,
                         PixelLayout::Bgra => 1,
                     },
-                    pixels: &frame.data,
+                    pixels: frame.data,
                     pts_100ns: frame.pts,
                     fps_num,
                     fps_den,

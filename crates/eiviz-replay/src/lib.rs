@@ -6,13 +6,17 @@
 pub mod channel;
 
 /// One picture crossing the mixer boundary.
-pub struct Picture<'a> {
+///
+/// The pixels are owned. The readback hands the recorder a buffer it has already allocated,
+/// and borrowing it only forced the sink to copy the whole picture a second time on its way
+/// into the encoder queue: at eight 1080p angles that was 33 MB a frame through one thread.
+pub struct Picture {
     pub width: u32,
     pub height: u32,
     pub stride: usize,
     /// 0 is packed UYVY. 1 is BGRA. The mixer maps its own layout onto these.
     pub layout: u32,
-    pub pixels: &'a [u8],
+    pub pixels: Vec<u8>,
     pub pts_100ns: i64,
     pub fps_num: u32,
     pub fps_den: u32,
@@ -20,12 +24,7 @@ pub struct Picture<'a> {
 
 /// The recorder pushes a picture in. The implementor stores it.
 pub trait FrameSink {
-    fn write_picture(
-        &mut self,
-        angle_id: u32,
-        frame: u64,
-        picture: Picture<'_>,
-    ) -> Result<(), String>;
+    fn write_picture(&mut self, angle_id: u32, frame: u64, picture: Picture) -> Result<(), String>;
 }
 
 /// Hands a picture to a sink. The mixer calls this instead of the store directly, so the
@@ -34,7 +33,7 @@ pub fn deliver_picture<S: FrameSink + ?Sized>(
     sink: &mut S,
     angle_id: u32,
     frame: u64,
-    picture: Picture<'_>,
+    picture: Picture,
 ) -> Result<(), String> {
     sink.write_picture(angle_id, frame, picture)
 }
@@ -51,7 +50,7 @@ mod tests {
             &mut self,
             _angle_id: u32,
             _frame: u64,
-            picture: Picture<'_>,
+            picture: Picture,
         ) -> Result<(), String> {
             self.written = picture.pixels.to_vec();
             Ok(())

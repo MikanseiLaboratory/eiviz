@@ -438,12 +438,10 @@ fn pool() -> &'static mpsc::Sender<CopyJob> {
                         let slice = job.buffer.slice(..);
                         let mut packed = None;
                         if let Ok(view) = slice.get_mapped_range() {
-                            let mut copy = vec![0u8; bytes];
                             if let Some(src) = view.get(..bytes) {
-                                copy.copy_from_slice(src);
+                                packed = Some(copy_out(src));
                             }
                             drop(view);
-                            packed = Some(copy);
                         }
                         job.buffer.unmap();
                         job.busy.store(false, Ordering::Release);
@@ -468,4 +466,59 @@ fn pool() -> &'static mpsc::Sender<CopyJob> {
         }
         tx
     })
+}
+
+/// Copies the mapped range out into a fresh buffer.
+///
+/// The destination is allocated without its zero-fill: `vec![0u8; n]` writes every byte of
+/// the buffer and then the copy writes them all again, which is a whole extra pass over 4.1 MB
+/// per angle per frame. Nothing reads the zeros — every byte is replaced — so the buffer is
+/// handed out uninitialised and filled by `copy_nonoverlapping` before anyone can look at it.
+///
+/// # Safety
+/// The buffer is never read before the copy fills it, and the two ranges cannot overlap
+/// because one is a fresh allocation.
+fn copy_out(src: &[u8]) -> Vec<u8> {
+    let mut buffer = recycle(src.len());
+    unsafe {
+        std::ptr::copy_nonoverlapping(src.as_ptr(), buffer.as_mut_ptr(), src.len());
+        buffer.set_len(src.len());
+    }
+    buffer
+}
+
+/// Buffers waiting to be filled again, keyed by size.
+///
+/// A frame lives only until the encoder has read it, and at most a few are in flight, so a
+/// short list covers the steady state and the allocator stops being touched at all.
+fn spare() -> &'static std::sync::Mutex<Vec<Vec<u8>>> {
+    use std::sync::OnceLock;
+    static SPARE: OnceLock<std::sync::Mutex<Vec<Vec<u8>>>> = OnceLock::new();
+    SPARE.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+/// A buffer of `len` bytes with its length set to zero, ready to be written into.
+fn recycle(len: usize) -> Vec<u8> {
+    let mut pool = spare().lock().unwrap_or_else(|e| e.into_inner());
+    while let Some(buffer) = pool.pop() {
+        if buffer.capacity() >= len {
+            let mut buffer = buffer;
+            buffer.clear();
+            return buffer;
+        }
+    }
+    drop(pool);
+    Vec::with_capacity(len)
+}
+
+/// Hands a finished buffer back for reuse. Called by the readback once the picture has been
+/// copied out of it by the encoder.
+pub fn release(buffer: Vec<u8>) {
+    let mut pool = spare().lock().unwrap_or_else(|e| e.into_inner());
+    // A handful is enough; keeping more only pins memory.
+    if pool.len() < 32 {
+        let mut buffer = buffer;
+        buffer.clear();
+        pool.push(buffer);
+    }
 }
