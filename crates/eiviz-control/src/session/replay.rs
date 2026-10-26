@@ -508,6 +508,15 @@ pub struct ReplayBufferingDto {
     pub overflow_policy: ReplayOverflowPolicy,
     #[serde(default = "reserve_default")]
     pub reserve_mb: u32,
+    /// Textures each angle keeps for encoding. More lets more frames be in flight per angle;
+    /// a ring too shallow runs dry and the picture is dropped before the encoder sees it.
+    /// Zero uses the mixer's default for the angle count.
+    #[serde(default)]
+    pub encoder_ring_frames: u32,
+    /// How much VRAM the encoder rings may use, in megabytes. Zero uses the default.
+    /// A machine with a large card can raise this and record more angles.
+    #[serde(default)]
+    pub encoder_ring_budget_mb: u32,
 }
 
 fn encode_queue_default() -> u32 {
@@ -527,6 +536,8 @@ impl Default for ReplayBufferingDto {
             write_buffer_mb: 512,
             overflow_policy: ReplayOverflowPolicy::DropFrames,
             reserve_mb: 2048,
+            encoder_ring_frames: 0,
+            encoder_ring_budget_mb: 0,
         }
     }
 }

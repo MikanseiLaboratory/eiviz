@@ -158,6 +158,10 @@ pub struct ReplayEstimateQuery {
 pub struct ReplayAngleTarget {
     pub angle_id: u32,
     pub storage_index: u32,
+    /// True when this angle's packets arrive already encoded (`write_encoded`), so the store
+    /// must not build a CPU codec for it. An unused codec still costs a thread and its state,
+    /// and a recording of many angles ends up carrying one per angle doing nothing.
+    pub gpu_encoded: bool,
 }
 
 #[derive(Clone, Debug)]

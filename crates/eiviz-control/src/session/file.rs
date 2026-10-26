@@ -1494,6 +1494,8 @@ fn replay_to_pb(replay: &crate::session::replay::ReplayDto) -> pb::Replay {
                 ReplayOverflowPolicy::DropFrames => pb::ReplayOverflow::Drop as i32,
             },
             reserve_mb: replay.buffering.reserve_mb,
+            encoder_ring_frames: replay.buffering.encoder_ring_frames,
+            encoder_ring_budget_mb: replay.buffering.encoder_ring_budget_mb,
         }),
         warnings: Some(pb::ReplayWarnings {
             remaining_warn_secs: Some(replay.warnings.remaining_warn_secs),
@@ -1664,6 +1666,8 @@ fn replay_from_pb(replay: pb::Replay) -> Result<crate::session::replay::ReplayDt
                 _ => ReplayOverflowPolicy::DropFrames,
             },
             reserve_mb: buffering.reserve_mb,
+            encoder_ring_frames: buffering.encoder_ring_frames,
+            encoder_ring_budget_mb: buffering.encoder_ring_budget_mb,
         },
         // A threshold that is absent takes the document's default; one that is
         // present is kept as written, including zero.
@@ -2087,6 +2091,8 @@ mod tests {
                 write_buffer_mb: 256,
                 overflow_policy: ReplayOverflowPolicy::StopRecording,
                 reserve_mb: 1024,
+                encoder_ring_frames: 0,
+                encoder_ring_budget_mb: 0,
             },
             warnings: ReplayWarningsDto {
                 remaining_warn_secs: 90,

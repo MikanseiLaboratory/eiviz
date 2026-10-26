@@ -678,18 +678,27 @@ impl ReplayEngine {
         // Encoding needs a ring of full-size textures per angle. Refusing here, with the
         // numbers, beats allocating until the driver fails somewhere unrelated.
         {
+            // The operator's ring depth has to reach the place that allocates it, which is
+            // separate from this check, so it is recorded before the ring is measured.
+            crate::replay::gpu_encode::set_ring_depth(dto.buffering.encoder_ring_frames);
             let ring = crate::replay::gpu_encode::ring_bytes(&dto);
-            // Three gigabytes of ring: far more than any supported angle count needs at
-            // 1080p, so hitting this means the configuration is out of scope, not unlucky.
-            const BUDGET: u64 = 3 * 1024 * 1024 * 1024;
-            if ring > BUDGET {
+            // The ceiling is the operator's, because how much VRAM the rings may use is a fact
+            // about the machine. Three gigabytes is the default: more than any angle count
+            // needs at 1080p, so reaching it means the configuration is out of scope.
+            const DEFAULT_BUDGET: u64 = 3 * 1024 * 1024 * 1024;
+            let budget: u64 = if dto.buffering.encoder_ring_budget_mb == 0 {
+                DEFAULT_BUDGET
+            } else {
+                u64::from(dto.buffering.encoder_ring_budget_mb) * 1024 * 1024
+            };
+            if ring > budget {
                 return Err(ReplayFailure::invalid(format!(
                     "{} angles need {:.1} GB of encoder ring at {}x{}, which is above the {:.1} GB this recorder reserves; lower the angle count or the recording size",
                     dto.angles.len().max(1),
                     ring as f64 / (1024.0 * 1024.0 * 1024.0),
                     dto.format.width,
                     dto.format.height,
-                    BUDGET as f64 / (1024.0 * 1024.0 * 1024.0),
+                    budget as f64 / (1024.0 * 1024.0 * 1024.0),
                 )));
             }
         }
@@ -1093,6 +1102,9 @@ impl ReplayEngine {
                 targets.push(eiviz_pro_api::ReplayAngleTarget {
                     angle_id: angle.id,
                     storage_index: index as u32,
+                    // A GPU angle hands the store finished packets, so it must not build a
+                    // CPU codec for one.
+                    gpu_encoded: angle.encoder == eiviz_control::session::replay::AngleEncoder::Gpu,
                 });
             }
             targets

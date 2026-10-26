@@ -543,6 +543,10 @@ message ReplayBuffering {
   uint32 write_buffer_mb = 2;
   ReplayOverflow overflow_policy = 3;
   uint32 reserve_mb = 4;
+  // Textures each angle keeps for encoding. 0 uses the mixer default for the angle count.
+  uint32 encoder_ring_frames = 5;
+  // VRAM the encoder rings may use, in megabytes. 0 uses the default.
+  uint32 encoder_ring_budget_mb = 6;
 }
 
 message ReplayWarnings {

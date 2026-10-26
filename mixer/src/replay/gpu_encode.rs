@@ -36,6 +36,19 @@ use vmx::{Codec, ColorSpace, Config, Profile};
 /// angle is 8 MB each, so sixteen angles cost 266 MB, well inside the recorder's budget. The
 /// ring only starts to shrink where the total would actually grow past that — above sixteen
 /// angles — and never below three, so several frames can still be in flight per angle.
+/// Records the ring depth the operator chose, so `prepare` builds the ring that deep.
+pub fn set_ring_depth(asked: u32) {
+    ASKED_RING.store(asked, Ordering::Relaxed);
+}
+
+/// The ring depth an operator asked for, or the default for this angle count.
+pub fn ring_for_with(angles: usize, asked: u32) -> usize {
+    if asked > 0 {
+        return asked as usize;
+    }
+    ring_for(angles)
+}
+
 fn ring_for(angles: usize) -> usize {
     match angles {
         0..=16 => 4,
@@ -84,6 +97,10 @@ struct Angle {
 
 /// One encoder thread's work list.
 type Pending = Arc<(Mutex<VecDeque<Job>>, Condvar)>;
+
+/// The ring depth the operator asked for; zero means "the default for this angle count".
+/// Set by the engine when a configuration is applied, read where the ring is built.
+static ASKED_RING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 static ANGLES: Mutex<Option<HashMap<u32, Angle>>> = Mutex::new(None);
 /// The encoder lanes. Built once and then extended as angles are added, because the pool has
