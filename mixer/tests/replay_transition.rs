@@ -34,7 +34,11 @@ const CHANNEL_SOURCE: u64 = 0x0008_0001;
 
 /// Frames the dissolve lasts. Thirty frames is half a second of picture, which is
 /// long enough to be sampled while it runs on a machine that can sample it.
-const DISSOLVE_FRAMES: u32 = 30;
+/// Frames the dissolve runs for. Long enough that a slow adapter, whose snapshots cost tens of
+/// milliseconds each, still produces several distinct pictures inside the window: at 60 fps a
+/// 30-frame dissolve lasts half a second, which a shared runner can miss entirely and then
+/// report as "the transition never reached the picture".
+const DISSOLVE_FRAMES: u32 = 90;
 
 fn linear(frames: u32) -> EivizMotion {
     EivizMotion {
