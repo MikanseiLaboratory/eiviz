@@ -72,7 +72,7 @@ mod tests {
                     height: 1,
                     stride: 4,
                     layout: 0,
-                    pixels: &pixels,
+                    pixels: pixels.to_vec(),
                     pts_100ns: 0,
                     fps_num: 60,
                     fps_den: 1,
