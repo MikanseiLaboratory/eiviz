@@ -421,6 +421,12 @@ struct CopyJob {
 unsafe impl Send for CopyJob {}
 
 /// Slots handed to the pool and not yet returned.
+/// Angles up to which the readback copy runs on the pool rather than on the render thread.
+///
+/// Above this the pool's calls back into the engine cost the deck more than the copy costs
+/// the render thread: see the note in `emit_replay`.
+pub const OFFLOAD_MAX_ANGLES: usize = 8;
+
 /// Jobs the pool may hold at once. Beyond this the copy is made on the render thread, so the
 /// render thread never depends on the pool catching up.
 const MAX_IN_FLIGHT: usize = 24;

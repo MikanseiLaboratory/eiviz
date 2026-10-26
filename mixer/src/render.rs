@@ -1261,10 +1261,18 @@ fn emit_replay(
         let Some(rb) = readbacks.get_mut(target.readback_key) else {
             continue;
         };
-        rb.offload_to(
-            target.angle_id,
-            u32::from(!matches!(target.layout, eiviz_pro_api::PixelLayout::Uyvy)),
-        );
+        // The copy pool pays for itself at four and eight angles, where it was measured.
+        // Beyond that it costs the deck its responsiveness: the pool calls back into the
+        // engine for every angle every frame, and those calls contend with the UI thread's
+        // status poll for the same mutex. Measured at sixteen angles, the deck took between
+        // 128 ms and 3.4 s to answer a message with the pool running and under 20 ms
+        // without it, so above eight the render thread copies as it used to.
+        if targets.len() <= crate::readback::OFFLOAD_MAX_ANGLES {
+            rb.offload_to(
+                target.angle_id,
+                u32::from(!matches!(target.layout, eiviz_pro_api::PixelLayout::Uyvy)),
+            );
+        }
         rb.advance_polled();
         let replaced = rb.take_replaced();
         if replaced > 0 {
