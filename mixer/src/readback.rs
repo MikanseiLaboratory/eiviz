@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 
 use std::collections::VecDeque;
@@ -10,13 +11,18 @@ use crate::device::GpuDevice;
 pub const READBACK_SLOTS: usize = 3;
 /// Slots a recording readback keeps. A map takes a few frames to come back, so
 /// the recorder needs a deeper ring than a preview: with only three, the fourth
-/// frame of latency is a lost one.
-pub const READBACK_RECORD_SLOTS: usize = 8;
+/// frame of latency is a lost one. The copy runs on the pool now, so a slot is also held
+/// while that copy is made rather than only until it is mapped; eight left the ring dry at
+/// eight angles and lost frames to it.
+pub const READBACK_RECORD_SLOTS: usize = 16;
 
 struct Slot {
     buffer: wgpu::Buffer,
     pending: bool,
     waiting: bool,
+    /// Set while the copy pool owns this slot. The pool clears it when it has finished with
+    /// the buffer, so the ring learns slot by slot rather than guessing from a count.
+    offloaded: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ready: Option<Receiver<Result<(), wgpu::BufferAsyncError>>>,
     pts: i64,
     /// Render frame the copy came from. The picture must be labelled with the
@@ -49,6 +55,13 @@ pub struct UnitReadback {
     mapped: VecDeque<(Vec<u8>, i64, u64)>,
     /// Frames that finished and were dropped because the queue was full.
     replaced: u64,
+    /// Copy on the pool instead of here. Set for the stores a recording reads, where the
+    /// copy is the difference between a 60 fps render loop and a 48 fps one.
+    offload: bool,
+    /// Angle the finished pictures belong to, for the offloaded path.
+    angle_id: u32,
+    /// 0 is UYVY, anything else is BGRA.
+    layout_code: u32,
 }
 
 impl UnitReadback {
@@ -73,6 +86,7 @@ impl UnitReadback {
                 }),
                 pending: false,
                 waiting: false,
+                offloaded: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 ready: None,
                 pts: 0,
                 frame: 0,
@@ -94,6 +108,9 @@ impl UnitReadback {
             callbacks_waiting: 0,
             taken: 0,
             replaced: 0,
+            offload: false,
+            angle_id: 0,
+            layout_code: 0,
         }
     }
 
@@ -205,6 +222,33 @@ impl UnitReadback {
                 continue;
             };
             self.callbacks_ready = self.callbacks_ready.saturating_add(1);
+            if result.is_ok() && self.offload {
+                // The map has completed; the copy has not been made. Reading a mapped buffer
+                // is about three times slower than reading RAM, and a recording does it once
+                // per angle per frame, so the pool takes it from here.
+                let busy = self.slots[i].offloaded.clone();
+                busy.store(true, Ordering::Release);
+                IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+                let job = CopyJob {
+                    buffer: self.slots[i].buffer.clone(),
+                    stride: self.stride as usize,
+                    height: self.height as usize,
+                    pts: self.slots[i].pts,
+                    frame: self.slots[i].frame,
+                    angle_id: self.angle_id,
+                    layout: self.layout_code,
+                    busy,
+                    store: std::ptr::null(),
+                };
+                if pool().send(job).is_err() {
+                    IN_FLIGHT.fetch_sub(1, Ordering::Relaxed);
+                }
+                self.mapped_frames = self.mapped_frames.saturating_add(1);
+                self.slots[i].pending = false;
+                self.slots[i].waiting = false;
+                self.slots[i].ready = None;
+                continue;
+            }
             if result.is_ok() {
                 let slice = self.slots[i].buffer.slice(..);
                 if let Ok(view) = slice.get_mapped_range() {
@@ -242,7 +286,10 @@ impl UnitReadback {
         // finish before starting the next one capped the outputs at one frame per
         // map latency, which cost recordings most of their frames.
         for i in 0..self.slots.len() {
-            if !self.slots[i].pending || self.slots[i].waiting {
+            if !self.slots[i].pending
+                || self.slots[i].waiting
+                || self.slots[i].offloaded.load(Ordering::Acquire)
+            {
                 continue;
             }
             // Leave the slot being written this frame alone: it is the copy that
@@ -258,6 +305,14 @@ impl UnitReadback {
             self.slots[i].waiting = true;
             self.slots[i].ready = Some(rx);
         }
+    }
+
+    /// Copies this store's frames on the pool instead of on the render thread. Set for the
+    /// stores a recording reads; preview readbacks are only a frame deep and do not need it.
+    pub fn offload_to(&mut self, angle_id: u32, layout_code: u32) {
+        self.offload = true;
+        self.angle_id = angle_id;
+        self.layout_code = layout_code;
     }
 
     pub fn latest(&self) -> Option<(&[u8], i64)> {
@@ -325,4 +380,92 @@ impl ReadbackStore {
     pub fn get_mut(&mut self, unit_id: u64) -> Option<&mut UnitReadback> {
         self.units.get_mut(&unit_id)
     }
+}
+
+/// One finished readback on its way to the copy pool.
+struct CopyJob {
+    buffer: wgpu::Buffer,
+    stride: usize,
+    height: usize,
+    pts: i64,
+    frame: u64,
+    angle_id: u32,
+    /// 0 is UYVY, anything else is BGRA.
+    layout: u32,
+    /// Cleared by the pool when the slot may be reused.
+    busy: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The store this slot belongs to, so the pool can clear `offloaded`.
+    store: *const (),
+}
+
+// SAFETY: every field is `Send`. The raw store pointer is only used to hand a counter back,
+// and is never dereferenced by the pool.
+unsafe impl Send for CopyJob {}
+
+/// Slots handed to the pool and not yet returned.
+static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+/// Slots the pool is working on, so callers can tell a busy pool from an idle one.
+pub fn in_flight() -> usize {
+    IN_FLIGHT.load(Ordering::Relaxed)
+}
+
+fn pool() -> &'static mpsc::Sender<CopyJob> {
+    use std::sync::OnceLock;
+    static POOL: OnceLock<mpsc::Sender<CopyJob>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<CopyJob>();
+        let lanes = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(2)
+            .clamp(2, 4);
+        let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
+        for lane in 0..lanes {
+            let rx = std::sync::Arc::clone(&rx);
+            let _ = std::thread::Builder::new()
+                .name(format!("eiviz-readback-{lane}"))
+                .spawn(move || {
+                    loop {
+                        let job = {
+                            let guard = rx.lock().unwrap_or_else(|e| e.into_inner());
+                            guard.recv()
+                        };
+                        let Ok(job) = job else { return };
+                        // The render thread already started the map and saw it complete, so the
+                        // range is readable now; mapping again here would fail, because a buffer
+                        // cannot be mapped twice. The pool only does the copy and the release.
+                        let bytes = job.stride.saturating_mul(job.height);
+                        let slice = job.buffer.slice(..);
+                        let mut packed = None;
+                        if let Ok(view) = slice.get_mapped_range() {
+                            let mut copy = vec![0u8; bytes];
+                            if let Some(src) = view.get(..bytes) {
+                                copy.copy_from_slice(src);
+                            }
+                            drop(view);
+                            packed = Some(copy);
+                        }
+                        job.buffer.unmap();
+                        job.busy.store(false, Ordering::Release);
+                        IN_FLIGHT.fetch_sub(1, Ordering::Relaxed);
+                        let Some(packed) = packed else { continue };
+                        let layout = if job.layout >= 1 {
+                            eiviz_pro_api::PixelLayout::Bgra
+                        } else {
+                            eiviz_pro_api::PixelLayout::Uyvy
+                        };
+                        crate::replay::engine().offer_frame(
+                            job.angle_id,
+                            job.frame,
+                            job.pts,
+                            packed,
+                            job.stride,
+                            layout,
+                        );
+                        let _ = job.store;
+                    }
+                });
+        }
+        tx
+    })
 }

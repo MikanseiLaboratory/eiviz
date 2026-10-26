@@ -204,7 +204,11 @@ impl Inbox {
             // Two frames is the old behaviour, used until a session configures a
             // real queue length.
             cursor: Mutex::new(0),
-            cap: AtomicUsize::new(2),
+            // Frames per angle that may wait between the readback and the recorder. Two was
+            // enough while the copy and the hand-off happened on the render thread, because
+            // nothing else could be in flight; with the copy on a pool several frames are
+            // ready at once and a shallow inbox dropped them before the recorder saw them.
+            cap: AtomicUsize::new(8),
             wake: Condvar::new(),
         }
     }

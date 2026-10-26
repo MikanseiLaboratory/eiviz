@@ -1259,6 +1259,10 @@ fn emit_replay(
         let Some(rb) = readbacks.get_mut(target.readback_key) else {
             continue;
         };
+        rb.offload_to(
+            target.angle_id,
+            u32::from(!matches!(target.layout, eiviz_pro_api::PixelLayout::Uyvy)),
+        );
         rb.advance_polled();
         let replaced = rb.take_replaced();
         if replaced > 0 {
