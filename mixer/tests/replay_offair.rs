@@ -54,7 +54,7 @@ fn an_angle_that_is_not_on_air_still_records() {
     let path = dir.display().to_string().replace('\\', "/");
     let config = CString::new(format!(
         r#"{{"enabled":true,"storage":[{{"path":"{path}","angleIds":[1]}}],
-"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent"}}],
+"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent","encoder":"Cpu"}}],
 "activeAngleId":1,
 "channels":[{{"index":0,"playlistId":null,"inputId":0}}],
 "playlists":[],"events":[],

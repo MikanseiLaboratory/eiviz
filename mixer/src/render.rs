@@ -801,10 +801,31 @@ pub(crate) fn render_loop(
                         target.width,
                         target.height,
                         target.profile,
+                        picture.format(),
                         &device.device,
                         &device.queue,
                     ) {
                         Some(ring) => {
+                            // The copy below only works between identical formats. An OMT or
+                            // NDI input arrives as Bgra while the ring is Rgba, and issuing
+                            // that copy left the lane blocked inside a submission that never
+                            // completed: the render loop shares the device and stopped at
+                            // 0 fps, so the whole recording froze rather than one angle.
+                            if picture.format() != ring.format() {
+                                crate::diag::warn_throttled(
+                                    "replay-gpu-format",
+                                    &format!(
+                                        "replay record: angle {} cannot be GPU encoded: \
+                                         picture is {:?} and the encoder ring is {:?}",
+                                        target.angle_id,
+                                        picture.format(),
+                                        ring.format()
+                                    ),
+                                );
+                                crate::replay::engine().note_encoder_unavailable();
+                                crate::replay::engine().note_encode_dropped(target.angle_id);
+                                continue;
+                            }
                             encoder.copy_texture_to_texture(
                                 picture.as_image_copy(),
                                 ring.as_image_copy(),

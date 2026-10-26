@@ -71,7 +71,7 @@ fn recording_keeps_the_frames_the_renderer_produced() {
     let path = dir.display().to_string().replace('\\', "/");
     let config = CString::new(format!(
         r#"{{"enabled":true,"storage":[{{"path":"{path}","angleIds":[1]}}],
-"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent"}}],
+"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent","encoder":"Cpu"}}],
 "channels":[{{"index":0,"playlistId":null,"inputId":0}}],
 "playlists":[],"events":[],
 "format":{{"width":320,"height":180,"fpsNum":60000,"fpsDen":1001,"profile":"Sq","segmentFrames":120}},

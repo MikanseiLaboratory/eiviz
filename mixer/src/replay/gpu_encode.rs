@@ -93,6 +93,8 @@ struct Angle {
     profile: u32,
     /// Frames this angle lost because a list was full.
     dropped: Arc<AtomicU32>,
+    /// The picture format this ring holds, so the copy into it is always allowed.
+    format: wgpu::TextureFormat,
 }
 
 /// One encoder thread's work list.
@@ -112,7 +114,12 @@ fn profile_of(code: u32) -> Profile {
     crate::replay::vmx_profile(code)
 }
 
-fn make_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
+fn make_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("eiviz-replay-encode-ring"),
         size: wgpu::Extent3d {
@@ -123,7 +130,7 @@ fn make_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
+        format,
         usage: wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::COPY_DST
             | wgpu::TextureUsages::COPY_SRC,
@@ -148,6 +155,7 @@ pub fn prepare(
     width: u32,
     height: u32,
     profile: u32,
+    format: wgpu::TextureFormat,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
 ) -> Option<wgpu::Texture> {
@@ -166,7 +174,10 @@ pub fn prepare(
     let angles = guard.get_or_insert_with(HashMap::new);
     // A format or profile change invalidates the ring; the codecs notice and rebuild.
     let stale = angles.get(&angle_id).is_some_and(|angle| {
-        angle.width != width || angle.height != height || angle.profile != profile
+        angle.width != width
+            || angle.height != height
+            || angle.profile != profile
+            || angle.format != format
     });
     if stale {
         angles.remove(&angle_id);
@@ -175,11 +186,12 @@ pub fn prepare(
     let ring = ring_for(angles.len());
     let angle = angles.entry(angle_id).or_insert_with(|| Angle {
         free: (0..ring)
-            .map(|_| make_texture(device, width, height))
+            .map(|_| make_texture(device, width, height, format))
             .collect(),
         width,
         height,
         profile,
+        format,
         dropped: Arc::new(AtomicU32::new(0)),
     });
     // Reuse a returned texture. Allocating a new one when the ring is busy made
