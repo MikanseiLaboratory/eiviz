@@ -236,7 +236,11 @@ impl UnitReadback {
                 continue;
             };
             self.callbacks_ready = self.callbacks_ready.saturating_add(1);
-            if result.is_ok() && self.offload {
+            // Only hand over while the pool is keeping up. If it is behind, the copy is made
+            // here instead: the render thread must never depend on the pool making progress,
+            // or a pool that falls behind stalls the whole recorder.
+            let room = IN_FLIGHT.load(Ordering::Relaxed) < MAX_IN_FLIGHT;
+            if result.is_ok() && self.offload && room {
                 // The map has completed; the copy has not been made. Reading a mapped buffer
                 // is about three times slower than reading RAM, and a recording does it once
                 // per angle per frame, so the pool takes it from here.
@@ -417,6 +421,10 @@ struct CopyJob {
 unsafe impl Send for CopyJob {}
 
 /// Slots handed to the pool and not yet returned.
+/// Jobs the pool may hold at once. Beyond this the copy is made on the render thread, so the
+/// render thread never depends on the pool catching up.
+const MAX_IN_FLIGHT: usize = 24;
+
 static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
 /// Slots the pool is working on, so callers can tell a busy pool from an idle one.
