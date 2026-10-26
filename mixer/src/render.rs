@@ -849,6 +849,7 @@ pub(crate) fn render_loop(
                     target.layout,
                     pts,
                     frame_i,
+                    replay_targets.len(),
                 );
             }
             let replay_ms = replay_started.elapsed().as_secs_f32() * 1000.0;
@@ -1185,6 +1186,7 @@ fn push_replay_packed(
     layout: eiviz_pro_api::PixelLayout,
     pts: i64,
     frame_index: u64,
+    angles: usize,
 ) {
     let picture = if src.size().width == width && src.size().height == height {
         src.clone()
@@ -1221,7 +1223,7 @@ fn push_replay_packed(
             width,
             height,
             2,
-            crate::readback::READBACK_RECORD_SLOTS,
+            crate::readback::record_slots(angles),
         );
         if rb.matches(width, height) {
             rb.copy_from_frame(encoder, &packed, pts, frame_index);
@@ -1236,7 +1238,7 @@ fn push_replay_packed(
         width,
         height,
         4,
-        crate::readback::READBACK_RECORD_SLOTS,
+        crate::readback::record_slots(angles),
     );
     if rb.matches(width, height) {
         rb.copy_from_frame(encoder, &picture, pts, frame_index);

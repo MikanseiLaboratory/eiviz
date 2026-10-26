@@ -16,6 +16,20 @@ pub const READBACK_SLOTS: usize = 3;
 /// eight angles and lost frames to it.
 pub const READBACK_RECORD_SLOTS: usize = 16;
 
+/// Slots for a recording, given how many angles are being read back at once.
+///
+/// Each slot holds a full picture, so the ring is bounded by memory rather than by a constant:
+/// sixteen slots are right for eight 1080p angles and far too many for thirty-two, where they
+/// would pin a gigabyte of buffers. The deep ring is what keeps the recorder fed, so it only
+/// gives way when the angle count makes it expensive.
+pub fn record_slots(angles: usize) -> usize {
+    match angles {
+        0..=8 => READBACK_RECORD_SLOTS,
+        9..=16 => 10,
+        _ => 6,
+    }
+}
+
 struct Slot {
     buffer: wgpu::Buffer,
     pending: bool,
@@ -509,16 +523,4 @@ fn recycle(len: usize) -> Vec<u8> {
     }
     drop(pool);
     Vec::with_capacity(len)
-}
-
-/// Hands a finished buffer back for reuse. Called by the readback once the picture has been
-/// copied out of it by the encoder.
-pub fn release(buffer: Vec<u8>) {
-    let mut pool = spare().lock().unwrap_or_else(|e| e.into_inner());
-    // A handful is enough; keeping more only pins memory.
-    if pool.len() < 32 {
-        let mut buffer = buffer;
-        buffer.clear();
-        pool.push(buffer);
-    }
 }
