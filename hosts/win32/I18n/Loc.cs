@@ -240,7 +240,8 @@ public static class Loc
         ["replay.exportNeedMode"] = "Choose what to export first.",
         ["replay.orphanClips"] = "{0} clip(s) play an angle that is about to be removed and will be deleted. Continue?",
         ["replay.encoder"] = "Encoder",
-        ["replay.encoderHelp"] = "Gpu encodes from the scene texture without copying the frame back.",
+        ["replay.encoderHelp"] =
+            "GPU encodes from the scene texture without copying the frame back, but its encoded throughput is shared by every angle that uses it: a few angles are fine, many lose frames. The CPU encoder reads the frame back and costs cores, and scales with them.",
         ["replay.encoderGpu"] = "GPU",
         ["replay.encoderCpu"] = "CPU",
         ["replay.deckRefresh"] = "Deck refresh",
@@ -1078,7 +1079,8 @@ public static class Loc
         ["replay.exportNeedMode"] = "書き出す対象を選んでください。",
         ["replay.orphanClips"] = "削除するアングルを使っているクリップが {0} 件あります。これらのクリップも削除します。続けますか？",
         ["replay.encoder"] = "エンコーダ",
-        ["replay.encoderHelp"] = "GPUはシーンのテクスチャから直接エンコードします（読み戻しなし）。",
+        ["replay.encoderHelp"] =
+            "GPUはシーンのテクスチャから直接エンコードします（読み戻しなし）。ただしエンコードの処理能力はGPUを使う全アングルで共有されるため、アングルが多いとフレームが欠落します。CPUはフレームを読み戻す代わりにコア数で処理能力を増やせます。",
         ["replay.encoderGpu"] = "GPU",
         ["replay.encoderCpu"] = "CPU",
         ["replay.deckRefresh"] = "デッキの更新間隔",
