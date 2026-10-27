@@ -29,6 +29,13 @@ pub fn init() {
     });
 }
 
+/// True roughly once every `n` calls, for logs that must reach the file but not every frame.
+pub fn every(n: u64) -> bool {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed) % n == 0
+}
+
 pub fn info(message: &str) {
     init();
     write("INFO", message);

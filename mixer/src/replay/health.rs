@@ -144,6 +144,17 @@ pub fn step(memory: &mut HealthMemory, sample: &HealthSample, now_ms: u64) -> He
         issues |= ISSUE_FRAMES_DROPPED;
         severity = severity.max(SEVERITY_WARNING);
     }
+    // The encoder refusing frames is a different problem from the disk refusing them, and the
+    // two need different answers: one means too much camera for the machine, the other means a
+    // slow drive. Reporting only "frames dropped" left the operator to guess.
+    if sample.dropped_encode_recent > 0 {
+        issues |= ISSUE_CPU_ENCODE;
+        severity = severity.max(if sample.dropped_encode_recent >= 30 {
+            SEVERITY_CRITICAL
+        } else {
+            SEVERITY_WARNING
+        });
+    }
     if sample.stop_reason == STOP_BUFFER_FULL {
         issues |= ISSUE_STOPPED_BY_POLICY;
         severity = severity.max(SEVERITY_CRITICAL);

@@ -150,6 +150,20 @@ pub struct CopyJob {
 ///
 /// Returns a free ring texture to copy the scene into. The caller copies the picture into
 /// it and later calls [`dispatch`].
+/// Frames an angle lost because its encoder lane had no room for them.
+///
+/// This is the count the deck shows as `エンコード落ち`. It was incremented into a field nothing
+/// read, so a recording could lose most of its frames without the health line saying so.
+pub fn dropped_for(angle_id: u32) -> u64 {
+    ANGLES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .and_then(|angles| angles.get(&angle_id))
+        .map(|angle| u64::from(angle.dropped.load(Ordering::Relaxed)))
+        .unwrap_or(0)
+}
+
 pub fn prepare(
     angle_id: u32,
     width: u32,

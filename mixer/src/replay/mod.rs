@@ -344,6 +344,8 @@ struct Inner {
     recent_at: Instant,
     epoch: Instant,
     write_drop_seen: u64,
+    /// Encoder drops already reported, so the health sample can measure a rate.
+    encode_drop_seen: u64,
     width: u32,
     height: u32,
     fps_num: u32,
@@ -464,6 +466,7 @@ impl ReplayEngine {
                 recent_at: Instant::now(),
                 epoch: Instant::now(),
                 write_drop_seen: 0,
+                encode_drop_seen: 0,
                 width: 1920,
                 height: 1080,
                 fps_num: 60,
@@ -2536,7 +2539,8 @@ fn angle_stats(
                 .angle_gpu_dropped
                 .get(&angle.angle_id)
                 .copied()
-                .unwrap_or(0),
+                .unwrap_or(0)
+                .saturating_add(crate::replay::gpu_encode::dropped_for(angle.angle_id)),
         ),
         dropped_write: angle.dropped_write,
         bytes_written: angle.bytes_written,
@@ -2748,7 +2752,7 @@ fn health_loop(stop: Arc<AtomicBool>) {
         thread::sleep(Duration::from_millis(250));
         engine.refresh_stats();
         let (sample, now_ms) = {
-            let inner = engine.lock();
+            let mut inner = engine.lock();
             let ratio = inner
                 .angles
                 .iter()
@@ -2778,6 +2782,18 @@ fn health_loop(stop: Arc<AtomicBool>) {
             };
             let write_drops: u64 = inner.angles.iter().map(|angle| angle.dropped_write).sum();
             let dropped_write_recent = write_drops.saturating_sub(inner.write_drop_seen) as u32;
+            // Frames the encoders refused. Summed across angles because the health line asks
+            // whether the recording is losing picture at all, not which angle is worst: an
+            // angle whose encoder cannot keep up loses most of its frames while the others
+            // look healthy, and that is exactly the case a totals-only view has to catch.
+            let encode_drops: u64 = inner
+                .angles
+                .iter()
+                .map(|angle| angle.dropped_encode)
+                .sum::<u64>()
+                .saturating_add(inner.angle_gpu_dropped.values().copied().sum::<u64>());
+            let dropped_encode_recent = encode_drops.saturating_sub(inner.encode_drop_seen) as u32;
+            inner.encode_drop_seen = encode_drops;
             (
                 HealthSample {
                     encode_queue_ratio: ratio,
@@ -2788,7 +2804,7 @@ fn health_loop(stop: Arc<AtomicBool>) {
                         .max()
                         .unwrap_or(0) as f32,
                     frame_period_ms: period,
-                    dropped_encode_recent: inner.stats.frames_dropped_recent,
+                    dropped_encode_recent,
                     write_buffer_ratio: write_ratio,
                     write_latency_p95_ms: inner
                         .angles
