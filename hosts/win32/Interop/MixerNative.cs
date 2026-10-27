@@ -94,6 +94,10 @@ internal static partial class MixerNative
     internal const uint FormatUyvy = 0;
     internal const uint FormatBgra = 1;
     internal const uint FormatRgba = 3;
+    /// <summary>How urgent the recording's health issues are, as the mixer reports them.</summary>
+    internal const uint SeverityOk = 0;
+    internal const uint SeverityWarning = 1;
+    internal const uint SeverityCritical = 2;
     internal const uint OutOmt = 0;
     internal const uint OutNdi = 1;
     internal const uint OutDeckLink = 2;
@@ -1279,6 +1283,7 @@ internal struct MixerCapabilities
     public uint ReplayLinked;
 }
 
+/// <summary>
 [StructLayout(LayoutKind.Sequential)]
 internal struct MixerReplayAngleStats
 {

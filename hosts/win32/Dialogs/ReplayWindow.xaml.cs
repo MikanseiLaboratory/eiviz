@@ -1066,6 +1066,26 @@ public partial class ReplayWindow : Window
     {
         // The sentence itself lives in ReplayHealthText, where both hosts build the same one.
         HealthText.Text = ReplayHealthText.Line(stats, angle, hasAngle);
+        // Severity was carried by the mixer and ignored here. A recording that is losing most of
+        // its frames keeps the programme picture correct — only the file is short — so without
+        // colour the deck looks healthy while nothing usable is being written.
+        HealthText.Foreground = stats.Severity switch
+        {
+            MixerNative.SeverityCritical => (Brush)FindResource("WarnForeground"),
+            MixerNative.SeverityWarning => (Brush)FindResource("HudForeground"),
+            _ => (Brush)FindResource("DimForeground"),
+        };
+        // The timecode is what the operator watches while marking, so a critical problem is
+        // repeated there and prefixed, rather than only tinting a line beneath it.
+        var critical = stats.Severity == MixerNative.SeverityCritical;
+        var alarm = (Brush)FindResource("WarnForeground");
+        RecordTcText.Foreground = critical ? alarm : (Brush)FindResource("TextForeground");
+        RecordTcLabel.Foreground = RecordTcText.Foreground;
+        var prefix = Loc.T("replay.alarmPrefix");
+        var body = RecordTcText.Text;
+        if (body.StartsWith(prefix, StringComparison.Ordinal))
+            body = body[prefix.Length..];
+        RecordTcText.Text = critical ? prefix + body : body;
     }
 
     private void BuildChannels()
