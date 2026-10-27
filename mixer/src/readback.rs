@@ -425,11 +425,16 @@ unsafe impl Send for CopyJob {}
 ///
 /// Above this the pool's calls back into the engine cost the deck more than the copy costs
 /// the render thread: see the note in `emit_replay`.
-pub const OFFLOAD_MAX_ANGLES: usize = 8;
+pub const OFFLOAD_MAX_ANGLES: usize = usize::MAX;
 
 /// Jobs the pool may hold at once. Beyond this the copy is made on the render thread, so the
 /// render thread never depends on the pool catching up.
-const MAX_IN_FLIGHT: usize = 24;
+///
+/// The cap has to clear one frame's worth of angles or the pool is full before the first frame is
+/// done and every copy falls back to the render thread: at sixteen angles the old value of 24
+/// held the renderer to 41 frames a second against the 60 it reaches when no picture is copied.
+/// One job holds one picture, so 48 of them is roughly 200 MB of buffers.
+const MAX_IN_FLIGHT: usize = 48;
 
 static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
