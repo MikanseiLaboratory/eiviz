@@ -299,6 +299,10 @@ public static class Loc
         ["replay.driveUnset"] = "(no path)",
         ["replay.freeUnknown"] = "unknown",
         ["replay.angleNeedsDrive"] = "Angle {0} has no drive: pick one in its row.",
+        ["replay.gpuAnglesOverCapacity"] =
+            "This machine's GPU encoder keeps up with about {1} angles at this size and frame "
+            + "rate, and {0} have been given it. The extra angles will record with most of their "
+            + "frames missing. Giving some of them the CPU encoder spreads the work.",
         ["replay.angleNeedsSource"] = "Angle {0} has no source: pick a scene or an input in its row.",
         ["replay.discardEdits"] = "Close without applying the changes?",
         ["replay.settingsTitle"] = "Replay Setup",
@@ -1133,6 +1137,10 @@ public static class Loc
         ["replay.driveUnset"] = "（パス未設定）",
         ["replay.freeUnknown"] = "不明",
         ["replay.angleNeedsDrive"] = "アングル {0} にドライブがありません。行の中で選んでください。",
+        ["replay.gpuAnglesOverCapacity"] =
+            "この GPU エンコーダがこの解像度・フレームレートで処理できるのは約 {1} アングルまでですが、"
+            + "{0} アングルに指定されています。超過分のアングルは大半のフレームが欠落します。"
+            + "一部を CPU エンコーダにすると負荷を分散できます。",
         ["replay.angleNeedsSource"] = "アングル {0} にソースがありません。行の中でシーンか入力を選んでください。",
         ["replay.discardEdits"] = "変更を適用せずに閉じますか？",
         ["replay.settingsTitle"] = "リプレイ設定",

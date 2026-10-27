@@ -673,6 +673,14 @@ public partial class ReplaySettingsWindow : Window
             AngleList.SelectedItem = unassigned;
             return;
         }
+        // A recording that starts short is worse than one that never starts, so the encoder
+        // load is checked here rather than left to the health line afterwards.
+        var gpuAngles = _angles.Count(angle =>
+            string.Equals(angle.EncoderOption?.Value, "Gpu", StringComparison.OrdinalIgnoreCase));
+        if (gpuAngles > GpuAnglesPerEncoder)
+        {
+            Warn(Loc.Format("replay.gpuAnglesOverCapacity", gpuAngles, GpuAnglesPerEncoder));
+        }
         var sourceless = _angles.FirstOrDefault(angle => angle.SourceId == 0);
         if (sourceless is not null)
         {
@@ -899,6 +907,19 @@ public partial class ReplaySettingsWindow : Window
     }
 
     private void Refuse(string message) => StatusText.Text = message;
+    /// <summary>
+    /// Angles one GPU encoder can keep up with at 1080p60, from measurement on the reference
+    /// machine: the encoder sustains about 160 frames a second and an angle wants 60.
+    /// </summary>
+    private const int GpuAnglesPerEncoder = 4;
+
+    /// <summary>
+    /// Says something without refusing the change. The operator keeps their setting; this only
+    /// makes sure they know what it will cost.
+    /// </summary>
+    private void Warn(string message) => WarningText.Text = message;
+
+
 
     private static string ComboTag(ComboBox box, string fallback) =>
         (box.SelectedItem as ComboBoxItem)?.Tag as string ?? fallback;

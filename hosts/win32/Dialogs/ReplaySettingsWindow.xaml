@@ -56,6 +56,11 @@
              missed without scrolling. -->
         <TextBlock x:Name="StatusText" DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,12"
                    FontWeight="Bold" Foreground="{DynamicResource HudForeground}"/>
+        <!-- A caution about the setting itself, not about the button press: the chosen encoder
+             can record fewer angles than were asked for, and that is worth saying before the
+             recording starts rather than after it is short. -->
+        <TextBlock x:Name="WarningText" DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,12"
+                   Foreground="{DynamicResource WarnForeground}"/>
 
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel>
