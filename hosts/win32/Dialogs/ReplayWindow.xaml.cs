@@ -2457,52 +2457,63 @@ public partial class ReplayWindow : Window
             });
             return;
         }
-        var active = ReplayModel.ActiveAngle(_replay);
-        foreach (var angle in ReplayModel.Angles(_replay))
+        var angles = ReplayModel.Angles(_replay);
+        // One scene holds every angle and one monitor watches it. A swapchain per tile cost a
+        // present per tile per frame and exhausted Direct3D's surfaces at sixteen; the grid is
+        // cheap to compose and the drawing for it already exists.
+        ReplayMultiview.Apply(
+            angles.Select(angle => angle.LiveSourceId).ToArray(),
+            angles.Select(angle => angle.Label).ToArray());
+        var grid = new SwapchainHost
         {
-            var selected = angle.Id == active;
-            // Every tile is a live monitor on the angle's own picture. A still would take away
-            // what the panel is for: judging a cut needs a moving picture, and the still was
-            // whatever the store happened to hold when the deck was built.
-            var surface = new SwapchainHost
-            {
-                Width = AngleTileWidth,
-                Height = AngleTileHeight,
-                Margin = new Thickness(4),
-                // A tile is a thumbnail, and there are as many of them as there are angles. At
-                // full rate each one costs a swapchain present every frame; presenting them at a
-                // third of the rate keeps a cut judgeable and leaves the frame to the renderer.
-                PresentInterval = AngleTilePresentInterval,
-            };
-            var monitorId = _session.NextMonitorId++;
-            surface.Loaded += (_, _) => surface.RetargetMonitor(monitorId, angle.LiveSourceId);
-            FrameworkElement picture = surface;
-            var label = new TextBlock
-            {
-                Text = angle.Label,
-                Margin = new Thickness(6, 0, 6, 4),
-                FontWeight = selected ? FontWeights.Bold : FontWeights.Normal
-            };
-            var tile = new Border
-            {
-                BorderThickness = new Thickness(selected ? 3 : 1),
-                BorderBrush = selected ? Brushes.LimeGreen : (Brush)FindResource("ButtonBorder"),
-                Margin = new Thickness(2),
-                Cursor = Cursors.Hand,
-                Tag = angle.Id,
-                Child = new StackPanel { Children = { picture, label } }
-            };
-            tile.MouseLeftButtonUp += (clickSender, _) =>
-            {
-                if (clickSender is Border { Tag: uint id })
-                    SelectAngle(id);
-            };
-            AutomationProperties.SetAutomationId(tile, $"AngleTile{angle.Id}");
-            AutomationProperties.SetName(tile, angle.Label);
-            AngleGridPanel.Children.Add(tile);
-            // Tracked so `ReleaseNative` can free it on the next rebuild or on close.
-            _angleHosts.Add(surface);
-        }
+            // A size up front, so the first layout has something to attach with: Loaded runs
+            // before the canvas has measured its children, and an unattached surface is one the
+            // deck never shows.
+            Width = 640,
+            Height = 360,
+            Margin = new Thickness(0),
+            PresentInterval = _session.Settings.ResolvedReplayPresentInterval(),
+        };
+        var monitorId = _session.NextMonitorId++;
+        grid.Loaded += (_, _) => grid.RetargetMonitor(monitorId, ReplayMultiview.SceneId);
+        _angleHosts.Add(grid);
+        // Selecting an angle is a click on the grid: the tiles are drawn by the mixer and the
+        // tally shows the active one, so the host only has to map a position back to an angle.
+        var (columns, rows) = ReplayMultiview.GridFor(angles.Count);
+        var canvas = new Canvas { Background = Brushes.Transparent };
+        canvas.Children.Add(grid);
+        canvas.SizeChanged += (_, _) => LayoutGrid(canvas, grid);
+        canvas.MouseLeftButtonUp += (_, click) =>
+        {
+            if (canvas.ActualWidth <= 0 || canvas.ActualHeight <= 0 || grid.ActualWidth <= 0)
+                return;
+            var at = click.GetPosition(canvas);
+            var column = Math.Clamp((int)(at.X / grid.ActualWidth * columns), 0, columns - 1);
+            var row = Math.Clamp((int)(at.Y / grid.ActualHeight * rows), 0, rows - 1);
+            var index = (row * columns) + column;
+            if (index >= 0 && index < angles.Count)
+                SelectAngle(angles[index].Id);
+        };
+        AutomationProperties.SetAutomationId(grid, "AngleGridSurface");
+        AngleGridPanel.Children.Add(canvas);
+    }
+
+    /// <summary>
+    /// Sizes the grid surface to fit the panel without distorting it.
+    /// </summary>
+    /// <remarks>
+    /// The scene is 16:9 and the panel is whatever the deck gives it, so the surface is fitted
+    /// inside the panel rather than stretched to fill it. Stretching would distort every tile.
+    /// </remarks>
+    private static void LayoutGrid(Canvas canvas, SwapchainHost grid)
+    {
+        if (canvas.ActualWidth <= 0 || canvas.ActualHeight <= 0)
+            return;
+        var scale = Math.Min(canvas.ActualWidth / 1280.0, canvas.ActualHeight / 720.0);
+        grid.Width = 1280.0 * scale;
+        grid.Height = 720.0 * scale;
+        Canvas.SetLeft(grid, (canvas.ActualWidth - grid.Width) / 2);
+        Canvas.SetTop(grid, (canvas.ActualHeight - grid.Height) / 2);
     }
 
     /// <summary>

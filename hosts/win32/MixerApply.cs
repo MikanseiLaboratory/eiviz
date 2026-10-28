@@ -738,6 +738,22 @@ internal static class MixerApply
         _ => ""
     };
 
+    /// <summary>
+    /// Defines a scene from layers the caller built, for surfaces that are not in the session's
+    /// own scene list.
+    /// </summary>
+    /// <remarks>
+    /// The deck's angle grid is one such surface: it is built from whatever angles exist at the
+    /// moment, so no <c>SceneEntry</c> describes it. It goes through the same path as every other
+    /// scene, so the drawing, the labels and the tallies behave identically.
+    /// </remarks>
+    public static void PushSceneLayers(
+        ulong gpuId,
+        uint width,
+        uint height,
+        OverlayDesc[] layers,
+        string[]? labels) => PushLayers(gpuId, width, height, layers, labels);
+
     private static void PushLayers(ulong gpuId, uint width, uint height, OverlayDesc[] layers, string[]? labels = null)
     {
         var pins = new List<nint>();

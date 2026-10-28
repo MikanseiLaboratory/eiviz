@@ -351,7 +351,11 @@ pub(crate) fn render_loop(
             // 3. Monitor compose and GUI-only upload — present_interval only.
             // Save roles still see every attached monitor/thumb so OMT quality
             // does not flap on skipped present ticks.
-            let due_monitors = presenters.attached_monitor_sources_due(frame_i);
+            // Every attached monitor's scene composes on every frame, not only on the frames its
+            // own presentation interval lands on: a surface flips to the most recently composed
+            // picture, so skipping a compose behind a slower interval shows a stale frame — and for
+            // a scene whose first compose never happened, an empty one.
+            let due_monitors = presenters.attached_monitor_sources();
             let due_thumbs: Vec<u64> = thumbs_snap
                 .iter()
                 .filter(|(_, sub)| frame_i % u64::from(sub.interval) == 0)
