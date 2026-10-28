@@ -774,6 +774,19 @@ public partial class ReplayWindow : Window
             StateText.Text = Loc.T("replay.stateIdle");
             HealthText.Text = "";
         }
+        // Recording says what is being captured; it said nothing about what is being played, so
+        // a replay that was running showed "stopped" the whole time it ran. An operator needs both:
+        // recording and playing is a live show building its playlist, stopped and playing is a
+        // review of what was already captured.
+        if (!remote)
+        {
+            var playback = _transport.Live
+                ? Loc.T("replay.playbackLive")
+                : Loc.T(_transport.Playing ? "replay.playbackPlaying" : "replay.playbackStopped");
+            StateText.Text = string.IsNullOrEmpty(StateText.Text)
+                ? playback
+                : $"{StateText.Text}  {playback}";
+        }
         // The master frame rate, from the mixer's own frame counter. When a preview looks
         // slow this is the first thing to read: it says whether the mixer is behind or
         // only the window is.
