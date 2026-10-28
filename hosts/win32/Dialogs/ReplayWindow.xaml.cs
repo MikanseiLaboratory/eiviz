@@ -1205,6 +1205,13 @@ public partial class ReplayWindow : Window
             // ambiguous.
             AutomationProperties.SetAutomationId(button, $"AngleTile{angle.Id}");
             AutomationProperties.SetName(button, $"{index}: {angle.Label}");
+            // The active angle was shown only as bold text and a green border, which says nothing
+            // to a screen reader and nothing to a test. Selecting an angle is the deck's most-used
+            // control, so it reports the state the way a set of exclusive choices should.
+            AutomationProperties.SetItemStatus(button, selected ? "selected" : "");
+            AutomationProperties.SetHelpText(
+                button,
+                selected ? Loc.T("replay.angleSelected") : Loc.T("replay.angleSelectHint"));
             AnglePanel.Children.Add(button);
         }
     }
@@ -2483,13 +2490,13 @@ public partial class ReplayWindow : Window
         var canvas = new Canvas { Background = Brushes.Transparent };
         canvas.Children.Add(grid);
         canvas.SizeChanged += (_, _) => LayoutGrid(canvas, grid);
-        canvas.MouseLeftButtonUp += (_, click) =>
+        // The grid owns a child window, so the click arrives on the grid, not on the canvas
+        // around it. It reports the position normalised to its own surface, which is the space
+        // the layers were laid out in.
+        grid.SurfaceClickedAt += (_, at) =>
         {
-            if (canvas.ActualWidth <= 0 || canvas.ActualHeight <= 0 || grid.ActualWidth <= 0)
-                return;
-            var at = click.GetPosition(canvas);
-            var column = Math.Clamp((int)(at.X / grid.ActualWidth * columns), 0, columns - 1);
-            var row = Math.Clamp((int)(at.Y / grid.ActualHeight * rows), 0, rows - 1);
+            var column = Math.Clamp((int)(at.X * columns), 0, columns - 1);
+            var row = Math.Clamp((int)(at.Y * rows), 0, rows - 1);
             var index = (row * columns) + column;
             if (index >= 0 && index < angles.Count)
                 SelectAngle(angles[index].Id);
