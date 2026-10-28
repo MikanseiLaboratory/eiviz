@@ -27,6 +27,15 @@ public partial class ReplayWindow : Window
     private readonly MainWindow? _main;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(200) };
     private readonly List<SwapchainHost> _angleHosts = [];
+
+    /// <summary>
+    /// Frames between presentations of an angle tile.
+    ///
+    /// A tile costs one swapchain present, and there is one per angle. Presenting them every frame
+    /// spends the whole frame on thumbnails at sixteen angles; a third of the rate still shows a
+    /// moving picture, which is what an operator needs to judge a cut.
+    /// </summary>
+    private const uint AngleTilePresentInterval = 3;
     /// <summary>
     /// Monitor ids of the two deck monitors: what the channel is sending out and
     /// the angle being recorded. They are retargeted only when the source changes,
@@ -1495,6 +1504,12 @@ public partial class ReplayWindow : Window
         LiveMonitor.PresentInterval = interval;
         OutputMonitor.ApplyPresentInterval();
         LiveMonitor.ApplyPresentInterval();
+        // The angle tiles present at the same rate, so a change here has to reach them too.
+        foreach (var host in _angleHosts)
+        {
+            host.PresentInterval = interval;
+            host.ApplyPresentInterval();
+        }
     }
 
     private void SaveDocument()
@@ -2446,30 +2461,22 @@ public partial class ReplayWindow : Window
         foreach (var angle in ReplayModel.Angles(_replay))
         {
             var selected = angle.Id == active;
-            // Only build a surface where one is shown. A tile with a proxy still draws a bitmap,
-            // and a swapchain made for it would attach nothing and cost a present every frame.
-            SwapchainHost? surface = null;
-            FrameworkElement picture;
-            if (_transport.Live || TryProxyTile(angle.Id) is not { } proxy)
+            // Every tile is a live monitor on the angle's own picture. A still would take away
+            // what the panel is for: judging a cut needs a moving picture, and the still was
+            // whatever the store happened to hold when the deck was built.
+            var surface = new SwapchainHost
             {
-                // Live, or nothing recorded to look at yet — a deck opened before the first mark,
-                // or a proxy the store has not written. The camera's own picture is what the
-                // operator is watching anyway, so the tile shows that rather than a label saying
-                // the deck cannot help.
-                surface = new SwapchainHost
-                {
-                    Width = AngleTileWidth,
-                    Height = AngleTileHeight,
-                    Margin = new Thickness(4)
-                };
-                var monitorId = _session.NextMonitorId++;
-                surface.Loaded += (_, _) => surface.RetargetMonitor(monitorId, angle.LiveSourceId);
-                picture = surface;
-            }
-            else
-            {
-                picture = proxy;
-            }
+                Width = AngleTileWidth,
+                Height = AngleTileHeight,
+                Margin = new Thickness(4),
+                // A tile is a thumbnail, and there are as many of them as there are angles. At
+                // full rate each one costs a swapchain present every frame; presenting them at a
+                // third of the rate keeps a cut judgeable and leaves the frame to the renderer.
+                PresentInterval = AngleTilePresentInterval,
+            };
+            var monitorId = _session.NextMonitorId++;
+            surface.Loaded += (_, _) => surface.RetargetMonitor(monitorId, angle.LiveSourceId);
+            FrameworkElement picture = surface;
             var label = new TextBlock
             {
                 Text = angle.Label,
@@ -2493,10 +2500,8 @@ public partial class ReplayWindow : Window
             AutomationProperties.SetAutomationId(tile, $"AngleTile{angle.Id}");
             AutomationProperties.SetName(tile, angle.Label);
             AngleGridPanel.Children.Add(tile);
-            // Tracked whenever it exists, not only when live: an untracked surface is one that
-            // `ReleaseNative` cannot free on the next rebuild.
-            if (surface is not null)
-                _angleHosts.Add(surface);
+            // Tracked so `ReleaseNative` can free it on the next rebuild or on close.
+            _angleHosts.Add(surface);
         }
     }
 
