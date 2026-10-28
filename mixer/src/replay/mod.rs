@@ -1030,6 +1030,22 @@ impl ReplayEngine {
                 "replay format needs a resolution and a frame rate; apply Replay Setup",
             ));
         }
+        // The recorder counts frames at one rate. A recording whose format disagrees with the rate
+        // the mixer is running would be stopped on its first frame by `note_fps`, which reads as
+        // "recording did not start" with no reason attached. Refusing here names both rates.
+        {
+            let inner = self.lock();
+            let (master_num, master_den) = (inner.fps_num, inner.fps_den);
+            if master_num != 0
+                && master_den != 0
+                && (master_num != fps_num || master_den != fps_den)
+            {
+                return Err(ReplayFailure::invalid(format!(
+                    "replay records at {fps_num}/{fps_den} fps but the show runs at \
+                     {master_num}/{master_den}; set the Replay format to the show's rate"
+                )));
+            }
+        }
         if !(SEGMENT_FRAMES_MIN..=SEGMENT_FRAMES_MAX).contains(&segment_frames) {
             return Err(ReplayFailure::invalid(format!(
                 "replay segment frames must be between {SEGMENT_FRAMES_MIN} and {SEGMENT_FRAMES_MAX}, got {segment_frames}"
