@@ -158,9 +158,10 @@ impl Presenters {
     pub fn present_unit_buses(
         &mut self,
         device: &GpuDevice,
+        encoder: &mut wgpu::CommandEncoder,
         epoch: u64,
         view_for: impl Fn(u64, u32) -> Option<wgpu::TextureView>,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<(wgpu::SurfaceTexture, wgpu::TextureView)>, String> {
         let planned: Vec<_> = self
             .by_key
             .keys()
@@ -170,16 +171,17 @@ impl Presenters {
                 (unit_id, kind, surface, cache_key, view_for(unit_id, kind))
             })
             .collect();
-        present_pass(self, device, &planned)
+        present_pass(self, device, encoder, &planned)
     }
 
     pub fn present_monitors(
         &mut self,
         device: &GpuDevice,
+        encoder: &mut wgpu::CommandEncoder,
         epoch: u64,
         frame_i: u64,
         source_view: impl Fn(u64) -> Option<(wgpu::TextureView, bool)>,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<(wgpu::SurfaceTexture, wgpu::TextureView)>, String> {
         let due: Vec<u64> = self
             .monitors
             .keys()
@@ -191,11 +193,19 @@ impl Presenters {
                 !is_preview_surface(presenter.config.width, presenter.config.height)
             })
         });
-        present_monitor_group(self, device, epoch, &tiles, &source_view)?;
+        let mut acquired =
+            present_monitor_group(self, device, encoder, epoch, &tiles, &source_view)?;
         for id in previews {
-            present_monitor_group(self, device, epoch, &[id], &source_view)?;
+            acquired.extend(present_monitor_group(
+                self,
+                device,
+                encoder,
+                epoch,
+                &[id],
+                &source_view,
+            )?);
         }
-        Ok(())
+        Ok(acquired)
     }
 
     pub fn reconfigure_pending(&mut self, device: &GpuDevice) {
@@ -361,12 +371,13 @@ fn is_preview_surface(width: u32, height: u32) -> bool {
 fn present_monitor_group(
     presenters: &mut Presenters,
     device: &GpuDevice,
+    encoder: &mut wgpu::CommandEncoder,
     epoch: u64,
     ids: &[u64],
     source_view: &impl Fn(u64) -> Option<(wgpu::TextureView, bool)>,
-) -> Result<(), String> {
+) -> Result<Vec<(wgpu::SurfaceTexture, wgpu::TextureView)>, String> {
     if ids.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let planned: Vec<_> = ids
         .iter()
@@ -380,12 +391,13 @@ fn present_monitor_group(
             Some((monitor_id, source_id ^ epoch.rotate_left(8), view, packed))
         })
         .collect();
-    present_monitor_pass(presenters, device, &planned)
+    present_monitor_pass(presenters, device, encoder, &planned)
 }
 
 fn present_pass(
     presenters: &mut Presenters,
     device: &GpuDevice,
+    encoder: &mut wgpu::CommandEncoder,
     planned: &[(
         u64,
         u32,
@@ -393,41 +405,27 @@ fn present_pass(
         u64,
         Option<wgpu::TextureView>,
     )],
-) -> Result<(), String> {
-    let mut encoder = device
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("eiviz present"),
-        });
+) -> Result<Vec<(wgpu::SurfaceTexture, wgpu::TextureView)>, String> {
     let mut acquired = Vec::new();
     for (unit_id, kind, surface, cache_key, view) in planned {
         let Some(presenter) = presenters.by_key.get_mut(&(*unit_id, *kind, *surface)) else {
             continue;
         };
-        if let Some(item) = draw_presenter(
-            device,
-            presenter,
-            *cache_key,
-            view.as_ref(),
-            false,
-            &mut encoder,
-        ) {
+        if let Some(item) =
+            draw_presenter(device, presenter, *cache_key, view.as_ref(), false, encoder)
+        {
             acquired.push(item);
         }
     }
-    submit_presents(device, encoder, acquired)
+    Ok(acquired)
 }
 
 fn present_monitor_pass(
     presenters: &mut Presenters,
     device: &GpuDevice,
+    encoder: &mut wgpu::CommandEncoder,
     planned: &[(u64, u64, Option<wgpu::TextureView>, bool)],
-) -> Result<(), String> {
-    let mut encoder = device
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("eiviz present"),
-        });
+) -> Result<Vec<(wgpu::SurfaceTexture, wgpu::TextureView)>, String> {
     let mut acquired = Vec::new();
     for (monitor_id, cache_key, view, packed) in planned {
         let Some(presenter) = presenters.monitors.get_mut(monitor_id) else {
@@ -439,12 +437,12 @@ fn present_monitor_pass(
             *cache_key,
             view.as_ref(),
             *packed,
-            &mut encoder,
+            encoder,
         ) {
             acquired.push(item);
         }
     }
-    submit_presents(device, encoder, acquired)
+    Ok(acquired)
 }
 
 fn live_extent(presenter: &Presenter) -> (u32, u32) {
@@ -724,15 +722,15 @@ fn draw_presenter(
     Some((texture, dest))
 }
 
-fn submit_presents(
+/// Flips the swapchain images this frame drew into.
+///
+/// The command buffer holding the blits was already submitted by the caller, so this only presents.
+/// Doing it in that one submission is what stops a frame from reaching the GPU three times and
+/// waiting for queue room on the second and third.
+pub(crate) fn present_acquired(
     device: &GpuDevice,
-    encoder: wgpu::CommandEncoder,
     acquired: Vec<(wgpu::SurfaceTexture, wgpu::TextureView)>,
 ) -> Result<(), String> {
-    if acquired.is_empty() {
-        return Ok(());
-    }
-    device.submit(Some(encoder.finish()));
     for (texture, dest) in acquired {
         drop(dest);
         device.queue.present(texture);

@@ -465,14 +465,29 @@ pub(crate) fn render_loop(
                 .iter()
                 .any(|item| item.source_kind == SRC_KIND_MU_PREVIEW && item.cpu_video());
             let present_epoch = composer.gpu_epoch() ^ frame_delay.epoch().rotate_left(8);
+            // The present passes record into this encoder instead of making their own, and the
+            // images they acquire are flipped after the frame's single submission below.
+            // Opened on first use. A session with nothing to present — a headless test, or a deck
+            // whose monitors all look at another source — would otherwise submit an empty command
+            // buffer every frame, and that round trip alone was enough to stall the playout test.
+            let mut present_encoder: Option<wgpu::CommandEncoder> = None;
+            let mut present_acquired_pending: Vec<(wgpu::SurfaceTexture, wgpu::TextureView)> =
+                Vec::new();
             match panic::catch_unwind(AssertUnwindSafe(|| {
-                presenters.present_unit_buses(&device, present_epoch, |unit_id, kind| {
+                let encoder = present_encoder.get_or_insert_with(|| {
+                    device
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("eiviz present"),
+                        })
+                });
+                presenters.present_unit_buses(&device, encoder, present_epoch, |unit_id, kind| {
                     frame_delay
                         .view(unit_id, kind)
                         .or_else(|| composer.unit_view(unit_id, kind))
                 })
             })) {
-                Ok(Ok(())) => {}
+                Ok(Ok(acquired)) => present_acquired_pending.extend(acquired),
                 Ok(Err(error)) => {
                     set_error(&telemetry, error.clone());
                     if error.contains("unconfigured") {
@@ -914,21 +929,46 @@ pub(crate) fn render_loop(
             if presenters.any_monitor_due(frame_i) {
                 let monitor_epoch = composer.gpu_epoch() ^ frame_delay.epoch().rotate_left(8);
                 if panic::catch_unwind(AssertUnwindSafe(|| {
-                    if let Err(error) =
-                        presenters.present_monitors(&device, monitor_epoch, frame_i, |source_id| {
+                    let encoder = present_encoder.get_or_insert_with(|| {
+                        device
+                            .device
+                            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("eiviz present"),
+                            })
+                    });
+                    match presenters.present_monitors(
+                        &device,
+                        encoder,
+                        monitor_epoch,
+                        frame_i,
+                        |source_id| {
                             frame_delay
                                 .view_for_source(source_id)
                                 .or_else(|| composer.view_for_source(source_id))
                                 .map(|view| (view, composer.source_is_packed(source_id)))
-                        })
-                    {
-                        set_error(&telemetry, error);
+                        },
+                    ) {
+                        Ok(acquired) => present_acquired_pending.extend(acquired),
+                        Err(error) => set_error(&telemetry, error),
                     }
                 }))
                 .is_err()
                 {
                     crate::diag::error("present monitors panicked");
                     set_error(&telemetry, "present monitors panicked");
+                }
+            }
+            // Both present passes recorded into `present_encoder`; submit it together with the
+            // frame's own command buffer, then flip the images they acquired. One submission per
+            // frame is the point: each extra one waits for room on a queue that already holds the
+            // frame's GPU work.
+            if let Some(encoder) = present_encoder {
+                device.submit([encoder.finish()]);
+                if !present_acquired_pending.is_empty()
+                    && let Err(error) =
+                        crate::present::present_acquired(&device, present_acquired_pending)
+                {
+                    set_error(&telemetry, error);
                 }
             }
             let compose_vram = composer.vram_bytes();
