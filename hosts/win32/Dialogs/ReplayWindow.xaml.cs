@@ -2446,26 +2446,29 @@ public partial class ReplayWindow : Window
         foreach (var angle in ReplayModel.Angles(_replay))
         {
             var selected = angle.Id == active;
-            var surface = new SwapchainHost { Width = AngleTileWidth, Height = AngleTileHeight, Margin = new Thickness(4) };
-            FrameworkElement picture = surface;
-            if (_transport.Live)
+            // Only build a surface where one is shown. A tile with a proxy still draws a bitmap,
+            // and a swapchain made for it would attach nothing and cost a present every frame.
+            SwapchainHost? surface = null;
+            FrameworkElement picture;
+            if (_transport.Live || TryProxyTile(angle.Id) is not { } proxy)
             {
-                var monitorId = _session.NextMonitorId++;
-                surface.Loaded += (_, _) => surface.RetargetMonitor(monitorId, angle.LiveSourceId);
-            }
-            else if (TryProxyTile(angle.Id) is { } proxy)
-            {
-                picture = proxy;
-            }
-            else
-            {
-                // Nothing recorded to look at yet — a deck opened before the first mark, or a
-                // proxy the store has not written. The camera's own picture is what the
-                // operator is watching anyway, so the tile shows that rather than a label
-                // saying the deck cannot help.
+                // Live, or nothing recorded to look at yet — a deck opened before the first mark,
+                // or a proxy the store has not written. The camera's own picture is what the
+                // operator is watching anyway, so the tile shows that rather than a label saying
+                // the deck cannot help.
+                surface = new SwapchainHost
+                {
+                    Width = AngleTileWidth,
+                    Height = AngleTileHeight,
+                    Margin = new Thickness(4)
+                };
                 var monitorId = _session.NextMonitorId++;
                 surface.Loaded += (_, _) => surface.RetargetMonitor(monitorId, angle.LiveSourceId);
                 picture = surface;
+            }
+            else
+            {
+                picture = proxy;
             }
             var label = new TextBlock
             {
@@ -2490,7 +2493,9 @@ public partial class ReplayWindow : Window
             AutomationProperties.SetAutomationId(tile, $"AngleTile{angle.Id}");
             AutomationProperties.SetName(tile, angle.Label);
             AngleGridPanel.Children.Add(tile);
-            if (_transport.Live)
+            // Tracked whenever it exists, not only when live: an untracked surface is one that
+            // `ReleaseNative` cannot free on the next rebuild.
+            if (surface is not null)
                 _angleHosts.Add(surface);
         }
     }
