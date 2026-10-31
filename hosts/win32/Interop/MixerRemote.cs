@@ -49,6 +49,24 @@ internal static partial class MixerRemote
     [LibraryImport(LibraryName, EntryPoint = "mixer_remote_replace")]
     internal static unsafe partial int Replace(int handle, byte* json, nuint length, ulong expectedRevision);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_replay_record")]
+    internal static partial int ReplayRecord(int handle, uint on);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_replay_mark_in")]
+    internal static partial int ReplayMarkIn(int handle);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_replay_mark_out", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int ReplayMarkOut(int handle, string name);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_replay_cue", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int ReplayCue(int handle, uint channel, string clipUid);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_replay_transport")]
+    internal static partial int ReplayTransport(int handle, uint channel, uint playing, int speedMilli, long seekFrame);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_remote_replay_jump_to_now")]
+    internal static partial int ReplayJumpToNow(int handle, uint channel);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_remote_save_session")]
     internal static unsafe partial int SaveSession(int handle, byte* buffer, nuint capacity);
 

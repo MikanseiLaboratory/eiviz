@@ -123,7 +123,97 @@ typedef struct EivizCapabilities {
     uint32_t hardware_encode;
     uint32_t decklink_linked;
     uint32_t rtmp_linked;
+    uint32_t replay_angle_limit;
+    uint32_t replay_channel_limit;
+    uint32_t replay_linked;
 } EivizCapabilities;
+
+typedef struct EivizReplayStats {
+    uint32_t state;
+    uint32_t stop_reason;
+    uint32_t severity;
+    uint32_t issues;
+    uint64_t recording_frame;
+    uint64_t first_frame;
+    uint64_t last_frame;
+    uint64_t free_bytes;
+    uint64_t reserve_bytes;
+    uint64_t write_rate_bps;
+    uint64_t write_rate_instant_bps;
+    uint64_t estimate_rate_bps;
+    uint32_t remaining_secs;
+    uint32_t remaining_is_estimate;
+    uint64_t frames_written;
+    uint64_t frames_dropped;
+    uint32_t frames_dropped_recent;
+    uint32_t angle_count;
+    uint32_t channel_count;
+    uint64_t mark_in_frame;
+    uint32_t mark_in_valid;
+    /* Frames the readback handed to the recorder. */
+    uint64_t frames_offered;
+    /* Frames handed to the readback. */
+    uint64_t frames_pushed;
+    /* Frames stored as the sender encoded them (passthrough angles). */
+    uint64_t encoded_frames;
+    /* Encoded frames the store refused. */
+    uint64_t encoded_dropped;
+} EivizReplayStats;
+
+/* One channel as the mixer reports it, so a host shows what is on air rather than what it
+   last asked for. `playing` is 1 or 0. */
+typedef struct EivizReplayChannelState {
+    uint32_t channel_index;
+    uint64_t source_id;
+    uint32_t playing;
+    int32_t speed_milli;
+    uint64_t position_frame;
+    uint64_t in_frame;
+    uint64_t out_frame;
+    uint32_t angle_id;
+    uint64_t clip_uid_hash;
+    uint64_t substituted_frames;
+    uint32_t decode_ms_avg_milli;
+    uint64_t decode_misses;
+} EivizReplayChannelState;
+
+/* Free space and a bitrate estimate for a prospective recording. */
+typedef struct EivizReplayEstimateIn {
+    uint32_t width;
+    uint32_t height;
+    uint32_t fps_num;
+    uint32_t fps_den;
+    uint32_t profile;
+    uint32_t angle_count;
+    const uint8_t *path;
+    size_t path_len;
+    uint64_t reserve_bytes;
+} EivizReplayEstimateIn;
+
+typedef struct EivizReplayEstimateOut {
+    uint64_t free_bytes;
+    uint64_t estimate_rate_bps;
+    uint32_t remaining_secs;
+    uint32_t path_writable;
+} EivizReplayEstimateOut;
+
+typedef struct EivizReplayAngleStats {
+    uint32_t angle_id;
+    uint64_t scene_gpu_id;
+    uint32_t encode_ms_avg_milli;
+    uint32_t encode_ms_max_milli;
+    uint32_t encode_queue_len;
+    uint32_t encode_queue_cap;
+    uint64_t write_buffer_bytes;
+    uint64_t write_buffer_cap;
+    uint32_t write_latency_p95_ms;
+    uint64_t frames_written;
+    uint64_t dropped_readback;
+    uint64_t dropped_encode;
+    uint64_t dropped_write;
+    uint64_t bytes_written;
+    uint32_t segments;
+} EivizReplayAngleStats;
 
 typedef struct EivizLicenseStatus {
     uint32_t state;
@@ -203,6 +293,15 @@ typedef struct EivizSequenceStepDesc {
     EivizMotion motion;
     uint32_t has_motion;
     uint32_t hold_frames;
+    /* Replay channel this step cues. Ignored when replay_active is zero. */
+    uint32_t replay_channel;
+    /* Non-zero when the step asks Replay to do something. */
+    uint32_t replay_active;
+    /* Start playing as soon as the step is reached. */
+    uint32_t replay_play;
+    /* Clip to cue; empty means the newest clip on the channel. */
+    const uint8_t *replay_clip;
+    size_t replay_clip_len;
 } EivizSequenceStepDesc;
 
 typedef struct EivizSceneSequenceDesc {
@@ -295,6 +394,8 @@ typedef struct EivizMixerStats {
 typedef struct EivizMixerRuntimeStats {
     uint64_t uptime_ms;
     uint64_t render_skipped;
+    /// Frames composed since start. Its growth rate is the master frame rate.
+    uint64_t frames_rendered;
     uint64_t input_queue_dropped;
     uint32_t output_omt;
     uint32_t output_ndi;
@@ -429,6 +530,37 @@ int32_t mixer_omt_start_send(uint64_t unit_id, const char *name);
 int32_t mixer_output_add(uint64_t output_id, uint32_t transport, const char *name, uint32_t source_kind, uint64_t source_id, uint64_t unit_id, uint32_t use_gpu, uint64_t audio_bus_id, uint32_t skip_idle_encode, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den);
 int32_t mixer_output_add_ex(uint64_t output_id, uint32_t transport, const char *name, uint32_t source_kind, uint64_t source_id, uint64_t unit_id, uint32_t use_gpu, uint64_t audio_bus_id, uint32_t skip_idle_encode, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, const char *config_json);
 int32_t mixer_capabilities(EivizCapabilities *out);
+int32_t mixer_replay_copy_stats(EivizReplayStats *stats, void *angles, uint32_t cap);
+int32_t mixer_replay_record(uint32_t on);
+int32_t mixer_replay_mark_in(uint64_t *out_frame);
+int32_t mixer_replay_copy_recording_uuid(uint8_t *out, size_t cap);
+int32_t mixer_replay_mark_out(uint64_t *out_in, uint64_t *out_out, uint8_t *uuid, size_t cap);
+int32_t mixer_replay_configure(const char *json);
+int32_t mixer_replay_channel_cue(uint32_t channel, uint32_t angle_id, uint64_t in_frame, uint64_t out_frame, const char *recording_uuid);
+int32_t mixer_replay_channel_transport(uint32_t channel, uint32_t playing, int32_t speed_milli, int64_t seek_frame);
+int32_t mixer_replay_channel_jump_to_now(uint32_t channel);
+/* Relative step inside the clip on air, in frames. */
+int32_t mixer_replay_channel_step(uint32_t channel, int32_t delta);
+/* Loops the channel's playlist at its end. */
+int32_t mixer_replay_loop(uint32_t channel, uint32_t on);
+/* Keeps the last clip running into the recording past its out point, instead of stopping
+   there. Not looping: the last clip is held and the timecode climbs through what followed. */
+int32_t mixer_replay_hold_last(uint32_t channel, uint32_t on);
+/* Per-channel live state, so a host shows what the mixer is doing rather than what it
+   last asked for. Returns how many entries were written. */
+int32_t mixer_replay_copy_channels(EivizReplayChannelState *out, uint32_t cap);
+/* Free space and a bitrate estimate for a prospective recording. */
+int32_t mixer_replay_estimate(const EivizReplayEstimateIn *input, EivizReplayEstimateOut *out);
+/* Waveform: buckets per second, how many an angle has, and how to read them. */
+uint32_t mixer_replay_peak_rate(void);
+uint32_t mixer_replay_peak_count(uint32_t angle_id, uint32_t *dropped);
+int32_t mixer_replay_copy_peaks(uint32_t angle_id, uint32_t from, float *min_out, float *max_out, uint32_t cap);
+/* Export. Range reports the recorded frames of one angle; progress is JSON. */
+int32_t mixer_replay_angle_range(uint32_t angle_id, uint64_t *first, uint64_t *last);
+int32_t mixer_replay_copy_proxy(uint32_t angle_id, uint64_t frame, uint8_t *pixels, size_t cap, uint32_t *width, uint32_t *height, uint32_t *stride);
+int32_t mixer_replay_export_start(const char *json);
+int32_t mixer_replay_export_progress(uint8_t *out, size_t cap, size_t *written);
+int32_t mixer_replay_export_cancel(void);
 int32_t mixer_license_install(const char *ticket);
 int32_t mixer_license_status(EivizLicenseStatus *out, uint8_t *ticket_id, size_t cap);
 int32_t mixer_license_clear(void);
@@ -475,6 +607,9 @@ int32_t mixer_session_history(const char *path, uint8_t *out, size_t cap);
 int32_t mixer_session_load_rev(const char *path, uint32_t index, uint8_t *out, size_t cap);
 int32_t mixer_session_publish(const uint8_t *json, size_t len);
 int32_t mixer_session_replace(const uint8_t *json, size_t len, uint64_t expected_revision);
+/* Applies one session mutation (`{"kind": "..."}`). The core applies it to the live
+   document, so an edit another window made in the meantime is kept. */
+int32_t mixer_session_mutate(const uint8_t *json, size_t len);
 int32_t mixer_poll_events(uint64_t after, uint8_t *out, size_t cap);
 int32_t mixer_api_configure(uint32_t enabled, uint32_t port, const char *user, const char *pass);
 int32_t mixer_api_listen_owner(uint8_t *out, size_t cap);

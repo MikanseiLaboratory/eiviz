@@ -12,6 +12,23 @@ internal static class PlanGate
 
     public static bool DeckLinkOutput => RemoteOr(caps => caps.DecklinkLinked != 0 && caps.DecklinkOutputLimit != 0);
 
+    public static bool ReplayRecord => RemoteOr(caps => caps.ReplayLinked != 0 && caps.ReplayAngleLimit != 0);
+
+    /// <summary>
+    /// Replay plan limits. Remote mode cannot read them yet, so it reports
+    /// "unknown" instead of inventing a number.
+    /// </summary>
+    public static bool TryReplayLimits(out uint angles, out uint channels)
+    {
+        angles = 0;
+        channels = 0;
+        if (HostRole.IsRemote || !MixerNative.TryQueryCapabilities(out var caps))
+            return false;
+        angles = caps.ReplayAngleLimit;
+        channels = caps.ReplayChannelLimit;
+        return true;
+    }
+
     public static bool CanAddMixingUnit(int existing) =>
         RemoteOr(caps => caps.MixingUnitLimit == uint.MaxValue || (uint)existing < caps.MixingUnitLimit);
 

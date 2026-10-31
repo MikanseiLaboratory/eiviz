@@ -46,6 +46,57 @@ internal static class NumericDrag
         };
     }
 
+    /// <summary>
+    /// Drags a timecode cell up or down to add or remove frames. The value is read and
+    /// written through the caller, so a cell can show a timecode and still be scrubbed.
+    /// A click that does not move leaves the caret alone for typing.
+    /// </summary>
+    public static void AttachTimecode(
+        TextBox box,
+        float pixelsPerFrame,
+        Func<string, double?> read,
+        Action<double> apply,
+        Action commit)
+    {
+        Point? start = null;
+        var origin = 0.0;
+        var dragging = false;
+        box.PreviewMouseLeftButtonDown += (_, _) =>
+        {
+            if (read(box.Text) is not { } value)
+                return;
+            origin = value;
+            start = System.Windows.Input.Mouse.GetPosition(box);
+            dragging = false;
+        };
+        box.PreviewMouseMove += (_, e) =>
+        {
+            if (start is not { } originPoint || e.LeftButton != MouseButtonState.Pressed)
+                return;
+            var delta = e.GetPosition(box) - originPoint;
+            if (!dragging && Math.Abs(delta.Y) < 3)
+                return;
+            if (!dragging)
+            {
+                dragging = true;
+                box.CaptureMouse();
+            }
+            apply(origin + -delta.Y / pixelsPerFrame);
+            e.Handled = true;
+        };
+        box.PreviewMouseLeftButtonUp += (_, _) =>
+        {
+            if (!dragging)
+            {
+                start = null;
+                return;
+            }
+            dragging = false;
+            start = null;
+            box.ReleaseMouseCapture();
+            commit();
+        };
+    }
     public static void AttachBox(TextBox box, float pixelsPerUnit, Action apply, Action? commit = null, string format = "0.#")
     {
         Point? start = null;

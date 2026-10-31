@@ -105,6 +105,26 @@ pub enum Command {
     },
     Shutdown,
     SaveSession,
+    ReplayRecord {
+        on: bool,
+    },
+    ReplayMarkIn,
+    ReplayMarkOut {
+        name: String,
+    },
+    ReplayCue {
+        channel: u32,
+        clip_uid: String,
+    },
+    ReplayTransport {
+        channel: u32,
+        playing: bool,
+        speed_milli: i32,
+        seek_frame: i64,
+    },
+    ReplayJumpToNow {
+        channel: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,6 +205,12 @@ impl Command {
                 | Self::VideoSeek { .. }
                 | Self::AudioSetInput { .. }
                 | Self::AudioSetBus { .. }
+                | Self::ReplayRecord { .. }
+                | Self::ReplayMarkIn
+                | Self::ReplayMarkOut { .. }
+                | Self::ReplayCue { .. }
+                | Self::ReplayTransport { .. }
+                | Self::ReplayJumpToNow { .. }
         )
     }
 
@@ -312,6 +338,40 @@ pub enum SessionMutation {
     DeleteScenePreset {
         name: String,
     },
+    UpsertReplaySettings {
+        replay: Box<crate::session::replay::ReplayDto>,
+    },
+    /// Writes only the recording settings (drives, format, buffering, retention,
+    /// angles, auto-add, enabled). Events, playlists, channels and the id counters
+    /// are left alone, so a host that applies Replay Setup from a document it read
+    /// a moment ago cannot clobber an event another client just marked.
+    UpdateReplaySettings {
+        settings: Box<crate::session::replay::ReplaySettingsDto>,
+    },
+    /// Writes the deck: events, playlists, the selected angle, timeline cues and
+    /// which playlist each existing channel plays. Settings and the channel list
+    /// stay with Replay Setup and the Replay inputs.
+    ///
+    /// The deck is a snapshot, so it is applied as a difference: what this deck has is
+    /// written, what it never had is kept, and only the deletions it names in `edit` are
+    /// made. A deck that sends no `edit` deletes nothing.
+    UpdateReplayDeck {
+        deck: Box<crate::session::replay::ReplayDeckDto>,
+        #[serde(default)]
+        edit: Option<Box<crate::session::replay::ReplayDeckEditDto>>,
+    },
+    /// Chooses the angle the next mark records. The deck selects it by clicking a
+    /// tile; a control client selects it here.
+    SetReplayActiveAngle {
+        #[serde(alias = "angle_id")]
+        angle_id: u32,
+    },
+    /// Creates the optional replay document on demand and returns its next
+    /// available channel through the resulting session snapshot.
+    AddReplayChannel,
+    /// Removes the replay document and every Replay input it owns, returning the
+    /// session to the state before Replay was added.
+    DeleteReplay,
 }
 
 impl SessionMutation {
@@ -341,6 +401,12 @@ impl SessionMutation {
             Self::DeleteCatalogTag { .. } => "DeleteCatalogTag",
             Self::UpsertScenePreset { .. } => "UpsertScenePreset",
             Self::DeleteScenePreset { .. } => "DeleteScenePreset",
+            Self::UpsertReplaySettings { .. } => "UpsertReplaySettings",
+            Self::UpdateReplaySettings { .. } => "UpdateReplaySettings",
+            Self::UpdateReplayDeck { .. } => "UpdateReplayDeck",
+            Self::SetReplayActiveAngle { .. } => "SetReplayActiveAngle",
+            Self::AddReplayChannel => "AddReplayChannel",
+            Self::DeleteReplay => "DeleteReplay",
         }
     }
 }

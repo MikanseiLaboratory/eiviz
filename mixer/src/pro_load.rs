@@ -6,7 +6,7 @@
 
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ed25519_dalek::Verifier;
 use eiviz_pro_api::{
@@ -211,6 +211,13 @@ fn api_complete(api: &ProApi) -> bool {
         && api.license_clear.is_some()
         && api.license_fingerprint.is_some()
         && api.license_email.is_some()
+        && api.replay_open.is_some()
+        && api.replay_close.is_some()
+        && api.replay_write_video.is_some()
+        && api.replay_decode.is_some()
+        && api.replay_range.is_some()
+        && api.replay_stats.is_some()
+        && api.replay_estimate.is_some()
 }
 
 fn query_snapshot(api: &ProApi, module: *mut c_void) -> Result<(Entitlements, u32), ()> {
@@ -227,6 +234,8 @@ fn query_snapshot(api: &ProApi, module: *mut c_void) -> Result<(Entitlements, u3
         recording: 0,
         srt: 0,
         hardware_encode: 0,
+        replay_angles: 0,
+        replay_channels: 0,
         features: 0,
     };
     let Some(query) = api.query_entitlements else {
@@ -300,7 +309,10 @@ fn accepted_public_keys() -> Result<Vec<[u8; 32]>, String> {
     if let Some(key) = embedded_public_key()? {
         keys.push(key);
     }
-    #[cfg(debug_assertions)]
+    // Two ways in, both outside a shipped release build: a debug build, which is what `cargo test`
+    // makes locally, and a release build that names `pro-test-key`, which is how CI runs the Replay
+    // suite.
+    #[cfg(any(debug_assertions, feature = "pro-test-key"))]
     if keys.is_empty() {
         if let Ok(hex) = std::env::var("EIVIZ_PRO_MODULE_TEST_KEY") {
             keys.push(parse_key(&hex)?);
@@ -399,6 +411,30 @@ impl eiviz_pro_api::ProModule for LoadedPro {
     fn license(&self) -> Option<&dyn LicenseBackend> {
         (self.refresh().features & FEATURE_LICENSE != 0).then_some(self)
     }
+
+    fn replay(&self) -> Option<&dyn eiviz_pro_api::ReplayBackend> {
+        Some(self)
+    }
+}
+
+impl eiviz_pro_api::ReplayBackend for LoadedPro {
+    fn open(
+        &self,
+        config: &eiviz_pro_api::ReplayStoreConfig,
+    ) -> eiviz_pro_api::ProResult<Box<dyn eiviz_pro_api::ReplayStore>> {
+        crate::replay::open_ffi_store(config)
+    }
+
+    fn estimate(
+        &self,
+        query: &eiviz_pro_api::ReplayEstimateQuery,
+    ) -> eiviz_pro_api::ProResult<eiviz_pro_api::ReplayEstimate> {
+        crate::replay::estimate_ffi(query)
+    }
+}
+
+pub(crate) fn loaded_api() -> Option<(ProApi, *mut c_void)> {
+    LOADED.get().map(|loaded| (loaded.api, loaded.module))
 }
 
 impl LoadedPro {
@@ -750,7 +786,7 @@ unsafe extern "C" fn on_video(user: *mut c_void, view: *const ProVideoView) {
             pts_100ns: view.pts_100ns,
             fps_num: view.fps_num,
             fps_den: view.fps_den,
-            data: data.into(),
+            data: Arc::new(data),
         });
     }));
 }

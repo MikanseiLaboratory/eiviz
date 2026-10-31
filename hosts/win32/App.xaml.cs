@@ -1,4 +1,4 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Threading;
 using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
@@ -30,7 +30,12 @@ public partial class App : Application
         try
         {
             if (MixerNative.Ping() != 0x4549_5649)
-                throw new InvalidOperationException("The Rust mixer ABI does not match this host.");
+            {
+                // The mixer is either missing or from another build. Both happen in
+                // development (a release `dotnet build` overwrites the debug cdylibs),
+                // so the message names the file and what to do.
+                throw new InvalidOperationException(Loc.T("msg.mixerMismatch"));
+            }
             LoadRequiredProModule(e.Args);
             Session = Session.Default();
             if (HostRole.IsRemote)
@@ -50,7 +55,16 @@ public partial class App : Application
         catch (Exception ex)
         {
             HostLog.WriteCrash(ex);
-            throw;
+            // A startup failure must never look like a crash. The operator gets the
+            // reason, what to do about it, and where the log is, and the process exits
+            // with a code that says it failed.
+            MessageBox.Show(
+                $"{ex.Message}\n\n{Loc.T("msg.startupFailedHint")}\n{HostLog.DirectoryPath}",
+                Loc.T("msg.startupFailed"),
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            Shutdown(1);
+            return;
         }
     }
 
@@ -150,8 +164,15 @@ public partial class App : Application
             if (args[i] == "--pro-module")
                 path = args[i + 1];
         }
-        if (MixerNative.ProPrepare(path) != 0)
-            throw new InvalidOperationException(MixerNative.QueryProError());
+        if (MixerNative.ProPrepare(path) == 0)
+            return;
+        var reason = MixerNative.QueryProError();
+        // The reason on its own ("no Pro module public key") does not tell an operator
+        // what to do, so the path and the two real causes travel with it.
+        throw new InvalidOperationException(
+            string.IsNullOrWhiteSpace(path)
+                ? Loc.Format("msg.proModuleMissing", reason)
+                : Loc.Format("msg.proModuleRejected", path, reason));
     }
 
     private void BootMixer()
@@ -170,6 +191,15 @@ public partial class App : Application
         SessionStore.ReplaceRuntime(Session);
         ApplyVmixApi();
         SessionStore.Publish(Session);
+        // The mixer starts with no Replay at all, so a project that already has one needs
+        // its settings and clip list pushed once. Without this the clips of an earlier
+        // run have nothing to play from, even though the host shows them.
+        if (!string.IsNullOrWhiteSpace(Session.ReplayJson))
+        {
+            MixerNative.ThrowIfFailed(
+                MixerNative.ReplayConfigure(Session.ReplayJson),
+                "Replay configure");
+        }
         MixerApply.ApplySceneBuses(Session);
     }
 
@@ -353,10 +383,13 @@ public partial class App : Application
 
     private static void ShowHttpListenMoved(uint port, uint next, string? owner)
     {
+        // A moved port is not a problem to solve: the server is running, the port is
+        // remembered, and the log already says so. A dialog here would greet every
+        // start on a machine where vMix owns 8088.
         var text = string.IsNullOrEmpty(owner)
             ? Loc.Format("msg.httpListenMoved", port, next)
             : Loc.Format("msg.httpListenMovedOwner", port, owner, next);
-        ShowApiWarning(text);
+        HostLog.Write("WARN", text);
     }
 
     private static void ShowHttpListenFailed(uint port, string? owner)
@@ -372,6 +405,14 @@ public partial class App : Application
         var text = string.IsNullOrEmpty(owner)
             ? Loc.T("msg.tcpListenFailed")
             : Loc.Format("msg.tcpListenFailedOwner", owner);
+        // Another application owning 8099 (vMix) is a normal setup, not something the
+        // operator can fix by reading a dialog: the TCP API is off and the log says
+        // why. Only an unclaimed port that still refuses to open is worth a dialog.
+        if (!string.IsNullOrEmpty(owner))
+        {
+            HostLog.Write("WARN", text);
+            return;
+        }
         ShowApiWarning(text);
     }
 
@@ -499,6 +540,8 @@ public partial class App : Application
                     break;
                 case InputKind.Audio when !network:
                     MixerApply.StartAudioCapture(input);
+                    break;
+                case InputKind.Replay:
                     break;
             }
         }

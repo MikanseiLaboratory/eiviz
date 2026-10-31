@@ -29,6 +29,13 @@ pub fn init() {
     });
 }
 
+/// True roughly once every `n` calls, for logs that must reach the file but not every frame.
+pub fn every(n: u64) -> bool {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed) % n == 0
+}
+
 pub fn info(message: &str) {
     init();
     write("INFO", message);
@@ -283,6 +290,7 @@ unsafe extern "system" fn on_unhandled_exception(_info: *mut core::ffi::c_void) 
 
 static SURFACE_LOST: AtomicU64 = AtomicU64::new(0);
 static RENDER_SKIPPED: AtomicU64 = AtomicU64::new(0);
+static FRAMES_RENDERED: AtomicU64 = AtomicU64::new(0);
 static FATAL: AtomicBool = AtomicBool::new(false);
 static FATAL_TAKEN: AtomicBool = AtomicBool::new(false);
 static FATAL_MSG: Mutex<String> = Mutex::new(String::new());
@@ -303,6 +311,17 @@ pub fn add_render_skipped(count: u64) {
 
 pub fn render_skipped() -> u64 {
     RENDER_SKIPPED.load(Ordering::Relaxed)
+}
+
+/// Counts composed frames. The rate this grows at is the master frame rate, which is
+/// what an operator needs to know when a preview looks slow: it says whether the mixer
+/// is behind or only the window.
+pub fn note_frame_rendered() {
+    FRAMES_RENDERED.fetch_add(1, Ordering::Relaxed);
+}
+
+pub fn frames_rendered() -> u64 {
+    FRAMES_RENDERED.load(Ordering::Relaxed)
 }
 
 pub fn mark_fatal(message: impl Into<String>) {

@@ -59,6 +59,13 @@ message Request {
     SaveSession save_session = 41;
     SceneGoTo scene_go_to = 42;
     SceneSequence scene_sequence = 43;
+    ReplayRecord replay_record = 44;
+    ReplayMarkIn replay_mark_in = 45;
+    ReplayMarkOut replay_mark_out = 46;
+    ReplayCue replay_cue = 47;
+    ReplayTransport replay_transport = 48;
+    ReplayJumpToNow replay_jump_to_now = 49;
+    GetReplayState get_replay_state = 50;
   }
 }
 
@@ -73,6 +80,7 @@ message Response {
     UploadAccepted upload_accepted = 12;
     DiscoverResult discover = 13;
     SavedSession saved_session = 14;
+    ReplayState replay_state = 15;
   }
 }
 
@@ -231,6 +239,9 @@ message Capabilities {
   bool hardware_encode = 18;
   bool decklink_linked = 19;
   bool rtmp_linked = 20;
+  uint32 replay_angle_limit = 21;
+  uint32 replay_channel_limit = 22;
+  bool replay_linked = 23;
 }
 
 message Snapshot {
@@ -294,4 +305,36 @@ message AbortMediaUpload {
 message UploadAccepted {
   string upload_id = 1;
   uint32 chunk_size = 2;
+}
+
+message ReplayRecord {
+  bool on = 1;
+}
+
+message ReplayMarkIn {}
+
+message ReplayMarkOut {
+  string name = 1;
+}
+
+message ReplayCue {
+  uint32 channel = 1;
+  string clip_uid = 2;
+}
+
+message ReplayTransport {
+  uint32 channel = 1;
+  bool playing = 2;
+  int32 speed_milli = 3;
+  int64 seek_frame = 4;
+}
+
+message ReplayJumpToNow {
+  uint32 channel = 1;
+}
+
+message GetReplayState {}
+
+message ReplayState {
+  string json = 1;
 }

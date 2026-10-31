@@ -375,6 +375,7 @@ struct SceneAnimView: View {
                     Text(L10n.t("anim.frames"))
                     Text(seconds(step.holdFrames)).foregroundStyle(EivizTheme.dim)
                 }
+                replayRow(sequence, index, step)
             }
             .padding(.leading, 26)
         }
@@ -382,6 +383,83 @@ struct SceneAnimView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 4).fill(Self.card))
         .padding(.top, 2)
+    }
+
+    /// Replay cue this step fires. An animation can start a replay clip on its own
+    /// timecode, so an operator can build a running order that plays back by itself.
+    private func replayRow(_ sequence: SceneSequence, _ index: Int, _ step: SequenceStep) -> some View {
+        let channels = mixer.replayDocument?.channels ?? []
+        let action = step.replay
+        let channelIndex = action?.channel ?? channels.first?.index ?? 0
+        let channelClips = clips(on: channels, channel: channelIndex)
+        return HStack(spacing: 6) {
+            Toggle(L10n.t("anim.replayAction"), isOn: Binding(
+                get: { action != nil },
+                set: { on in
+                    updateStep(sequence.id, index) {
+                        // Without a Replay channel there is nothing to cue, so the
+                        // action cannot be turned on at all.
+                        $0.replay = on && !channels.isEmpty
+                            ? SequenceReplayAction(channel: channelIndex, clipUid: "", play: false)
+                            : nil
+                    }
+                }
+            ))
+            .disabled(channels.isEmpty)
+            Picker("", selection: Binding(
+                get: { channelIndex },
+                set: { value in
+                    updateStep(sequence.id, index) {
+                        guard let current = $0.replay else { return }
+                        guard current.channel != value else { return }
+                        // The clip list belongs to the channel, so a stale id would
+                        // name a clip the channel does not have.
+                        $0.replay = SequenceReplayAction(channel: value, clipUid: "", play: current.play)
+                    }
+                }
+            )) {
+                ForEach(channels) { channel in
+                    Text(channel.label).tag(channel.index)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 110)
+            .disabled(action == nil)
+            Picker("", selection: Binding(
+                get: {
+                    let uid = action?.clipUid ?? ""
+                    return channelClips.contains { $0.uid == uid } ? uid : ""
+                },
+                set: { value in
+                    updateStep(sequence.id, index) { $0.replay?.clipUid = value }
+                }
+            )) {
+                Text(L10n.t("anim.replayNewestClip")).tag("")
+                ForEach(channelClips) { clip in
+                    Text(clip.uid).tag(clip.uid)
+                }
+            }
+            .labelsHidden()
+            .frame(minWidth: 180)
+            .disabled(action == nil)
+            Toggle(L10n.t("anim.replayPlay"), isOn: Binding(
+                get: { action?.play == true },
+                set: { value in
+                    updateStep(sequence.id, index) { $0.replay?.play = value }
+                }
+            ))
+            .disabled(action == nil)
+            Spacer()
+        }
+        .padding(.leading, 0)
+    }
+
+    /// Clips of the playlist a channel selects, which is what a cue can name.
+    private func clips(on channels: [ReplayChannelInfo], channel: UInt32) -> [ReplayClipInfo] {
+        guard let document = mixer.replayDocument,
+              let playlistId = channels.first(where: { $0.index == channel })?.playlistId
+        else { return [] }
+        return document.clips(playlistId: playlistId)
     }
 
     // MARK: Motion editor

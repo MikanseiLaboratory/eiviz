@@ -17,6 +17,27 @@ internal static class SessionStore
         Converters = { new InputKindJsonConverter(), new JsonStringEnumConverter() }
     };
 
+    /// <summary>
+    /// Puts an edited scene back into the live document before it is published.
+    ///
+    /// A window keeps the object it opened. The document itself is replaced whenever
+    /// the mixer reports a change, so publishing without this wrote the version from
+    /// before the edit: the picture changed (the mixer was told directly) while the
+    /// saved document did not.
+    /// </summary>
+    public static void AdoptScene(Session session, SceneEntry scene)
+    {
+        var index = session.Scenes.FindIndex(item => item.Id == scene.Id);
+        if (index < 0)
+        {
+            session.Scenes.Add(scene);
+            return;
+        }
+        if (ReferenceEquals(session.Scenes[index], scene))
+            return;
+        session.Scenes[index] = scene;
+    }
+
     public static void Save(Session session, string path)
     {
         MixerApply.CaptureSceneBuses(session);
@@ -36,7 +57,10 @@ internal static class SessionStore
     public static Session Import(string exportPath, string sessionDest, string mediaDir)
     {
         var json = MixerNative.SessionImportText(exportPath, sessionDest, mediaDir);
-        return FromJson(json);
+        var session = FromJson(json);
+        if (ReplayModel.Parse(session) is { } replay)
+            ReplayModel.EnsureRecordings(session, replay);
+        return session;
     }
 
     public static bool FileHasAssets(string path) => MixerNative.SessionFileHasAssets(path);
@@ -81,10 +105,162 @@ internal static class SessionStore
             }
             MixerNative.ThrowIfFailed(MixerNative.SecretSet(output.RtmpSecretRef, key), "RTMP secret");
         }
-        MixerNative.SessionReplaceText(ToJson(session));
+        var json = ToJson(session);
+        // A publish replaces the whole document in the core, so anything the DTO forgets
+        // is silently reset there. The scene camera bit us that way: every replay edit
+        // put the framing back to default. Fail loudly instead of quietly.
+        var framed = session.Scenes.Any(scene =>
+            scene.Camera.X != 0.5f || scene.Camera.Y != 0.5f || scene.Camera.Zoom != 1f);
+        if (framed && !json.Contains("\"camera\""))
+        {
+            HostLog.Write(
+                "ERROR",
+                "session publish drops the scene camera; the document DTO is missing the field");
+        }
+        // A recording started through the API (or by another host) is not linked by the
+        // deck, so the publish links whatever is recording now. The id the clips carry
+        // then points at a drive the session knows.
+        if (Application.Current is App { Backend.IsRemote: false } && MixerNative.ReplayRecordingUuid() is { Length: > 0 } recording
+            && ReplayModel.Parse(session) is { } replayDocument)
+        {
+            var format = replayDocument["format"] as System.Text.Json.Nodes.JsonObject;
+            ReplayModel.AddRecording(
+                replayDocument,
+                recording,
+                ReplayModel.Storages(replayDocument).FirstOrDefault() ?? "",
+                ReplayModel.Angles(replayDocument).Select(angle => angle.Id).ToList(),
+                format?["width"]?.GetValue<uint>() ?? 0,
+                format?["height"]?.GetValue<uint>() ?? 0,
+                format?["fpsNum"]?.GetValue<uint>() ?? 0,
+                format?["fpsDen"]?.GetValue<uint>() ?? 0,
+                0);
+            json = ToJson(session);
+        }
+        MixerNative.SessionReplaceText(json);
+        AdoptCanonicalReplay(session);
+        NoteReplayPublish(session);
+    }
+
+    /// The last replay document the core settled on, so a publish can be compared
+    /// with what was on air before it.
+    private static string _settledReplay = "";
+
+    /// <summary>Names the window whose edit the next publish carries, for the log.</summary>
+    public static string NextPublishSource = "";
+
+    /// Writes one line per publish that changed the replay document: which parts
+    /// changed and how the selected angle moved. A replay edit that quietly undid
+    /// another window's edit showed up only as "it changed by itself" in the UI; with
+    /// this line the log says which publish did it and what it replaced.
+    private static void NoteReplayPublish(Session session)
+    {
+        var source = NextPublishSource;
+        NextPublishSource = "";
+        var current = session.ReplayJson;
+        if (string.Equals(current, _settledReplay, StringComparison.Ordinal))
+            return;
+        if (string.IsNullOrEmpty(_settledReplay))
+        {
+            // The first publish of a process has nothing to compare with: taking the
+            // document as the baseline keeps the log free of a bogus "everything
+            // changed" line.
+            _settledReplay = current;
+            return;
+        }
+        try
+        {
+            using var before = JsonDocument.Parse(string.IsNullOrWhiteSpace(_settledReplay) ? "{}" : _settledReplay);
+            using var after = JsonDocument.Parse(string.IsNullOrWhiteSpace(current) ? "{}" : current);
+            var changed = new List<string>();
+            foreach (var name in new[]
+                     {
+                         "enabled", "storage", "format", "buffering", "retention", "warnings",
+                         "angles", "autoAddToPlaylist", "decodeAhead", "profiling", "channels",
+                         "events", "playlists", "activeAngleId", "nextEventId", "nextPlaylistId",
+                     })
+            {
+                var was = before.RootElement.TryGetProperty(name, out var left) ? left.GetRawText() : "-";
+                var now = after.RootElement.TryGetProperty(name, out var right) ? right.GetRawText() : "-";
+                if (!string.Equals(was, now, StringComparison.Ordinal))
+                    changed.Add(name);
+            }
+            if (changed.Count == 0)
+            {
+                _settledReplay = current;
+                return;
+            }
+            HostLog.Write(
+                "INFO",
+                $"replay publish from={source} changed=[{string.Join(",", changed)}] " +
+                $"active={AngleOf(before.RootElement)}->{AngleOf(after.RootElement)} " +
+                $"angles={Count(before.RootElement, "angles")}->{Count(after.RootElement, "angles")} " +
+                $"events={Count(before.RootElement, "events")}->{Count(after.RootElement, "events")} " +
+                $"playlists={Count(before.RootElement, "playlists")}->{Count(after.RootElement, "playlists")}");
+            _settledReplay = current;
+        }
+        catch (JsonException)
+        {
+        }
+    }
+
+    private static string AngleOf(JsonElement replay) =>
+        replay.TryGetProperty("activeAngleId", out var angle) ? angle.ToString() : "-";
+
+    private static int Count(JsonElement replay, string name) =>
+        replay.TryGetProperty(name, out var array) && array.ValueKind == JsonValueKind.Array
+            ? array.GetArrayLength()
+            : 0;
+
+    /// The core normalizes the replay document on replace, so the host keeps that copy
+    /// instead of the string it sent, which keeps repaired fields and counters.
+    ///
+    /// A `null` is the core saying Replay is gone: the last channel was removed and the
+    /// document went with it. Holding on to the string would publish the deleted Replay
+    /// back on the next save, and the core would then refuse the session, because a
+    /// Replay input cannot exist without its document.
+    private static void AdoptCanonicalReplay(Session session)
+    {
+        try
+        {
+            var snapshot = MixerNative.SnapshotText();
+            if (string.IsNullOrWhiteSpace(snapshot))
+                return;
+            using var document = JsonDocument.Parse(snapshot);
+            if (!document.RootElement.TryGetProperty("replay", out var replay)
+                || replay.ValueKind == JsonValueKind.Undefined)
+            {
+                return;
+            }
+            session.ReplayJson = replay.ValueKind == JsonValueKind.Null ? "" : replay.GetRawText();
+        }
+        catch (JsonException)
+        {
+        }
     }
 
     public static void ReplaceRuntime(Session session) => Publish(session);
+
+    /// <summary>
+    /// Applies one session mutation to the live document, then adopts what the core kept.
+    /// <para>
+    /// This is the way a window edits the document. Reading the document, changing it and
+    /// publishing it back loses anything another writer added in between, which is why
+    /// every window used to grow its own merge; the core now owns that rule.
+    /// </para>
+    /// </summary>
+    public static void MutateLocal(string mutation)
+    {
+        MixerNative.SessionMutateText(mutation);
+        AdoptCanonical(session: Application.Current is App app ? app.Session : null);
+    }
+
+    /// <summary>Takes the core's canonical document back onto the session.</summary>
+    private static void AdoptCanonical(Session? session)
+    {
+        if (session is null)
+            return;
+        AdoptCanonicalReplay(session);
+    }
 
     /// An enabled RTMP row with no encode profile never opens a socket. Create
     /// the same default profile the settings page uses and point those rows at it.
@@ -229,7 +405,13 @@ internal static class SessionStore
                 : MixerNative.SessionLoadText(path);
             var dto = JsonSerializer.Deserialize<Document>(json, Json)
                 ?? throw new InvalidOperationException(Loc.Error("Load session", 3));
-            return dto.ToSession();
+            var session = dto.ToSession();
+            // A session written before the recording list existed names its recordings
+            // only on the clips. Link them once, here, so playback and the deck use the
+            // list from then on.
+            if (ReplayModel.Parse(session) is { } replay)
+                ReplayModel.EnsureRecordings(session, replay);
+            return session;
         }
         catch (InvalidOperationException)
         {
@@ -257,6 +439,7 @@ internal static class SessionStore
         public List<SceneLayoutPreset> ScenePresets { get; set; } = [];
         public List<string> InputTags { get; set; } = [];
         public List<string> SceneTags { get; set; } = [];
+        public List<string> ReplayTags { get; set; } = [];
         public ulong NextInputId { get; set; }
         public ulong NextSceneId { get; set; }
         public ulong NextUnitId { get; set; }
@@ -268,6 +451,8 @@ internal static class SessionStore
         public bool HeadphoneCopyMonitor { get; set; }
         public uint HeadphoneListenKind { get; set; }
         public ulong HeadphoneListenId { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public JsonElement? Replay { get; set; }
 
         public static Document From(Session session) => new()
         {
@@ -289,6 +474,7 @@ internal static class SessionStore
             }).ToList(),
             InputTags = [.. session.InputTags],
             SceneTags = [.. session.SceneTags],
+            ReplayTags = [.. session.ReplayTags],
             NextInputId = session.NextInputId,
             NextSceneId = session.NextSceneId,
             NextUnitId = session.NextUnitId,
@@ -299,7 +485,10 @@ internal static class SessionStore
             Headphone = session.Headphone.Clone(),
             HeadphoneCopyMonitor = session.HeadphoneCopyMonitor,
             HeadphoneListenKind = session.HeadphoneListenKind,
-            HeadphoneListenId = session.HeadphoneListenId
+            HeadphoneListenId = session.HeadphoneListenId,
+            Replay = string.IsNullOrWhiteSpace(session.ReplayJson)
+                ? null
+                : JsonSerializer.Deserialize<JsonElement>(session.ReplayJson, Json)
         };
 
         public Session ToSession()
@@ -310,35 +499,12 @@ internal static class SessionStore
                 Headphone = Headphone.Clone(),
                 HeadphoneCopyMonitor = HeadphoneCopyMonitor,
                 HeadphoneListenKind = HeadphoneListenKind,
-                HeadphoneListenId = HeadphoneListenId
+                HeadphoneListenId = HeadphoneListenId,
+                ReplayJson = Replay is { ValueKind: JsonValueKind.Undefined or JsonValueKind.Null }
+                    ? ""
+                    : Replay?.GetRawText() ?? ""
             };
-            session.Settings.MasterFpsNum = Settings.MasterFpsNum;
-            session.Settings.MasterFpsDen = Settings.MasterFpsDen;
-            session.Settings.DefaultWidth = Settings.DefaultWidth;
-            session.Settings.DefaultHeight = Settings.DefaultHeight;
-            session.Settings.Theme = Settings.Theme;
-            session.Settings.DefaultMultiviewUnitId = Settings.DefaultMultiviewUnitId;
-            session.Settings.FrameBufferFrames = Settings.FrameBufferFrames == 0 ? 3 : Math.Clamp(Settings.FrameBufferFrames, 1u, 8u);
-            session.Settings.DefaultPresentInterval = Settings.DefaultPresentInterval == 0 ? 3 : Math.Clamp(Settings.DefaultPresentInterval, 1u, 8u);
-            session.Settings.FlipSwapchainLimit = Settings.FlipSwapchainLimit is 0 or 4 or 6 or 8 or 10 or 12 or 16
-                ? Settings.FlipSwapchainLimit
-                : 0;
-            session.Settings.InternalColorFormat = Settings.InternalColorFormat;
-            session.Settings.RebarOptimization = Settings.RebarOptimization != false;
-            session.Settings.NdiGpuUpload = Settings.NdiGpuUpload != false;
-            session.Settings.PreviewColor = RgbColor.FromOrDefault(Settings.PreviewColor, RgbColor.PreviewDefault);
-            session.Settings.ProgramColor = RgbColor.FromOrDefault(Settings.ProgramColor, RgbColor.ProgramDefault);
-            session.Settings.InactiveColor = RgbColor.FromOrDefault(Settings.InactiveColor, RgbColor.InactiveDefault);
-            session.Settings.MultiviewLabelSize = Settings.MultiviewLabelSize <= 0 ? 18 : Math.Clamp(Settings.MultiviewLabelSize, 1f, 200f);
-            session.Settings.MultiviewLabelUnit = Settings.MultiviewLabelUnit;
-            session.Settings.MultiviewLabelAnchor = Settings.MultiviewLabelAnchor;
-            session.Settings.VmixApiEnabled = Settings.VmixApiEnabledValue;
-            session.Settings.VmixApiPort = Settings.VmixApiPort == 0 ? 8088 : Settings.VmixApiPort;
-            session.Settings.VmixApiUser = Settings.VmixApiUser ?? "";
-            session.Settings.VmixApiPassword = Settings.VmixApiPassword ?? "";
-            session.Settings.VmixTcpEnabled = Settings.VmixTcpEnabledValue;
-            session.Settings.NativeApiEnabled = Settings.NativeApiEnabledValue;
-            session.Settings.NativeApiPort = Settings.NativeApiPort == 0 ? 9400 : Settings.NativeApiPort;
+            session.Settings.AdoptFrom(Settings);
             foreach (var input in Inputs)
                 session.Inputs.Add(input.ToEntry());
             foreach (var scene in Scenes)
@@ -360,6 +526,7 @@ internal static class SessionStore
                 session.ScenePresets.Add(preset);
             session.InputTags.AddRange(TagCatalog.NormalizeList(InputTags));
             session.SceneTags.AddRange(TagCatalog.NormalizeList(SceneTags));
+            session.ReplayTags.AddRange(TagCatalog.NormalizeList(ReplayTags));
             foreach (var output in session.Outputs)
             {
                 if (output.SourceKind == OutputSourceKind.Multiview)
@@ -523,6 +690,12 @@ internal static class SessionStore
         public List<SceneLayer> Layers { get; set; } = [];
         public List<string> Tags { get; set; } = [];
         public bool PreviewCollapsed { get; set; }
+        /// <summary>
+        /// The scene's framing. It has to travel with the scene: leaving it out resets the
+        /// camera in the core, so the operator's framing jumps back the moment anything
+        /// else is edited or a replay angle is chosen.
+        /// </summary>
+        public SceneCamera Camera { get; set; } = new();
         public List<SceneState> States { get; set; } = [];
         public List<SceneSequence> Sequences { get; set; } = [];
 
@@ -534,6 +707,7 @@ internal static class SessionStore
             Layers = [.. scene.Layers],
             Tags = [.. scene.Tags],
             PreviewCollapsed = scene.PreviewCollapsed,
+            Camera = scene.Camera.Clone(),
             States = [.. scene.States],
             Sequences = [.. scene.Sequences]
         };
@@ -547,7 +721,8 @@ internal static class SessionStore
                 Name = Name,
                 MonitorId = session.NextMonitorId++,
                 Tags = TagCatalog.NormalizeList(Tags),
-                PreviewCollapsed = PreviewCollapsed
+                PreviewCollapsed = PreviewCollapsed,
+                Camera = Camera.Clone()
             };
             foreach (var layer in Layers)
                 scene.Layers.Add(layer);
@@ -703,6 +878,7 @@ internal sealed class InputKindJsonConverter : JsonConverter<InputKind>
             "Mix" or "mix" => InputKind.Mix,
             "Audio" or "audio" => InputKind.Audio,
             "DeckLink" or "deckLink" or "decklink" => InputKind.DeckLink,
+            "Replay" or "replay" => InputKind.Replay,
             _ => throw new JsonException($"Unknown InputKind '{text}'.")
         };
     }
@@ -717,3 +893,5 @@ internal sealed class InputKindJsonConverter : JsonConverter<InputKind>
             _ => value.ToString()
         });
 }
+
+

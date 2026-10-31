@@ -746,6 +746,10 @@ extension MixerController {
                     }
                 }
             }
+        case .replay:
+            // A Replay channel has no source to create. The replay document drives
+            // the engine, and the channel input is only the playout surface.
+            break
         }
         pushInputAudio(input)
     }
@@ -864,13 +868,28 @@ extension MixerController {
                 return desc
             }
         }
+        // Clip ids the steps cue, pinned for the whole define call. Empty means
+        // "the newest clip", which the core reads as a null pointer.
+        var clipBuffers: [[UInt8]] = []
+        let clipIndices: [[Int?]] = scene.sequences.map { sequence in
+            sequence.steps.map { step in
+                guard let uid = step.replay?.clipUid, !uid.isEmpty else { return nil }
+                clipBuffers.append(Array(uid.utf8))
+                return clipBuffers.count - 1
+            }
+        }
         let stepBufs: [[EivizSequenceStepDesc]] = scene.sequences.map { sequence in
             sequence.steps.map { step in
                 EivizSequenceStepDesc(
                     state_id: step.stateId,
                     motion: sceneMotion(step.motion ?? Motion()),
                     has_motion: step.motion == nil ? 0 : 1,
-                    hold_frames: step.holdFrames
+                    hold_frames: step.holdFrames,
+                    replay_channel: step.replay?.channel ?? 0,
+                    replay_active: step.replay == nil ? 0 : 1,
+                    replay_play: step.replay?.play == true ? 1 : 0,
+                    replay_clip: nil,
+                    replay_clip_len: 0
                 )
             }
         }
@@ -897,19 +916,29 @@ extension MixerController {
                     "Define scene states"
                 )
             }
-            withPinned(stepBufs) { stepPtrs in
-                let sequences: [EivizSceneSequenceDesc] = scene.sequences.enumerated().map { index, sequence in
-                    EivizSceneSequenceDesc(
-                        id: sequence.id,
-                        steps: stepPtrs[index].map { UnsafePointer($0) },
-                        step_count: stepCounts[index]
-                    )
+            withPinned(clipBuffers) { clipPtrs in
+                var steps = stepBufs
+                for sequenceIndex in steps.indices {
+                    for stepIndex in steps[sequenceIndex].indices {
+                        guard let buffer = clipIndices[sequenceIndex][stepIndex] else { continue }
+                        steps[sequenceIndex][stepIndex].replay_clip = clipPtrs[buffer].map { UnsafePointer($0) }
+                        steps[sequenceIndex][stepIndex].replay_clip_len = clipBuffers[buffer].count
+                    }
                 }
-                sequences.withUnsafeBufferPointer { ptr in
-                    fail(
-                        mixer_scene_sequences_define(scene.gpuId, ptr.baseAddress, UInt32(sequences.count)),
-                        "Define scene sequences"
-                    )
+                withPinned(steps) { stepPtrs in
+                    let sequences: [EivizSceneSequenceDesc] = scene.sequences.enumerated().map { index, sequence in
+                        EivizSceneSequenceDesc(
+                            id: sequence.id,
+                            steps: stepPtrs[index].map { UnsafePointer($0) },
+                            step_count: stepCounts[index]
+                        )
+                    }
+                    sequences.withUnsafeBufferPointer { ptr in
+                        fail(
+                            mixer_scene_sequences_define(scene.gpuId, ptr.baseAddress, UInt32(sequences.count)),
+                            "Define scene sequences"
+                        )
+                    }
                 }
             }
         }

@@ -24,6 +24,9 @@ pub struct MixedAudio {
     /// PCM of the cued Mixing Unit. Local monitors play this.
     pub monitor: Vec<f32>,
     pub by_unit: HashMap<u64, Vec<f32>>,
+    /// PCM of what each Replay angle records, for the angles whose audio follows
+    /// their source. Keyed by angle id; filled only when the session asks for it.
+    pub by_angle: HashMap<u32, Vec<f32>>,
 }
 
 impl Default for MixedAudio {
@@ -31,6 +34,7 @@ impl Default for MixedAudio {
         Self {
             monitor: Vec::new(),
             by_unit: HashMap::new(),
+            by_angle: HashMap::new(),
         }
     }
 }
@@ -41,6 +45,10 @@ impl MixedAudio {
             return &[];
         }
         self.by_unit.get(&unit_id).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    pub fn for_angle(&self, angle_id: u32) -> Option<&Vec<f32>> {
+        self.by_angle.get(&angle_id)
     }
 }
 
@@ -362,12 +370,14 @@ impl AudioGraph {
         mix_inputs: &HashMap<u64, MixInputSpec>,
         fps_num: u32,
         fps_den: u32,
+        angle_sources: &[crate::replay::AudioSourceSpec],
     ) -> MixedAudio {
         if frames == 0 {
             return MixedAudio::default();
         }
         self.scratch_master.clear();
         self.scratch_master.resize(frames * 2, 0.0);
+        let mut by_angle = HashMap::new();
         if produce {
             let mut ids: Vec<u64> = uploads.primed_ids();
             for id in self.inputs.keys() {
@@ -389,6 +399,7 @@ impl AudioGraph {
                 .map(|spec| (spec.0, spec.3.as_ref()))
                 .collect();
             self.pop_mix_inputs(mix_inputs, frames, fps_num, fps_den);
+            by_angle = self.mix_angle_sources(angle_sources, frames, &spec_map);
             let unit_ids: Vec<u64> = self.unit_buses.keys().copied().collect();
             let mut listened_unit = Vec::new();
             for unit_id in unit_ids {
@@ -466,7 +477,11 @@ impl AudioGraph {
             .get(&self.headphone_cue_unit)
             .cloned()
             .unwrap_or_else(|| vec![0.0; frames * 2]);
-        MixedAudio { monitor, by_unit }
+        MixedAudio {
+            monitor,
+            by_unit,
+            by_angle,
+        }
     }
 
     fn render_bus(
@@ -498,6 +513,53 @@ impl AudioGraph {
         }
     }
 
+    /// The audio of what each Replay angle records. An input angle takes that input's
+    /// own sound; a scene angle takes the sound of the inputs placed in the scene, at
+    /// their own gains, before any unit fader. Only the angles the session asks for are
+    /// built, so a session that records a unit mix pays nothing here.
+    fn mix_angle_sources(
+        &self,
+        specs: &[crate::replay::AudioSourceSpec],
+        frames: usize,
+        spec_map: &HashMap<u64, &[OverlayDesc]>,
+    ) -> HashMap<u32, Vec<f32>> {
+        let mut by_angle = HashMap::new();
+        if specs.is_empty() || frames == 0 {
+            return by_angle;
+        }
+        for spec in specs {
+            let mut pcm = vec![0.0f32; frames * 2];
+            if spec.input_id != 0 {
+                if let Some(input) = self.inputs.get(&spec.input_id)
+                    && !input.mute
+                    && let Some(samples) = self.popped.get(&spec.input_id)
+                {
+                    crate::simd::mix_stereo_gain(&mut pcm, samples, input.gain.max(0.0));
+                }
+            } else if spec.scene_id != 0
+                && let Some(layers) = spec_map.get(&spec.scene_id)
+            {
+                for layer in layers.iter() {
+                    let Some(input) = self.inputs.get(&layer.source_id) else {
+                        continue;
+                    };
+                    if input.mute {
+                        continue;
+                    }
+                    let Some(samples) = self.popped.get(&layer.source_id) else {
+                        continue;
+                    };
+                    crate::simd::mix_stereo_gain(
+                        &mut pcm,
+                        samples,
+                        (layer.opacity.max(0.0)) * input.gain.max(0.0),
+                    );
+                }
+            }
+            by_angle.insert(spec.angle_id, pcm);
+        }
+        by_angle
+    }
     fn gains_for_unit(
         &self,
         unit_id: u64,
@@ -832,6 +894,7 @@ mod tests {
             &HashMap::new(),
             60,
             1,
+            &[],
         );
         assert_eq!(mixed.monitor.len(), 128);
         assert_eq!(graph.headphone.ring.fill_frames(), 0);
@@ -855,6 +918,7 @@ mod tests {
             &HashMap::new(),
             60,
             1,
+            &[],
         );
         let master = graph.unit_buses.get(&1).unwrap();
         assert_eq!(master.ring.fill_frames(), 64);
@@ -875,12 +939,96 @@ mod tests {
         let mixed = MixedAudio {
             monitor: vec![0.5, -0.5],
             by_unit: HashMap::from([(3, vec![0.25, 0.25])]),
+            by_angle: HashMap::new(),
         };
         assert!(mixed.for_unit(0).is_empty());
         assert_eq!(mixed.for_unit(3), &[0.25, 0.25]);
         assert!(mixed.for_unit(9).is_empty());
     }
 
+    /// An angle that follows its source records that input's own sound, at the input's
+    /// own gain, without a unit fader in between. A session that records a unit mix, or
+    /// no audio at all, builds nothing here.
+    #[test]
+    fn a_source_angle_records_the_input_s_own_sound() {
+        let mut graph = AudioGraph::with_defaults();
+        let mut uploads = AudioInputStore::default();
+        let mut delay = AudioDelay::new();
+        graph.ensure_unit(1);
+        graph.set_input(10, &[1], 0.5, false);
+        uploads.ingest_audio(
+            10,
+            crate::upload::AudioPacket {
+                timestamp: 0,
+                sample_rate: AUDIO_RATE,
+                channels: 2,
+                samples_per_channel: AUDIO_RATE,
+                pcm_planar_f32: vec![0.4; AUDIO_RATE as usize * 2],
+            },
+        );
+        let sources = [crate::replay::AudioSourceSpec {
+            angle_id: 3,
+            input_id: 10,
+            scene_id: 0,
+        }];
+        let mixed = graph.mix(
+            &mut uploads,
+            &[],
+            &[],
+            64,
+            &mut delay,
+            true,
+            &HashMap::new(),
+            60,
+            1,
+            &sources,
+        );
+        let pcm = mixed.for_angle(3).expect("the angle has audio");
+        assert_eq!(pcm.len(), 128);
+        // The input's gain is applied and the unit fader is not.
+        assert!((pcm[0] - 0.2).abs() < 1e-3, "{:?}", pcm[0]);
+        assert!(mixed.for_angle(4).is_none());
+    }
+
+    /// A muted input records nothing, rather than passing the picture with sound the
+    /// operator muted.
+    #[test]
+    fn a_muted_input_records_silence() {
+        let mut graph = AudioGraph::with_defaults();
+        let mut uploads = AudioInputStore::default();
+        let mut delay = AudioDelay::new();
+        graph.ensure_unit(1);
+        graph.set_input(10, &[1], 1.0, true);
+        uploads.ingest_audio(
+            10,
+            crate::upload::AudioPacket {
+                timestamp: 0,
+                sample_rate: AUDIO_RATE,
+                channels: 2,
+                samples_per_channel: AUDIO_RATE,
+                pcm_planar_f32: vec![0.4; AUDIO_RATE as usize * 2],
+            },
+        );
+        let sources = [crate::replay::AudioSourceSpec {
+            angle_id: 3,
+            input_id: 10,
+            scene_id: 0,
+        }];
+        let mixed = graph.mix(
+            &mut uploads,
+            &[],
+            &[],
+            64,
+            &mut delay,
+            true,
+            &HashMap::new(),
+            60,
+            1,
+            &sources,
+        );
+        let pcm = mixed.for_angle(3).expect("the angle has a buffer");
+        assert!(pcm.iter().all(|sample| *sample == 0.0));
+    }
     #[test]
     fn mix_keeps_sample_count_for_broadcast_clocks() {
         let mut graph = AudioGraph::with_defaults();
@@ -926,6 +1074,7 @@ mod tests {
                     &HashMap::new(),
                     fps_num,
                     fps_den,
+                    &[],
                 );
                 assert_eq!(mixed.monitor.len(), audio_frames * 2);
                 total += audio_frames;

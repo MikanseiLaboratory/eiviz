@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -19,6 +20,74 @@ namespace Eiviz.Host;
 public partial class MainWindow
 {
     private bool _uploadingMedia;
+    private ReplayWindow? _replayWindow;
+    private ReplaySettingsWindow? _replaySettingsWindow;
+
+    private bool HasReplayInput => _session.Inputs.Any(input => input.Kind == InputKind.Replay);
+
+    private void Replay_Click(object sender, RoutedEventArgs e) => OpenReplay();
+
+    /// <summary>
+    /// Opens the Replay deck, or brings it forward. The deck itself opens the
+    /// recording settings, so both entry points share one path.
+    /// </summary>
+    internal void OpenReplay()
+    {
+        if (!HasReplayInput)
+            return;
+        if (_replayWindow is not null)
+        {
+            _replayWindow.Activate();
+            return;
+        }
+        // Not owned by the main window: an owned window always rides above its owner,
+        // and an operator moving the switcher over the deck is a normal thing to do.
+        _replayWindow = new ReplayWindow(_session, this);
+        _replayWindow.Closed += (_, _) => _replayWindow = null;
+        _replayWindow.Show();
+    }
+
+    /// <summary>
+    /// Replay Setup has published. The open deck reloads that document and repaints
+    /// at the interval the operator just chose.
+    /// </summary>
+    internal void NotifyReplaySettingsApplied() => _replayWindow?.ApplySessionSettings();
+
+    /// <summary>Opens the recording settings, or brings them forward.</summary>
+    internal void OpenReplaySettings()
+    {
+        if (!HasReplayInput)
+            return;
+        if (_replaySettingsWindow is not null)
+        {
+            _replaySettingsWindow.Activate();
+            return;
+        }
+        try
+        {
+            _replaySettingsWindow = new ReplaySettingsWindow(_session) { Owner = this };
+            _replaySettingsWindow.Closed += (_, _) => _replaySettingsWindow = null;
+            _replaySettingsWindow.Show();
+        }
+        catch (Exception error)
+        {
+            HostLog.Write("ERROR", $"replay settings failed: {error}");
+            _replaySettingsWindow = null;
+        }
+    }
+
+    /// Replay is available only while the project has a Replay input. Without one
+    /// the chrome hides the deck's entry point and closes anything already open.
+    /// The deck itself opens the recording settings, so the main UI has one entry.
+    private void RefreshReplayUi()
+    {
+        ReplayButton.Visibility = HasReplayInput ? Visibility.Visible : Visibility.Collapsed;
+        if (!HasReplayInput)
+        {
+            _replayWindow?.Close();
+            _replaySettingsWindow?.Close();
+        }
+    }
 
     private async void AddInput_Click(object sender, RoutedEventArgs e)
     {
@@ -28,9 +97,29 @@ public partial class MainWindow
         dialog.BindTags(_session);
         if (dialog.ShowDialog() != true)
             return;
-        if (dialog.Kind is not (InputKind.Color or InputKind.Bars or InputKind.Mix or InputKind.Audio) && dialog.ResultPath is null)
+        if (dialog.Kind is not (InputKind.Color or InputKind.Bars or InputKind.Mix or InputKind.Audio or InputKind.Replay) && dialog.ResultPath is null)
             return;
-        var id = _session.NextInputId++;
+        var id = dialog.Kind == InputKind.Replay
+            ? NextReplayInputId()
+            : _session.NextInputId++;
+        if (dialog.Kind == InputKind.Replay && _session.Inputs.Any(item => item.Id == id))
+        {
+            MessageBox.Show(this, Loc.T("replay.channelsFull"), Loc.T("msg.addInput"));
+            return;
+        }
+        // The plan caps channels as well as angles. The core would refuse the
+        // document with a bare code, so say which limit was reached here.
+        if (dialog.Kind == InputKind.Replay
+            && PlanGate.TryReplayLimits(out var angleLimit, out var channelLimit)
+            && channelLimit != uint.MaxValue
+            && _session.Inputs.Count(item => item.Kind == InputKind.Replay) >= channelLimit)
+        {
+            MessageBox.Show(
+                this,
+                Loc.Format("replay.planLimits", angleLimit, channelLimit),
+                Loc.T("msg.addInput"));
+            return;
+        }
         var input = new InputEntry
         {
             Id = id,
@@ -365,10 +454,66 @@ public partial class MainWindow
                 input.AudioProcessAumid = dialog.ResultAudioProcessAumid ?? "";
                 MixerApply.StartAudioCapture(input);
                 break;
+            case InputKind.Replay:
+                EnsureReplayConfiguration(input.Id);
+                break;
             default:
                 throw new InvalidOperationException($"{dialog.Kind} is not available.");
         }
         SessionStore.Publish(_session);
+        RefreshReplayUi();
+    }
+
+    /// Replay channel inputs own this band. It must match
+    /// `REPLAY_CHANNEL_BASE` in `eiviz-control::session::replay`, which is
+    /// `0x0008_0000`; `0x0005_0000` belongs to the remote video sources.
+    private const ulong ReplayChannelBase = 0x0008_0000;
+
+    private ulong NextReplayInputId()
+    {
+        for (var index = 0UL; index < 26; index++)
+        {
+            var id = ReplayChannelBase | (index + 1);
+            if (_session.Inputs.All(input => input.Id != id))
+                return id;
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// Gives a freshly added Replay input its channel and the document Replay needs.
+    ///
+    /// The document's format is seeded from the project's Mixing Unit and the channel is
+    /// chosen from the free ones, which is exactly what the core's own
+    /// <c>add_channel_input</c> does for a Remote. Writing those rules a second time here
+    /// is how the two hosts drifted apart before, so the seed comes from the same place:
+    /// the session this host is about to publish has no Replay document yet, and the core
+    /// fills it when it adopts the input. This only reports whether that is possible, so
+    /// the operator hears about a missing Mixing Unit before the picture is expected.
+    /// </summary>
+    private void EnsureReplayConfiguration(ulong inputId)
+    {
+        var unit = _session.Units.FirstOrDefault()
+            ?? throw new InvalidOperationException(Loc.T("replay.needMixingUnit"));
+        if (unit.Width == 0 || unit.Height == 0 || unit.FpsNum == 0 || unit.FpsDen == 0)
+            throw new InvalidOperationException(Loc.T("replay.needMixingUnit"));
+        var channel = inputId - ReplayChannelBase - 1;
+        if (channel >= 26)
+            throw new InvalidOperationException("all Replay channels A-Z already exist");
+        // A document that already exists keeps it: only the channel for this input is
+        // added, and everything else (angles, events, playlists, retention) stays.
+        if (string.IsNullOrWhiteSpace(_session.ReplayJson))
+        {
+            _session.ReplayJson = ReplayModel.NewDocument(unit.Width, unit.Height, unit.FpsNum, unit.FpsDen, channel, inputId);
+            _session.Inputs.FirstOrDefault(item => item.Id == inputId)!.Name = $"Replay {(char)('A' + (int)channel)}";
+        }
+        else
+        {
+            _session.ReplayJson = ReplayModel.AddChannel(_session.ReplayJson, channel, inputId);
+            _session.Inputs.FirstOrDefault(item => item.Id == inputId)!.Name = $"Replay {(char)('A' + (int)channel)}";
+        }
+        HostLog.Write("INFO", $"replay EnsureReplayConfiguration input={inputId} channel={channel}");
+        MixerNative.ThrowIfFailed(MixerNative.ReplayConfigure(_session.ReplayJson), "Replay configure");
     }
 
     private void RemoveInput_Click(object sender, RoutedEventArgs e)
@@ -386,6 +531,8 @@ public partial class MainWindow
             return;
         }
         if (TryRemoteMutate(MutationJson.DeleteInput(input.Id), Loc.T("msg.selectInputDelete")))
+            return;
+        if (input.Kind == InputKind.Replay && !RemoveReplayChannel(input.Id))
             return;
         CloseInputPreview(input.Id);
         CloseAudioInput(input.Id);
@@ -422,6 +569,50 @@ public partial class MainWindow
         RebuildStreamToggles();
         TickVideo();
         SessionStore.Publish(_session);
+        RefreshReplayUi();
+    }
+
+    private bool RemoveReplayChannel(ulong inputId)
+    {
+        if (string.IsNullOrWhiteSpace(_session.ReplayJson))
+            return true;
+        using var document = JsonDocument.Parse(_session.ReplayJson);
+        var root = document.RootElement;
+        var channels = root.TryGetProperty("channels", out var existing)
+            ? existing.EnumerateArray()
+                .Where(item => !item.TryGetProperty("inputId", out var id) || id.GetUInt64() != inputId)
+                .Select(item => item.GetRawText())
+                .ToList()
+            : [];
+        // The channel index is what an animation step cues, and it follows the
+        // reserved input id.
+        var channelIndex = inputId > ReplayChannelBase
+            ? (uint)(inputId - ReplayChannelBase - 1)
+            : 0;
+        if (channels.Count == 0)
+        {
+            if (MessageBox.Show(
+                    this,
+                    "Removing the last Replay input removes its replay settings, events, and playlists from this session. Continue?",
+                    "Remove Replay",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                return false;
+            _session.ReplayJson = "";
+            // Scene sequences that cued a channel go with Replay: a cue to a channel
+            // nobody owns would stop the session loading.
+            ReplayCues.ClearAll(_session.Scenes);
+            MixerNative.ThrowIfFailed(MixerNative.ReplayConfigure("null"), "Replay configure");
+            return true;
+        }
+        var properties = root.EnumerateObject()
+            .Where(property => property.Name != "channels")
+            .Select(property => $"\"{property.Name}\":{property.Value.GetRawText()}");
+        _session.ReplayJson = "{" + string.Join(",", properties.Append($"\"channels\":[{string.Join(",", channels)}]")) + "}";
+        // Only the cues that named this channel are dead.
+        ReplayCues.Clear(_session.Scenes, channel: channelIndex);
+        MixerNative.ThrowIfFailed(MixerNative.ReplayConfigure(_session.ReplayJson), "Replay configure");
+        return true;
     }
 
     private void AddScene_Click(object sender, RoutedEventArgs e)
@@ -511,10 +702,47 @@ public partial class MainWindow
                 continue;
             names.Add(string.IsNullOrWhiteSpace(unit.Name) ? $"Mixing Unit {unit.Id}" : unit.Name);
         }
+        // A Replay angle records this scene's composited output, so the scene is not
+        // free to delete while the angle names it.
+        if (ReplayModel.Parse(_session) is { } replay && replay["angles"] is JsonArray angles)
+        {
+            foreach (var item in angles)
+            {
+                if (item is not JsonObject angle
+                    || (angle["sceneId"]?.GetValue<ulong>() ?? 0) != scene.Id)
+                {
+                    continue;
+                }
+                names.Add("Replay " + (angle["name"]?.GetValue<string>() ?? "angle"));
+            }
+        }
         message = names.Count == 0
             ? ""
             : Loc.Format("msg.sceneInUse", string.Join(Environment.NewLine, names));
         return names.Count > 0;
+    }
+
+    /// <summary>
+    /// True when a Replay angle records this mixing unit's program mix, which makes
+    /// the unit the wrong thing to delete.
+    /// </summary>
+    private bool ReplayRecordsUnit(ulong unitId, out string message)
+    {
+        if (ReplayModel.Parse(_session) is { } replay && replay["angles"] is JsonArray angles)
+        {
+            foreach (var item in angles)
+            {
+                if (item is not JsonObject angle)
+                    continue;
+                var audio = angle["audio"]?.GetValue<string>() ?? "Silent";
+                if (audio != "Unit" || (angle["audioUnitId"]?.GetValue<ulong>() ?? 0) != unitId)
+                    continue;
+                message = Loc.Format("msg.unitReplayAudio", angle["name"]?.GetValue<string>() ?? "");
+                return true;
+            }
+        }
+        message = "";
+        return false;
     }
 
     private bool UnitShowsScene(MixingUnitEntry unit, SceneEntry scene)
@@ -701,6 +929,11 @@ public partial class MainWindow
             return;
         }
         var unit = SelectedUnit;
+        if (ReplayRecordsUnit(unit.Id, out var replayMessage))
+        {
+            MessageBox.Show(this, replayMessage, Loc.T("replay.windowTitle"), MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         if (TryRemoteMutate(MutationJson.DeleteUnit(unit.Id), Loc.T("chrome.delete")))
             return;
         foreach (var output in _session.Outputs.Where(item => item.UnitId == unit.Id).ToArray())
@@ -1067,9 +1300,11 @@ public partial class MainWindow
             return;
         if (App.IsRemote)
         {
+            var merged = _session.Settings.Clone();
+            SessionSettings.ApplyChanges(merged, dialog.OpenedWith, dialog.Settings);
             RemoteMutate(
                 MutationJson.SetSettings(
-                    dialog.Settings,
+                    merged,
                     dialog.Outputs,
                     dialog.Headphone,
                     dialog.HeadphoneCopyMonitor,
@@ -1081,31 +1316,9 @@ public partial class MainWindow
         }
         var restartMedia = _session.Settings.InternalColorFormat != dialog.Settings.InternalColorFormat
             || _session.Settings.FrameBufferFrames != dialog.Settings.FrameBufferFrames;
-        _session.Settings.MasterFpsNum = dialog.Settings.MasterFpsNum;
-        _session.Settings.MasterFpsDen = dialog.Settings.MasterFpsDen;
-        _session.Settings.DefaultWidth = dialog.Settings.DefaultWidth;
-        _session.Settings.DefaultHeight = dialog.Settings.DefaultHeight;
-        _session.Settings.DefaultMultiviewUnitId = dialog.Settings.DefaultMultiviewUnitId;
-        _session.Settings.FrameBufferFrames = dialog.Settings.FrameBufferFrames;
-        _session.Settings.DefaultPresentInterval = dialog.Settings.DefaultPresentInterval;
-        _session.Settings.FlipSwapchainLimit = dialog.Settings.FlipSwapchainLimit;
+        // Apply only what this dialog changed; see SessionSettings.ApplyChanges.
+        SessionSettings.ApplyChanges(_session.Settings, dialog.OpenedWith, dialog.Settings);
         FlipBudget.Configure(_session.Settings.FlipSwapchainLimit);
-        _session.Settings.InternalColorFormat = dialog.Settings.InternalColorFormat;
-        _session.Settings.RebarOptimization = dialog.Settings.RebarOptimizationEnabled;
-        _session.Settings.NdiGpuUpload = dialog.Settings.NdiGpuUploadEnabled;
-        _session.Settings.PreviewColor = RgbColor.FromOrDefault(dialog.Settings.PreviewColor, RgbColor.PreviewDefault);
-        _session.Settings.ProgramColor = RgbColor.FromOrDefault(dialog.Settings.ProgramColor, RgbColor.ProgramDefault);
-        _session.Settings.InactiveColor = RgbColor.FromOrDefault(dialog.Settings.InactiveColor, RgbColor.InactiveDefault);
-        _session.Settings.MultiviewLabelSize = dialog.Settings.MultiviewLabelSize;
-        _session.Settings.MultiviewLabelUnit = dialog.Settings.MultiviewLabelUnit;
-        _session.Settings.MultiviewLabelAnchor = dialog.Settings.MultiviewLabelAnchor;
-        _session.Settings.VmixApiEnabled = dialog.Settings.VmixApiEnabledValue;
-        _session.Settings.VmixApiPort = dialog.Settings.VmixApiPort == 0 ? 8088 : dialog.Settings.VmixApiPort;
-        _session.Settings.VmixApiUser = dialog.Settings.VmixApiUser ?? "";
-        _session.Settings.VmixApiPassword = dialog.Settings.VmixApiPassword ?? "";
-        _session.Settings.VmixTcpEnabled = dialog.Settings.VmixTcpEnabledValue;
-        _session.Settings.NativeApiEnabled = dialog.Settings.NativeApiEnabledValue;
-        _session.Settings.NativeApiPort = dialog.Settings.NativeApiPort == 0 ? 9400 : dialog.Settings.NativeApiPort;
         AppPrefs.Current.NativeApiEnabled = _session.Settings.NativeApiEnabledValue;
         AppPrefs.Current.NativeApiPort = _session.Settings.NativeApiPort;
         AppPrefs.Current.Save();

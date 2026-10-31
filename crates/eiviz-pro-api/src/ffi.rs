@@ -36,6 +36,7 @@ pub const PRO_NOT_SUPPORTED: u32 = 6;
 pub const FEATURE_DECKLINK: u32 = 1 << 0;
 pub const FEATURE_RTMP: u32 = 1 << 1;
 pub const FEATURE_LICENSE: u32 = 1 << 2;
+pub const FEATURE_REPLAY: u32 = 1 << 3;
 
 pub const LAYOUT_UYVY: u32 = 0;
 pub const LAYOUT_BGRA: u32 = 1;
@@ -92,6 +93,8 @@ pub struct ProEntitlementsAbi {
     pub recording: u32,
     pub srt: u32,
     pub hardware_encode: u32,
+    pub replay_angles: u32,
+    pub replay_channels: u32,
     pub features: u32,
 }
 
@@ -204,6 +207,22 @@ pub struct ProOutputStatsAbi {
     pub sent_fps_milli: u32,
 }
 
+/// The estimate entry point. The argument list is the module ABI: path bytes, the
+/// plan's format, how many angles are planned, the reserve, and an out struct.
+pub type ReplayEstimateFn = unsafe extern "C" fn(
+    *mut c_void,
+    *const u8,
+    usize,
+    u32,
+    u32,
+    u32,
+    u32,
+    u32,
+    u32,
+    u64,
+    *mut ProReplayEstimateAbi,
+) -> ProStatus;
+
 /// Function table. `struct_size` is the plugin's view of this struct.
 /// `abi_hash` must equal [`abi_hash`].
 #[repr(C)]
@@ -285,6 +304,326 @@ pub struct ProApi {
         Option<unsafe extern "C" fn(*mut c_void, *mut u8, usize, *mut usize) -> ProStatus>,
     pub license_email:
         Option<unsafe extern "C" fn(*mut c_void, *mut u8, usize, *mut usize) -> ProStatus>,
+    pub replay_open: Option<
+        unsafe extern "C" fn(*mut c_void, *const ProReplayConfig, *mut *mut c_void) -> ProStatus,
+    >,
+    /// Opens a finished recording for playback only.
+    ///
+    /// Writing into a recording that is being read would destroy it, so a module that
+    /// attaches this way refuses every write. It exists so clips from an earlier run can
+    /// be played and exported without re-recording them.
+    pub replay_attach:
+        Option<unsafe extern "C" fn(*mut c_void, *const u8, usize, *mut *mut c_void) -> ProStatus>,
+    pub replay_close: Option<unsafe extern "C" fn(*mut c_void) -> ProStatus>,
+    pub replay_write_video:
+        Option<unsafe extern "C" fn(*mut c_void, u32, u64, *const ProVideoView) -> ProStatus>,
+    pub replay_decode: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            u32,
+            u64,
+            *mut u8,
+            usize,
+            *mut ProReplayDecoded,
+        ) -> ProStatus,
+    >,
+    pub replay_range:
+        Option<unsafe extern "C" fn(*mut c_void, u32, *mut u64, *mut u64) -> ProStatus>,
+    /// Added after the first layout. A module that does not export it has no
+    /// replay audio, and a caller that passes a smaller `struct_size` never set
+    /// it.
+    pub replay_write_audio:
+        Option<unsafe extern "C" fn(*mut c_void, u32, u64, *const ProReplayAudioView) -> ProStatus>,
+    /// Stores a frame the sender already encoded (Replay passthrough).
+    pub replay_write_encoded: Option<
+        unsafe extern "C" fn(*mut c_void, u32, u64, *const ProReplayEncodedView) -> ProStatus,
+    >,
+    pub replay_read_audio:
+        Option<unsafe extern "C" fn(*mut c_void, u32, u64, usize, *mut f32, *mut u32) -> ProStatus>,
+    pub replay_copy_peaks: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            u32,
+            u32,
+            *mut f32,
+            *mut f32,
+            u32,
+            *mut u32,
+            *mut u32,
+        ) -> ProStatus,
+    >,
+    pub replay_stats: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            *mut ProReplayStatsAbi,
+            *mut ProReplayAngleStatsAbi,
+            u32,
+            *mut u32,
+        ) -> ProStatus,
+    >,
+    pub replay_estimate: Option<ReplayEstimateFn>,
+
+    /// Export a recording to MP4. The job runs on its own thread, so the host can
+    /// show progress and cancel.
+    pub replay_export_start:
+        Option<unsafe extern "C" fn(*mut c_void, *const ProReplayExportRequest) -> ProStatus>,
+    pub replay_export_progress: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            *mut ProReplayExportProgress,
+            *mut u8,
+            usize,
+            *mut usize,
+        ) -> ProStatus,
+    >,
+    pub replay_export_cancel: Option<unsafe extern "C" fn(*mut c_void) -> ProStatus>,
+    /// Reads a stored packet for GPU decode. The caller supplies a buffer; when it
+    /// is too small the module reports the needed length and `PRO_BUSY`.
+    pub replay_read_packet: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            u32,
+            u64,
+            *mut u8,
+            usize,
+            *mut usize,
+            *mut ProReplayPacket,
+        ) -> ProStatus,
+    >,
+}
+
+/// One run of the recording timeline that goes into the exported file.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProReplayExportSegment {
+    pub angle_id: u32,
+    /// Inclusive, matching how the session stores clip ranges.
+    pub from_frame: u64,
+    pub to_frame: u64,
+}
+
+/// One playlist clip, transitions included, as the exported file has to reproduce it.
+///
+/// Appended after the first export layout. A caller that passes a smaller `struct_size`
+/// never set `clips`, and the module writes the plain `segments` instead.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProReplayExportClip {
+    pub angle_id: u32,
+    /// Inclusive.
+    pub from_frame: u64,
+    pub to_frame: u64,
+    /// Percent of normal speed; 100 is real time.
+    pub speed_percent: u32,
+    /// Non-zero when the next clip begins with a transition rather than a cut.
+    pub has_transition: u32,
+    /// 0 Cut, 1 Dissolve, 2 Dip, 3 Wipe, 4 Slide, 5 Push.
+    pub transition_kind: u32,
+    /// 0 Left, 1 Right, 2 Up, 3 Down.
+    pub transition_direction: u32,
+    /// `EXPORT_TIMING_OVERWRAP` or `EXPORT_TIMING_ADDITIVE`.
+    pub transition_timing: u32,
+    /// Frames the transition occupies on the exported timeline.
+    pub transition_frames: u32,
+    /// Angle supplying this clip's audio; `u32::MAX` to export it silent.
+    pub audio_angle_id: u32,
+    /// Clip gain, linear.
+    pub gain: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProReplayExportRequest {
+    pub struct_size: u32,
+    pub path: *const u8,
+    pub path_len: usize,
+    pub width: u32,
+    pub height: u32,
+    pub fps_num: u32,
+    pub fps_den: u32,
+    pub bitrate: u32,
+    pub sample_rate: u32,
+    pub channels: u32,
+    /// Non-zero to include the recorded audio.
+    pub with_audio: u32,
+    pub segments: *const ProReplayExportSegment,
+    pub segment_count: u32,
+    /// 0 is H.264. 1 is HEVC. Older callers leave this off the struct; the
+    /// module then writes H.264.
+    pub codec: u32,
+    /// The playlist with its transitions, in play order. Non-null and non-zero
+    /// `clip_count` means "write this, not `segments`". A module that cannot reproduce
+    /// transitions must refuse the request rather than flatten it to cuts.
+    pub clips: *const ProReplayExportClip,
+    pub clip_count: u32,
+    /// Keeps the two pointers' alignment identical on every target.
+    pub reserved: u32,
+}
+
+/// `audio_angle_id` for a clip that exports silent.
+pub const EXPORT_AUDIO_SILENT: u32 = u32::MAX;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProReplayExportProgress {
+    pub struct_size: u32,
+    /// `EXPORT_*` from the module.
+    pub state: u32,
+    pub done: u64,
+    pub total: u64,
+    pub skipped: u64,
+    pub bytes: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProReplayStorage {
+    pub path: *const u8,
+    pub path_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProReplayAngle {
+    pub angle_id: u32,
+    pub storage_index: u32,
+}
+
+/// Interleaved `f32` audio for one video frame of the recording timeline.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProReplayAudioView {
+    pub struct_size: u32,
+    pub sample_rate: u32,
+    pub channels: u32,
+    /// Frames per channel in `data`.
+    pub frames: u32,
+    pub data: *const f32,
+    pub data_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProReplayConfig {
+    pub struct_size: u32,
+    pub recording_uuid: *const u8,
+    pub recording_uuid_len: usize,
+    pub storages: *const ProReplayStorage,
+    pub storage_count: u32,
+    pub angles: *const ProReplayAngle,
+    pub angle_count: u32,
+    pub width: u32,
+    pub height: u32,
+    pub fps_num: u32,
+    pub fps_den: u32,
+    pub profile: u32,
+    pub segment_frames: u32,
+    pub encode_queue_frames: u32,
+    pub write_buffer_bytes: u64,
+    pub overflow_policy: u32,
+    pub reserve_bytes: u64,
+    pub retention: u32,
+    /// Appended after the original layout. A caller that passes a smaller
+    /// `struct_size` cannot have set it, and the module must read zero instead.
+    pub protect_from_frame: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProReplayStatsAbi {
+    pub struct_size: u32,
+    pub state: u32,
+    pub stop_reason: u32,
+    pub issues: u32,
+    pub first_frame: u64,
+    pub last_frame: u64,
+    pub free_bytes: u64,
+    pub reserve_bytes: u64,
+    pub write_rate_bps: u64,
+    pub write_rate_instant_bps: u64,
+    pub frames_written: u64,
+    pub frames_dropped: u64,
+    pub frames_dropped_recent: u32,
+    /// Frames stored as the sender encoded them, without a second encoder.
+    pub encoded_frames: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProReplayEncodedView {
+    pub struct_size: u32,
+    /// Picture width the sender declared.
+    pub width: u32,
+    /// Picture height the sender declared.
+    pub height: u32,
+    /// Timestamp the sender stamped, in 100 ns units.
+    pub pts_100ns: i64,
+    /// Frame rate numerator the sender declared.
+    pub fps_num: u32,
+    /// Frame rate denominator the sender declared.
+    pub fps_den: u32,
+    /// Frames the receiver's capture replaced before this one.
+    pub dropped_before: u64,
+    /// The bitstream, exactly as it arrived.
+    pub data: *const u8,
+    pub data_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProReplayAngleStatsAbi {
+    pub struct_size: u32,
+    pub angle_id: u32,
+    pub encode_ms_avg_milli: u32,
+    pub encode_ms_max_milli: u32,
+    pub encode_queue_len: u32,
+    pub encode_queue_cap: u32,
+    pub write_buffer_bytes: u64,
+    pub write_buffer_cap: u64,
+    pub write_latency_p95_ms: u32,
+    pub frames_written: u64,
+    pub dropped_encode: u64,
+    pub dropped_write: u64,
+    pub bytes_written: u64,
+    pub segments: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProReplayDecoded {
+    pub struct_size: u32,
+    pub actual_frame_index: u64,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub pts_100ns: i64,
+    pub substituted: u32,
+}
+
+/// Metadata for a packet read for GPU decode.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProReplayPacket {
+    pub struct_size: u32,
+    pub actual_frame_index: u64,
+    pub width: u32,
+    pub height: u32,
+    pub pts_100ns: i64,
+    pub substituted: u32,
+    /// `REPLAY_CODEC_*`.
+    pub codec: u32,
+    /// Bytes the caller must provide. Set even when `PRO_BUSY` is returned.
+    pub required_len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProReplayEstimateAbi {
+    pub struct_size: u32,
+    pub free_bytes: u64,
+    pub estimate_rate_bps: u64,
+    pub remaining_secs: u32,
+    pub path_writable: u32,
 }
 
 /// FNV-1a over the sizes of every struct that crosses the boundary.
@@ -303,6 +642,20 @@ pub fn abi_hash() -> u64 {
         std::mem::size_of::<ProLicenseStatusAbi>(),
         std::mem::size_of::<ProCaptureStatsAbi>(),
         std::mem::size_of::<ProOutputStatsAbi>(),
+        std::mem::size_of::<ProReplayConfig>(),
+        std::mem::size_of::<ProReplayStatsAbi>(),
+        std::mem::size_of::<ProReplayAngleStatsAbi>(),
+        std::mem::size_of::<ProReplayDecoded>(),
+        std::mem::size_of::<ProReplayPacket>(),
+        std::mem::size_of::<ProReplayEstimateAbi>(),
+        // The export request is compared by `struct_size` on the module side, so a module
+        // built against the older layout is accepted and reads the fields it knows. Its
+        // size still has to be part of the hash: a mixer paired with a module that never
+        // heard of `clips` would otherwise be told nothing is wrong while the request it
+        // sent carried a transition list the module silently ignored.
+        std::mem::size_of::<ProReplayExportRequest>(),
+        std::mem::size_of::<ProReplayExportSegment>(),
+        std::mem::size_of::<ProReplayExportClip>(),
         ABI_MAJOR as usize,
     ];
     let mut hash = 0xcbf29ce484222325u64;
@@ -318,6 +671,12 @@ pub fn module_target() -> String {
     format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
 }
 
+/// Copies a slice into a caller-provided buffer.
+///
+/// Deliberately not `unsafe fn`: this is the helper modules call from their own
+/// `unsafe extern "C"` entry points, and it refuses a null pointer or a short
+/// buffer instead of trusting the caller.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn copy_to_buffer(src: &[u8], dst: *mut u8, cap: usize, written: *mut usize) -> ProStatus {
     if dst.is_null() || written.is_null() {
         return ProStatus::new(PRO_INVALID);
@@ -359,6 +718,8 @@ impl Entitlements {
             recording: u32::from(self.recording),
             srt: u32::from(self.srt),
             hardware_encode: u32::from(self.hardware_encode),
+            replay_angles: quota_count(self.replay_angles),
+            replay_channels: quota_count(self.replay_channels),
             features,
         }
     }
@@ -378,6 +739,8 @@ impl Entitlements {
             recording: raw.recording != 0,
             srt: raw.srt != 0,
             hardware_encode: raw.hardware_encode != 0,
+            replay_angles: quota_from_count(raw.replay_angles),
+            replay_channels: quota_from_count(raw.replay_channels),
         }
     }
 }

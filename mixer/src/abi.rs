@@ -130,6 +130,33 @@ pub const LABEL_BASE: u64 = 0x0003_0000;
 pub const AUDIO_BUS_PEAK_BASE: u64 = 0x0004_0000;
 /// Peak id for the headphone bus. It is not `AUDIO_BUS_PEAK_BASE | unit_id`.
 pub const AUDIO_HEADPHONE_PEAK: u64 = 0x0004_FFFF;
+/// Replay ids are owned by the control crate so the session model and the mixer
+/// cannot disagree about which bands Replay occupies.
+pub const REPLAY_RECORD_BASE: u64 = eiviz_control::ids::REPLAY_RECORD_BASE;
+
+pub const REPLAY_STATE_IDLE: u32 = 0;
+pub const REPLAY_STATE_RECORDING: u32 = 1;
+pub const REPLAY_STATE_STOPPED: u32 = 2;
+pub const REPLAY_STOP_NONE: u32 = 0;
+pub const REPLAY_STOP_USER: u32 = 1;
+pub const REPLAY_STOP_STORAGE_FULL: u32 = 2;
+pub const REPLAY_STOP_BUFFER_FULL: u32 = 3;
+pub const REPLAY_STOP_IO_ERROR: u32 = 4;
+pub const REPLAY_STOP_FPS_CHANGED: u32 = 5;
+pub const REPLAY_ISSUE_CPU_ENCODE: u32 = 1 << 0;
+pub const REPLAY_ISSUE_STORAGE_WRITE: u32 = 1 << 1;
+pub const REPLAY_ISSUE_GPU_READBACK: u32 = 1 << 2;
+pub const REPLAY_ISSUE_STORAGE_LOW: u32 = 1 << 3;
+pub const REPLAY_ISSUE_STORAGE_FULL: u32 = 1 << 4;
+pub const REPLAY_ISSUE_FRAMES_DROPPED: u32 = 1 << 5;
+pub const REPLAY_ISSUE_STOPPED_BY_POLICY: u32 = 1 << 6;
+pub const REPLAY_ISSUE_PRO_UNAVAILABLE: u32 = 1 << 7;
+/// A GPU angle could not encode: the codec could not be built or the texture could not
+/// be sampled. Distinct from a slow disk, which is the other reason frames go missing.
+pub const REPLAY_ISSUE_ENCODER_UNAVAILABLE: u32 = 1 << 8;
+pub const REPLAY_SEVERITY_OK: u32 = 0;
+pub const REPLAY_SEVERITY_WARNING: u32 = 1;
+pub const REPLAY_SEVERITY_CRITICAL: u32 = 2;
 pub const MU_SOURCE_FLAG: u64 = 0x8000_0000_0000_0000;
 
 pub const OUT_OMT: u32 = 0;
@@ -157,6 +184,104 @@ pub struct MixerCapabilities {
     pub hardware_encode: u32,
     pub decklink_linked: u32,
     pub rtmp_linked: u32,
+    pub replay_angle_limit: u32,
+    pub replay_channel_limit: u32,
+    pub replay_linked: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MixerReplayStats {
+    pub state: u32,
+    pub stop_reason: u32,
+    pub severity: u32,
+    pub issues: u32,
+    pub recording_frame: u64,
+    pub first_frame: u64,
+    pub last_frame: u64,
+    pub free_bytes: u64,
+    pub reserve_bytes: u64,
+    pub write_rate_bps: u64,
+    pub write_rate_instant_bps: u64,
+    pub estimate_rate_bps: u64,
+    pub remaining_secs: u32,
+    pub remaining_is_estimate: u32,
+    pub frames_written: u64,
+    pub frames_dropped: u64,
+    pub frames_dropped_recent: u32,
+    pub angle_count: u32,
+    pub channel_count: u32,
+    pub mark_in_frame: u64,
+    pub mark_in_valid: u32,
+    /// Frames the readback handed to the recorder. Compared with
+    /// `recording_frame` it says whether picture is lost on the way in or later,
+    /// at the encoder.
+    pub frames_offered: u64,
+    /// Frames handed to the readback. `frames_offered` should match it: the
+    /// difference is picture the readback could not carry.
+    pub frames_pushed: u64,
+    /// Wall clock of the recording's frame 0, in milliseconds since the epoch. Zero
+    /// when nothing has been recorded since the mixer started.
+    pub started_unix_ms: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MixerReplayAngleStats {
+    pub angle_id: u32,
+    pub scene_gpu_id: u64,
+    pub encode_ms_avg_milli: u32,
+    pub encode_ms_max_milli: u32,
+    pub encode_queue_len: u32,
+    pub encode_queue_cap: u32,
+    pub write_buffer_bytes: u64,
+    pub write_buffer_cap: u64,
+    pub write_latency_p95_ms: u32,
+    pub frames_written: u64,
+    pub dropped_readback: u64,
+    pub dropped_encode: u64,
+    pub dropped_write: u64,
+    pub bytes_written: u64,
+    pub segments: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MixerReplayChannelState {
+    pub channel_index: u32,
+    pub source_id: u64,
+    pub playing: u32,
+    pub speed_milli: i32,
+    pub position_frame: u64,
+    pub in_frame: u64,
+    pub out_frame: u64,
+    pub angle_id: u32,
+    pub clip_uid_hash: u64,
+    pub substituted_frames: u64,
+    pub decode_ms_avg_milli: u32,
+    pub decode_misses: u64,
+}
+
+#[repr(C)]
+pub struct MixerReplayEstimateIn {
+    pub width: u32,
+    pub height: u32,
+    pub fps_num: u32,
+    pub fps_den: u32,
+    pub profile: u32,
+    pub angle_count: u32,
+    pub path: *const u8,
+    pub path_len: usize,
+    pub reserve_bytes: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MixerReplayEstimateOut {
+    pub free_bytes: u64,
+    pub estimate_rate_bps: u64,
+    pub remaining_secs: u32,
+    pub path_writable: u32,
 }
 
 /// `state` matches [`eiviz_pro_api::LicenseCondition::abi`].
@@ -426,6 +551,15 @@ pub struct EivizSequenceStepDesc {
     pub motion: EivizMotion,
     pub has_motion: u32,
     pub hold_frames: u32,
+    /// Replay channel this step cues. Ignored when `replay_play_channel` is zero.
+    pub replay_channel: u32,
+    /// Non-zero when the step asks Replay to do something.
+    pub replay_active: u32,
+    /// Start playing as soon as the step is reached.
+    pub replay_play: u32,
+    /// Clip to cue; empty means the newest clip on the channel.
+    pub replay_clip: *const u8,
+    pub replay_clip_len: usize,
 }
 
 #[repr(C)]
@@ -655,10 +789,42 @@ mod tests {
 
     #[test]
     fn runtime_stats_are_fixed_width() {
-        assert_eq!(size_of::<MixerRuntimeStats>(), 72);
+        assert_eq!(size_of::<MixerRuntimeStats>(), 80);
         assert_eq!(align_of::<MixerRuntimeStats>(), 8);
         assert_eq!(size_of::<InputRuntimeStats>(), 24);
         assert_eq!(size_of::<OutputRuntimeStats>(), 32);
+    }
+
+    /// The hosts hand these structs over by fixed layout: Windows marshals the
+    /// sequence step with explicit offsets and the macOS header declares it in C.
+    /// Adding a field moves every offset after it, so this test is what tells the
+    /// next change to update both hosts.
+    #[test]
+    fn the_animation_step_layout_the_hosts_use_is_pinned() {
+        assert_eq!(size_of::<EivizMotion>(), 28);
+        assert_eq!(size_of::<EivizSceneCamera>(), 12);
+        assert_eq!(size_of::<EivizSceneStateDesc>(), 64);
+        assert_eq!(size_of::<EivizSequenceStepDesc>(), 72);
+        assert_eq!(align_of::<EivizSequenceStepDesc>(), 8);
+        assert_eq!(std::mem::offset_of!(EivizSequenceStepDesc, state_id), 0);
+        assert_eq!(std::mem::offset_of!(EivizSequenceStepDesc, motion), 8);
+        assert_eq!(std::mem::offset_of!(EivizSequenceStepDesc, has_motion), 36);
+        assert_eq!(std::mem::offset_of!(EivizSequenceStepDesc, hold_frames), 40);
+        assert_eq!(
+            std::mem::offset_of!(EivizSequenceStepDesc, replay_channel),
+            44
+        );
+        assert_eq!(
+            std::mem::offset_of!(EivizSequenceStepDesc, replay_active),
+            48
+        );
+        assert_eq!(std::mem::offset_of!(EivizSequenceStepDesc, replay_play), 52);
+        assert_eq!(std::mem::offset_of!(EivizSequenceStepDesc, replay_clip), 56);
+        assert_eq!(
+            std::mem::offset_of!(EivizSequenceStepDesc, replay_clip_len),
+            64
+        );
+        assert_eq!(std::mem::offset_of!(EivizSceneStateDesc, has_camera), 60);
     }
 }
 
@@ -667,6 +833,8 @@ mod tests {
 pub struct MixerRuntimeStats {
     pub uptime_ms: u64,
     pub render_skipped: u64,
+    /// Frames composed since start. Its growth rate is the master frame rate.
+    pub frames_rendered: u64,
     pub input_queue_dropped: u64,
     pub output_omt: u32,
     pub output_ndi: u32,

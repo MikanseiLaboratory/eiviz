@@ -205,6 +205,172 @@ enum MixerFFI {
         return pointer.load(as: T.self)
     }
 
+    /// Live replay state. The session document says what is configured; this
+    /// says what is actually playing.
+    static func replayStats() -> EivizReplayStats? {
+        var stats = EivizReplayStats()
+        guard mixer_replay_copy_stats(&stats, nil, 0) == EIVIZ_OK else { return nil }
+        return stats
+    }
+
+    /// Replay stats with the per-angle breakdown, so the operator can see which
+    /// stage lost frames.
+    static func replayStatsWithAngles(
+        _ capacity: Int = 8
+    ) -> (stats: EivizReplayStats, angles: [EivizReplayAngleStats])? {
+        var stats = EivizReplayStats()
+        var angles = [EivizReplayAngleStats](repeating: EivizReplayAngleStats(), count: capacity)
+        let status = angles.withUnsafeMutableBufferPointer { pointer in
+            mixer_replay_copy_stats(&stats, UnsafeMutableRawPointer(pointer.baseAddress), UInt32(pointer.count))
+        }
+        guard status == EIVIZ_OK else { return nil }
+        let count = min(Int(stats.angle_count), angles.count)
+        return (stats, Array(angles.prefix(count)))
+    }
+
+    static func replayConfigure(_ json: String) -> Int32 {
+        withCString(json) { text in mixer_replay_configure(text) }
+    }
+
+    static func replayRecordingUuid() -> String {
+        let (n, bytes) = copyUtf8(startCap: 128) { mixer_replay_copy_recording_uuid($0, $1) }
+        guard n > 0 else { return "" }
+        return String(bytes: bytes, encoding: .utf8) ?? ""
+    }
+
+    static func replayRecord(_ on: Bool) -> Int32 {
+        mixer_replay_record(on ? 1 : 0)
+    }
+
+    static func replayMarkIn() -> UInt64? {
+        var frame: UInt64 = 0
+        guard mixer_replay_mark_in(&frame) == EIVIZ_OK else { return nil }
+        return frame
+    }
+
+    static func replayMarkOut() -> (uuid: String, inFrame: UInt64, outFrame: UInt64)? {
+        var inFrame: UInt64 = 0
+        var outFrame: UInt64 = 0
+        var uuid = [UInt8](repeating: 0, count: 80)
+        let code = uuid.withUnsafeMutableBufferPointer { ptr in
+            mixer_replay_mark_out(&inFrame, &outFrame, ptr.baseAddress, ptr.count)
+        }
+        guard code == EIVIZ_OK else { return nil }
+        let end = uuid.firstIndex(of: 0) ?? uuid.count
+        let text = String(decoding: uuid.prefix(end), as: UTF8.self)
+        return (text, inFrame, outFrame)
+    }
+
+    static func replayCue(channel: UInt32, angleId: UInt32, inFrame: UInt64, outFrame: UInt64, recordingUuid: String) -> Int32 {
+        withCString(recordingUuid) { uuid in
+            mixer_replay_channel_cue(channel, angleId, inFrame, outFrame, uuid)
+        }
+    }
+
+    static func replayTransport(channel: UInt32, playing: Bool, speedMilli: Int32, seekFrame: Int64) -> Int32 {
+        mixer_replay_channel_transport(channel, playing ? 1 : 0, speedMilli, seekFrame)
+    }
+
+    static func replayJumpToNow(channel: UInt32) -> Int32 {
+        mixer_replay_channel_jump_to_now(channel)
+    }
+
+    /// Moves a channel by `delta` frames inside the clip it is playing.
+    static func replayStep(channel: UInt32, delta: Int32) -> Int32 {
+        mixer_replay_channel_step(channel, delta)
+    }
+
+    /// Loops the channel's playlist at its end.
+    static func replayLoop(channel: UInt32, on: Bool) -> Int32 {
+        mixer_replay_loop(channel, on ? 1 : 0)
+    }
+
+    /// Keeps the last clip running past its out point instead of stopping there.
+    static func replayHoldLast(channel: UInt32, on: Bool) -> Int32 {
+        mixer_replay_hold_last(channel, on ? 1 : 0)
+    }
+
+    /// Per-channel live state, so the deck shows what the mixer is doing. Empty when the
+    /// mixer reports nothing.
+    static func replayChannels() -> [EivizReplayChannelState] {
+        let limit: Int = replayChannelLimit
+        let empty: EivizReplayChannelState = EivizReplayChannelState()
+        var buffer: [EivizReplayChannelState] = Array(
+            repeating: empty, count: limit)
+        // Every step is spelled out on its own line. Written as one expression the type
+        // checker gives up ("failed to produce diagnostic") rather than reporting anything
+        // useful, because the pointer's element type has to be inferred through the closure.
+        // `mixer_replay_copy_channels` answers with `int32_t`, so the count is signed: a
+        // negative value means the call failed and there is nothing to report.
+        let copied: Int32 = buffer.withUnsafeMutableBufferPointer { pointer -> Int32 in
+            let capacity: UInt32 = UInt32(pointer.count)
+            return mixer_replay_copy_channels(pointer.baseAddress, capacity)
+        }
+        guard copied > 0 else { return [] }
+        let filled: Int = Int(min(copied, Int32(limit)))
+        return Array(buffer[0..<filled])
+    }
+
+    /// Channels A-Z. Matches the core's own limit, so the buffer is never short.
+    private static let replayChannelLimit = 26
+
+    /// Recorded frame range of one angle, or nil when it has no frames.
+    static func replayAngleRange(angleId: UInt32) -> (first: UInt64, last: UInt64)? {
+        var first: UInt64 = 0
+        var last: UInt64 = 0
+        guard mixer_replay_angle_range(angleId, &first, &last) != 0 else { return nil }
+        return (first, last)
+    }
+
+    /// Starts an MP4 export. The JSON names the file and its segments.
+    static func replayExportStart(_ json: String) -> Int32 {
+        withCString(json) { text in mixer_replay_export_start(text) }
+    }
+
+    /// Progress of the running export as JSON, or an empty string when the mixer
+    /// has nothing to report.
+    static func replayExportProgress() -> String {
+        var buffer = [UInt8](repeating: 0, count: 512)
+        var written = 0
+        let status = buffer.withUnsafeMutableBufferPointer { pointer in
+            mixer_replay_export_progress(pointer.baseAddress, pointer.count, &written)
+        }
+        guard status == EIVIZ_OK, written > 0 else { return "" }
+        return String(decoding: buffer.prefix(written), as: UTF8.self)
+    }
+
+    static func replayExportCancel() -> Int32 {
+        mixer_replay_export_cancel()
+    }
+
+    /// Buckets per second the replay waveform is stored at.
+    static func replayPeakRate() -> UInt32 {
+        mixer_replay_peak_rate()
+    }
+
+    /// Waveform of one angle: the bucket count and the buckets themselves.
+    static func replayPeaks(angleId: UInt32) -> (mins: [Float], maxes: [Float], dropped: UInt32) {
+        var dropped: UInt32 = 0
+        let count = mixer_replay_peak_count(angleId, &dropped)
+        guard count > 0 else { return ([], [], dropped) }
+        var mins = [Float](repeating: 0, count: Int(count))
+        var maxes = [Float](repeating: 0, count: Int(count))
+        let copied = mins.withUnsafeMutableBufferPointer { minBuffer in
+            maxes.withUnsafeMutableBufferPointer { maxBuffer in
+                mixer_replay_copy_peaks(
+                    angleId,
+                    0,
+                    minBuffer.baseAddress,
+                    maxBuffer.baseAddress,
+                    count
+                )
+            }
+        }
+        guard copied > 0 else { return ([], [], dropped) }
+        let written = Int(copied)
+        return (Array(mins.prefix(written)), Array(maxes.prefix(written)), dropped)
+    }
+
     static func deckLinkDevices() -> (devices: [DeckLinkDeviceInfo], error: String) {
         var buffer = [UInt8](repeating: 0, count: 1 << 16)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in

@@ -4,8 +4,39 @@ use serde::{Deserialize, Serialize};
 
 pub const SCENE_BASE: u64 = 0x0001_0000;
 pub const MULTIVIEW_BASE: u64 = 0x0002_0000;
+/// First band after multiview surfaces. Mirrors `LABEL_BASE` in the mixer.
+pub const LABEL_BASE: u64 = 0x0003_0000;
 /// Live encode workers. Destinations stay on the output-row id.
 pub const STREAM_ENCODER_BASE: u64 = 0x0006_0000;
+pub const REPLAY_CHANNEL_BASE: u64 = crate::session::replay::REPLAY_CHANNEL_BASE;
+/// Readback keys for Replay recording. Remote mixing unit ids occupy
+/// `0x0007_0000`, so recording keys use `0x0009_0000`.
+pub const REPLAY_RECORD_BASE: u64 = 0x0009_0000;
+
+/// Bands that hold non-input source ids. New inputs must skip them, otherwise a
+/// user input takes an id that a Replay channel has already reserved.
+const RESERVED_INPUT_BANDS: [(u64, u64); 2] = [
+    (REPLAY_CHANNEL_BASE, REPLAY_CHANNEL_BASE + 0x1_0000),
+    (REPLAY_RECORD_BASE, REPLAY_RECORD_BASE + 0x1_0000),
+];
+
+/// Moves `id` past every reserved band.
+pub fn skip_reserved_bands(id: u64) -> u64 {
+    let mut id = id;
+    loop {
+        match RESERVED_INPUT_BANDS
+            .iter()
+            .find(|(low, high)| id >= *low && id < *high)
+        {
+            Some((_, high)) => id = *high,
+            None => return id,
+        }
+    }
+}
+
+pub fn replay_channel_gpu_id(index: u32) -> u64 {
+    crate::session::replay::replay_channel_gpu_id(index)
+}
 pub const MU_SOURCE_FLAG: u64 = 0x8000_0000_0000_0000;
 pub const MU_BUS_PREVIEW: u64 = 0x1000_0000_0000_0000;
 pub const MU_ID_MASK: u64 = 0x0FFF_FFFF_FFFF_FFFF;
@@ -267,5 +298,35 @@ mod tests {
             .resolve_input(&doc, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
             .unwrap();
         assert_eq!(hit.id, 2);
+    }
+
+    #[test]
+    fn new_input_ids_skip_the_replay_bands() {
+        assert_eq!(skip_reserved_bands(10), 10);
+        // Both Replay bands are skipped: a user input that reaches the channel
+        // band lands past the record band too.
+        assert_eq!(
+            skip_reserved_bands(REPLAY_CHANNEL_BASE),
+            REPLAY_RECORD_BASE + 0x1_0000
+        );
+        assert_eq!(
+            skip_reserved_bands(REPLAY_RECORD_BASE + 1),
+            REPLAY_RECORD_BASE + 0x1_0000
+        );
+        assert_eq!(
+            skip_reserved_bands(REPLAY_RECORD_BASE + 0x1_0000),
+            REPLAY_RECORD_BASE + 0x1_0000
+        );
+    }
+
+    /// The replay bands are laid out at compile time, so the relationship between them
+    /// is checked where they are defined rather than asserted in a test that could never
+    /// see a different build.
+    #[test]
+    fn replay_bands_are_laid_out_in_order() {
+        const _: () = assert!(REPLAY_CHANNEL_BASE > MULTIVIEW_BASE);
+        const _: () = assert!(REPLAY_CHANNEL_BASE != 0x0005_0000);
+        const _: () = assert!(REPLAY_RECORD_BASE != 0x0007_0000);
+        const _: () = assert!(REPLAY_RECORD_BASE >= REPLAY_CHANNEL_BASE + 0x1_0000);
     }
 }

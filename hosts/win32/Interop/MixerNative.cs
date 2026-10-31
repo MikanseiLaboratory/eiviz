@@ -87,11 +87,17 @@ internal static partial class MixerNative
     internal const uint SceneSeqStop = 3;
 
     internal static string TransitionLabel(uint kind) => TransitionCatalog.Label(kind);
+    /// <summary>No recorded material is open: nothing has been recorded yet this run.</summary>
+    internal const int ErrIo = 5;
     internal const int ErrBufferTooSmall = 6;
     internal const int ErrNotSupportedPlan = 7;
     internal const uint FormatUyvy = 0;
     internal const uint FormatBgra = 1;
     internal const uint FormatRgba = 3;
+    /// <summary>How urgent the recording's health issues are, as the mixer reports them.</summary>
+    internal const uint SeverityOk = 0;
+    internal const uint SeverityWarning = 1;
+    internal const uint SeverityCritical = 2;
     internal const uint OutOmt = 0;
     internal const uint OutNdi = 1;
     internal const uint OutDeckLink = 2;
@@ -403,6 +409,109 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_capabilities")]
     internal static unsafe partial int Capabilities(MixerCapabilities* caps);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_copy_stats")]
+    internal static unsafe partial int ReplayCopyStats(MixerReplayStats* stats, nint angles, uint cap);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_bench_capacity")]
+    internal static unsafe partial int BenchCapacity(byte* path, nuint pathLen, uint width, uint height, byte* outBuffer, nuint cap, nuint* written);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_record")]
+    internal static partial int ReplayRecord(uint on);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_mark_in")]
+    internal static unsafe partial int ReplayMarkIn(ulong* frame);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_mark_out")]
+    internal static unsafe partial int ReplayMarkOut(ulong* inFrame, ulong* outFrame, byte* uuid, nuint cap);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_configure", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int ReplayConfigure(string json);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_channel_jump_to_now")]
+    internal static partial int ReplayJumpToNow(uint channel);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_copy_recording_uuid")]
+    internal static unsafe partial int ReplayCopyRecordingUuid(byte* buffer, nuint capacity);
+
+    /// <summary>Wall clock of the recording's frame 0 (ms since the epoch); 0 when unknown.</summary>
+    internal static unsafe ulong ReplayStartedUnixMs()
+    {
+        var stats = default(MixerReplayStats);
+        return ReplayCopyStats(&stats, 0, 0) == 0 ? stats.StartedUnixMs : 0UL;
+    }
+
+    internal static string ReplayRecordingUuid()
+    {
+        var buffer = new byte[128];
+        unsafe
+        {
+            fixed (byte* ptr = buffer)
+            {
+                var n = ReplayCopyRecordingUuid(ptr, (nuint)buffer.Length);
+                return n <= 0 ? "" : Encoding.UTF8.GetString(buffer, 0, n);
+            }
+        }
+    }
+
+    /// <summary>Turns looping on or off for a channel's playlist.</summary>
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_loop")]
+    internal static partial int ReplayLoop(uint channel, uint on);
+
+    /// <summary>
+    /// Asks the mixer how much space a drive has and how long the current settings
+    /// would record there. Replay Setup shows it per drive, because an operator
+    /// choosing a drive needs to know what fits.
+    /// </summary>
+    [DllImport(LibraryName, EntryPoint = "mixer_replay_channel_step")]
+    internal static extern int ReplayChannelStep(uint channel, int delta);
+
+    [DllImport(LibraryName, EntryPoint = "mixer_replay_copy_channels")]
+    internal static extern int ReplayCopyChannels([Out] MixerReplayChannelState[] channels, uint capacity);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_estimate", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int ReplayEstimate(ref MixerReplayEstimateIn input, ref MixerReplayEstimateOut output);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_channel_cue", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int ReplayCue(uint channel, uint angleId, ulong inFrame, ulong outFrame, string recordingUuid);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_hold_last")]
+    internal static partial int ReplayHoldLast(uint channel, uint on);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_channel_transport")]
+    internal static partial int ReplayTransport(uint channel, uint playing, int speedMilli, long seekFrame);
+
+    /// <summary>Buckets per second the replay waveform is stored at.</summary>
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_peak_rate")]
+    internal static partial uint ReplayPeakRate();
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_peak_count")]
+    internal static unsafe partial uint ReplayPeakCount(uint angleId, uint* dropped);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_copy_peaks")]
+    internal static unsafe partial int ReplayCopyPeaks(uint angleId, uint from, float* minOut, float* maxOut, uint cap);
+
+    /// <summary>Recorded frame range of one angle. Nonzero when it has frames.</summary>
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_angle_range")]
+    internal static unsafe partial int ReplayAngleRange(uint angleId, ulong* first, ulong* last);
+
+    /// <summary>
+    /// Jog proxy as UYVY. Zero when the recording has no proxy. The stride is the source's
+    /// bytes per row, which a store may pad beyond width * 2.
+    /// </summary>
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_copy_proxy")]
+    internal static unsafe partial int ReplayCopyProxy(
+        uint angleId, ulong frame, byte* pixels, nuint cap, uint* width, uint* height, uint* stride);
+
+    /// <summary>Starts an MP4 export. The JSON names the file and its segments.</summary>
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_export_start", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int ReplayExportStart(string json);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_export_progress")]
+    internal static unsafe partial int ReplayExportProgress(byte* outBuffer, nuint cap, nuint* written);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_export_cancel")]
+    internal static partial int ReplayExportCancel();
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_secret_set", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int SecretSet(string name, string value);
 
@@ -667,6 +776,13 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_replace")]
     internal static unsafe partial int SessionReplace(byte* json, nuint length, ulong expectedRevision);
 
+    /// <summary>
+    /// Applies one session mutation. The core applies it to the live document, so an
+    /// edit another window made in the meantime is kept rather than replaced.
+    /// </summary>
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_mutate")]
+    internal static unsafe partial int SessionMutate(byte* json, nuint length);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_poll_events")]
     internal static unsafe partial int PollEvents(ulong after, byte* buffer, nuint capacity);
 
@@ -853,6 +969,22 @@ internal static partial class MixerNative
             fixed (byte* ptr = bytes)
             {
                 ThrowIfFailed(SessionReplace(ptr, (nuint)bytes.Length, expectedRevision), "Replace session");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Applies one mutation. The core refuses a mutation it cannot apply and says why,
+    /// which reaches the host through <see cref="LastErrorText"/>.
+    /// </summary>
+    internal static void SessionMutateText(string json)
+    {
+        var bytes = Encoding.UTF8.GetBytes(json);
+        unsafe
+        {
+            fixed (byte* ptr = bytes)
+            {
+                ThrowIfFailed(SessionMutate(ptr, (nuint)bytes.Length), "Mutate session");
             }
         }
     }
@@ -1080,13 +1212,20 @@ internal struct EivizSceneStateDesc
     [FieldOffset(60)] public uint HasCamera;
 }
 
-[StructLayout(LayoutKind.Explicit, Size = 48)]
+[StructLayout(LayoutKind.Explicit, Size = 72)]
 internal struct EivizSequenceStepDesc
 {
     [FieldOffset(0)] public ulong StateId;
     [FieldOffset(8)] public EivizMotion Motion;
     [FieldOffset(36)] public uint HasMotion;
     [FieldOffset(40)] public uint HoldFrames;
+    /// <summary>Replay channel this step cues. Ignored unless <see cref="ReplayActive"/>.</summary>
+    [FieldOffset(44)] public uint ReplayChannel;
+    [FieldOffset(48)] public uint ReplayActive;
+    [FieldOffset(52)] public uint ReplayPlay;
+    /// <summary>Clip to cue; empty means the newest clip on the channel.</summary>
+    [FieldOffset(56)] public nint ReplayClip;
+    [FieldOffset(64)] public nuint ReplayClipLen;
 }
 
 [StructLayout(LayoutKind.Explicit, Size = 24)]
@@ -1139,6 +1278,103 @@ internal struct MixerCapabilities
     public uint HardwareEncode;
     public uint DecklinkLinked;
     public uint RtmpLinked;
+    public uint ReplayAngleLimit;
+    public uint ReplayChannelLimit;
+    public uint ReplayLinked;
+}
+
+/// <summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixerReplayAngleStats
+{
+    public uint AngleId;
+    public ulong SceneGpuId;
+    public uint EncodeMsAvgMilli;
+    public uint EncodeMsMaxMilli;
+    public uint EncodeQueueLen;
+    public uint EncodeQueueCap;
+    public ulong WriteBufferBytes;
+    public ulong WriteBufferCap;
+    public uint WriteLatencyP95Ms;
+    public ulong FramesWritten;
+    public ulong DroppedReadback;
+    public ulong DroppedEncode;
+    public ulong DroppedWrite;
+    public ulong BytesWritten;
+    public uint Segments;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixerReplayStats
+{
+    public uint State;
+    public uint StopReason;
+    public uint Severity;
+    public uint Issues;
+    public ulong RecordingFrame;
+    public ulong FirstFrame;
+    public ulong LastFrame;
+    public ulong FreeBytes;
+    public ulong ReserveBytes;
+    public ulong WriteRateBps;
+    public ulong WriteRateInstantBps;
+    public ulong EstimateRateBps;
+    public uint RemainingSecs;
+    public uint RemainingIsEstimate;
+    public ulong FramesWritten;
+    public ulong FramesDropped;
+    public uint FramesDroppedRecent;
+    public uint AngleCount;
+    public uint ChannelCount;
+    public ulong MarkInFrame;
+    public uint MarkInValid;
+    public ulong FramesOffered;
+    public ulong FramesPushed;
+    /// <summary>Wall clock of the recording's frame 0 (ms since the epoch); 0 when unknown.</summary>
+    public ulong StartedUnixMs;
+}
+
+/// <summary>What a replay channel is showing, and where in its clip it is.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixerReplayChannelState
+{
+    public uint ChannelIndex;
+    public ulong SourceId;
+    public uint Playing;
+    public int SpeedMilli;
+    /// <summary>Source frame the channel is on, in the recording's own numbering.</summary>
+    public ulong PositionFrame;
+    public ulong InFrame;
+    public ulong OutFrame;
+    public uint AngleId;
+    public ulong ClipUidHash;
+    public ulong SubstitutedFrames;
+    public uint DecodeMsAvgMilli;
+    public ulong DecodeMisses;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixerReplayEstimateIn
+{
+    public uint Width;
+    public uint Height;
+    public uint FpsNum;
+    public uint FpsDen;
+    /// <summary>0 = HQ, 1 = SQ, 2 = LQ, matching the Pro API.</summary>
+    public uint Profile;
+    public uint AngleCount;
+    public IntPtr Path;
+    public nuint PathLen;
+    public ulong ReserveBytes;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MixerReplayEstimateOut
+{
+    public ulong FreeBytes;
+    public ulong EstimateRateBps;
+    public uint RemainingSecs;
+    public uint PathWritable;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -1174,6 +1410,8 @@ internal struct MixerRuntimeStats
 {
     public ulong UptimeMs;
     public ulong RenderSkipped;
+    /// <summary>Frames composed since start. Its growth rate is the master frame rate.</summary>
+    public ulong FramesRendered;
     public ulong InputQueueDropped;
     public uint OutputOmt;
     public uint OutputNdi;
@@ -1337,3 +1575,8 @@ internal sealed class DeckLinkModeInfo
 
     public string Label => !string.IsNullOrWhiteSpace(Name) ? Name : $"{Width}x{Height}";
 }
+
+
+
+
+

@@ -3,6 +3,8 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -17,6 +19,8 @@ namespace Eiviz.Host.Dialogs;
 public partial class SettingsWindow : Window
 {
     private Session _session => ((App)Application.Current).Session;
+    /// <summary>The settings as they were when this dialog opened.</summary>
+    public SessionSettings OpenedWith { get; }
     private ulong _nextOutputId;
     private HttpListener? _licenseReturn;
     private CancellationTokenSource? _licenseReturnCancel;
@@ -60,6 +64,10 @@ public partial class SettingsWindow : Window
             NativeApiEnabled = session.Settings.NativeApiEnabledValue,
             NativeApiPort = session.Settings.NativeApiPort == 0 ? 9400 : session.Settings.NativeApiPort
         };
+        // What the fields held when the dialog opened. The main window applies only the
+        // values that differ from this, so a setting changed elsewhere while the dialog
+        // was open is not put back to the value it had here.
+        OpenedWith = Settings.Clone();
         foreach (var output in session.Outputs)
         {
             Outputs.Add(Clone(output));
@@ -75,7 +83,7 @@ public partial class SettingsWindow : Window
         SelectTag(SizeBox, $"{Settings.DefaultWidth}x{Settings.DefaultHeight}");
         SelectTag(BufferBox, Settings.FrameBufferFrames.ToString());
         SelectTag(ColorFormatBox, Settings.InternalColorFormat == InternalColorFormat.Bgra ? "bgra" : "uyvy");
-        SelectTag(MvPresentBox, MultiviewLayout.ClampPresentInterval(Settings.DefaultPresentInterval == 0 ? 3 : Settings.DefaultPresentInterval).ToString());
+        SelectTag(MvPresentBox, MultiviewLayout.ClampPresentInterval(Settings.DefaultPresentInterval == 0 ? 2 : Settings.DefaultPresentInterval).ToString());
         SelectTag(FlipBudgetBox, Settings.FlipSwapchainLimit.ToString());
         MvUnitBox.ItemsSource = session.Units;
         MvUnitBox.SelectedItem = session.Units.FirstOrDefault(item => item.Id == Settings.DefaultMultiviewUnitId)
