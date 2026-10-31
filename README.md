@@ -3,18 +3,18 @@
 [![Test Build](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/ci.yml/badge.svg)](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/ci.yml)
 [![Publish Release](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/release.yml/badge.svg)](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/release.yml)
 
-**Under active development / Unstable.**  
+<img width="816" height="460" alt="eiviz-07-I1-frameless-text-right" src="https://github.com/user-attachments/assets/a5953466-5084-423e-813b-b0118f7dc88d" />
+
 A cross-platform vision mixer with unlimited M/E. eiviz / 映像(eizou) + visual.
-
-[Documentation](https://mikanseilaboratory.github.io/eiviz/en/) · [日本語](README.ja.md)
-
-<img width="1916" height="1030" alt="eiviz" src="https://github.com/user-attachments/assets/7b2f30c0-7870-49d7-9fdc-369da2e10ef4" />
 
 | Platform | Graphics | Status |
 | --- | --- | --- |
 | Windows x64 | Direct3D 12 or Vulkan | Supported |
+| Windows Arm | Direct3D 12 or Vulkan | Under Development |
 | macOS | Metal | Supported (untested) |
-| Linux | Vulkan | Under development |
+| Linux | Vulkan | CLI Only |
+
+[Documentation](https://mikanseilaboratory.github.io/eiviz/en/) · [日本語](README.ja.md)
 
 ## Install
 
@@ -34,40 +34,7 @@ Same steps, with the `macos-x64` pkg.
 
 ### Linux
 
-Linux currently ships as CLI (headless) only. Build from source and run `eiviz-headless`. See [Headless](https://mikanseilaboratory.github.io/eiviz/en/features/headless/). A Release build is strongly recommended for performance.
-
-## Develop
-
-An executable with no `eiviz-pro.required` beside it is the OSS build. It does not search for a Pro module and uses the Community limits.
-
-Rust 1.97. The Windows host also needs .NET 10 and the NDI SDK 6 runtime DLL.
-
-```bat
-cargo test --workspace --locked
-dotnet build hosts\win32\Eiviz.Host.csproj
-```
-
-`dotnet build` always builds the release `eiviz_mixer.dll` and copies it next to the host, including a Debug configuration.
-
-```bat
-hosts\win32\bin\Debug\net10.0-windows\Eiviz.Host.exe
-```
-
-The Release configuration writes `hosts\win32\bin\Release\net10.0-windows\Eiviz.Host.exe`.
-
-Headless initializes the GPU and serves the control API:
-
-```bat
-cargo run -p eiviz-headless --features runtime --release --locked -- run
-```
-
-On macOS, from `hosts/macos`:
-
-```bash
-swift build -c release
-```
-
-Run the `eiviz-mac` product. `swift build --show-bin-path` prints its directory.
+Linux currently ships as CLI (headless) only. Build from source and run `eiviz-headless`. See [Headless](https://mikanseilaboratory.github.io/eiviz/en/features/headless/).  
 
 ## What it is
 
