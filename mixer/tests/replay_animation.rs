@@ -166,8 +166,10 @@ fn an_animation_step_cues_a_replay_clip() {
     mixer_destroy();
 
     assert!(count >= 1, "the channel must exist");
+    // Both encoders count the frames they took: the readback path as `frames_pushed`, a GPU angle
+    // as `frames_written`, which never touches the readback.
     assert!(
-        stats.frames_pushed > 0,
+        stats.frames_pushed.saturating_add(stats.frames_written) > 0,
         "the session should have been recording while the animation ran"
     );
     assert_eq!(

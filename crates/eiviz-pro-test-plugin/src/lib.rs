@@ -673,6 +673,22 @@ static REPLAY: Mutex<Option<std::collections::HashMap<(u32, u64), ReplayFrame>>>
 
 /// One codec per angle, used only to turn a stored raw picture into a VMX1 packet
 /// for the mixer's GPU playback path.
+/// Encoded packets a GPU angle produced, kept so playback can decode them.
+static REPLAY_PACKETS: Mutex<Option<std::collections::HashMap<(u32, u64), ReplayPacket>>> =
+    Mutex::new(None);
+
+/// One decoder per angle, used to turn a stored VMX1 packet back into a picture.
+static REPLAY_DECODERS: Mutex<Option<std::collections::HashMap<u32, vmx::Codec>>> =
+    Mutex::new(None);
+
+/// A packet a GPU angle recorded, with the picture it holds.
+struct ReplayPacket {
+    bytes: Vec<u8>,
+    width: u32,
+    height: u32,
+    pts_100ns: i64,
+}
+
 static REPLAY_ENCODERS: Mutex<Option<std::collections::HashMap<u32, vmx::Codec>>> =
     Mutex::new(None);
 
@@ -763,8 +779,8 @@ unsafe extern "C" fn replay_write_video(
 /// passthrough path is wired, and it refuses an empty payload like a real store.
 unsafe extern "C" fn replay_write_encoded(
     handle: *mut c_void,
-    _angle_id: u32,
-    _frame_index: u64,
+    angle_id: u32,
+    frame_index: u64,
     view: *const eiviz_pro_api::ProReplayEncodedView,
 ) -> ProStatus {
     guard(|| {
@@ -775,6 +791,20 @@ unsafe extern "C" fn replay_write_encoded(
         if view.data_len == 0 || view.data.is_null() || view.width == 0 || view.height == 0 {
             return error("an encoded frame needs a bitstream and a size");
         }
+        let bytes = unsafe { std::slice::from_raw_parts(view.data, view.data_len) }.to_vec();
+        REPLAY_PACKETS
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get_or_insert_with(Default::default)
+            .insert(
+                (angle_id, frame_index),
+                ReplayPacket {
+                    bytes,
+                    width: view.width,
+                    height: view.height,
+                    pts_100ns: view.pts_100ns,
+                },
+            );
         ENCODED_FRAMES.fetch_add(1, Ordering::Relaxed);
         ProStatus::ok()
     })
@@ -792,12 +822,83 @@ unsafe extern "C" fn replay_decode(
         if handle != 9 as *mut c_void || dst.is_null() || out.is_null() {
             return error("bad replay decode");
         }
-        let map = REPLAY.lock().unwrap_or_else(|poison| poison.into_inner());
-        let Some(map) = map.as_ref() else {
-            return ProStatus::new(PRO_UNAVAILABLE);
+        // A GPU angle stores encoded packets rather than raw pictures, so the raw store may hold
+        // nothing for this frame. The packet is tried before the frame is called missing.
+        let raw = {
+            let map = REPLAY.lock().unwrap_or_else(|poison| poison.into_inner());
+            map.as_ref()
+                .and_then(|map| map.get(&(angle_id, frame_index)))
+                .map(|frame| {
+                    (
+                        frame.bytes.clone(),
+                        frame.width,
+                        frame.height,
+                        frame.stride,
+                        frame.layout,
+                        frame.pts_100ns,
+                    )
+                })
         };
-        let Some(frame) = map.get(&(angle_id, frame_index)) else {
-            return ProStatus::new(PRO_UNAVAILABLE);
+        let stored = if let Some(raw) = raw {
+            raw
+        } else {
+            let packet = {
+                let packets = REPLAY_PACKETS
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                packets.as_ref().and_then(|packets| {
+                    packets.get(&(angle_id, frame_index)).map(|packet| {
+                        (
+                            packet.bytes.clone(),
+                            packet.width,
+                            packet.height,
+                            packet.pts_100ns,
+                        )
+                    })
+                })
+            };
+            let Some((bytes, width, height, pts)) = packet else {
+                return ProStatus::new(PRO_UNAVAILABLE);
+            };
+            // Decoded into UYVY, which is what the caller's buffer is sized for.
+            let stride = width as usize * 2;
+            let mut decoded = vec![0u8; stride * height as usize];
+            {
+                let mut decoders = REPLAY_DECODERS
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                let decoders = decoders.get_or_insert_with(Default::default);
+                let codec = match decoders.entry(angle_id) {
+                    std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        let Ok(codec) = vmx::Codec::new(vmx::Config {
+                            width: width as i32,
+                            height: height as i32,
+                            profile: vmx::Profile::Sq,
+                            color_space: vmx::ColorSpace::Bt709,
+                        }) else {
+                            return error("replay decoder could not be built");
+                        };
+                        entry.insert(codec)
+                    }
+                };
+                if codec.load_from(&bytes).is_err() {
+                    return error("replay packet could not be loaded");
+                }
+                if codec.decode_uyvy(&mut decoded, stride).is_err() {
+                    return error("replay packet could not be decoded");
+                }
+            }
+            (decoded, width, height, width * 2, LAYOUT_UYVY, pts)
+        };
+        let (bytes, width, height, stride, layout, pts_100ns) = stored;
+        let frame = ReplayFrame {
+            bytes,
+            width,
+            height,
+            stride,
+            layout,
+            pts_100ns,
         };
         let uyvy_len = frame.width as usize * frame.height as usize * 2;
         if dst_cap < uyvy_len {
@@ -899,18 +1000,45 @@ unsafe extern "C" fn replay_read_packet(
         if handle != 9 as *mut c_void || required.is_null() || out.is_null() {
             return error("bad replay packet");
         }
-        let (width, height, pts, packet) = {
+        // A GPU angle stored its packet already encoded, so it is handed back as stored; a CPU
+        // angle stored a raw picture, which has to be encoded here.
+        let from_raw = {
             let map = REPLAY.lock().unwrap_or_else(|poison| poison.into_inner());
-            let Some(map) = map.as_ref() else {
-                return ProStatus::new(PRO_UNAVAILABLE);
-            };
-            let Some(frame) = map.get(&(angle_id, frame_index)) else {
-                return ProStatus::new(PRO_UNAVAILABLE);
-            };
-            let Some(packet) = encode_replay_packet(angle_id, frame) else {
-                return error("replay packet encode failed");
-            };
-            (frame.width, frame.height, frame.pts_100ns, packet)
+            map.as_ref()
+                .and_then(|map| map.get(&(angle_id, frame_index)))
+                .map(|frame| {
+                    (
+                        frame.width,
+                        frame.height,
+                        frame.pts_100ns,
+                        encode_replay_packet(angle_id, frame),
+                    )
+                })
+        };
+        let (width, height, pts, packet) = match from_raw {
+            Some((width, height, pts, Some(packet))) => (width, height, pts, packet),
+            Some((_, _, _, None)) => return error("replay packet encode failed"),
+            None => {
+                let stored = {
+                    let packets = REPLAY_PACKETS
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner());
+                    packets.as_ref().and_then(|packets| {
+                        packets.get(&(angle_id, frame_index)).map(|packet| {
+                            (
+                                packet.width,
+                                packet.height,
+                                packet.pts_100ns,
+                                packet.bytes.clone(),
+                            )
+                        })
+                    })
+                };
+                let Some(stored) = stored else {
+                    return ProStatus::new(PRO_UNAVAILABLE);
+                };
+                stored
+            }
         };
         unsafe { *required = packet.len() };
         if data.is_null() || data_cap < packet.len() {
