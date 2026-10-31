@@ -18,17 +18,26 @@ use sha2::{Digest, Sha256};
 /// The GPU encoder needs a real adapter: on a basic render driver its ring cannot be created and no
 /// frame reaches the recorder, which is a property of the runner rather than of the code under test.
 pub fn adapter_is_software() -> bool {
-    let mut info = eiviz_mixer::MixerRebarInfo::default();
-    if unsafe { eiviz_mixer::mixer_copy_rebar_info(&mut info) } != OK {
-        return false;
-    }
-    let end = info
-        .adapter
-        .iter()
-        .position(|&byte| byte == 0)
-        .unwrap_or(info.adapter.len());
-    let name = String::from_utf8_lossy(&info.adapter[..end]).to_ascii_lowercase();
-    name.contains("basic render") || name.contains("llvmpipe") || name.contains("swiftshader")
+    // Asked of `wgpu` rather than of the mixer: this runs at the top of a test, before anything has
+    // been created, and the mixer would answer "not created" — which used to read as "has a GPU".
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+        ..Default::default()
+    }));
+    let Ok(adapter) = adapter else {
+        // No adapter at all means nothing can be drawn; a test that needs pictures cannot run.
+        return true;
+    };
+    let info = adapter.get_info();
+    let name = info.name.to_ascii_lowercase();
+    let software = name.contains("basic render")
+        || name.contains("llvmpipe")
+        || name.contains("swiftshader")
+        || matches!(info.device_type, wgpu::DeviceType::Cpu);
+    software
 }
 
 /// Key the debug builds accept for a test module.
