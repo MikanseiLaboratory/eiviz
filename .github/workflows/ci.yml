@@ -53,7 +53,13 @@ jobs:
 
       - name: Test mixer
         # mixer_create is process-global, so GPU/integration tests cannot share the process.
-        run: cargo test -p eiviz_mixer --locked --release -- --test-threads=1
+        #
+        # `pro-test-key` lets the Replay suite load the signed stand-in for the Pro module, so the
+        # tests that record, mark, play back, transition and check audio run here — including the GPU
+        # encoder, which is the default and which the readback path cannot reach.
+        run: >
+          cargo test -p eiviz_mixer --locked --release --features pro-test-key
+          -- --test-threads=1
 
       - name: Build headless
         run: cargo build -p eiviz-headless --locked --release --bins
@@ -180,7 +186,13 @@ jobs:
 
       - name: Test mixer
         # mixer_create is process-global, so GPU/integration tests cannot share the process.
-        run: cargo test -p eiviz_mixer --locked --release -- --test-threads=1
+        #
+        # `pro-test-key` lets the Replay suite load the signed stand-in for the Pro module, so the
+        # tests that record, mark, play back, transition and check audio run here — including the GPU
+        # encoder, which is the default and which the readback path cannot reach.
+        run: >
+          cargo test -p eiviz_mixer --locked --release --features pro-test-key
+          -- --test-threads=1
 
       - name: Build headless
         run: cargo build -p eiviz-headless --locked --release --bins

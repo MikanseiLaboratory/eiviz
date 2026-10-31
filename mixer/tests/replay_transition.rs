@@ -9,8 +9,6 @@
 //!
 //! Loading a Pro module is permanent, so this lives in its own test binary.
 
-#![cfg(debug_assertions)]
-
 mod common;
 
 use std::ffi::CString;

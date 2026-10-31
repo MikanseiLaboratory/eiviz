@@ -8,8 +8,6 @@
 //! `replay requires the Pro module` branch; today every module that grants the plan
 //! also implements Replay, so this test covers the plan refusal.
 
-#![cfg(debug_assertions)]
-
 mod common;
 
 use std::ffi::CString;

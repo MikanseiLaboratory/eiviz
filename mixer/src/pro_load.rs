@@ -309,7 +309,9 @@ fn accepted_public_keys() -> Result<Vec<[u8; 32]>, String> {
     if let Some(key) = embedded_public_key()? {
         keys.push(key);
     }
-    #[cfg(debug_assertions)]
+    // The feature, not the build profile: CI tests in release, and a shipped build has no test key
+    // to trust either way.
+    #[cfg(feature = "pro-test-key")]
     if keys.is_empty() {
         if let Ok(hex) = std::env::var("EIVIZ_PRO_MODULE_TEST_KEY") {
             keys.push(parse_key(&hex)?);

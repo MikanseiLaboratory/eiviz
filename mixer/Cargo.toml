@@ -11,6 +11,9 @@ license.workspace = true
 
 [features]
 default = []
+# Accepts a signing key from `EIVIZ_PRO_MODULE_TEST_KEY`, so a test stand-in can load as the Pro
+# module would. Enabled by the tests that need it; never enabled in a shipped build.
+pro-test-key = []
 # Always compiled. Kept so older `cargo build --features control-api` still works.
 control-api = []
 
