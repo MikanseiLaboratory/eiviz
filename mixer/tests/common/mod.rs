@@ -85,11 +85,15 @@ pub fn mark_in_when_ready(label: &str) -> u64 {
     }
 }
 
-/// Frames the recorder has taken from the readback so far.
+/// Frames the recorder has taken so far, from either encoder.
+///
+/// `frames_offered` counts what the readback path handed over; a GPU-encoded angle copies its frame
+/// into the encoder's ring and never touches the readback, so it only raises `frames_written`. Both
+/// mean "the recorder saw a frame", which is what a wait is for.
 pub fn offered_frames() -> u64 {
     let mut stats = eiviz_mixer::MixerReplayStats::default();
     unsafe { eiviz_mixer::mixer_replay_copy_stats(&mut stats, std::ptr::null_mut(), 0) };
-    stats.frames_offered
+    stats.frames_offered.saturating_add(stats.frames_written)
 }
 
 /// Closes the mark once the recorder has taken at least `min_frames` frames since
