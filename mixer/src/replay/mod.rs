@@ -350,6 +350,8 @@ struct Inner {
     height: u32,
     fps_num: u32,
     fps_den: u32,
+    /// Whether `fps_num`/`fps_den` came from the mixer rather than being the starting placeholder.
+    master_fps_known: bool,
     stats: MixerReplayStats,
     angles: Vec<MixerReplayAngleStats>,
     channels: Vec<ChannelSlot>,
@@ -471,6 +473,7 @@ impl ReplayEngine {
                 height: 1080,
                 fps_num: 60,
                 fps_den: 1,
+                master_fps_known: false,
                 stats: MixerReplayStats::default(),
                 angles: Vec::new(),
                 channels: Vec::new(),
@@ -1033,17 +1036,23 @@ impl ReplayEngine {
         // The recorder counts frames at one rate. A recording whose format disagrees with the rate
         // the mixer is running would be stopped on its first frame by `note_fps`, which reads as
         // "recording did not start" with no reason attached. Refusing here names both rates.
+        //
+        // Only a rate the mixer has actually reported counts: the engine holds a placeholder until
+        // `note_fps` says otherwise, and comparing against it would refuse a correct recording in any
+        // session that never sets the rate.
         {
             let inner = self.lock();
-            let (master_num, master_den) = (inner.fps_num, inner.fps_den);
-            if master_num != 0
-                && master_den != 0
-                && (master_num != fps_num || master_den != fps_den)
-            {
-                return Err(ReplayFailure::invalid(format!(
-                    "replay records at {fps_num}/{fps_den} fps but the show runs at \
-                     {master_num}/{master_den}; set the Replay format to the show's rate"
-                )));
+            if inner.master_fps_known {
+                let (master_num, master_den) = (inner.fps_num, inner.fps_den);
+                if master_num != 0
+                    && master_den != 0
+                    && (master_num != fps_num || master_den != fps_den)
+                {
+                    return Err(ReplayFailure::invalid(format!(
+                        "replay records at {fps_num}/{fps_den} fps but the show runs at \
+                         {master_num}/{master_den}; set the Replay format to the show's rate"
+                    )));
+                }
             }
         }
         if !(SEGMENT_FRAMES_MIN..=SEGMENT_FRAMES_MAX).contains(&segment_frames) {
@@ -1262,6 +1271,7 @@ impl ReplayEngine {
         }
         inner.fps_num = fps_num;
         inner.fps_den = fps_den;
+        inner.master_fps_known = true;
     }
 
     pub fn record_targets(&self) -> Arc<[RecordTarget]> {
