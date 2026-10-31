@@ -30,6 +30,11 @@ const CHANNEL_SOURCE: u64 = 0x0008_0001;
 
 #[test]
 fn an_input_angle_records_without_a_scene() {
+    // CI has no graphics card, and the GPU encoder cannot run on a software rasteriser.
+    if common::adapter_is_software() {
+        eprintln!("skip replay_input: the adapter is a software rasteriser");
+        return;
+    }
     load_test_module("replay-input");
 
     mixer_destroy();

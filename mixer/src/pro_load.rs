@@ -309,9 +309,10 @@ fn accepted_public_keys() -> Result<Vec<[u8; 32]>, String> {
     if let Some(key) = embedded_public_key()? {
         keys.push(key);
     }
-    // The feature, not the build profile: CI tests in release, and a shipped build has no test key
-    // to trust either way.
-    #[cfg(feature = "pro-test-key")]
+    // Two ways in, both outside a shipped release build: a debug build, which is what `cargo test`
+    // makes locally, and a release build that names `pro-test-key`, which is how CI runs the Replay
+    // suite.
+    #[cfg(any(debug_assertions, feature = "pro-test-key"))]
     if keys.is_empty() {
         if let Ok(hex) = std::env::var("EIVIZ_PRO_MODULE_TEST_KEY") {
             keys.push(parse_key(&hex)?);

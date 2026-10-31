@@ -36,6 +36,11 @@ fn linear(frames: u32) -> EivizMotion {
 
 #[test]
 fn an_animation_step_cues_a_replay_clip() {
+    // CI has no graphics card, and the GPU encoder cannot run on a software rasteriser.
+    if common::adapter_is_software() {
+        eprintln!("skip replay_animation: the adapter is a software rasteriser");
+        return;
+    }
     load_test_module("replay-animation");
 
     mixer_destroy();

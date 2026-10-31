@@ -13,6 +13,24 @@ use eiviz_mixer::{OK, OverlayDesc, Rect, SCENE_BASE, load_pro_module, mixer_snap
 use eiviz_pro_api::{ABI_MAJOR, ModuleManifest, abi_hash, module_target};
 use sha2::{Digest, Sha256};
 
+/// Whether the runner has no graphics card, so only a software rasteriser is available.
+///
+/// The GPU encoder needs a real adapter: on a basic render driver its ring cannot be created and no
+/// frame reaches the recorder, which is a property of the runner rather than of the code under test.
+pub fn adapter_is_software() -> bool {
+    let mut info = eiviz_mixer::MixerRebarInfo::default();
+    if unsafe { eiviz_mixer::mixer_copy_rebar_info(&mut info) } != OK {
+        return false;
+    }
+    let end = info
+        .adapter
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(info.adapter.len());
+    let name = String::from_utf8_lossy(&info.adapter[..end]).to_ascii_lowercase();
+    name.contains("basic render") || name.contains("llvmpipe") || name.contains("swiftshader")
+}
+
 /// Key the debug builds accept for a test module.
 pub const SECRET: [u8; 32] = [9; 32];
 

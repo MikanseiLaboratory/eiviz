@@ -18,6 +18,11 @@ use eiviz_mixer::{
 
 #[test]
 fn an_operator_records_marks_and_plays_back() {
+    // CI has no graphics card, and the GPU encoder cannot run on a software rasteriser.
+    if common::adapter_is_software() {
+        eprintln!("skip replay_flow: the adapter is a software rasteriser");
+        return;
+    }
     load_test_module("replay-flow");
 
     mixer_destroy();

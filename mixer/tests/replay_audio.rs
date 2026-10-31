@@ -69,6 +69,11 @@ fn wait_for_peak(id: u64, level: f32, within: Duration) -> f32 {
 
 #[test]
 fn the_recorded_sound_reaches_the_channel_meter() {
+    // CI has no graphics card, and the GPU encoder cannot run on a software rasteriser.
+    if common::adapter_is_software() {
+        eprintln!("skip replay_audio: the adapter is a software rasteriser");
+        return;
+    }
     load_test_module("replay-audio");
 
     mixer_destroy();

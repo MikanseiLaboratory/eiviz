@@ -51,6 +51,11 @@ fn channel_state() -> MixerReplayChannelState {
 
 #[test]
 fn the_replay_picture_reaches_the_program_scene() {
+    // CI has no graphics card, and the GPU encoder cannot run on a software rasteriser.
+    if common::adapter_is_software() {
+        eprintln!("skip replay_playout: the adapter is a software rasteriser");
+        return;
+    }
     load_test_module("replay-playout");
 
     mixer_destroy();

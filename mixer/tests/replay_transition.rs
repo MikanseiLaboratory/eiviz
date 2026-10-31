@@ -70,6 +70,11 @@ fn is_red(pixel: [u8; 3]) -> bool {
 
 #[test]
 fn a_dissolve_between_two_clips_reaches_the_program() {
+    // CI has no graphics card, and the GPU encoder cannot run on a software rasteriser.
+    if common::adapter_is_software() {
+        eprintln!("skip replay_transition: the adapter is a software rasteriser");
+        return;
+    }
     load_test_module("replay-transition");
 
     mixer_destroy();
