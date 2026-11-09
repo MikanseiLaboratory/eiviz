@@ -25,153 +25,171 @@ struct ReplaySettingsView: View {
     @State private var status = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(planText).font(.callout)
-            if !status.isEmpty {
-                // Apply and every refusal report here, where it cannot be missed.
-                Text(status).fontWeight(.bold).foregroundStyle(EivizTheme.dim)
-            }
-            GroupBox(L10n.t("replay.storage")) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(L10n.t("replay.storageHelp"))
-                        .font(.caption)
-                        .foregroundStyle(EivizTheme.dim)
-                    // Each drive is edited in its own row: the path is the row's text field,
-                    // and the angles that record there are shown in the same row.
-                    List {
-                        ForEach($storages) { $storage in
-                            HStack(spacing: 6) {
-                                TextField(L10n.t("settings.replayPath"), text: $storage.path)
-                                    .frame(minWidth: 240)
-                                    .help(L10n.t("replay.pickStorageHint"))
-                                Text(storage.angleIds.map(String.init).joined(separator: ", "))
-                                    .foregroundStyle(EivizTheme.dim)
-                                Spacer()
-                                Button(L10n.t("replay.browse")) { browseInto(storage.id) }
-                                Button(L10n.t("replay.removeStorage")) { removeStorageRow(storage.id) }
+        // The settings are taller than the smallest window the view allows, so they scroll
+        // instead of being clipped at the bottom of a compressed layout. Apply stays pinned
+        // below the scroll, so it is reachable without scrolling to the end.
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(planText).font(.callout)
+                    if !status.isEmpty {
+                        // Apply and every refusal report here, where it cannot be missed.
+                        Text(status).fontWeight(.bold).foregroundStyle(EivizTheme.dim)
+                    }
+                    GroupBox(L10n.t("replay.storage")) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(L10n.t("replay.storageHelp"))
+                                .font(.caption)
+                                .foregroundStyle(EivizTheme.dim)
+                            // Each drive is edited in its own row: the path is the row's text field,
+                            // and the angles that record there are shown in the same row.
+                            List {
+                                ForEach($storages) { $storage in
+                                    HStack(spacing: 6) {
+                                        TextField(L10n.t("settings.replayPath"), text: $storage.path)
+                                            .frame(minWidth: 240)
+                                            .help(L10n.t("replay.pickStorageHint"))
+                                        Text(storage.angleIds.map(String.init).joined(separator: ", "))
+                                            .foregroundStyle(EivizTheme.dim)
+                                        Spacer()
+                                        Button(L10n.t("replay.browse")) { browseInto(storage.id) }
+                                        Button(L10n.t("replay.removeStorage")) { removeStorageRow(storage.id) }
+                                    }
+                                }
+                            }
+                            .frame(minHeight: 90)
+                            Button(L10n.t("replay.addStorageRow")) { browseInto(nil) }
+                            HStack {
+                                Picker(L10n.t("settings.replayProfile"), selection: $profile) {
+                                    Text("HQ").tag("Hq")
+                                    Text("SQ").tag("Sq")
+                                    Text("LQ").tag("Lq")
+                                }
+                                Picker(L10n.t("replay.retention"), selection: $retention) {
+                                    Text(L10n.t("replay.retentionStop")).tag("StopWhenFull")
+                                    Text(L10n.t("replay.retentionOverwrite")).tag("Overwrite")
+                                    Text(L10n.t("replay.retentionProtect")).tag("OverwriteUnprotected")
+                                }
+                                .frame(minWidth: 280, alignment: .leading)
+                            }
+                            HStack(alignment: .bottom, spacing: 10) {
+                                // A filled text field hides its placeholder, so each number keeps its
+                                // label above it instead of leaving three bare values.
+                                numberField("settings.replayQueue", $queue, width: 90)
+                                numberField("settings.replayBuffer", $buffer, width: 90)
+                                numberField("replay.reserve", $reserve, width: 100)
+                                Spacer(minLength: 4)
+                                Picker(L10n.t("replay.overflow"), selection: $overflow) {
+                                    Text(L10n.t("replay.overflowDrop")).tag("DropFrames")
+                                    Text(L10n.t("replay.overflowStop")).tag("StopRecording")
+                                }
+                                .frame(minWidth: 230, alignment: .leading)
+                            }
+                            HStack(alignment: .top) {
+                                // One format for every angle, taken from the first Mixing Unit.
+                                // It is shown rather than edited here.
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(L10n.t("replay.formatFromUnit")).font(.caption)
+                                    Text(formatText).font(.system(.body, design: .monospaced))
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(L10n.t("replay.segmentFrames")).font(.caption)
+                                    TextField("120", text: $segmentFrames)
+                                        .frame(width: 90)
+                                        .help(L10n.t("replay.segmentFramesRange"))
+                                }
+                            }
+                            HStack {
+                                Text(L10n.t("replay.warnings")).font(.caption)
+                                TextField("600", text: $warnSecs).frame(width: 70)
+                                TextField("300", text: $alertSecs).frame(width: 70)
+                                TextField("60", text: $criticalSecs).frame(width: 70)
+                            }
+                            Text(L10n.t("replay.warningsHelp")).font(.caption)
+                            Text(L10n.t("replay.retentionHelp")).font(.caption)
+                        }
+                    }
+                    GroupBox(L10n.t("replay.angles")) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(L10n.t("replay.anglesHelp")).font(.caption)
+                            // Every angle is edited in its own row: name, what it records, how, its
+                            // audio and its drive are cells, not a separate panel.
+                            List {
+                                ForEach($angles) { $angle in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack(spacing: 6) {
+                                            TextField(L10n.t("replay.name"), text: $angle.name)
+                                                .frame(minWidth: 140)
+                                            Picker("", selection: $angle.source) {
+                                                Text(L10n.t("replay.sourceScene")).tag("Scene")
+                                                Text(L10n.t("replay.sourceInput")).tag("Input")
+                                            }
+                                            .labelsHidden()
+                                            .frame(width: 90)
+                                            .onChange(of: angle.source) { _, _ in resetAngleSource(angle.id) }
+                                            Picker("", selection: sourceBinding($angle)) {
+                                                ForEach(sources(for: angle), id: \.id) { source in
+                                                    Text(source.name).tag(source.id)
+                                                }
+                                            }
+                                            .labelsHidden()
+                                            .frame(minWidth: 170)
+                                            Spacer(minLength: 4)
+                                            Button(L10n.t("replay.removeAngle")) { removeAngle(angle.id) }
+                                        }
+                                        // A second line keeps every control at full width; one row
+                                        // clipped the drive and the remove button on a 620 point window.
+                                        HStack(spacing: 6) {
+                                            Picker("", selection: $angle.encoder) {
+                                                Text(L10n.t("replay.encoderGpu")).tag("Gpu")
+                                                Text(L10n.t("replay.encoderCpu")).tag("Cpu")
+                                            }
+                                            .labelsHidden()
+                                            .frame(width: 90)
+                                            .help(L10n.t("replay.encoderHelp"))
+                                            Picker("", selection: $angle.audioUnitId) {
+                                                Text(L10n.t("replay.audioSilent")).tag(UInt64(0))
+                                                ForEach(mixer.session.units) { unit in
+                                                    Text(unit.name).tag(unit.id)
+                                                }
+                                            }
+                                            .labelsHidden()
+                                            .frame(minWidth: 140)
+                                            .help(L10n.t("replay.audioHelp"))
+                                            Picker("", selection: driveBinding(angle.id)) {
+                                                Text(L10n.t("replay.driveUnassigned")).tag(-1)
+                                                ForEach(Array(storages.enumerated()), id: \.offset) { index, storage in
+                                                    Text("\(index + 1): \(storage.path)").tag(index)
+                                                }
+                                            }
+                                            .labelsHidden()
+                                            .frame(minWidth: 170)
+                                            .help(L10n.t("replay.storageHelp"))
+                                        }
+                                    }
+                                }
+                            }
+                            .frame(minHeight: 230)
+                            HStack {
+                                Button(L10n.t("replay.addAngleRow")) { addAngle() }
+                                Text(L10n.t("replay.angleRowHelp")).font(.caption)
                             }
                         }
                     }
-                    .frame(minHeight: 90)
-                    Button(L10n.t("replay.addStorageRow")) { browseInto(nil) }
-                    HStack {
-                        Picker(L10n.t("settings.replayProfile"), selection: $profile) {
-                            Text("HQ").tag("Hq")
-                            Text("SQ").tag("Sq")
-                            Text("LQ").tag("Lq")
-                        }
-                        Picker(L10n.t("replay.retention"), selection: $retention) {
-                            Text(L10n.t("replay.retentionStop")).tag("StopWhenFull")
-                            Text(L10n.t("replay.retentionOverwrite")).tag("Overwrite")
-                            Text(L10n.t("replay.retentionProtect")).tag("OverwriteUnprotected")
-                        }
+                    Toggle(L10n.t("replay.autoAdd"), isOn: $autoAdd)
+                    Text(L10n.t("replay.autoAddHelp")).font(.caption)
+                    if let active = document?.activeAngleId, active != 0 {
+                        Text(L10n.format("replay.activeAngle", document?.angleLabel(active) ?? ""))
+                    } else {
+                        Text(L10n.t("replay.noActiveAngle"))
                     }
-                    HStack {
-                        TextField(L10n.t("settings.replayQueue"), text: $queue).frame(width: 80)
-                        TextField(L10n.t("settings.replayBuffer"), text: $buffer).frame(width: 90)
-                        TextField(L10n.t("replay.reserve"), text: $reserve).frame(width: 100)
-                        Picker(L10n.t("replay.overflow"), selection: $overflow) {
-                            Text(L10n.t("replay.overflowDrop")).tag("DropFrames")
-                            Text(L10n.t("replay.overflowStop")).tag("StopRecording")
-                        }
-                    }
-                    HStack(alignment: .top) {
-                        // One format for every angle, taken from the first Mixing Unit.
-                        // It is shown rather than edited here.
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(L10n.t("replay.formatFromUnit")).font(.caption)
-                            Text(formatText).font(.system(.body, design: .monospaced))
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(L10n.t("replay.segmentFrames")).font(.caption)
-                            TextField("120", text: $segmentFrames)
-                                .frame(width: 90)
-                                .help(L10n.t("replay.segmentFramesRange"))
-                        }
-                    }
-                    HStack {
-                        Text(L10n.t("replay.warnings")).font(.caption)
-                        TextField("600", text: $warnSecs).frame(width: 70)
-                        TextField("300", text: $alertSecs).frame(width: 70)
-                        TextField("60", text: $criticalSecs).frame(width: 70)
-                    }
-                    Text(L10n.t("replay.warningsHelp")).font(.caption)
-                    Text(L10n.t("replay.retentionHelp")).font(.caption)
-                }
-            }
-            GroupBox(L10n.t("replay.angles")) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(L10n.t("replay.anglesHelp")).font(.caption)
-                    // Every angle is edited in its own row: name, what it records, how, its
-                    // audio and its drive are cells, not a separate panel.
-                    List {
-                        ForEach($angles) { $angle in
-                            HStack(spacing: 6) {
-                                TextField(L10n.t("replay.name"), text: $angle.name)
-                                    .frame(width: 130)
-                                Picker("", selection: $angle.source) {
-                                    Text(L10n.t("replay.sourceScene")).tag("Scene")
-                                    Text(L10n.t("replay.sourceInput")).tag("Input")
-                                }
-                                .labelsHidden()
-                                .frame(width: 90)
-                                .onChange(of: angle.source) { _, _ in resetAngleSource(angle.id) }
-                                Picker("", selection: sourceBinding($angle)) {
-                                    ForEach(sources(for: angle), id: \.id) { source in
-                                        Text(source.name).tag(source.id)
-                                    }
-                                }
-                                .labelsHidden()
-                                .frame(width: 170)
-                                // Where this angle is encoded: GPU keeps the picture on
-                                // the GPU from the scene to the stored packet.
-                                Picker("", selection: $angle.encoder) {
-                                    Text(L10n.t("replay.encoderGpu")).tag("Gpu")
-                                    Text(L10n.t("replay.encoderCpu")).tag("Cpu")
-                                }
-                                .labelsHidden()
-                                .frame(width: 90)
-                                .help(L10n.t("replay.encoderHelp"))
-                                Picker("", selection: $angle.audioUnitId) {
-                                    Text(L10n.t("replay.audioSilent")).tag(UInt64(0))
-                                    ForEach(mixer.session.units) { unit in
-                                        Text(unit.name).tag(unit.id)
-                                    }
-                                }
-                                .labelsHidden()
-                                .frame(width: 140)
-                                .help(L10n.t("replay.audioHelp"))
-                                Picker("", selection: driveBinding(angle.id)) {
-                                    Text(L10n.t("replay.driveUnassigned")).tag(-1)
-                                    ForEach(Array(storages.enumerated()), id: \.offset) { index, storage in
-                                        Text("\(index + 1): \(storage.path)").tag(index)
-                                    }
-                                }
-                                .labelsHidden()
-                                .frame(width: 150)
-                                .help(L10n.t("replay.storageHelp"))
-                                Button(L10n.t("replay.removeAngle")) { removeAngle(angle.id) }
-                            }
-                        }
-                    }
-                    .frame(minHeight: 150)
-                    HStack {
-                        Button(L10n.t("replay.addAngleRow")) { addAngle() }
-                        Text(L10n.t("replay.angleRowHelp")).font(.caption)
+                    if !status.isEmpty {
+                        Text(status).font(.caption)
                     }
                 }
+                .padding(14)
             }
-            Toggle(L10n.t("replay.autoAdd"), isOn: $autoAdd)
-            Text(L10n.t("replay.autoAddHelp")).font(.caption)
-            if let active = document?.activeAngleId, active != 0 {
-                Text(L10n.format("replay.activeAngle", document?.angleLabel(active) ?? ""))
-            } else {
-                Text(L10n.t("replay.noActiveAngle"))
-            }
-            if !status.isEmpty {
-                Text(status).font(.caption)
-            }
-            Spacer()
+            Divider()
             HStack {
                 Spacer()
                 // Cancelling discards the edits: nothing was published, so the
@@ -180,10 +198,18 @@ struct ReplaySettingsView: View {
                 Button(L10n.t("replay.apply")) { apply() }
                     .keyboardShortcut(.defaultAction)
             }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 12)
         }
-        .padding(14)
         .frame(minWidth: 620, minHeight: 520)
         .onAppear { load() }
+    }
+
+    private func numberField(_ key: String, _ value: Binding<String>, width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(L10n.t(key)).font(.caption)
+            TextField("", text: value).frame(width: width)
+        }
     }
 
     private var planText: String {

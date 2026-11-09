@@ -39,7 +39,12 @@ struct EivizMacApp: App {
 
     init() {
         HostLog.install()
-        EivizTheme.applyAppAppearance()
+        // macOS 27 runs `App.init()` before the shared application exists. Creating or
+        // touching it here leaves SwiftUI without a window, so the appearance is applied
+        // in `.onAppear` there instead.
+        if NSApp != nil {
+            EivizTheme.applyAppAppearance()
+        }
     }
 
     var body: some Scene {

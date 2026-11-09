@@ -73,6 +73,16 @@ struct ReplayView: View {
         VStack(alignment: .leading, spacing: 10) {
             header
             deckMonitors
+            if angles.isEmpty {
+                // The angle strip collapses to its controls when there are no angles, so a
+                // sentence inside it wrapped into a column a few characters wide. The way
+                // out of the empty state belongs on a full-width line instead.
+                Text(L10n.t("replay.noAngles"))
+                    .font(.callout)
+                    .foregroundStyle(EivizTheme.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             HStack(alignment: .top, spacing: 10) {
                 angleStrip
                 VStack(spacing: 8) {
@@ -83,7 +93,7 @@ struct ReplayView: View {
             transportBar
         }
         .padding(12)
-        .frame(minWidth: 1100, minHeight: 720)
+        .frame(minWidth: 1240, minHeight: 780)
         .onAppear { load() }
         .onReceive(tick) { _ in refresh() }
     }
@@ -242,9 +252,7 @@ struct ReplayView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text(L10n.t("replay.angles")).fontWeight(.bold)
-                if angles.isEmpty {
-                    Text(L10n.t("replay.noAngles")).foregroundStyle(EivizTheme.dim)
-                } else if mixer.isRemote {
+                if mixer.isRemote {
                     // Angle previews are the recording machine's scenes, and a Remote has
                     // no local render of them. Saying where they are beats dead tiles.
                     Text(L10n.t("replay.remoteAngles")).foregroundStyle(EivizTheme.dim)
@@ -270,7 +278,7 @@ struct ReplayView: View {
             }
             Text(L10n.t("replay.anglesHelpShort")).font(.caption).foregroundStyle(EivizTheme.dim)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(width: 300, alignment: .leading)
     }
 
     /// Every event on one line, edited in that line: its name and its protection are
@@ -329,53 +337,59 @@ struct ReplayView: View {
     /// cells, so nothing is "select a clip, then use the controls below".
     private var playlist: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .center, spacing: 8) {
-                Text(L10n.t("replay.playlist")).fontWeight(.bold)
-                Picker("", selection: Binding(
-                    get: { playlistId },
-                    set: { selectPlaylist($0) }
-                )) {
-                    ForEach(playlists) { item in
-                        Text(item.label).tag(item.id)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .center, spacing: 8) {
+                    Text(L10n.t("replay.playlist")).fontWeight(.bold)
+                    Picker("", selection: Binding(
+                        get: { playlistId },
+                        set: { selectPlaylist($0) }
+                    )) {
+                        ForEach(playlists) { item in
+                            Text(item.label).tag(item.id)
+                        }
                     }
+                    .labelsHidden()
+                    .frame(width: 190, height: 32)
+                    .help(L10n.t("replay.playlistPickHelp"))
+                    TextField("", text: Binding(
+                        get: { playlists.first { $0.id == playlistId }?.name ?? "" },
+                        set: { renamePlaylist(playlistId, $0) }
+                    ))
+                    .frame(width: 160, height: 32)
+                    .help(L10n.t("replay.playlistNameHelp"))
+                    Button(L10n.t("replay.playlistAdd")) { addPlaylist() }
+                        .frame(width: 88, height: 32)
+                        .help(L10n.t("replay.playlistAddHint"))
+                    Button(L10n.t("replay.playlistRemove")) { deletePlaylist() }
+                        .frame(width: 72, height: 32)
+                        .disabled(playlists.count <= 1)
+                        .help(L10n.t("replay.playlistRemove"))
+                    Spacer()
                 }
-                .labelsHidden()
-                .frame(width: 190, height: 32)
-                .help(L10n.t("replay.playlistPickHelp"))
-                TextField("", text: Binding(
-                    get: { playlists.first { $0.id == playlistId }?.name ?? "" },
-                    set: { renamePlaylist(playlistId, $0) }
-                ))
-                .frame(width: 160, height: 32)
-                .help(L10n.t("replay.playlistNameHelp"))
-                Button(L10n.t("replay.playlistAdd")) { addPlaylist() }
-                    .frame(width: 88, height: 32)
-                    .help(L10n.t("replay.playlistAddHint"))
-                Button(L10n.t("replay.playlistRemove")) { deletePlaylist() }
-                    .frame(width: 72, height: 32)
-                    .disabled(playlists.count <= 1)
-                    .help(L10n.t("replay.playlistRemove"))
-                Spacer()
-                // Playlist default: what clips added from now on start with.
-                Text(L10n.t("replay.defaultTransition")).font(.caption)
-                Picker("", selection: $defaultKind) {
-                    Text(L10n.t("replay.transitionCut")).tag("Cut")
-                    Text(L10n.t("replay.transitionDissolve")).tag("Dissolve")
+                // The default transition is a second row: sharing one row with the playlist
+                // controls clipped its caption and the frames field on a 1100 point window.
+                HStack(alignment: .center, spacing: 8) {
+                    Text(L10n.t("replay.defaultTransition")).font(.caption)
+                    Picker("", selection: $defaultKind) {
+                        Text(L10n.t("replay.transitionCut")).tag("Cut")
+                        Text(L10n.t("replay.transitionDissolve")).tag("Dissolve")
+                    }
+                    .labelsHidden()
+                    .frame(width: 110, height: 32)
+                    .onChange(of: defaultKind) { _, _ in applyDefaultTransition() }
+                    Picker("", selection: $defaultTiming) {
+                        Text(L10n.t("replay.timingOverwrap")).tag("Overwrap")
+                        Text(L10n.t("replay.timingAdditive")).tag("Additive")
+                    }
+                    .labelsHidden()
+                    .frame(width: 140, height: 32)
+                    .help(L10n.t("replay.timingHelp"))
+                    .onChange(of: defaultTiming) { _, _ in applyDefaultTransition() }
+                    TextField("", text: $defaultFrames)
+                        .frame(width: 56, height: 32)
+                        .onSubmit { applyDefaultTransition() }
+                    Spacer()
                 }
-                .labelsHidden()
-                .frame(width: 110, height: 32)
-                .onChange(of: defaultKind) { _, _ in applyDefaultTransition() }
-                Picker("", selection: $defaultTiming) {
-                    Text(L10n.t("replay.timingOverwrap")).tag("Overwrap")
-                    Text(L10n.t("replay.timingAdditive")).tag("Additive")
-                }
-                .labelsHidden()
-                .frame(width: 140, height: 32)
-                .help(L10n.t("replay.timingHelp"))
-                .onChange(of: defaultTiming) { _, _ in applyDefaultTransition() }
-                TextField("", text: $defaultFrames)
-                    .frame(width: 56, height: 32)
-                    .onSubmit { applyDefaultTransition() }
             }
             ReplayClipTable(
                 clips: clips,

@@ -148,6 +148,9 @@ extension MixerController {
         }
         window.delegate = replaySettingsCloser
         window.makeKeyAndOrderFront(nil)
+        // SwiftUI fits the window to the view's minimum, which is shorter than the
+        // settings need. Open tall enough that the first read shows every section.
+        window.setContentSize(NSSize(width: 720, height: 700))
         replaySettingsWindow = window
     }
 

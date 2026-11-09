@@ -564,7 +564,15 @@ enum L10n {
         "action.TAKE": "TAKE",
         "action.T-bar": "T-bar",
         "action.Overlays": "Overlays",
-        "action.Audio link": "Audio link"
+        "action.Audio link": "Audio link",
+        "replay.clipAudioHelp": "Where this clip takes its sound from.",
+        "replay.eventsRowHelp": "Every event is edited in its own row.",
+        "replay.noClips": "No clips in this playlist yet.",
+        "replay.noEvents": "No events yet. Record, then use mark in / mark out to make one.",
+        "replay.playlistDefaultName": "Playlist {0}",
+        "replay.playlistDeleteClips": "{0} clip(s) on this playlist were deleted.",
+        "replay.playlistInUse": "{0} channels play this playlist. Point them elsewhere first.",
+        "replay.playlistLast": "The last playlist cannot be deleted.",
     ]
 
     private static let ja: [String: String] = [
@@ -911,7 +919,7 @@ enum L10n {
         "replay.stepForwardHint": "1フレーム送ります（→）",
         "replay.speedHint": "再生速度を変更します",
         "replay.jogHint": "ドラッグしてジョグします",
-        "replay.anglesHelpShort": "クリックすると、マークとプレイリストで使うアングルになります。",
+        "replay.anglesHelpShort": "クリックするとマークとプレイリストで使うアングルになります。",
         "replay.pickStorage": "録画先のドライブを選択",
         "replay.pickStorageHint": "パスを入力せずにフォルダを選択できます",
         "replay.selectStorage": "先に一覧からドライブを選んでください。",
@@ -1085,6 +1093,14 @@ enum L10n {
         "action.TAKE": "TAKE",
         "action.T-bar": "T-bar",
         "action.Overlays": "Overlay",
-        "action.Audio link": "音声リンク"
+        "action.Audio link": "音声リンク",
+        "replay.clipAudioHelp": "このクリップの音声の取得元。",
+        "replay.eventsRowHelp": "各イベントはその行で編集できます。",
+        "replay.noClips": "このプレイリストにクリップはまだありません。",
+        "replay.noEvents": "イベントはまだありません。録画してからマークイン／マークアウトで作成できます。",
+        "replay.playlistDefaultName": "プレイリスト {0}",
+        "replay.playlistDeleteClips": "このプレイリストのクリップ {0} 件も削除しました。",
+        "replay.playlistInUse": "このプレイリストは {0} チャンネルが使用中です。先に切り替えてください。",
+        "replay.playlistLast": "最後の1つは削除できません。",
     ]
 }
