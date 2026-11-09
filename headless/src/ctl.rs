@@ -1965,6 +1965,22 @@ pub fn print_ok(json: bool, command: &str, revision: u64, resource: Value) {
             "{}",
             serde_json::to_string_pretty(&resource).unwrap_or_else(|_| resource.to_string())
         );
+    } else if command == "replay"
+        && resource.get("document").is_some()
+        && resource.get("live").is_some()
+    {
+        // `replay state` promises the document and the measured state in one call; the
+        // generic "ok" hid both of them behind --json.
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&resource).unwrap_or_else(|_| resource.to_string())
+        );
+    } else if command == "replay" && resource.get("note").is_some() {
+        // `replay estimate` answers with a note on this client; print it rather than "ok".
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&resource).unwrap_or_else(|_| resource.to_string())
+        );
     } else {
         println!("ok");
     }

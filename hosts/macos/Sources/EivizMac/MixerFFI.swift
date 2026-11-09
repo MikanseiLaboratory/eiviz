@@ -119,6 +119,18 @@ enum MixerFFI {
         return String(bytes: bytes, encoding: .utf8)
     }
 
+    /// Revision of the control session. The host polls this to notice edits made by the
+    /// vMix API or eivizctl, which mutate the mixer's document and not the host's.
+    static func sessionRevision() -> UInt64 {
+        mixer_session_revision()
+    }
+
+    static func sessionJSON() -> Data? {
+        let (n, bytes) = copyUtf8(startCap: 1 << 20) { mixer_session_copy_json($0, $1) }
+        guard n >= 0 else { return nil }
+        return Data(bytes)
+    }
+
     static func sessionHasAssets(_ path: String) -> Bool {
         withCString(path) { mixer_session_has_assets($0) > 0 }
     }

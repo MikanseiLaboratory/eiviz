@@ -81,6 +81,9 @@ final class MixerController: ObservableObject {
     var tbarLatching = false
     var meterTimer: Timer?
     var mixTimer: Timer?
+    var sessionSyncTimer: Timer?
+    /// Revision of the control session whose Replay document the host has already adopted.
+    var syncedSessionRevision: UInt64 = 0
     @Published var previewByUnit: [UInt64: UInt64] = [:]
     @Published var programByUnit: [UInt64: UInt64] = [:]
     var inputPreviewWindows: [UInt64: NSWindow] = [:]
@@ -152,6 +155,9 @@ final class MixerController: ObservableObject {
         booted = true
         applyVmixApi()
         publishSession()
+        // Everything the control API changes bumps this revision; start from the state the
+        // host just published so the first poll does not adopt its own document.
+        syncedSessionRevision = MixerFFI.sessionRevision()
         updateStatus()
         openPendingSession()
     }
@@ -186,6 +192,12 @@ final class MixerController: ObservableObject {
     }
 
     private func startTimers() {
+        // The vMix API and eivizctl edit the mixer's session, not this host's copy. Poll the
+        // revision and adopt the Replay document so marks and clips made from a Stream Deck
+        // appear in the deck.
+        sessionSyncTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.syncReplayFromMixer() }
+        }
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -199,6 +211,28 @@ final class MixerController: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Adopts the Replay document the control session currently holds. Only Replay is
+    /// adopted: the rest of the host's session is what the operator is editing, while Replay
+    /// marks and playlists are routinely written by the vMix API and eivizctl.
+    private func syncReplayFromMixer() {
+        let revision = MixerFFI.sessionRevision()
+        guard revision != syncedSessionRevision else { return }
+        guard let data = MixerFFI.sessionJSON(),
+              let root = try? JSONDecoder().decode(JSONValue.self, from: data),
+              case .object(let object) = root
+        else { return }
+        syncedSessionRevision = revision
+        let replay: JSONValue?
+        if let value = object["replay"], value != .null {
+            replay = value
+        } else {
+            replay = nil
+        }
+        guard replay != session.replay else { return }
+        session.replay = replay
+        objectWillChange.send()
     }
 
     private func startRemoteDiscover() {

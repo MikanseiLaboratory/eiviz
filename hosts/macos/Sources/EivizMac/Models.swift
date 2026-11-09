@@ -1763,7 +1763,7 @@ struct SessionSettings: Codable {
     }
 }
 
-enum JSONValue: Codable {
+enum JSONValue: Codable, Equatable {
     case object([String: JSONValue])
     case array([JSONValue])
     case string(String)
