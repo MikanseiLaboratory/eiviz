@@ -864,6 +864,8 @@ pub enum ReplayCmd {
         #[arg(long)]
         path: String,
     },
+    /// Removes Replay and its channels/events/playlists from the project.
+    Delete,
 }
 
 async fn replay_cmd(session: &ControlSession, cmd: ReplayCmd) -> Result<CmdResult, String> {
@@ -940,6 +942,9 @@ async fn replay_cmd(session: &ControlSession, cmd: ReplayCmd) -> Result<CmdResul
         ReplayCmd::JumpToNow { channel } => {
             session.replay_jump_to_now(channel).await.map_err(map_err)?;
             ok_live(session, json!({ "channel": channel })).await
+        }
+        ReplayCmd::Delete => {
+            mutate(session, SessionMutation::DeleteReplay, None, false).await
         }
         ReplayCmd::State => {
             let json = session.replay_state().await.map_err(map_err)?;
