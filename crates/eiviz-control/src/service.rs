@@ -402,6 +402,11 @@ impl ControlService {
                     // that starts a recording through the API must leave the same
                     // document a deck would.
                     self.link_recording()?;
+                } else {
+                    // The range is only final once the recorder stops. Without this the
+                    // session kept `lastFrame: 0` even though frames had been written, and
+                    // a saved project described a recording shorter than it was.
+                    self.finish_recording()?;
                 }
                 self.after_live("ReplayRecord", request_id, None, false)
             }
@@ -899,6 +904,39 @@ impl ControlService {
         }
         Ok(())
     }
+    /// Writes the final frame range of the recording that just stopped into the session.
+    fn finish_recording(&mut self) -> ControlResult<()> {
+        let Ok((uuid, _)) = self.port.replay_recording() else {
+            return Ok(());
+        };
+        if uuid.trim().is_empty() {
+            return Ok(());
+        }
+        let Ok(state) = serde_json::from_str::<serde_json::Value>(&self.port.replay_state_json())
+        else {
+            return Ok(());
+        };
+        let first = state.get("firstFrame").and_then(|v| v.as_u64()).unwrap_or(0);
+        let last = state.get("lastFrame").and_then(|v| v.as_u64()).unwrap_or(0);
+        let Some(mut doc) = self.store.document_cloned() else {
+            return Ok(());
+        };
+        let changed = doc
+            .replay
+            .as_mut()
+            .and_then(|replay| replay.recordings.iter_mut().find(|rec| rec.uuid == uuid))
+            .is_some_and(|recording| {
+                let changed = recording.first_frame != first || recording.last_frame != last;
+                recording.first_frame = first;
+                recording.last_frame = last;
+                changed
+            });
+        if changed {
+            let _ = self.replace_session(doc, None, "");
+        }
+        Ok(())
+    }
+
     fn replay_mark_out(&mut self, request_id: &str, name: &str) -> ControlResult<CommandOutcome> {
         let (uuid, in_frame, out_frame) = self.port.replay_close_mark()?;
         let mut doc = self
