@@ -35,6 +35,7 @@ public enum EivizLaunch {
 }
 
 struct EivizMacApp: App {
+    @NSApplicationDelegateAdaptor(EivizAppDelegate.self) private var appDelegate
     @StateObject private var mixer = MixerController()
 
     init() {

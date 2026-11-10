@@ -12,6 +12,7 @@ struct ContentView: View {
     @EnvironmentObject private var mixer: MixerController
     @ObservedObject private var prefs = AppPrefs.shared
     @State private var customWgslEdit: CustomWgslEdit?
+    @State private var onAirLock = OnAirLock.active
 
     var body: some View {
         VStack(spacing: 0) {
@@ -128,6 +129,11 @@ struct ContentView: View {
             if !mixer.isRemote {
                 Button(L10n.t("chrome.screenshot")) { mixer.snapshotProgram() }
             }
+            Button(onAirLock ? L10n.t("chrome.onAirLockOn") : L10n.t("chrome.onAirLock")) {
+                onAirLock.toggle()
+                OnAirLock.set(onAirLock)
+            }
+            .help(L10n.t("msg.onAirLock"))
             Button(L10n.t("chrome.logs")) { mixer.showLogs = true }
             Button(L10n.t("chrome.settings")) { mixer.showSettings = true }
                 .disabled(mixer.isRemote && !mixer.remoteConnected)

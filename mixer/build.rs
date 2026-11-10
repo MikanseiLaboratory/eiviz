@@ -13,6 +13,22 @@ fn main() {
     }
     #[cfg(target_os = "macos")]
     compile_av_pump();
+    #[cfg(target_os = "macos")]
+    compile_audio_tap();
+}
+
+#[cfg(target_os = "macos")]
+fn compile_audio_tap() {
+    println!("cargo:rerun-if-changed=native/macos/audio_tap.m");
+    println!("cargo:rerun-if-changed=native/macos/audio_tap.h");
+    cc::Build::new()
+        .file("native/macos/audio_tap.m")
+        .include("native/macos")
+        .flag("-fobjc-arc")
+        .compile("eiviz_audio_tap");
+    println!("cargo:rustc-link-lib=framework=AppKit");
+    println!("cargo:rustc-link-lib=framework=CoreAudio");
+    println!("cargo:rustc-link-lib=framework=AudioToolbox");
 }
 
 #[cfg(target_os = "macos")]

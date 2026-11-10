@@ -2015,6 +2015,15 @@ struct AudioDevice: Identifiable, Hashable {
     var channels: UInt32
     var id: String
     var name: String
+    /// 0 render, 1 capture, 2 both. Matches AUDIO_DIR_* in the mixer.
+    var direction: UInt32 = 0
+}
+
+struct AudioProcess: Decodable, Identifiable, Hashable {
+    var name: String
+    var exe: String
+    var aumid: String = ""
+    var id: String { exe + "|" + aumid }
 }
 
 struct VideoCaptureDevice: Identifiable, Hashable {

@@ -906,7 +906,7 @@ struct SettingsView: View {
     }
 
     private func devices(for kind: AudioDeviceKind) -> [AudioDevice] {
-        MixerFFI.audioDevices().filter {
+        MixerFFI.audioDevices(direction: 0).filter {
             $0.kind == kind.rawUInt
                 || (kind == .coreAudio && $0.kind == AudioDeviceKind.wasapi.rawUInt)
         }
@@ -1115,9 +1115,17 @@ struct AddInputView: View {
     @State private var selectedDeckLinkMode = ""
     @State private var decklinkError = ""
     @State private var decklinkBuffer: UInt32 = 1
+    @State private var audioMode: AudioCaptureMode = .mic
+    @State private var audioDeviceId = ""
+    @State private var audioDevices: [AudioDevice] = []
+    @State private var audioMapLeft: Int32 = 0
+    @State private var audioMapRight: Int32 = 1
+    @State private var audioProcesses: [AudioProcess] = []
+    @State private var audioProcessExe = ""
+    @State private var audioProcessAumid = ""
 
     private var inputCategories: [String] {
-        var items = ["Colours", "Still", "Video", "OMT", "NDI®", "UVC"]
+        var items = ["Colours", "Still", "Video", "OMT", "NDI®", "UVC", "Audio"]
         if InputKind.deckLinkInputAllowed() || editing?.kind == .deckLink {
             items.append("DeckLink")
         }
@@ -1164,6 +1172,21 @@ struct AddInputView: View {
             if value == "DeckLink" {
                 refreshDeckLink()
             }
+            if value == "Audio" {
+                refreshAudioDevices()
+                refreshAudioProcesses()
+            }
+        }
+        .onChange(of: audioMode) { _, _ in
+            refreshAudioDevices()
+            if audioMode == .processLoopback {
+                refreshAudioProcesses()
+            }
+        }
+        .onChange(of: audioDeviceId) { _, _ in
+            let channels = Int(audioDevices.first { $0.id == audioDeviceId }?.channels ?? 1)
+            audioMapLeft = min(audioMapLeft, Int32(max(0, channels - 1)))
+            audioMapRight = min(audioMapRight, Int32(max(0, channels - 1)))
         }
         .onAppear {
             loadEditing()
@@ -1299,6 +1322,57 @@ struct AddInputView: View {
             Text(L10n.t("settings.decklinkInputHelp"))
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
+        case "Audio":
+            Picker("Audio capture", selection: $audioMode) {
+                Text("Microphone / line input").tag(AudioCaptureMode.mic)
+                Text("Output device loopback").tag(AudioCaptureMode.endpointLoopback)
+                Text("Application audio").tag(AudioCaptureMode.processLoopback)
+            }
+            if audioMode == .processLoopback {
+                Button("Refresh applications") { refreshAudioProcesses() }
+                List(audioProcesses, id: \.exe) { process in
+                    Button(process.name) {
+                        audioProcessExe = process.exe
+                        audioProcessAumid = process.aumid
+                    }
+                }
+                .frame(height: 120)
+                if audioProcessExe.isEmpty {
+                    Text("Choose an application.")
+                        .foregroundStyle(EivizTheme.dim)
+                } else {
+                    Text(audioProcesses.first { $0.exe == audioProcessExe }?.name ?? audioProcessExe)
+                        .foregroundStyle(EivizTheme.dim)
+                }
+            } else {
+                Button("Refresh devices") { refreshAudioDevices() }
+                Picker("Device", selection: $audioDeviceId) {
+                    Text("System default").tag("")
+                    ForEach(audioDevices) { device in
+                        Text("\(device.name)  (\(device.channels)ch)").tag(device.id)
+                    }
+                }
+                let channels = audioDevices.first { $0.id == audioDeviceId }?.channels ?? 2
+                HStack {
+                    Text("L")
+                    Picker("", selection: $audioMapLeft) {
+                        ForEach(0..<Int(max(1, min(channels, 32))), id: \.self) {
+                            Text("\($0 + 1)").tag(Int32($0))
+                        }
+                    }
+                    .frame(width: 72)
+                    Text("R")
+                    Picker("", selection: $audioMapRight) {
+                        ForEach(0..<Int(max(1, min(channels, 32))), id: \.self) {
+                            Text("\($0 + 1)").tag(Int32($0))
+                        }
+                    }
+                    .frame(width: 72)
+                }
+            }
+            Text("Audio Inputs route to Mixing Units and stay out of Scene layers. macOS output loopback and application capture use Core Audio process taps.")
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
         default:
             Picker("Source", selection: $mixTargetId) {
                 ForEach(mixer.session.units) { unit in
@@ -1366,6 +1440,21 @@ struct AddInputView: View {
         if panel.runModal() == .OK, let url = panel.url {
             dest.wrappedValue = url.path
             if name.isEmpty { name = url.deletingPathExtension().lastPathComponent }
+        }
+    }
+
+    private func refreshAudioDevices() {
+        audioDevices = MixerFFI.audioDevices(direction: audioMode == .mic ? 1 : 0)
+        if !audioDevices.contains(where: { $0.id == audioDeviceId }) {
+            audioDeviceId = ""
+        }
+    }
+
+    private func refreshAudioProcesses() {
+        audioProcesses = MixerFFI.audioProcesses()
+        if !audioProcesses.contains(where: { $0.exe == audioProcessExe }) {
+            audioProcessExe = ""
+            audioProcessAumid = ""
         }
     }
 
@@ -1491,6 +1580,16 @@ struct AddInputView: View {
         mixIsMultiview = mixer.session.multiviews.contains { $0.gpuId == editing.mixTargetId }
         mixPreview = editing.mixSource == .muPreview
         mixBuffer = max(1, min(8, editing.frameBufferFrames == 0 ? 1 : editing.frameBufferFrames))
+        audioMode = editing.audioCaptureMode
+        audioDeviceId = editing.audioDeviceId
+        audioMapLeft = editing.audioMapLeft
+        audioMapRight = editing.audioMapRight
+        audioProcessExe = editing.audioProcessExe
+        audioProcessAumid = editing.audioProcessAumid
+        if category == "Audio" {
+            refreshAudioDevices()
+            refreshAudioProcesses()
+        }
         selectedTags = editing.tags
     }
 
@@ -1511,6 +1610,11 @@ struct AddInputView: View {
             return ndiAddress
         case "DeckLink":
             return decklinkDevices.first { $0.id == selectedDeckLink }?.label ?? "DeckLink"
+        case "Audio":
+            if audioMode == .processLoopback {
+                return audioProcesses.first { $0.exe == audioProcessExe }?.name ?? "Application Audio"
+            }
+            return audioDevices.first { $0.id == audioDeviceId }?.name ?? "Audio"
         case "Replay":
             return "Replay"
         case "Mix":
@@ -1604,6 +1708,17 @@ struct AddInputView: View {
             input.mixSource = mixIsMultiview ? .sessionMultiview : (mixPreview ? .muPreview : .muProgram)
             input.audioUnits = []
             input.frameBufferFrames = max(1, min(8, mixBuffer))
+        case "Audio":
+            input.kind = .audio
+            input.audioCaptureMode = audioMode
+            input.audioDeviceKind = .coreAudio
+            input.audioDeviceId = audioDeviceId
+            input.audioMapLeft = audioMapLeft
+            input.audioMapRight = audioMapRight
+            input.audioProcessExe = audioProcessExe
+            input.audioProcessAumid = audioProcessAumid
+            input.audioUnits = []
+            input.frameBufferFrames = 1
         case "Replay":
             // The reserved channel id, the input band and the replay document all
             // follow from adding a Replay input; the Replay windows own the rest.
@@ -1725,7 +1840,7 @@ struct MixingUnitView: View {
     }
 
     private func muDevices(_ kind: AudioDeviceKind) -> [AudioDevice] {
-        MixerFFI.audioDevices().filter {
+        MixerFFI.audioDevices(direction: 0).filter {
             $0.kind == kind.rawUInt
                 || (kind == .coreAudio && $0.kind == AudioDeviceKind.wasapi.rawUInt)
         }

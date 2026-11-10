@@ -181,20 +181,34 @@ enum MixerFFI {
         }
     }
 
-    static func audioDevices() -> [AudioDevice] {
+    static func audioDevices(direction: UInt32? = nil) -> [AudioDevice] {
         var buffer = [EivizAudioDeviceInfo](repeating: zeroed(), count: 64)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in
             mixer_audio_enum_devices(0, ptr.baseAddress, UInt32(ptr.count))
         }
         guard n > 0 else { return [] }
-        return buffer.prefix(Int(n)).map { info in
+        let devices = buffer.prefix(Int(n)).map { info in
             AudioDevice(
                 kind: info.kind,
                 channels: info.channels,
                 id: cString(info.id),
-                name: cString(info.name)
+                name: cString(info.name),
+                direction: info.direction
             )
         }
+        guard let direction else { return devices }
+        return devices.filter { $0.direction == direction || $0.direction == 2 }
+    }
+
+    static func audioProcesses() -> [AudioProcess] {
+        var buffer = [UInt8](repeating: 0, count: 1 << 20)
+        let n = buffer.withUnsafeMutableBufferPointer { ptr in
+            mixer_audio_process_list(ptr.baseAddress, ptr.count)
+        }
+        guard n > 0, let data = String(bytes: buffer.prefix(Int(n)), encoding: .utf8)?.data(using: .utf8) else {
+            return []
+        }
+        return (try? JSONDecoder().decode([AudioProcess].self, from: data)) ?? []
     }
 
     private static func cString<T>(_ value: T) -> String {

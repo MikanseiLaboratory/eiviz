@@ -30,7 +30,10 @@ let package = Package(
         .target(
             name: "EivizMac",
             dependencies: ["EivizMixer", "EivizRemote"],
-            path: "Sources/EivizMac"
+            path: "Sources/EivizMac",
+            // ReplayCoreChecks is an executable check target, not an XCTest bundle;
+            // it imports EivizMac with @testable so the module must be built for testing.
+            swiftSettings: [.unsafeFlags(["-enable-testing"])]
         ),
         .executableTarget(
             name: "eiviz-mac",

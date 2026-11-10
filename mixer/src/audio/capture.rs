@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::upload::AudioInputStore;
 
 use super::graph::{DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_WASAPI};
-use super::info::CAPTURE_MODE_PROCESS_LOOPBACK;
+use super::info::{CAPTURE_MODE_ENDPOINT_LOOPBACK, CAPTURE_MODE_PROCESS_LOOPBACK};
 
 #[derive(Clone, Debug)]
 pub struct AudioCaptureSpec {
@@ -193,8 +193,8 @@ fn coreaudio_capture(
     ready: Option<&mpsc::Sender<Result<(), String>>>,
     signaled: &AtomicBool,
 ) -> Result<(), String> {
-    if spec.mode == CAPTURE_MODE_PROCESS_LOOPBACK {
-        return Err("Core Audio process loopback is not implemented".into());
+    if spec.mode == CAPTURE_MODE_ENDPOINT_LOOPBACK || spec.mode == CAPTURE_MODE_PROCESS_LOOPBACK {
+        return super::coreaudio_tap::run(spec, uploads, stop, ready, signaled);
     }
     super::cpal_io::run_capture(spec, uploads, stop, ready, signaled)
 }
