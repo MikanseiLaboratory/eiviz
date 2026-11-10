@@ -644,7 +644,14 @@ struct ReplaySettingsView: View {
             // The deck refresh interval lives in the session settings, not the replay
             // document, so applying has to publish the session too.
             mixer.publishSession()
-            AppKitDialog.toast(L10n.t("replay.applied"))
+            if let gpuCount = ReplayDeckMath.gpuAnglesOverCapacity(angles) {
+                AppKitDialog.toast(L10n.format(
+                    "replay.gpuAnglesOverCapacity",
+                    "\(gpuCount)",
+                    "\(ReplayDeckMath.gpuAnglesPerEncoder)"))
+            } else {
+                AppKitDialog.toast(L10n.t("replay.applied"))
+            }
             mixer.closeReplaySettings()
         } else {
             status = L10n.t("replay.publishRefused")

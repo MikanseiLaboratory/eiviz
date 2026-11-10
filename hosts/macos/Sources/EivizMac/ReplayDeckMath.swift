@@ -67,6 +67,15 @@ enum ReplayDeckMath {
         return UInt64(max(0, (bucket * fps / bucketRate).rounded()))
     }
 
+    /// A GPU encoder keeps up with about four angles at 1080p60. More than that records
+    /// with most frames missing, which Windows warns about before applying.
+    static let gpuAnglesPerEncoder = 4
+
+    static func gpuAnglesOverCapacity(_ angles: [ReplayAngleInfo]) -> Int? {
+        let count = angles.filter { $0.encoder == "Gpu" }.count
+        return count > gpuAnglesPerEncoder ? count : nil
+    }
+
     enum SetupProblem: Equatable {
         case noStorage
         case noAngles

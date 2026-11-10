@@ -470,6 +470,23 @@ let duplicateB = ReplayAngleInfo(id: 4, name: "D", source: "Scene", sceneId: 5, 
 check("duplicate scene refused",
       ReplayDeckMath.setupProblem(angles: [duplicateA, duplicateB], storages: [ReplayDocument.StorageSpec(path: "/tmp/replay", angleIds: [3, 4])]) == .angleDuplicate(4, kind: "Scene"))
 
+
+// MARK: - GPU angle capacity
+
+let fourGpuAngles = (1...4).map {
+    ReplayAngleInfo(id: UInt32($0), name: "G\($0)", source: "Scene", sceneId: UInt64($0), inputId: 0, audioUnitId: 0, encoder: "Gpu")
+}
+check("four gpu angles fit", ReplayDeckMath.gpuAnglesOverCapacity(fourGpuAngles) == nil)
+let fiveGpuAngles = (1...5).map {
+    ReplayAngleInfo(id: UInt32($0), name: "G\($0)", source: "Scene", sceneId: UInt64($0), inputId: 0, audioUnitId: 0, encoder: "Gpu")
+}
+check("five gpu angles warn", ReplayDeckMath.gpuAnglesOverCapacity(fiveGpuAngles) == 5)
+let mixedAngles = [
+    ReplayAngleInfo(id: 1, name: "a", source: "Scene", sceneId: 1, inputId: 0, audioUnitId: 0, encoder: "Cpu"),
+    ReplayAngleInfo(id: 2, name: "b", source: "Scene", sceneId: 2, inputId: 0, audioUnitId: 0, encoder: "Gpu"),
+]
+check("cpu angles do not count", ReplayDeckMath.gpuAnglesOverCapacity(mixedAngles) == nil)
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)
