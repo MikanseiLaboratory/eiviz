@@ -452,6 +452,24 @@ setupDoc.setAngles([])
 setupDoc.refreshEnabled()
 check("no angle disables", setupDoc.raw["enabled"]?.boolValue == false)
 
+
+// MARK: - Setup validation
+
+let validAngle = ReplayAngleInfo(id: 1, name: "A", source: "Scene", sceneId: 1, inputId: 0, audioUnitId: 0, encoder: "Cpu")
+let validStorage = ReplayDocument.StorageSpec(path: "/tmp/replay", angleIds: [1])
+check("valid setup accepted", ReplayDeckMath.setupProblem(angles: [validAngle], storages: [validStorage]) == nil)
+check("setup needs a drive", ReplayDeckMath.setupProblem(angles: [validAngle], storages: []) == .noStorage)
+check("setup needs an angle", ReplayDeckMath.setupProblem(angles: [], storages: [validStorage]) == .noAngles)
+check("angle needs a drive",
+      ReplayDeckMath.setupProblem(angles: [validAngle], storages: [ReplayDocument.StorageSpec(path: "/tmp/replay", angleIds: [])]) == .angleNeedsDrive(1))
+let sourceless = ReplayAngleInfo(id: 2, name: "B", source: "Scene", sceneId: 0, inputId: 0, audioUnitId: 0, encoder: "Cpu")
+check("angle needs a source",
+      ReplayDeckMath.setupProblem(angles: [sourceless], storages: [ReplayDocument.StorageSpec(path: "/tmp/replay", angleIds: [2])]) == .angleNeedsSource(2))
+let duplicateA = ReplayAngleInfo(id: 3, name: "C", source: "Scene", sceneId: 5, inputId: 0, audioUnitId: 0, encoder: "Cpu")
+let duplicateB = ReplayAngleInfo(id: 4, name: "D", source: "Scene", sceneId: 5, inputId: 0, audioUnitId: 0, encoder: "Cpu")
+check("duplicate scene refused",
+      ReplayDeckMath.setupProblem(angles: [duplicateA, duplicateB], storages: [ReplayDocument.StorageSpec(path: "/tmp/replay", angleIds: [3, 4])]) == .angleDuplicate(4, kind: "Scene"))
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)

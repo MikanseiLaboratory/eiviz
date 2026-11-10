@@ -67,6 +67,47 @@ enum ReplayDeckMath {
         return UInt64(max(0, (bucket * fps / bucketRate).rounded()))
     }
 
+    enum SetupProblem: Equatable {
+        case noStorage
+        case noAngles
+        case angleNeedsDrive(UInt32)
+        case angleNeedsSource(UInt32)
+        case angleDuplicate(UInt32, kind: String)
+    }
+
+    /// Checks the setup the Windows settings window refuses: a drive, at least one angle,
+    /// every angle on a drive with a path, every angle with a source, and no two angles
+    /// recording the same source.
+    static func setupProblem(
+        angles: [ReplayAngleInfo],
+        storages: [ReplayDocument.StorageSpec]
+    ) -> SetupProblem? {
+        let usable = storages.filter {
+            !$0.path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        guard !usable.isEmpty else { return .noStorage }
+        guard !angles.isEmpty else { return .noAngles }
+        for angle in angles {
+            let drive = storages.firstIndex { $0.angleIds.contains(angle.id) }
+            guard let drive, drive < storages.count,
+                  !storages[drive].path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return .angleNeedsDrive(angle.id) }
+        }
+        for angle in angles {
+            let source = angle.source == "Input" ? angle.inputId : angle.sceneId
+            if source == 0 { return .angleNeedsSource(angle.id) }
+        }
+        var seen = Set<String>()
+        for angle in angles {
+            let source = angle.source == "Input" ? angle.inputId : angle.sceneId
+            let key = "\(angle.source):\(source)"
+            if !seen.insert(key).inserted {
+                return .angleDuplicate(angle.id, kind: angle.source)
+            }
+        }
+        return nil
+    }
+
     /// FNV-1a, the hash the mixer reports for the clip a channel is on.
     static func clipUidHash(_ uid: String) -> UInt64 {
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325

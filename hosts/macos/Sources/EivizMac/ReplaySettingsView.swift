@@ -572,8 +572,22 @@ struct ReplaySettingsView: View {
             return
         }
         let usable = storages.filter { !$0.path.trimmingCharacters(in: .whitespaces).isEmpty }
-        if !usable.isEmpty && angles.isEmpty {
-            status = L10n.t("replay.needStorable")
+        if let problem = ReplayDeckMath.setupProblem(angles: angles, storages: storages) {
+            let name = { (id: UInt32) in
+                angles.first(where: { $0.id == id })?.label ?? "\(id)"
+            }
+            switch problem {
+            case .noStorage, .noAngles:
+                status = L10n.t("replay.needStorable")
+            case let .angleNeedsDrive(id):
+                status = L10n.format("replay.angleNeedsDrive", name(id))
+            case let .angleNeedsSource(id):
+                status = L10n.format("replay.angleNeedsSource", name(id))
+            case let .angleDuplicate(id, kind):
+                status = L10n.format(
+                    kind == "Input" ? "replay.angleDuplicateInput" : "replay.angleDuplicate",
+                    name(id))
+            }
             return
         }
         // Only angles that still exist are assigned, so a removed one cannot be
