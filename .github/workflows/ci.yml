@@ -244,7 +244,10 @@ jobs:
       - name: Run Swift replay checks
         run: |
           cd hosts/macos
-          EIVIZ_MIXER_LIBDIR="$GITHUB_WORKSPACE/target/release" swift run -c release replay-core-checks
+          swift run -c release \
+            -Xlinker -L"$GITHUB_WORKSPACE/target/release" \
+            -Xlinker -rpath -Xlinker "$GITHUB_WORKSPACE/target/release" \
+            replay-core-checks
 
       - name: Verify macOS runtime linkage and architecture
         run: |
