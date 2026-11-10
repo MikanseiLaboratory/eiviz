@@ -92,7 +92,7 @@ extension MixerController {
                 .environment(\.mixerSurfaceEpoch, surfaceEpoch)
         )
         let window = SwitcherHostWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1240, height: 780),
+            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false

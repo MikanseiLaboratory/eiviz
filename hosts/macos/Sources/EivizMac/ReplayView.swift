@@ -69,42 +69,377 @@ struct ReplayView: View {
     /// the recording. The marks are placed with it.
     @State private var peakDropped: UInt32 = 0
     @State private var jogValue: Double = 0
+    @State private var showExport = false
 
     private let tick = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            header
-            if !multiview {
-                deckMonitors
-            }
-            if angles.isEmpty {
-                // The angle strip collapses to its controls when there are no angles, so a
-                // sentence inside it wrapped into a column a few characters wide. The way
-                // out of the empty state belongs on a full-width line instead.
-                Text(L10n.t("replay.noAngles"))
-                    .font(.callout)
-                    .foregroundStyle(EivizTheme.dim)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            HStack(alignment: .top, spacing: 10) {
-                if multiview {
-                    angleMultiview
-                } else {
-                    angleStrip
-                }
-                VStack(spacing: 8) {
-                    eventList
-                    playlist
-                }
-            }
-            transportBar
+        VStack(spacing: 8) {
+            deckHeader
+            deckPictures
+            deckLists
+            deckTransport
         }
-        .padding(12)
-        .frame(minWidth: 1240, minHeight: 860)
+        .padding(10)
+        .frame(minWidth: 1280, minHeight: 860)
         .onAppear { load() }
         .onReceive(tick) { _ in refresh() }
+    }
+
+    // MARK: - Windows deck layout
+
+    private var deckHeader: some View {
+        HStack(spacing: 8) {
+            Text(L10n.t("replay.channel"))
+                .font(.system(size: 11))
+                .foregroundStyle(Color(white: 0.54))
+            Picker("", selection: $channel) {
+                ForEach(channels) { item in Text(item.label).tag(item.index) }
+            }
+            .labelsHidden()
+            .frame(width: 120, height: 30)
+            Divider().frame(height: 24)
+            Text(stateText)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(isRecording ? Color.red : EivizTheme.text)
+            Spacer(minLength: 8)
+            Text(capacityLine)
+                .font(.system(size: 11))
+                .foregroundStyle(Color(white: 0.54))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 8)
+            HStack(spacing: 6) {
+                Text(L10n.t("replay.recordTc"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(white: 0.54))
+                Text(ReplayTime.timecode(stats?.recording_frame ?? 0, fps))
+                    .font(.system(size: 18, design: .monospaced))
+                    .foregroundStyle(Color(red: 0.49, green: 0.82, blue: 0.29))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(Color.black.opacity(0.22))
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+            Text(String(format: "%.2f fps", ReplayTime.rate(fps)))
+                .font(.system(size: 11))
+                .foregroundStyle(Color(white: 0.54))
+            Button(L10n.t("replay.openSetup")) { mixer.openReplaySettings() }
+                .frame(minWidth: 150, minHeight: 30)
+        }
+    }
+
+    private var capacityLine: String {
+        guard let snapshot = stats else { return "" }
+        let free = ByteCountFormatter.string(
+            fromByteCount: Int64(snapshot.free_bytes), countStyle: .file)
+        if snapshot.remaining_secs == UInt32.max { return free }
+        return "\(free) / \(ReplayTime.clock(snapshot.remaining_secs))"
+    }
+
+    private var deckPictures: some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(L10n.t("replay.liveInput"))
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color(white: 0.78))
+                    Spacer()
+                    Button(L10n.t("replay.multiview")) { multiview.toggle() }
+                        .controlSize(.small)
+                        .tint(multiview ? .green : nil)
+                }
+                Group {
+                    if multiview {
+                        angleMultiview
+                    } else {
+                        livePicture
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                Text(liveCaption)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(white: 0.69))
+                    .lineLimit(1)
+                angleRow
+            }
+            .frame(maxWidth: .infinity)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L10n.t("replay.output"))
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color(white: 0.78))
+                outputPicture
+                Text(outputCaption)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(white: 0.69))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var livePicture: some View {
+        Group {
+            if liveMonitor != 0, let angle = activeAngle {
+                MetalPreviewRepresentable(
+                    role: .monitor(monitorId: liveMonitor, sourceId: angle.liveSourceId)
+                )
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                .background(Color.black)
+            } else {
+                Color.black.aspectRatio(16.0 / 9.0, contentMode: .fit)
+            }
+        }
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(EivizTheme.stroke))
+    }
+
+    private var outputPicture: some View {
+        Group {
+            if outputMonitor != 0, channelSource != 0 {
+                MetalPreviewRepresentable(
+                    role: .monitor(monitorId: outputMonitor, sourceId: channelSource)
+                )
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                .background(Color.black)
+            } else {
+                Color.black.aspectRatio(16.0 / 9.0, contentMode: .fit)
+            }
+        }
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(EivizTheme.stroke))
+    }
+
+    private var angleRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(Array(angles.enumerated()), id: \.element.id) { index, angle in
+                    let selected = (document?.activeAngleId ?? 0) == angle.id
+                    Button {
+                        selectAngle(angle.id)
+                    } label: {
+                        ZStack(alignment: .bottomLeading) {
+                            if let monitor = angleMonitors[angle.id], monitor != 0 {
+                                MetalPreviewRepresentable(
+                                    role: .monitor(monitorId: monitor, sourceId: angle.liveSourceId)
+                                )
+                                .frame(width: 76, height: 40)
+                                .clipped()
+                                .allowsHitTesting(false)
+                            } else {
+                                Color.black
+                            }
+                            Text("\(index + 1)")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 3)
+                                .background(Color.black.opacity(0.55))
+                        }
+                        .frame(width: 76, height: 40)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(selected ? Color.green : EivizTheme.stroke,
+                                    lineWidth: selected ? 2 : 1)
+                    )
+                    .help("\(index + 1): \(angle.label)")
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .frame(height: 48)
+    }
+
+    private var deckLists: some View {
+        HStack(alignment: .top, spacing: 8) {
+            eventList
+                .frame(minWidth: 360, maxWidth: .infinity, alignment: .topLeading)
+            playlist
+                .frame(minWidth: 520, maxWidth: .infinity, alignment: .topLeading)
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    private var deckTransport: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 6) {
+                Text(L10n.t("replay.defaultTransition"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(white: 0.54))
+                Picker("", selection: $defaultKind) {
+                    Text(L10n.t("replay.transitionCut")).tag("Cut")
+                    Text(L10n.t("replay.transitionDissolve")).tag("Dissolve")
+                }
+                .labelsHidden()
+                .frame(width: 104, height: 26)
+                .onChange(of: defaultKind) { _, _ in applyDefaultTransition() }
+                Picker("", selection: $defaultTiming) {
+                    Text(L10n.t("replay.timingOverwrap")).tag("Overwrap")
+                    Text(L10n.t("replay.timingAdditive")).tag("Additive")
+                }
+                .labelsHidden()
+                .frame(width: 130, height: 26)
+                .onChange(of: defaultTiming) { _, _ in applyDefaultTransition() }
+                TextField("", text: $defaultFrames)
+                    .frame(width: 48, height: 26)
+                    .onSubmit { applyDefaultTransition() }
+                Text(L10n.t("replay.transitionFrames"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(white: 0.54))
+                Spacer()
+            }
+            HStack(spacing: 8) {
+                Slider(
+                    value: Binding(
+                        get: { Double(stats?.recording_frame ?? 0) },
+                        set: { seekKeepingPlay(Int64($0)) }
+                    ),
+                    in: 0...Double(max(1, stats?.last_frame ?? 1))
+                )
+                .help(L10n.t("replay.seekWholeHint"))
+                Button(L10n.t("replay.jumpLive")) { live() }
+                    .frame(minWidth: 130, minHeight: 26)
+                    .help(L10n.t("replay.jumpLiveHint"))
+            }
+            waveform
+                .frame(height: 48)
+            HStack(spacing: 12) {
+                Spacer()
+                transportReadout(
+                    L10n.t("replay.playhead"),
+                    ReplayTime.timecode(stats?.recording_frame ?? 0, fps),
+                    color: Color(red: 0.49, green: 0.82, blue: 0.29)
+                )
+                transportReadout(L10n.t("replay.remainingInClip"), remainingClipText)
+                transportReadout(L10n.t("replay.remainingInPlaylist"), remainPlaylistText)
+                transportReadout(
+                    L10n.t("replay.in"),
+                    inFrame.map { ReplayTime.timecode($0, fps) } ?? "--:--:--:--",
+                    color: .orange
+                )
+                transportReadout(
+                    L10n.t("replay.out"),
+                    outFrame.map { ReplayTime.timecode($0, fps) } ?? "--:--:--:--",
+                    color: .orange
+                )
+                transportReadout(L10n.t("replay.duration"), markDuration)
+            }
+            HStack(spacing: 8) {
+                controlGroup {
+                    Button {
+                        record(true)
+                    } label: {
+                        HStack(spacing: 7) {
+                            Circle()
+                                .fill(isRecording ? Color.red : Color(red: 0.88, green: 0.32, blue: 0.32))
+                                .frame(width: 11, height: 11)
+                            Text(isRecording ? "REC" : L10n.t("replay.record"))
+                        }
+                    }
+                    .disabled(isRecording)
+                    .frame(minWidth: 88, minHeight: 44)
+                    Button(L10n.t("replay.stop")) { record(false) }
+                        .disabled(!isRecording)
+                        .frame(minWidth: 66, minHeight: 44)
+                    Button(L10n.t("replay.live")) { live() }
+                        .frame(minWidth: 74, minHeight: 44)
+                    Button(L10n.t(transport.playing ? "replay.pause" : "replay.play")) { togglePlay() }
+                        .frame(minWidth: 84, minHeight: 44)
+                    Button("◀") { step(-1) }
+                        .frame(width: 44, height: 44)
+                        .help(L10n.t("replay.stepBackHint"))
+                    Button("▶") { step(1) }
+                        .frame(width: 44, height: 44)
+                        .help(L10n.t("replay.stepForwardHint"))
+                }
+                controlGroup {
+                    Button(L10n.t("replay.markIn")) { markIn() }
+                        .tint(inFrame != nil ? .orange : nil)
+                        .frame(width: 96, height: 44)
+                    Button(L10n.t("replay.markOut")) { markOut() }
+                        .tint(outFrame != nil ? .orange : nil)
+                        .frame(width: 96, height: 44)
+                        .disabled(!markOpen)
+                    Button(L10n.t("replay.cancelMark")) { cancelMark() }
+                        .frame(width: 72, height: 44)
+                }
+                Spacer(minLength: 8)
+                controlGroup {
+                    Button("25%") { setSpeed(250) }.frame(width: 54, height: 44)
+                    Button("50%") { setSpeed(500) }.frame(width: 54, height: 44)
+                    Button("75%") { setSpeed(750) }.frame(width: 54, height: 44)
+                    Button("100%") { setSpeed(1000) }.frame(width: 56, height: 44)
+                    Slider(value: $jogValue, in: -30...30, step: 1) { editing in
+                        if !editing {
+                            jog(Int(jogValue.rounded()))
+                            jogValue = 0
+                        }
+                    }
+                    .frame(width: 110)
+                    Button(L10n.t("replay.export")) { showExport.toggle() }
+                        .frame(minWidth: 110).frame(height: 44)
+                        .popover(isPresented: $showExport) {
+                            exportBar
+                                .padding(12)
+                                .frame(width: 760)
+                        }
+                }
+            }
+            HStack(alignment: .center, spacing: 8) {
+                Text(health)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(white: 0.54))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer()
+                if !status.isEmpty {
+                    Text(status)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color(white: 0.54))
+                        .lineLimit(1)
+                }
+            }
+            Text(L10n.t("replay.shortcutHelp"))
+                .font(.system(size: 11))
+                .foregroundStyle(Color(white: 0.42))
+                .lineLimit(1)
+        }
+    }
+
+    private func controlGroup<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: 4) { content() }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 4).fill(Color(white: 0.1)))
+    }
+
+    private func transportReadout(
+        _ title: String,
+        _ value: String,
+        color: Color = EivizTheme.text
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title)
+                .font(.system(size: 10))
+                .foregroundStyle(Color(white: 0.54))
+            Text(value)
+                .font(.system(size: 16, design: .monospaced))
+                .foregroundStyle(value.hasPrefix("--") ? EivizTheme.dim : color)
+        }
+    }
+
+    private var remainingClipText: String {
+        guard let out = outFrame, let frame = stats?.recording_frame, out > frame else {
+            return "--:--:--:--"
+        }
+        return ReplayTime.duration(frame, out, fps)
+    }
+
+    private var remainPlaylistText: String {
+        guard let frame = stats?.recording_frame else { return "--:--:--:--" }
+        let left = clips.filter { $0.outFrame > frame }.map { $0.outFrame - frame }.reduce(0, +)
+        return left > 0 ? ReplayTime.duration(frame, frame + left, fps) : "--:--:--:--"
     }
 
     private var fps: (num: UInt32, den: UInt32) {
@@ -412,59 +747,61 @@ struct ReplayView: View {
     /// cells, so nothing is "select a clip, then use the controls below".
     private var playlist: some View {
         VStack(alignment: .leading, spacing: 4) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .center, spacing: 8) {
-                    Text(L10n.t("replay.playlist")).fontWeight(.bold)
-                    Picker("", selection: Binding(
-                        get: { playlistId },
-                        set: { selectPlaylist($0) }
-                    )) {
-                        ForEach(playlists) { item in
-                            Text(item.label).tag(item.id)
-                        }
+            HStack(alignment: .center, spacing: 4) {
+                Text(L10n.t("replay.playlist")).fontWeight(.bold)
+                Picker("", selection: Binding(
+                    get: { playlistId },
+                    set: { selectPlaylist($0) }
+                )) {
+                    ForEach(playlists) { item in
+                        Text(item.label).tag(item.id)
                     }
-                    .labelsHidden()
-                    .frame(width: 190, height: 32)
-                    .help(L10n.t("replay.playlistPickHelp"))
-                    TextField("", text: Binding(
-                        get: { playlists.first { $0.id == playlistId }?.name ?? "" },
-                        set: { renamePlaylist(playlistId, $0) }
-                    ))
-                    .frame(width: 160, height: 32)
-                    .help(L10n.t("replay.playlistNameHelp"))
-                    Button(L10n.t("replay.playlistAdd")) { addPlaylist() }
-                        .frame(width: 88, height: 32)
-                        .help(L10n.t("replay.playlistAddHint"))
-                    Button(L10n.t("replay.playlistRemove")) { deletePlaylist() }
-                        .frame(width: 72, height: 32)
-                        .disabled(playlists.count <= 1)
-                        .help(L10n.t("replay.playlistRemove"))
-                    Spacer()
                 }
-                // The default transition is a second row: sharing one row with the playlist
-                // controls clipped its caption and the frames field on a 1100 point window.
-                HStack(alignment: .center, spacing: 8) {
-                    Text(L10n.t("replay.defaultTransition")).font(.caption)
-                    Picker("", selection: $defaultKind) {
-                        Text(L10n.t("replay.transitionCut")).tag("Cut")
-                        Text(L10n.t("replay.transitionDissolve")).tag("Dissolve")
-                    }
-                    .labelsHidden()
-                    .frame(width: 110, height: 32)
-                    .onChange(of: defaultKind) { _, _ in applyDefaultTransition() }
-                    Picker("", selection: $defaultTiming) {
-                        Text(L10n.t("replay.timingOverwrap")).tag("Overwrap")
-                        Text(L10n.t("replay.timingAdditive")).tag("Additive")
-                    }
-                    .labelsHidden()
-                    .frame(width: 140, height: 32)
-                    .help(L10n.t("replay.timingHelp"))
-                    .onChange(of: defaultTiming) { _, _ in applyDefaultTransition() }
-                    TextField("", text: $defaultFrames)
-                        .frame(width: 56, height: 32)
-                        .onSubmit { applyDefaultTransition() }
-                    Spacer()
-                }
+                .labelsHidden()
+                .frame(width: 160, height: 28)
+                .help(L10n.t("replay.playlistPickHelp"))
+                TextField("", text: Binding(
+                    get: { playlists.first { $0.id == playlistId }?.name ?? "" },
+                    set: { renamePlaylist(playlistId, $0) }
+                ))
+                .frame(width: 120, height: 28)
+                .help(L10n.t("replay.playlistNameHelp"))
+                Button(L10n.t("replay.playlistAdd")) { addPlaylist() }
+                    .frame(minWidth: 40, minHeight: 28)
+                    .help(L10n.t("replay.playlistAddHint"))
+                Button(L10n.t("replay.playlistRemove")) { deletePlaylist() }
+                    .frame(minWidth: 40, minHeight: 28)
+                    .disabled(playlists.count <= 1)
+                    .help(L10n.t("replay.playlistRemove"))
+                Spacer(minLength: 8)
+            }
+            HStack(alignment: .center, spacing: 4) {
+                Spacer(minLength: 8)
+                Button(L10n.t("replay.playlistPlay")) { playPlaylist() }
+                    .frame(minWidth: 86, minHeight: 28)
+                    .help(L10n.t("replay.playlistPlayHint"))
+                Button(L10n.t("replay.pause")) { pausePlaylist() }
+                    .frame(minWidth: 66, minHeight: 28)
+                    .help(L10n.t("replay.pauseHint"))
+                Button(L10n.t("replay.playlistStop")) { stopPlaylist() }
+                    .frame(minWidth: 52, minHeight: 28)
+                    .help(L10n.t("replay.playlistStopHint"))
+                Toggle(L10n.t("replay.playlistLoop"), isOn: Binding(
+                    get: { looping },
+                    set: { next in
+                        looping = next
+                        _ = mixer.replayLoop(channel: channel, on: next)
+                    }))
+                .toggleStyle(.button)
+                .frame(minWidth: 60, minHeight: 28)
+                Toggle(L10n.t("replay.playlistHold"), isOn: Binding(
+                    get: { holdLast },
+                    set: { next in
+                        holdLast = next
+                        _ = mixer.replayHoldLast(channel: channel, on: next)
+                    }))
+                .toggleStyle(.button)
+                .frame(minWidth: 72, minHeight: 28)
             }
             ReplayClipTable(
                 clips: clips,
@@ -1475,6 +1812,23 @@ struct ReplayView: View {
         } else {
             status = L10n.t("replay.commandRefused")
         }
+    }
+
+    private func playPlaylist() {
+        if let first = clips.first {
+            cue(first)
+        }
+        _ = mixer.replayTransport(
+            channel: channel, playing: true, speedMilli: speedMilli, seekFrame: -1)
+    }
+
+    private func pausePlaylist() {
+        _ = mixer.replayTransport(
+            channel: channel, playing: false, speedMilli: 0, seekFrame: -1)
+    }
+
+    private func stopPlaylist() {
+        live()
     }
 
     private func togglePlay() {
