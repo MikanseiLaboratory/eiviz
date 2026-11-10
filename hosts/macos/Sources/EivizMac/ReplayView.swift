@@ -409,8 +409,6 @@ struct ReplayView: View {
                         .frame(minWidth: 110).frame(height: 44)
                         .popover(isPresented: $showExport) {
                             exportBar
-                                .padding(12)
-                                .frame(width: 760)
                         }
                 }
             }
@@ -866,20 +864,16 @@ struct ReplayView: View {
     }
 
     private var exportBar: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .center, spacing: 8) {
-                Text(L10n.t("replay.export"))
-                    .frame(width: 72, alignment: .leading)
-                Picker("", selection: $exportCodec) {
-                    Text("H.264").tag("H264")
-                    Text("HEVC").tag("Hevc")
-                }
-                .labelsHidden()
-                .frame(width: 100, height: 32)
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L10n.t("replay.exportHint"))
+                .font(.system(size: 11))
+                .foregroundStyle(Color(white: 0.69))
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Text(L10n.t("replay.exportMode"))
+                    .frame(width: 90, alignment: .leading)
                 Picker("", selection: $exportMode) {
                     Text(L10n.t("replay.exportClip")).tag("Clip")
-                    // Two playlist modes: the clips as they play, and the same clips
-                    // joined by cuts. The first is what the operator watched.
                     Text(L10n.t("replay.exportPlaylistTransitions")).tag("PlaylistWithTransitions")
                     Text(L10n.t("replay.exportPlaylistCut")).tag("Playlist")
                     Text(L10n.t("replay.exportAngle")).tag("Angle")
@@ -887,26 +881,41 @@ struct ReplayView: View {
                 }
                 .labelsHidden()
                 .frame(width: 220, height: 32)
-                TextField(L10n.t("replay.exportPath"), text: $exportPath)
+                Text(L10n.t("replay.exportCodec"))
+                    .padding(.leading, 12)
+                Picker("", selection: $exportCodec) {
+                    Text("H.264").tag("H264")
+                    Text("HEVC").tag("Hevc")
+                }
+                .labelsHidden()
+                .frame(width: 120, height: 32)
+                Spacer()
+            }
+            HStack(spacing: 8) {
+                Text(L10n.t("replay.exportPath"))
+                    .frame(width: 90, alignment: .leading)
+                TextField("", text: $exportPath)
                     .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32)
                 Button(L10n.t("replay.browse")) { chooseExportPath() }
-                    .frame(width: 88, height: 32)
+                    .frame(minWidth: 90, minHeight: 32)
+            }
+            Text(exporter.status)
+                .font(.system(size: 11))
+                .foregroundStyle(Color(white: 0.69))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            HStack(spacing: 10) {
+                Spacer()
                 Button(L10n.t("replay.exportStart")) { startExport() }
                     .disabled(exporter.busy)
-                    .frame(width: 96, height: 32)
-                Button(L10n.t("replay.exportCancel")) { cancelExport() }
-                    .disabled(!exporter.busy)
-                    .frame(width: 88, height: 32)
-            }
-            if !exporter.status.isEmpty {
-                Text(exporter.status).font(.caption)
-            }
-            if !health.isEmpty {
-                Text(health).font(.caption).foregroundStyle(EivizTheme.dim)
+                    .frame(minWidth: 130, minHeight: 36)
+                Button(L10n.t("replay.close")) { showExport = false }
+                    .frame(minWidth: 110, minHeight: 36)
             }
         }
+        .padding(16)
+        .frame(width: 720, height: 360)
     }
-
 
     private func chooseExportPath() {
         let panel = NSSavePanel()
