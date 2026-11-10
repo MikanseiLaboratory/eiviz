@@ -197,6 +197,15 @@ if let value = try? JSONDecoder().decode(JSONValue.self, from: Data(roundTrip.se
     check("settings payload parses", false)
 }
 
+
+// MARK: - Angle id allocation
+
+var angleDoc = ReplayDocument.empty(format: format)
+let firstAngle = angleDoc.reserveAngleId()
+let secondAngle = angleDoc.reserveAngleId()
+check("angle ids advance", firstAngle == 1 && secondAngle == 2)
+check("angle next id stored", angleDoc.raw["nextAngleId"]?.uint32Value == 3)
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)

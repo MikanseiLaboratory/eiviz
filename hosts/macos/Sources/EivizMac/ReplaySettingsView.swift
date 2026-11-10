@@ -468,7 +468,9 @@ struct ReplaySettingsView: View {
         }
         let used = Set(angles.filter { $0.source == "Scene" }.map(\.sceneId))
         let scene = mixer.session.scenes.first { !used.contains($0.id) }
-        let id = (angles.map(\.id).max() ?? 0) + 1
+        guard var current = document else { return }
+        let id = current.reserveAngleId()
+        document = current
         angles.append(
             ReplayAngleInfo(
                 id: id,

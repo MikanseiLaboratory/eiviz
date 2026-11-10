@@ -631,6 +631,19 @@ struct ReplayDocument {
         raw["activeAngleId"] = .number(Double(id))
     }
 
+    /// Allocates the next angle id and advances the document's counter. The settings
+    /// window used to take max(existing)+1 without touching nextAngleId, so another host
+    /// could hand out the same id.
+    mutating func reserveAngleId() -> UInt32 {
+        var highest: UInt32 = 0
+        for item in array("angles") {
+            highest = max(highest, item.objectValue?["id"]?.uint32Value ?? 0)
+        }
+        let next = max(raw["nextAngleId"]?.uint32Value ?? 1, highest + 1)
+        raw["nextAngleId"] = .number(Double(next + 1))
+        return next
+    }
+
     mutating func reserveEventId() -> UInt64 {
         var highest: UInt64 = 0
         for item in array("events") {
