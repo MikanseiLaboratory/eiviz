@@ -164,6 +164,15 @@ jobs:
           chmod +x hosts/macos/build.sh
           hosts/macos/build.sh
 
+      - name: Verify macOS app linkage and architecture
+        run: |
+          set -euo pipefail
+          BIN="$(cd hosts/macos && swift build -c release --show-bin-path)"
+          file "$BIN/eiviz-mac" | grep -q arm64
+          file "$BIN/libeiviz_mixer.dylib" | grep -q arm64
+          otool -L "$BIN/eiviz-mac" | grep -q "@rpath/libeiviz_mixer.dylib"
+          otool -L "$BIN/eiviz-mac" | grep -q "@rpath/libeiviz_remote.dylib"
+
   macos:
     name: Test mixer and Mac host
     runs-on: macos-26
@@ -255,11 +264,6 @@ jobs:
       - name: Verify macOS runtime linkage and architecture
         run: |
           set -euo pipefail
-          BIN="$(cd hosts/macos && swift build -c release --show-bin-path)"
-          file "$BIN/eiviz-mac" | grep -q arm64
-          file "$BIN/libeiviz_mixer.dylib" | grep -q arm64
-          otool -L "$BIN/eiviz-mac" | grep -q "@rpath/libeiviz_mixer.dylib"
-          otool -L "$BIN/eiviz-mac" | grep -q "@rpath/libeiviz_remote.dylib"
           otool -L target/release/eiviz-headless | grep -q "@rpath/libndi.dylib"
           otool -l target/release/eiviz-headless | grep -A2 LC_RPATH | grep -q "@executable_path"
           if otool -L target/release/eiviz-headless | grep -E "/Library/NDI|/usr/local/lib/libndi"; then
