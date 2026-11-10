@@ -931,6 +931,57 @@ struct ReplayDocument {
         })
     }
 
+    /// The format the document records at, so a recording can be linked without
+    /// reading the unit that happened to be selected.
+    var formatValues: ReplayFormatValues {
+        let format = raw["format"]?.objectValue
+        return ReplayFormatValues(
+            width: UInt32(format?["width"]?.numberValue ?? 0),
+            height: UInt32(format?["height"]?.numberValue ?? 0),
+            fpsNum: UInt32(format?["fpsNum"]?.numberValue ?? 0),
+            fpsDen: UInt32(format?["fpsDen"]?.numberValue ?? 0)
+        )
+    }
+
+    /// Adds the recording a local record button started. The control API links its own
+    /// recordings; a deck that records through the mixer ABI has to do the same or the
+    /// session keeps no way to find the files.
+    mutating func linkRecording(
+        uuid: String,
+        storage: String,
+        angles: [UInt32],
+        format: ReplayFormatValues,
+        createdMs: UInt64
+    ) {
+        var list = array("recordings")
+        list.removeAll { $0.objectValue?["uuid"]?.stringValue == uuid }
+        list.append(.object([
+            "uuid": .string(uuid),
+            "storage": .string(storage),
+            "angles": .array(angles.map { .number(Double($0)) }),
+            "width": .number(Double(format.width)),
+            "height": .number(Double(format.height)),
+            "fpsNum": .number(Double(format.fpsNum)),
+            "fpsDen": .number(Double(format.fpsDen)),
+            "firstFrame": .number(0),
+            "lastFrame": .number(0),
+            "createdMs": .number(Double(createdMs)),
+        ]))
+        raw["recordings"] = .array(list)
+    }
+
+    /// Writes the final frame range after the recorder stops.
+    mutating func setRecordingRange(uuid: String, first: UInt64, last: UInt64) {
+        var list = array("recordings")
+        guard let index = list.firstIndex(where: {
+            $0.objectValue?["uuid"]?.stringValue == uuid
+        }), var entry = list[index].objectValue else { return }
+        entry["firstFrame"] = .number(Double(first))
+        entry["lastFrame"] = .number(Double(last))
+        list[index] = .object(entry)
+        raw["recordings"] = .array(list)
+    }
+
     mutating func setAngles(_ angles: [ReplayAngleInfo]) {
         raw["angles"] = .array(angles.map { angle in
             .object([

@@ -224,15 +224,33 @@ final class MixerController: ObservableObject {
               case .object(let object) = root
         else { return }
         syncedSessionRevision = revision
+        guard let decoded = try? JSONDecoder().decode(MixerSessionData.self, from: data) else {
+            return
+        }
+        var changed = false
+        // Inputs are shared with the native API too: a Replay channel added by eivizctl has
+        // to appear in the input list, or the deck cannot be opened for it.
+        if decoded.inputs != session.inputs {
+            session.inputs = decoded.inputs
+            changed = true
+        }
+        if decoded.nextInputId != session.nextInputId {
+            session.nextInputId = decoded.nextInputId
+            changed = true
+        }
         let replay: JSONValue?
         if let value = object["replay"], value != .null {
             replay = value
         } else {
             replay = nil
         }
-        guard replay != session.replay else { return }
-        session.replay = replay
-        objectWillChange.send()
+        if replay != session.replay {
+            session.replay = replay
+            changed = true
+        }
+        if changed {
+            objectWillChange.send()
+        }
     }
 
     private func startRemoteDiscover() {

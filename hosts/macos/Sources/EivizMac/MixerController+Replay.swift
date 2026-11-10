@@ -274,10 +274,41 @@ extension MixerController {
         if isRemote {
             return MixerRemoteReplay.record(handle: remoteHandle, on: on) == 0
         }
-        if let document = replayDocument {
-            _ = MixerFFI.replayConfigure(document.json)
+        if on {
+            if let document = replayDocument {
+                _ = MixerFFI.replayConfigure(document.json)
+            }
+            let started = MixerFFI.replayRecord(true) == 0
+            if started, var document = replayDocument {
+                let uuid = MixerFFI.replayRecordingUuid()
+                if !uuid.isEmpty {
+                    document.linkRecording(
+                        uuid: uuid,
+                        storage: document.storages.first?.path ?? "",
+                        angles: document.angles.map(\.id),
+                        format: document.formatValues,
+                        createdMs: UInt64(Date().timeIntervalSince1970 * 1000)
+                    )
+                    session.replay = document.value
+                    publishSession()
+                }
+            }
+            return started
         }
-        return MixerFFI.replayRecord(on) == 0
+        let stopped = MixerFFI.replayRecord(false) == 0
+        if var document = replayDocument {
+            let uuid = MixerFFI.replayRecordingUuid()
+            if !uuid.isEmpty, let stats = MixerFFI.replayStats() {
+                document.setRecordingRange(
+                    uuid: uuid,
+                    first: stats.first_frame,
+                    last: stats.last_frame
+                )
+                session.replay = document.value
+                publishSession()
+            }
+        }
+        return stopped
     }
 
     /// Returns the mark-in frame when the host owns it. The remote core keeps the
