@@ -76,6 +76,9 @@ struct ReplayView: View {
     /// The channel's playhead, as the mixer reports it. This is what the seek bar moves;
     /// the recording head is where the recorder is writing and must not drive the bar.
     @State private var playheadFrame: UInt64 = 0
+    /// The out point of the clip the channel is playing, so "remaining in clip" does not
+    /// depend on a Mark Out the operator may not have taken.
+    @State private var channelOutFrame: UInt64 = 0
     /// While the operator drags the bar the engine has not moved yet, so the drag value
     /// owns the bar until the seek lands.
     @State private var scrubFrame: Double?
@@ -367,6 +370,8 @@ struct ReplayView: View {
             }
             waveform
                 .frame(height: 48)
+                .accessibilityElement()
+                .accessibilityLabel(L10n.t("replay.waveformSeek"))
             HStack(spacing: 12) {
                 Spacer()
                 transportReadout(
@@ -523,10 +528,11 @@ struct ReplayView: View {
     }
 
     private var remainingClipText: String {
-        guard let out = outFrame, out > displayPlayhead else {
-            return "--:--:--:--"
-        }
-        return ReplayTime.duration(displayPlayhead, out, fps)
+        let clipOut = channelOutFrame > displayPlayhead ? channelOutFrame : 0
+        let markOut = outFrame.flatMap { $0 > displayPlayhead ? $0 : nil } ?? 0
+        let end = clipOut != 0 ? clipOut : markOut
+        guard end > displayPlayhead else { return "--:--:--:--" }
+        return ReplayTime.duration(displayPlayhead, end, fps)
     }
 
     private var remainPlaylistText: String {
@@ -1264,6 +1270,7 @@ struct ReplayView: View {
                 if scrubFrame == nil {
                     playheadFrame = state.position_frame
                 }
+                channelOutFrame = state.out_frame
             }
         }
         refreshExport()
@@ -1387,7 +1394,7 @@ struct ReplayView: View {
             inFrame = frame
             outFrame = nil
             markOpen = true
-            seekKeepingPlay(Int64(frame))
+            seekFromWaveform(to: frame)
         case .out:
             guard markOpen, let inFrame, frame > inFrame else {
                 status = L10n.t("replay.markOutBeforeIn")
@@ -1399,7 +1406,7 @@ struct ReplayView: View {
             markOpen = false
             createEvent(inFrame: inFrame, outFrame: frame)
         case nil:
-            seekKeepingPlay(Int64(frame))
+            seekFromWaveform(to: frame)
         }
     }
 
@@ -2044,27 +2051,51 @@ struct ReplayView: View {
         }
     }
 
-    /// Moves the channel by `delta` frames from Mark In, stopping at Mark Out when
-    /// one was taken. The mixer clamps a seek to the clip on its own, so this only
-    /// keeps the operator inside the mark they made.
+    /// Moves the channel by `delta` frames from where the playhead is now, stopping at
+    /// the marks when both are set. A step is a look at the next frame, not a jump back
+    /// to Mark In, and it must work before any mark has been taken.
     private func seekMarked(_ delta: Int64) {
-        guard let start = inFrame, start != UInt64.max else {
-            // Stepping needs a mark taken here; a remote mark has no frame to move from.
-            status = L10n.t("replay.stepNeedsLocalMark")
-            return
+        let base = Int64(displayPlayhead)
+        var target = max(0, base + delta)
+        if let start = inFrame, let end = outFrame, end > start {
+            target = min(max(target, Int64(start)), Int64(end))
+        } else {
+            target = min(max(target, Int64(seekRange.lowerBound)), Int64(seekRange.upperBound))
         }
-        // Stepping leaves the live edge and holds where it lands.
-        var target = max(0, Int64(start) + delta)
-        if let end = outFrame, end > start {
-            target = min(target, Int64(end))
+        seekHolding(to: UInt64(target), keepPlaying: false)
+    }
+
+    /// A waveform click or mark moves the picture without changing whether the channel
+    /// is advancing. It still has to leave the live edge, or the next report puts the
+    /// playhead back on the recording edge.
+    private func seekFromWaveform(to frame: UInt64) {
+        // A waveform click is a place to look at a sound or a picture before cutting;
+        // parking there is what makes the mark that follows land on the frame clicked.
+        seekHolding(to: frame, keepPlaying: false)
+    }
+
+    /// Leaves live follow when needed, seeks, and either holds or keeps playing.
+    private func seekHolding(to frame: UInt64, keepPlaying: Bool) {
+        let target = min(max(frame, UInt64(seekRange.lowerBound)),
+                         UInt64(seekRange.upperBound))
+        cueScratchForSeek(target: target)
+        let action = ReplayTransportRules.leaveEdge(transport)
+        let playing = keepPlaying && action.playing
+        if mixer.replayTransport(
+            channel: channel,
+            playing: playing,
+            speedMilli: speedMilli,
+            seekFrame: Int64(target)
+        ) {
+            transport = playing
+                ? ReplayTransportState(live: false, playing: true)
+                : .held
+            playheadFrame = target
+            scrubFrame = nil
+            settleUntil = Date().addingTimeInterval(0.4)
+        } else {
+            status = L10n.t("replay.seekRefused")
         }
-        let action = ReplayTransportRules.seek()
-        if !mixer.replayTransport(
-            channel: channel, playing: action.playing, speedMilli: speedMilli, seekFrame: target)
-        {
-            status = L10n.t("replay.commandRefused")
-        }
-        transport = action.next
     }
 
     private func step(_ delta: Int64) {
