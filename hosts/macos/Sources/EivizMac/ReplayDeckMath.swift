@@ -127,6 +127,13 @@ enum ReplayDeckMath {
         return nil
     }
 
+    /// Where a live channel is parked when the operator pauses or changes speed: the
+    /// playhead if the deck has one, otherwise the recording head. A stale zero playhead
+    /// must not send the picture back to the first frame.
+    static func liveHoldTarget(playhead: UInt64, recordingHead: UInt64) -> UInt64 {
+        max(playhead, recordingHead)
+    }
+
     /// The channel the deck should show after an external session edit. A selected channel
     /// that no longer exists used to leave the picker and the transport on a channel the
     /// document never had.

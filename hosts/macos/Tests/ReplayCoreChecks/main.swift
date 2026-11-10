@@ -583,6 +583,15 @@ let duplicateAngles = [
 check("duplicate storage refused",
       ReplayDeckMath.setupProblem(angles: duplicateAngles, storages: [duplicateStorageA, duplicateStorageB]) == .duplicateStorage(" /tmp/REPLAY "))
 
+
+// MARK: - Live hold target
+
+check("live pause uses head when playhead is stale",
+      ReplayDeckMath.liveHoldTarget(playhead: 0, recordingHead: 1500) == 1500)
+check("live pause keeps playhead when ahead",
+      ReplayDeckMath.liveHoldTarget(playhead: 1600, recordingHead: 1500) == 1600)
+check("live target both zero", ReplayDeckMath.liveHoldTarget(playhead: 0, recordingHead: 0) == 0)
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)

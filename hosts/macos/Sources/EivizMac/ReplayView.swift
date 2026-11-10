@@ -2117,7 +2117,7 @@ struct ReplayView: View {
 
     private func pausePlaylist() {
         if transport.live {
-            seekHolding(to: max(displayPlayhead, recordingHead), keepPlaying: false)
+            seekHolding(to: ReplayDeckMath.liveHoldTarget(playhead: displayPlayhead, recordingHead: recordingHead), keepPlaying: false)
             return
         }
         if mixer.replayTransport(
@@ -2138,7 +2138,7 @@ struct ReplayView: View {
         // Pausing a live channel has to leave the edge; a live channel with playing=false
         // still follows the write head, so the picture would keep moving.
         if !action.playing && transport.live {
-            seekHolding(to: max(displayPlayhead, recordingHead), keepPlaying: false)
+            seekHolding(to: ReplayDeckMath.liveHoldTarget(playhead: displayPlayhead, recordingHead: recordingHead), keepPlaying: false)
             return
         }
         if mixer.replayTransport(
@@ -2211,7 +2211,7 @@ struct ReplayView: View {
         if transport.live, stats?.last_frame ?? 0 > 0 {
             // A speed preset on a live channel starts the recorded picture at that rate,
             // from the newest frame rather than from wherever a stale position said zero.
-            seekHolding(to: max(displayPlayhead, recordingHead), keepPlaying: true)
+            seekHolding(to: ReplayDeckMath.liveHoldTarget(playhead: displayPlayhead, recordingHead: recordingHead), keepPlaying: true)
             return
         }
         if !mixer.replayTransport(
