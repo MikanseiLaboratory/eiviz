@@ -1067,14 +1067,44 @@ struct ReplayDocument {
         raw["recordings"] = .array(list)
     }
 
+    /// Repairs angles saved before source switching cleared the other side. Returns true
+    /// when the document changed, so the deck can publish the repaired copy.
+    @discardableResult
+    mutating func normalizeAngleSources() -> Bool {
+        var items = array("angles")
+        var changed = false
+        for index in items.indices {
+            guard var angle = items[index].objectValue,
+                  let source = angle["source"]?.stringValue
+            else { continue }
+            if source == "Input" {
+                if (angle["sceneId"]?.uint64Value ?? 0) != 0 {
+                    angle["sceneId"] = .number(0)
+                    changed = true
+                }
+            } else if (angle["inputId"]?.uint64Value ?? 0) != 0 {
+                angle["inputId"] = .number(0)
+                changed = true
+            }
+            items[index] = .object(angle)
+        }
+        if changed { raw["angles"] = .array(items) }
+        return changed
+    }
+
     mutating func setAngles(_ angles: [ReplayAngleInfo]) {
         raw["angles"] = .array(angles.map { angle in
-            .object([
+            // A source is one or the other. A scene id left behind on an input angle is
+            // exactly what the core refuses with "records an input, so it cannot name
+            // scene N", so the unused side is written as zero rather than carried over.
+            let sceneId = angle.source == "Scene" ? angle.sceneId : 0
+            let inputId = angle.source == "Input" ? angle.inputId : 0
+            return .object([
                 "id": .number(Double(angle.id)),
                 "name": .string(angle.name),
                 "source": .string(angle.source),
-                "sceneId": .number(Double(angle.sceneId)),
-                "inputId": .number(Double(angle.inputId)),
+                "sceneId": .number(Double(sceneId)),
+                "inputId": .number(Double(inputId)),
                 "audio": .string(angle.audioUnitId == 0 ? "Silent" : "Unit"),
                 "audioUnitId": .number(Double(angle.audioUnitId)),
                     "encoder": .string(angle.encoder),

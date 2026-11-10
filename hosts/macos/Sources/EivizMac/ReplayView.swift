@@ -1223,6 +1223,11 @@ struct ReplayView: View {
     private func load() {
         document = mixer.replayDocument
         loadedJson = document?.json ?? ""
+        // A session saved before source switching cleared the unused id would keep failing
+        // the core's "records an input, so it cannot name scene" check forever.
+        if var current = document, current.normalizeAngleSources() {
+            save(current)
+        }
         if let first = channels.first {
             channel = first.index
         }

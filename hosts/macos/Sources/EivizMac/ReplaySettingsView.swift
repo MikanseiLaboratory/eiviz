@@ -353,8 +353,10 @@ struct ReplaySettingsView: View {
             set: { value in
                 if angle.wrappedValue.source == "Input" {
                     angle.wrappedValue.inputId = value
+                    angle.wrappedValue.sceneId = 0
                 } else {
                     angle.wrappedValue.sceneId = value
+                    angle.wrappedValue.inputId = 0
                 }
             }
         )
@@ -376,8 +378,10 @@ struct ReplaySettingsView: View {
         let first = sources(for: angle).first?.id ?? 0
         if angle.source == "Input" {
             angle.inputId = first
+            angle.sceneId = 0
         } else {
             angle.sceneId = first
+            angle.inputId = 0
         }
         angles[index] = angle
     }

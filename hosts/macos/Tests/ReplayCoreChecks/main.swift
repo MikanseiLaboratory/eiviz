@@ -702,6 +702,33 @@ if let source = try? String(contentsOf: l10nPath, encoding: .utf8),
     check("l10n call site source readable", false)
 }
 
+
+// MARK: - Angle source normalization
+
+var sourceDoc = ReplayDocument.empty(format: format)
+sourceDoc.setAngles([
+    ReplayAngleInfo(id: 1, name: "input", source: "Input", sceneId: 7, inputId: 524289, audioUnitId: 0, encoder: "Cpu"),
+    ReplayAngleInfo(id: 2, name: "scene", source: "Scene", sceneId: 3, inputId: 99, audioUnitId: 0, encoder: "Cpu"),
+])
+let normalized = sourceDoc.angles
+check("input angle clears scene id", normalized.first?.sceneId == 0 && normalized.first?.inputId == 524289)
+check("scene angle clears input id", normalized.last?.sceneId == 3 && normalized.last?.inputId == 0)
+
+
+// MARK: - Normalising saved angle sources
+
+var staleDoc = ReplayDocument(raw: [
+    "angles": .array([
+        .object(["id": .number(1), "name": .string("a"), "source": .string("Input"), "sceneId": .number(3), "inputId": .number(524289), "audio": .string("Silent"), "audioUnitId": .number(0), "encoder": .string("Cpu")]),
+        .object(["id": .number(2), "name": .string("b"), "source": .string("Scene"), "sceneId": .number(4), "inputId": .number(9), "audio": .string("Silent"), "audioUnitId": .number(0), "encoder": .string("Cpu")]),
+    ])
+])
+check("stale sources need repair", staleDoc.normalizeAngleSources())
+let repaired = staleDoc.angles
+check("repaired input scene id", repaired.first?.sceneId == 0)
+check("repaired scene input id", repaired.last?.inputId == 0)
+check("repair is idempotent", !staleDoc.normalizeAngleSources())
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)
