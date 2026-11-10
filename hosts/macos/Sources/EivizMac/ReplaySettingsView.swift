@@ -123,6 +123,19 @@ struct ReplaySettingsView: View {
                                         .frame(width: 90)
                                         .help(L10n.t("replay.segmentFramesRange"))
                                 }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(L10n.t("replay.deckRefresh")).font(.caption)
+                                    Picker("", selection: $mixer.session.settings.replayPresentInterval) {
+                                        Text(L10n.t("replay.deckRefreshFollow")).tag(UInt32(0))
+                                        ForEach([UInt32(1), 2, 3, 4, 6, 8], id: \.self) { frames in
+                                            Text(L10n.format("replay.deckRefreshEvery", "\(frames)"))
+                                                .tag(frames)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .frame(width: 150)
+                                    .help(L10n.t("replay.deckRefreshHelp"))
+                                }
                             }
                             Text(L10n.t("replay.retentionHelp")).font(.caption)
                         }
@@ -611,6 +624,9 @@ struct ReplaySettingsView: View {
         // Applying either works or says why. A window that closes without a word
         // leaves the operator unable to tell the two apart.
         if mixer.applyReplay(current) {
+            // The deck refresh interval lives in the session settings, not the replay
+            // document, so applying has to publish the session too.
+            mixer.publishSession()
             AppKitDialog.toast(L10n.t("replay.applied"))
             mixer.closeReplaySettings()
         } else {

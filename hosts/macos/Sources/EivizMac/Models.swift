@@ -1692,6 +1692,9 @@ struct SessionSettings: Codable {
     var defaultMultiviewUnitId: UInt64 = 1
     var frameBufferFrames: UInt32 = 3
     var defaultPresentInterval: UInt32 = 3
+    /// Presentation interval for the replay deck's monitors. Zero follows
+    /// `defaultPresentInterval`, the same rule the Windows settings window uses.
+    var replayPresentInterval: UInt32 = 0
     var flipSwapchainLimit: UInt32 = 0
     var internalColorFormat: InternalColorFormat = .uyvy
     var rebarOptimization: Bool?

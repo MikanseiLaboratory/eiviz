@@ -147,6 +147,16 @@ struct ReplayView: View {
         max(stats?.recording_frame ?? 0, stats?.last_frame ?? 0)
     }
 
+    /// What the deck's monitors present at. Zero in the session means "follow the
+    /// project default", exactly as the Windows settings window describes it.
+    private var deckPresentInterval: UInt32 {
+        let settings = mixer.session.settings
+        let interval = settings.replayPresentInterval == 0
+            ? settings.defaultPresentInterval
+            : settings.replayPresentInterval
+        return max(1, min(8, interval))
+    }
+
     private var capacityLine: String {
         guard let snapshot = stats else { return "" }
         let free = ByteCountFormatter.string(
@@ -200,7 +210,8 @@ struct ReplayView: View {
         Group {
             if liveMonitor != 0, let angle = activeAngle {
                 MetalPreviewRepresentable(
-                    role: .monitor(monitorId: liveMonitor, sourceId: angle.liveSourceId)
+                    role: .monitor(monitorId: liveMonitor, sourceId: angle.liveSourceId),
+                    presentInterval: deckPresentInterval
                 )
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
                 .background(Color.black)
@@ -215,7 +226,8 @@ struct ReplayView: View {
         Group {
             if outputMonitor != 0, channelSource != 0 {
                 MetalPreviewRepresentable(
-                    role: .monitor(monitorId: outputMonitor, sourceId: channelSource)
+                    role: .monitor(monitorId: outputMonitor, sourceId: channelSource),
+                    presentInterval: deckPresentInterval
                 )
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
                 .background(Color.black)
@@ -237,7 +249,8 @@ struct ReplayView: View {
                         ZStack(alignment: .bottomLeading) {
                             if let monitor = angleMonitors[angle.id], monitor != 0 {
                                 MetalPreviewRepresentable(
-                                    role: .monitor(monitorId: monitor, sourceId: angle.liveSourceId)
+                                    role: .monitor(monitorId: monitor, sourceId: angle.liveSourceId),
+                                    presentInterval: deckPresentInterval
                                 )
                                 .frame(width: 76, height: 40)
                                 .clipped()
@@ -566,7 +579,9 @@ struct ReplayView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).fontWeight(.bold)
             if monitorId != 0 && sourceId != 0 {
-                MetalPreviewRepresentable(role: .monitor(monitorId: monitorId, sourceId: sourceId))
+                MetalPreviewRepresentable(
+                    role: .monitor(monitorId: monitorId, sourceId: sourceId),
+                    presentInterval: deckPresentInterval)
                     .aspectRatio(16.0 / 9.0, contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: 180)
                     .background(Color.black)
@@ -684,7 +699,8 @@ struct ReplayView: View {
                         VStack(spacing: 2) {
                             if let monitor = angleMonitors[angle.id], monitor != 0 {
                                 MetalPreviewRepresentable(
-                                    role: .monitor(monitorId: monitor, sourceId: angle.liveSourceId)
+                                    role: .monitor(monitorId: monitor, sourceId: angle.liveSourceId),
+                                    presentInterval: deckPresentInterval
                                 )
                                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
                                 .frame(maxWidth: .infinity)
@@ -1977,7 +1993,8 @@ struct ReplayView: View {
             // Every angle stays live, not only the one in the large monitor: the strip is
             // how the operator notices a camera that stopped before marking it.
             MetalPreviewRepresentable(
-                role: .monitor(monitorId: monitor, sourceId: angle.liveSourceId)
+                role: .monitor(monitorId: monitor, sourceId: angle.liveSourceId),
+                presentInterval: deckPresentInterval
             )
             .frame(width: 48, height: 44)
             .clipped()
