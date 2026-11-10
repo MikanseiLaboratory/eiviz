@@ -124,13 +124,6 @@ struct ReplaySettingsView: View {
                                         .help(L10n.t("replay.segmentFramesRange"))
                                 }
                             }
-                            HStack {
-                                Text(L10n.t("replay.warnings")).font(.caption)
-                                TextField("600", text: $warnSecs).frame(width: 70)
-                                TextField("300", text: $alertSecs).frame(width: 70)
-                                TextField("60", text: $criticalSecs).frame(width: 70)
-                            }
-                            Text(L10n.t("replay.warningsHelp")).font(.caption)
                             Text(L10n.t("replay.retentionHelp")).font(.caption)
                         }
                     }
@@ -213,6 +206,13 @@ struct ReplaySettingsView: View {
                     }
                     Toggle(L10n.t("replay.autoAdd"), isOn: $autoAdd)
                     Text(L10n.t("replay.autoAddHelp")).font(.caption)
+                    Text(L10n.t("replay.warnings")).font(.system(size: 11))
+                    HStack {
+                        TextField("600", text: $warnSecs).frame(width: 70)
+                        TextField("300", text: $alertSecs).frame(width: 70)
+                        TextField("60", text: $criticalSecs).frame(width: 70)
+                    }
+                    Text(L10n.t("replay.warningsHelp")).font(.caption)
                     Toggle(L10n.t("replay.decodeAhead"), isOn: $decodeAhead)
                     Text(L10n.t("replay.decodeAheadHelp")).font(.caption)
                     Toggle(L10n.t("replay.profiling"), isOn: $profiling)
