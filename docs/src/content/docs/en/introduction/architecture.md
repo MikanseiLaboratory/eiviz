@@ -198,9 +198,10 @@ CPU pictures usually upload through system memory.
 On Windows with Resizable BAR on a discrete GPU, the host reaches through wgpu to the DX12 low-level API and writes straight into VRAM.  
 Apple Silicon uses unified memory for a similar path.
 
-File and UVC decode on the GPU when they can, then convert into the compose format.  
-GPU work is preferred so the CPU can spend time on NDI and other CPU-heavy paths.  
-That behaviour can be changed in [Settings](/eiviz/en/introduction/settings/).
+File and UVC decode currently uses AVFoundation on the CPU, then uploads through the
+Unified Memory path on Apple Silicon. Moving the decoded `CVPixelBuffer` straight into
+a Metal texture is tracked as the next macOS performance step; it is not enabled yet.  
+That upload path can be changed in [Settings](/eiviz/en/introduction/settings/).
 
 ```mermaid
 flowchart TB

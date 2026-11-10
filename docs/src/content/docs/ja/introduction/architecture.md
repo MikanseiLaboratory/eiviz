@@ -131,7 +131,7 @@ sequenceDiagram
 
 - **Windows**: Direct3D 12を使用。Resizable BAR（ReBAR）対応環境ではCPUからVRAMへ直接書き込みを行うことで、システムメモリ経由のコピーを削減します。
 - **macOS**: Metalを使用。Apple Silicon環境ではUnified Memoryを活かし、共有メモリ領域経由で効率的な転送を行います。
-- ファイル再生やUVC入力は可能な限りGPUデコーダーを活用し、CPU負荷を低減します。
+- ファイル再生やUVC入力は現在AVFoundationでCPUデコードし、Apple SiliconではUnified Memory経路でアップロードします。デコード済みの`CVPixelBuffer`をMetalテクスチャへ直接渡す最適化は次の性能改善として追跡中で、まだ有効ではありません。
 
 ## 音声パイプライン
 
