@@ -73,6 +73,12 @@ struct ReplayView: View {
     @State private var markLastSeconds = "10"
     @State private var clipOrder = "Append"
     @State private var playingClipUid: String?
+    /// The channel's playhead, as the mixer reports it. This is what the seek bar moves;
+    /// the recording head is where the recorder is writing and must not drive the bar.
+    @State private var playheadFrame: UInt64 = 0
+    /// While the operator drags the bar the engine has not moved yet, so the drag value
+    /// owns the bar until the seek lands.
+    @State private var scrubFrame: Double?
 
     private let tick = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
@@ -155,6 +161,19 @@ struct ReplayView: View {
             ? settings.defaultPresentInterval
             : settings.replayPresentInterval
         return max(1, min(8, interval))
+    }
+
+    private var seekRange: ClosedRange<Double> {
+        if let angle = activeAngle,
+           let range = mixer.replayAngleRange(angle.id),
+           range.last > range.first {
+            return Double(range.first)...Double(range.last)
+        }
+        return 0...Double(max(1, stats?.last_frame ?? 1))
+    }
+
+    private var displayPlayhead: UInt64 {
+        scrubFrame.map { UInt64(max(0, $0.rounded())) } ?? playheadFrame
     }
 
     private var capacityLine: String {
@@ -324,11 +343,23 @@ struct ReplayView: View {
             HStack(spacing: 8) {
                 Slider(
                     value: Binding(
-                        get: { Double(recordingHead) },
-                        set: { seekKeepingPlay(Int64($0)) }
+                        get: { scrubFrame ?? Double(playheadFrame) },
+                        set: { scrubFrame = $0 }
                     ),
-                    in: 0...Double(max(1, stats?.last_frame ?? 1))
-                )
+                    in: seekRange
+                ) { editing in
+                    guard !editing, let target = scrubFrame else { return }
+                    let frame = UInt64(max(0, target.rounded()))
+                    playheadFrame = frame
+                    // Keep showing the drop point while the mixer catches up, then let
+                    // the engine's position own the bar again.
+                    seekWhole(to: frame)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                        if let current = scrubFrame, abs(current - target) < 0.5 {
+                            scrubFrame = nil
+                        }
+                    }
+                }
                 .help(L10n.t("replay.seekWholeHint"))
                 Button(L10n.t("replay.jumpLive")) { live() }
                     .frame(minWidth: 130, minHeight: 26)
@@ -340,7 +371,7 @@ struct ReplayView: View {
                 Spacer()
                 transportReadout(
                     L10n.t("replay.playhead"),
-                    ReplayTime.timecode(recordingHead, fps),
+                    ReplayTime.timecode(displayPlayhead, fps),
                     color: Color(red: 0.49, green: 0.82, blue: 0.29)
                 )
                 transportReadout(L10n.t("replay.remainingInClip"), remainingClipText)
@@ -492,14 +523,14 @@ struct ReplayView: View {
     }
 
     private var remainingClipText: String {
-        guard let out = outFrame, out > recordingHead else {
+        guard let out = outFrame, out > displayPlayhead else {
             return "--:--:--:--"
         }
-        return ReplayTime.duration(recordingHead, out, fps)
+        return ReplayTime.duration(displayPlayhead, out, fps)
     }
 
     private var remainPlaylistText: String {
-        let frame = recordingHead
+        let frame = displayPlayhead
         let left = clips.filter { $0.outFrame > frame }.map { $0.outFrame - frame }.reduce(0, +)
         return left > 0 ? ReplayTime.duration(frame, frame + left, fps) : "--:--:--:--"
     }
@@ -1229,6 +1260,10 @@ struct ReplayView: View {
                 playingClipUid = clips.first {
                     Self.clipUidHash($0.uid) == state.clip_uid_hash
                 }?.uid
+                // Only the engine's own answer may move the bar once a drag is over.
+                if scrubFrame == nil {
+                    playheadFrame = state.position_frame
+                }
             }
         }
         refreshExport()
@@ -1290,7 +1325,7 @@ struct ReplayView: View {
             let marks: [(UInt64?, Color, CGFloat)] = [
                 (inFrame, .yellow, 1),
                 (outFrame, .yellow, 1),
-                (stats?.recording_frame, .red, 2),
+                (playheadFrame, .red, 2),
             ]
             for (frame, color, width) in marks {
                 guard let frame, frame != 0, last > first else { continue }
@@ -1374,6 +1409,62 @@ struct ReplayView: View {
     /// strip draws proxies from here on. It does not start or stop anything, though: an
     /// operator who was paused stays paused, and one who was playing keeps playing from the
     /// new frame. The transport was handed that play state, and the deck keeps it.
+    /// Moves the whole-recording slider. The bar parks the channel on the chosen frame:
+    /// a slider is a place to look at a picture, and a seek that kept playing made the
+    /// thumb run away from the frame the operator just picked.
+    private func seekWhole(to frame: UInt64) {
+        // A channel that is following the recording edge has no current clip, and the
+        // engine's live flag wins over a seek. Cue a scratch clip over the recorded range
+        // first, which leaves the edge, then park on the chosen frame.
+        cueScratchForSeek(target: frame)
+        let action = ReplayTransportRules.seek()
+        let accepted = mixer.replayTransport(
+            channel: channel,
+            playing: false,
+            speedMilli: speedMilli,
+            seekFrame: Int64(frame)
+        )
+        if accepted {
+            transport = action.next
+            playheadFrame = frame
+            settleUntil = Date().addingTimeInterval(0.4)
+        } else {
+            let detail = MixerFFI.lastErrorText()
+            status = detail.isEmpty ? L10n.t("replay.seekRefused") : detail
+        }
+    }
+
+    /// Leaves live follow for a seek without disturbing a clip that is already on air.
+    private func cueScratchForSeek(target: UInt64) {
+        if !transport.live, playingClipUid != nil { return }
+        guard let angle = activeAngle,
+              let range = mixer.replayAngleRange(angle.id),
+              range.last > range.first
+        else { return }
+        let recorded = document?.raw["recordings"]?.arrayValue?.last?
+            .objectValue?["uuid"]?.stringValue ?? ""
+        let recording = recorded.isEmpty ? mixer.replayRecordingUuid() : recorded
+        guard !recording.isEmpty else { return }
+        let clip = ReplayClipInfo(
+            uid: "seek-scrub",
+            angleId: angle.id,
+            recordingUuid: recording,
+            inFrame: range.first,
+            outFrame: max(range.last, target),
+            speed: 1,
+            gainDb: 0,
+            transition: .cut,
+            tags: [],
+            preservePitch: false,
+            audioKind: "FollowAngle",
+            audioAngleId: angle.id
+        )
+        if mixer.replayCue(channel: channel, clip: clip) {
+            transport = .held
+            playingClipUid = nil
+        }
+    }
+
     private func seekKeepingPlay(_ frame: Int64) {
         let action = ReplayTransportRules.leaveEdge(transport)
         if !mixer.replayTransport(
@@ -1899,6 +1990,7 @@ struct ReplayView: View {
     }
 
     private func live() {
+        scrubFrame = nil
         guard mixer.replayJumpToNow(channel: channel) else {
             status = L10n.t("replay.commandRefused")
             return
