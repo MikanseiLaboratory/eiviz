@@ -685,6 +685,23 @@ struct ReplayDocument {
         return id
     }
 
+    /// Puts a playlist's clips in timecode order, for the clip-order setting that inserts
+    /// a late highlight where it happened instead of at the end.
+    mutating func sortClips(playlistId: UInt64) {
+        var playlists = array("playlists")
+        guard let index = playlists.firstIndex(where: {
+            ($0.objectValue?["id"]?.uint64Value ?? 0) == playlistId
+        }), var playlist = playlists[index].objectValue else { return }
+        var clips = playlist["clips"]?.arrayValue ?? []
+        clips.sort {
+            ($0.objectValue?["inFrame"]?.uint64Value ?? 0)
+                < ($1.objectValue?["inFrame"]?.uint64Value ?? 0)
+        }
+        playlist["clips"] = .array(clips)
+        playlists[index] = .object(playlist)
+        raw["playlists"] = .array(playlists)
+    }
+
     mutating func setEventRange(_ id: UInt64, inFrame: UInt64, outFrame: UInt64) {
         var events = array("events")
         guard let index = events.firstIndex(where: {

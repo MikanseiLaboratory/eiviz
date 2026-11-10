@@ -71,6 +71,7 @@ struct ReplayView: View {
     @State private var jogValue: Double = 0
     @State private var showExport = false
     @State private var markLastSeconds = "10"
+    @State private var clipOrder = "Append"
 
     private let tick = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
@@ -755,6 +756,13 @@ struct ReplayView: View {
                 Button(L10n.t("replay.playlistAdd")) { addPlaylist() }
                     .frame(minWidth: 40, minHeight: 28)
                     .help(L10n.t("replay.playlistAddHint"))
+                Picker("", selection: $clipOrder) {
+                    Text(L10n.t("replay.clipOrderAppend")).tag("Append")
+                    Text(L10n.t("replay.clipOrderTimecode")).tag("Timecode")
+                }
+                .labelsHidden()
+                .frame(width: 128, height: 28)
+                .help(L10n.t("replay.clipOrderHint"))
                 Button(L10n.t("replay.playlistRemove")) { deletePlaylist() }
                     .frame(minWidth: 40, minHeight: 28)
                     .disabled(playlists.count <= 1)
@@ -1661,7 +1669,11 @@ struct ReplayView: View {
             status = L10n.t("replay.needAngle")
             return
         }
-        _ = current.appendClip(playlistId: current.ensurePlaylist(), event: event, angleId: angleId)
+        let target = current.ensurePlaylist()
+        _ = current.appendClip(playlistId: target, event: event, angleId: angleId)
+        if clipOrder == "Timecode" {
+            current.sortClips(playlistId: target)
+        }
         save(current)
     }
 

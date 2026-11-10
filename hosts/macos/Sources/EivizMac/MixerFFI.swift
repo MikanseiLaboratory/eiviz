@@ -219,6 +219,36 @@ enum MixerFFI {
 
     /// Live replay state. The session document says what is configured; this
     /// says what is actually playing.
+    /// Free space and the recorder's bitrate model for one storage path. The mixer works
+    /// both out itself, so the settings table can show a drive before recording starts.
+    static func replayEstimate(
+        path: String,
+        width: UInt32,
+        height: UInt32,
+        fpsNum: UInt32,
+        fpsDen: UInt32,
+        profile: UInt32,
+        angleCount: UInt32,
+        reserveBytes: UInt64
+    ) -> EivizReplayEstimateOut? {
+        guard !path.isEmpty else { return nil }
+        var input = EivizReplayEstimateIn()
+        input.width = width
+        input.height = height
+        input.fps_num = fpsNum
+        input.fps_den = fpsDen
+        input.profile = profile
+        input.angle_count = angleCount
+        input.reserve_bytes = reserveBytes
+        var output = EivizReplayEstimateOut()
+        let status = path.withCString { cString -> Int32 in
+            input.path = UnsafeRawPointer(cString).assumingMemoryBound(to: UInt8.self)
+            input.path_len = path.utf8.count
+            return mixer_replay_estimate(&input, &output)
+        }
+        return status == EIVIZ_OK ? output : nil
+    }
+
     static func replayStats() -> EivizReplayStats? {
         var stats = EivizReplayStats()
         guard mixer_replay_copy_stats(&stats, nil, 0) == EIVIZ_OK else { return nil }

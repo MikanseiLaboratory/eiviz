@@ -45,21 +45,33 @@ struct ReplaySettingsView: View {
                                 .foregroundStyle(EivizTheme.dim)
                             // Each drive is edited in its own row: the path is the row's text field,
                             // and the angles that record there are shown in the same row.
-                            List {
-                                ForEach($storages) { $storage in
-                                    HStack(spacing: 6) {
-                                        TextField(L10n.t("settings.replayPath"), text: $storage.path)
-                                            .frame(minWidth: 240)
-                                            .help(L10n.t("replay.pickStorageHint"))
-                                        Text(storage.angleIds.map(String.init).joined(separator: ", "))
-                                            .foregroundStyle(EivizTheme.dim)
-                                        Spacer()
-                                        Button(L10n.t("replay.browse")) { browseInto(storage.id) }
-                                        Button(L10n.t("replay.removeStorage")) { removeStorageRow(storage.id) }
-                                    }
+                            // The drive table is the Windows one: path, free space, the angles
+                            // that record there, and the row's browse and remove buttons.
+                            Table($storages) {
+                                TableColumn(L10n.t("settings.replayPath")) { $storage in
+                                    TextField("", text: $storage.path)
+                                        .help(L10n.t("replay.pickStorageHint"))
                                 }
+                                .width(min: 240, ideal: 520)
+                                TableColumn(L10n.t("replay.freeSpace")) { storage in
+                                    Text(freeSpaceText(storage.wrappedValue.path, angles: storage.wrappedValue.angleIds))
+                                        .foregroundStyle(EivizTheme.dim)
+                                }
+                                .width(180)
+                                TableColumn(L10n.t("replay.angle")) { storage in
+                                    Text(storage.wrappedValue.angleIds.map(String.init).joined(separator: ", "))
+                                }
+                                .width(200)
+                                TableColumn("") { storage in
+                                    Button(L10n.t("replay.browse")) { browseInto(storage.wrappedValue.id) }
+                                }
+                                .width(100)
+                                TableColumn("") { storage in
+                                    Button(L10n.t("replay.removeStorage")) { removeStorageRow(storage.wrappedValue.id) }
+                                }
+                                .width(80)
                             }
-                            .frame(minHeight: 90)
+                            .frame(minHeight: 130)
                             Button(L10n.t("replay.addStorageRow")) { browseInto(nil) }
                             HStack {
                                 Picker(L10n.t("settings.replayProfile"), selection: $profile) {
@@ -195,19 +207,23 @@ struct ReplaySettingsView: View {
                 }
                 .padding(14)
             }
+            .frame(height: 720)
             Divider()
-            HStack {
+            HStack(spacing: 8) {
                 Spacer()
-                // Cancelling discards the edits: nothing was published, so the
-                // window just goes away.
-                Button(L10n.t("dialog.cancel")) { mixer.closeReplaySettings() }
+                // Closing discards the edits: nothing was published, so the window
+                // just goes away. Apply keeps it open.
+                Button(L10n.t("replay.close")) { mixer.closeReplaySettings() }
+                    .frame(width: 130, height: 34)
+                    .keyboardShortcut(.cancelAction)
                 Button(L10n.t("replay.apply")) { apply() }
+                    .frame(width: 130, height: 34)
                     .keyboardShortcut(.defaultAction)
             }
-            .padding(.horizontal, 14)
-            .padding(.bottom, 12)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 14)
         }
-        .frame(minWidth: 620, minHeight: 520)
+        .frame(minWidth: 620, maxWidth: .infinity, minHeight: 520, maxHeight: .infinity)
         .onAppear { load() }
     }
 
@@ -468,6 +484,34 @@ struct ReplaySettingsView: View {
             }
         }
         return count
+    }
+
+    /// Free space for one drive, from the same mixer model the recorder uses. The
+    /// settings table is where an operator sees a full drive before pressing Apply.
+    private func freeSpaceText(_ path: String, angles: [UInt32]) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, let unit = mixer.session.units.first else { return "—" }
+        let count = UInt32(max(1, angles.count))
+        guard let estimate = MixerFFI.replayEstimate(
+            path: trimmed,
+            width: unit.width,
+            height: unit.height,
+            fpsNum: unit.fpsNum,
+            fpsDen: unit.fpsDen,
+            profile: profileCode,
+            angleCount: count,
+            reserveBytes: UInt64(reserve) ?? 0
+        ), estimate.path_writable != 0 else { return "—" }
+        return ByteCountFormatter.string(
+            fromByteCount: Int64(estimate.free_bytes), countStyle: .file)
+    }
+
+    private var profileCode: UInt32 {
+        switch profile {
+        case "Hq": return 0
+        case "Lq": return 2
+        default: return 1
+        }
     }
 
     private func apply() {
