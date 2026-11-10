@@ -1888,6 +1888,7 @@ struct ReplayView: View {
         _ = current.addEventClip(
             eventId: eventId,
             angleId: angleId,
+            playlistId: current.channelPlaylist(channelIndex: channel) ?? 0,
             sortByTimecode: clipOrder == "Timecode")
     }
 
@@ -1898,7 +1899,8 @@ struct ReplayView: View {
             status = L10n.t("replay.needAngle")
             return
         }
-        let target = current.ensurePlaylist()
+        // Add to the playlist the channel is on, not merely the first one.
+        let target = current.ensurePlaylist(preferred: playlistId)
         _ = current.appendClip(playlistId: target, event: event, angleId: angleId)
         if clipOrder == "Timecode" {
             current.sortClips(playlistId: target)

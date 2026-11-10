@@ -224,6 +224,20 @@ let playlistB = playlistDoc.addPlaylist(name: "B")
 check("playlist ids advance", playlistA == 1 && playlistB == 2)
 check("playlist next id stored", playlistDoc.raw["nextPlaylistId"]?.uint64Value == 3)
 
+
+// MARK: - Auto add targets the selected playlist
+
+var routingDoc = ReplayDocument.empty(format: format)
+let firstPlaylist = routingDoc.ensurePlaylist()
+let secondPlaylist = routingDoc.addPlaylist(name: "Second")
+let routedEvent = routingDoc.appendEvent(uuid: "rec", inFrame: 0, outFrame: 30, name: "routed")
+check("ensure preferred playlist", routingDoc.ensurePlaylist(preferred: secondPlaylist) == secondPlaylist)
+check("ensure unknown falls back", routingDoc.ensurePlaylist(preferred: 999) == firstPlaylist)
+_ = routingDoc.addEventClip(
+    eventId: routedEvent, angleId: 1, playlistId: secondPlaylist, sortByTimecode: false)
+check("clip lands in selected playlist", routingDoc.clips(playlistId: secondPlaylist).count == 1)
+check("other playlist untouched", routingDoc.clips(playlistId: firstPlaylist).isEmpty)
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)

@@ -664,9 +664,14 @@ struct ReplayDocument {
         return next
     }
 
-    /// Creates the first playlist when the project has none yet.
-    mutating func ensurePlaylist() -> UInt64 {
-        if let existing = array("playlists").first?.objectValue?["id"]?.uint64Value {
+    /// The playlist an event should join: the one the channel selected when it exists,
+    /// otherwise the first one, creating it when the project has none.
+    mutating func ensurePlaylist(preferred: UInt64 = 0) -> UInt64 {
+        let ids = array("playlists").compactMap { $0.objectValue?["id"]?.uint64Value }
+        if preferred != 0, ids.contains(preferred) {
+            return preferred
+        }
+        if let existing = ids.first {
             return existing
         }
         let id = reservePlaylistId()
@@ -705,10 +710,11 @@ struct ReplayDocument {
     mutating func addEventClip(
         eventId: UInt64,
         angleId: UInt32,
+        playlistId preferred: UInt64 = 0,
         sortByTimecode: Bool
     ) -> Bool {
         guard let event = events.first(where: { $0.id == eventId }) else { return false }
-        let target = ensurePlaylist()
+        let target = ensurePlaylist(preferred: preferred)
         guard appendClip(playlistId: target, event: event, angleId: angleId) else {
             return false
         }
