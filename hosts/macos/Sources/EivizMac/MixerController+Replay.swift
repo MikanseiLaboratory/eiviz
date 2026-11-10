@@ -92,7 +92,7 @@ extension MixerController {
                 .environment(\.mixerSurfaceEpoch, surfaceEpoch)
         )
         let window = SwitcherHostWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
+            contentRect: NSRect(x: 0, y: 0, width: 1440, height: 820),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -109,6 +109,16 @@ extension MixerController {
         }
         window.delegate = replayCloser
         window.makeKeyAndOrderFront(nil)
+        // SwiftUI resizes a hosting window to its fitting size, which is the minimum
+        // width. Put it back to the size the deck is read at, inside the visible screen.
+        if let visible = NSScreen.main?.visibleFrame {
+            let width = min(1440, visible.width - 16)
+            let height = min(820, visible.height - 8)
+            window.setContentSize(NSSize(width: width, height: height))
+            window.setFrameOrigin(NSPoint(
+                x: visible.midX - width / 2,
+                y: visible.midY - height / 2))
+        }
         replayWindow = window
     }
 

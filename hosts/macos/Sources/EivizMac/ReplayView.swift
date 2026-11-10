@@ -70,6 +70,7 @@ struct ReplayView: View {
     @State private var peakDropped: UInt32 = 0
     @State private var jogValue: Double = 0
     @State private var showExport = false
+    @State private var markLastSeconds = "10"
 
     private let tick = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
@@ -81,7 +82,7 @@ struct ReplayView: View {
             deckTransport
         }
         .padding(10)
-        .frame(minWidth: 1280, minHeight: 860)
+        .frame(minWidth: 1280, minHeight: 720)
         .onAppear { load() }
         .onReceive(tick) { _ in refresh() }
     }
@@ -363,6 +364,15 @@ struct ReplayView: View {
                         .disabled(!markOpen)
                     Button(L10n.t("replay.cancelMark")) { cancelMark() }
                         .frame(width: 72, height: 44)
+                    TextField("", text: $markLastSeconds)
+                        .frame(width: 44, height: 44)
+                    Text(L10n.t("replay.secondsShort"))
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color(white: 0.54))
+                    Button(L10n.t("replay.markLast")) { markLast() }
+                        .frame(width: 100, height: 44)
+                        .help(L10n.t("replay.markLastHint"))
+                        .disabled(!isRecording)
                 }
                 Spacer(minLength: 8)
                 controlGroup {
@@ -695,49 +705,18 @@ struct ReplayView: View {
     /// cells, so nothing is "select one, then use the buttons above".
     private var eventList: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(L10n.t("replay.events")).fontWeight(.bold)
-                Spacer()
-                Text(L10n.t("replay.eventsRowHelp")).font(.caption).foregroundStyle(EivizTheme.dim)
-            }
-            List {
-                ForEach(document?.events ?? []) { event in
-                    HStack(spacing: 6) {
-                        Text(ReplayTime.timecode(event.inFrame, fps))
-                            .font(.system(.caption, design: .monospaced))
-                        Text(ReplayTime.timecode(event.outFrame, fps))
-                            .font(.system(.caption, design: .monospaced))
-                        Text(ReplayTime.duration(event.inFrame, event.outFrame, fps))
-                            .font(.system(.caption, design: .monospaced))
-                        TextField("", text: Binding(
-                            get: { event.name },
-                            set: { renameEvent(event.id, $0) }
-                        ))
-                        .frame(minWidth: 120)
-                        Toggle(L10n.t("replay.protect"), isOn: Binding(
-                            get: { event.protected },
-                            set: { setEventProtected(event.id, $0) }
-                        ))
-                        .toggleStyle(.checkbox)
-                        .help(L10n.t("replay.protectHint"))
-                        Button {
-                            addEventToPlaylist(event)
-                        } label: {
-                            Image(systemName: "play.fill")
-                        }
-                        .help(L10n.t("replay.cueHint"))
-                        Button {
-                            deleteEvent(event.id)
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                        .help(L10n.t("replay.delete"))
-                    }
-                }
-            }
-            .frame(minHeight: 90)
+            Text(L10n.t("replay.events")).fontWeight(.bold)
+            ReplayEventTable(
+                events: document?.events ?? [],
+                fps: fps,
+                rename: { renameEvent($0, $1) },
+                protect: { setEventProtected($0, $1) },
+                addToPlaylist: { addEventToPlaylist($0) },
+                remove: { deleteEvent($0) })
             if (document?.events ?? []).isEmpty {
-                Text(L10n.t("replay.noEvents")).font(.caption).foregroundStyle(EivizTheme.dim)
+                Text(L10n.t("replay.noEvents"))
+                    .font(.caption)
+                    .foregroundStyle(EivizTheme.dim)
             }
         }
     }
@@ -803,7 +782,7 @@ struct ReplayView: View {
                 .toggleStyle(.button)
                 .frame(minWidth: 72, minHeight: 28)
             }
-            ReplayClipTable(
+            ReplayClipTableWindows(
                 clips: clips,
                 angles: angles,
                 fps: fps,
@@ -1345,6 +1324,32 @@ struct ReplayView: View {
         guard var current = document, current.activeAngleId != id else { return }
         current.setActiveAngle(id)
         save(current)
+    }
+
+    /// Marks the last N seconds as one event without walking the playhead: the range is
+    /// written straight into the session, the same range Mark In / Mark Out would leave.
+    private func markLast() {
+        guard isRecording,
+              let snapshot = stats,
+              var current = document
+        else { return }
+        let seconds = max(1.0, Double(markLastSeconds) ?? 10)
+        let span = UInt64(seconds * ReplayTime.rate(fps))
+        let now = snapshot.recording_frame
+        let start = now > span ? now - span : 0
+        let recording = mixer.replayRecordingUuid()
+        guard !recording.isEmpty else { return }
+        let name = L10n.format("replay.eventName", "\(current.events.count + 1)")
+        _ = current.appendEvent(
+            uuid: recording,
+            inFrame: start,
+            outFrame: now,
+            name: name)
+        inFrame = start
+        outFrame = now
+        document = current
+        let applied = mixer.applyReplay(current)
+        if !applied { status = L10n.t("replay.publishRefused") }
     }
 
     private func markIn() {
