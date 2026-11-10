@@ -407,6 +407,36 @@ check("cancelled progress parses", ReplayExportProgress(json: "{\"state\":4,\"do
 check("invalid progress is nil", ReplayExportProgress(json: "not json") == nil)
 check("unknown state falls back to failed", ReplayExportProgress(json: "{\"state\":99}")?.state == .failed)
 
+
+// MARK: - Clip creation
+
+var clipDoc = ReplayDocument.empty(format: format)
+let clipEvent = clipDoc.appendEvent(uuid: "rec", inFrame: 0, outFrame: 60, name: "clip event")
+let clipPlaylist = clipDoc.ensurePlaylist()
+check("clip needs an angle",
+      !clipDoc.appendClip(playlistId: clipPlaylist, event: clipDoc.events[0], angleId: 0))
+check("clip appends", clipDoc.appendClip(playlistId: clipPlaylist, event: clipDoc.events[0], angleId: 1))
+check("clip is playable", clipDoc.clips(playlistId: clipPlaylist).count == 1)
+check("clip uid uses event id", clipDoc.clips(playlistId: clipPlaylist).first?.uid == "clip-\(clipEvent)")
+check("clip starts at real time", clipDoc.clips(playlistId: clipPlaylist).first?.speed == 1.0)
+let secondPlaylistForClip = clipDoc.addPlaylist(name: "Other")
+_ = clipDoc.appendClip(playlistId: secondPlaylistForClip, event: clipDoc.events[0], angleId: 1)
+check("clip uid stays unique across playlists",
+      clipDoc.clips(playlistId: secondPlaylistForClip).first?.uid == "clip-\(clipEvent)-2")
+
+var transitionDoc = ReplayDocument.empty(format: format)
+let transitionPlaylist = transitionDoc.ensurePlaylist()
+transitionDoc.setDefaultTransition(
+    playlistId: transitionPlaylist,
+    transition: ReplayTransitionInfo(kind: "Dissolve", timing: "Overwrap", durationFrames: 30))
+let transitionEvent = transitionDoc.appendEvent(uuid: "rec", inFrame: 0, outFrame: 30, name: "t")
+_ = transitionDoc.appendClip(
+    playlistId: transitionPlaylist,
+    event: transitionDoc.events.first(where: { $0.id == transitionEvent })!,
+    angleId: 1)
+check("clip starts on playlist default transition",
+      transitionDoc.clips(playlistId: transitionPlaylist).first?.transition.kind == "Dissolve")
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)
