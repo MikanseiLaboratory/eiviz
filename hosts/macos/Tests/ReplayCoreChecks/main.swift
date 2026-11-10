@@ -97,6 +97,20 @@ _ = autoAddDoc.addEventClip(eventId: early, angleId: 1, sortByTimecode: true)
 let ordered = autoAddDoc.clips(playlistId: autoAddDoc.ensurePlaylist())
 check("auto add sorts by timecode", ordered.first?.inFrame == 10 && ordered.last?.inFrame == 300)
 
+
+// MARK: - Range validation and waveform mapping
+
+check("event range must advance", ReplayDeckMath.eventRangeValid(inFrame: 10, outFrame: 20))
+check("event range rejects equal", !ReplayDeckMath.eventRangeValid(inFrame: 10, outFrame: 10))
+check("event range rejects backwards", !ReplayDeckMath.eventRangeValid(inFrame: 20, outFrame: 10))
+
+check("waveform start", ReplayDeckMath.waveformFrame(ratio: 0, bucketRate: 60, buckets: 60, dropped: 0, fps: 60) == 0)
+check("waveform half", ReplayDeckMath.waveformFrame(ratio: 0.5, bucketRate: 60, buckets: 60, dropped: 0, fps: 60) == 30)
+check("waveform end", ReplayDeckMath.waveformFrame(ratio: 1, bucketRate: 60, buckets: 60, dropped: 0, fps: 60) == 60)
+check("waveform dropped offset", ReplayDeckMath.waveformFrame(ratio: 0, bucketRate: 60, buckets: 60, dropped: 10, fps: 60) == 10)
+check("waveform clamps left", ReplayDeckMath.waveformFrame(ratio: -1, bucketRate: 60, buckets: 60, dropped: 0, fps: 60) == 0)
+check("waveform clamps right", ReplayDeckMath.waveformFrame(ratio: 2, bucketRate: 60, buckets: 60, dropped: 0, fps: 60) == 60)
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)

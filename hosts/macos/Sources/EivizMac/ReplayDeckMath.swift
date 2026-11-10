@@ -46,6 +46,27 @@ enum ReplayDeckMath {
         return left
     }
 
+    /// An event range is only usable when it advances. The engine refuses a backwards
+    /// range, so the table checks before it publishes and says why.
+    static func eventRangeValid(inFrame: UInt64, outFrame: UInt64) -> Bool {
+        outFrame > inFrame
+    }
+
+    /// The recording frame under a point on the waveform. The waveform draws only the
+    /// buckets the store still holds, so the dropped count is the offset.
+    static func waveformFrame(
+        ratio: Double,
+        bucketRate: Double,
+        buckets: Int,
+        dropped: UInt32,
+        fps: Double
+    ) -> UInt64 {
+        guard buckets > 0, bucketRate > 0, fps > 0 else { return 0 }
+        let clamped = min(max(ratio, 0), 1)
+        let bucket = Double(dropped) + clamped * Double(buckets)
+        return UInt64(max(0, (bucket * fps / bucketRate).rounded()))
+    }
+
     /// FNV-1a, the hash the mixer reports for the clip a channel is on.
     static func clipUidHash(_ uid: String) -> UInt64 {
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325

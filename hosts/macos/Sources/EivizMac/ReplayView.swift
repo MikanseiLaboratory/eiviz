@@ -97,6 +97,16 @@ struct ReplayView: View {
         .frame(minWidth: 1280, minHeight: 720)
         .onAppear { load() }
         .onReceive(tick) { _ in refresh() }
+        .onChange(of: channel) { _, _ in
+            // A different channel has its own playhead; carrying the last one over made
+            // the slider and the readouts describe a channel that is no longer selected.
+            scrubFrame = nil
+            playheadFrame = 0
+            channelOutFrame = 0
+            playingClipUid = nil
+            selectedClip = nil
+            transport = .atEdge
+        }
     }
 
     // MARK: - Windows deck layout
@@ -171,9 +181,10 @@ struct ReplayView: View {
         if let angle = activeAngle,
            let range = mixer.replayAngleRange(angle.id),
            range.last > range.first {
-            return Double(range.first)...Double(range.last)
+            let upper = max(range.last, playheadFrame, recordingHead)
+            return Double(range.first)...Double(max(1, upper))
         }
-        return 0...Double(max(1, stats?.last_frame ?? 1))
+        return 0...Double(max(1, stats?.last_frame ?? 1, playheadFrame))
     }
 
     private var displayPlayhead: UInt64 {
@@ -884,16 +895,22 @@ struct ReplayView: View {
                 Toggle(L10n.t("replay.playlistLoop"), isOn: Binding(
                     get: { looping },
                     set: { next in
-                        looping = next
-                        _ = mixer.replayLoop(channel: channel, on: next)
+                        if mixer.replayLoop(channel: channel, on: next) {
+                            looping = next
+                        } else {
+                            status = L10n.t("replay.commandRefused")
+                        }
                     }))
                 .toggleStyle(.button)
                 .frame(minWidth: 60, minHeight: 28)
                 Toggle(L10n.t("replay.playlistHold"), isOn: Binding(
                     get: { holdLast },
                     set: { next in
-                        holdLast = next
-                        _ = mixer.replayHoldLast(channel: channel, on: next)
+                        if mixer.replayHoldLast(channel: channel, on: next) {
+                            holdLast = next
+                        } else {
+                            status = L10n.t("replay.commandRefused")
+                        }
                     }))
                 .toggleStyle(.button)
                 .frame(minWidth: 72, minHeight: 28)
@@ -1163,8 +1180,11 @@ struct ReplayView: View {
                 Toggle(L10n.t("replay.playlistLoop"), isOn: Binding(
                     get: { looping },
                     set: { next in
-                        looping = next
-                        _ = mixer.replayLoop(channel: channel, on: next)
+                        if mixer.replayLoop(channel: channel, on: next) {
+                            looping = next
+                        } else {
+                            status = L10n.t("replay.commandRefused")
+                        }
                     }))
                 .toggleStyle(.button)
                 .frame(width: 64, height: 36)
@@ -1174,8 +1194,11 @@ struct ReplayView: View {
                 Toggle(L10n.t("replay.playlistHold"), isOn: Binding(
                     get: { holdLast },
                     set: { next in
-                        holdLast = next
-                        _ = mixer.replayHoldLast(channel: channel, on: next)
+                        if mixer.replayHoldLast(channel: channel, on: next) {
+                            holdLast = next
+                        } else {
+                            status = L10n.t("replay.commandRefused")
+                        }
                     }))
                 .toggleStyle(.button)
                 .frame(width: 88, height: 36)
@@ -1392,9 +1415,13 @@ struct ReplayView: View {
         let bucketRate = Double(MixerFFI.replayPeakRate())
         let framesPerSecond = max(1.0, ReplayTime.rate(document.fps))
         guard bucketRate > 0 else { return }
-        let ratio = min(max(point.x / size.width, 0), 1)
-        let bucket = Double(peakDropped) + ratio * Double(buckets)
-        let frame = UInt64(max(0, bucket * framesPerSecond / bucketRate).rounded())
+        let ratio = Double(point.x / size.width)
+        let frame = ReplayDeckMath.waveformFrame(
+            ratio: ratio,
+            bucketRate: bucketRate,
+            buckets: buckets,
+            dropped: peakDropped,
+            fps: framesPerSecond)
         let mark: WaveformMark? =
             modifiers.contains(.shift) ? .in : (modifiers.contains(.control) ? .out : nil)
         switch mark {
@@ -1644,6 +1671,10 @@ struct ReplayView: View {
     }
 
     private func setEventRange(_ id: UInt64, _ inFrame: UInt64, _ outFrame: UInt64) {
+        guard ReplayDeckMath.eventRangeValid(inFrame: inFrame, outFrame: outFrame) else {
+            status = L10n.t("replay.markOutBeforeIn")
+            return
+        }
         guard var current = document else { return }
         current.setEventRange(id, inFrame: inFrame, outFrame: outFrame)
         document = current
