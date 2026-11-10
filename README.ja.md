@@ -41,6 +41,8 @@ macOS 14以降のApple Siliconがサポート対象です。公証の資格情�
 ad-hoc署名のため、Gatekeeperに止められた場合はpkgを右クリックして「開く」を選ぶか、
 インストール後に`xattr -dr com.apple.quarantine /Applications/eiviz.app`を実行してください。
 
+macOSでは音声入力、RTMP出力、Replayの一部書き出し経路を順次対応中です。残作業はGitHub Issueで追跡しています。
+
 ### macOS Intel（`macos-x64`）
 
 手順は同じです。`macos-x64`のpkgを使います。

@@ -33,6 +33,9 @@ signed until notarization credentials are wired into the release; if Gatekeeper
 blocks it, right-click the package and choose Open, or run
 `xattr -dr com.apple.quarantine /Applications/eiviz.app` after installing.
 
+Audio Input, RTMP output, and some Replay export paths are still being brought
+up on macOS; the linked GitHub issues track the remaining work.
+
 ### macOS Intel (`macos-x64`)
 
 Same steps, with the `macos-x64` pkg.
