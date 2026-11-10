@@ -634,7 +634,7 @@ if let source = try? String(contentsOf: l10nPath, encoding: .utf8),
     let englishValues = Dictionary(uniqueKeysWithValues: english)
     let japaneseValues = Dictionary(uniqueKeysWithValues: japanese)
     func placeholders(_ value: String) -> Set<String> {
-        let regex = try! NSRegularExpression(pattern: "\\{(\\d+)\\}")
+        let regex = try! NSRegularExpression(pattern: #"\{(\d+)\}"#)
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
         return Set(regex.matches(in: value, range: range).compactMap { match in
             Range(match.range(at: 1), in: value).map { String(value[$0]) }
@@ -667,6 +667,39 @@ if let data = try? Data(contentsOf: fixturePath) {
     }
 } else {
     check("core session fixture readable", false)
+}
+
+
+// MARK: - Localisation call sites
+
+if let source = try? String(contentsOf: l10nPath, encoding: .utf8),
+   let english = l10nEntries("en", source: source) {
+    let englishKeys = Set(english.map(\.key))
+    let sourcesDirectory = l10nPath
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    var missing: [String] = []
+    if let files = try? FileManager.default.contentsOfDirectory(
+        at: sourcesDirectory.appendingPathComponent("Sources/EivizMac"),
+        includingPropertiesForKeys: nil
+    ) {
+        let regex = try! NSRegularExpression(pattern: #"L10n\.(?:t|format)\("([^"]+)""#)
+        for file in files where file.pathExtension == "swift" {
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
+            let range = NSRange(text.startIndex..<text.endIndex, in: text)
+            for match in regex.matches(in: text, range: range) {
+                guard let keyRange = Range(match.range(at: 1), in: text) else { continue }
+                let key = String(text[keyRange])
+                // Interpolated call sites build the key at runtime; they are not literals.
+                if key.contains("\\(") { continue }
+                if !englishKeys.contains(key) { missing.append(key) }
+            }
+        }
+    }
+    check("l10n call sites use defined keys", missing.isEmpty)
+    if !missing.isEmpty { print("undefined l10n keys: \(missing)") }
+} else {
+    check("l10n call site source readable", false)
 }
 
 if failures > 0 {
