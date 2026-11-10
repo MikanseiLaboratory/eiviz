@@ -52,5 +52,11 @@ let package = Package(
             name: "EivizRemote",
             path: "Sources/EivizRemote"
         ),
+        .executableTarget(
+            name: "replay-core-checks",
+            dependencies: ["EivizMac"],
+            path: "Tests/ReplayCoreChecks",
+            linkerSettings: exeLinker("\(Context.packageDirectory)/Sources/EivizMac/Info.plist")
+        ),
     ]
 )

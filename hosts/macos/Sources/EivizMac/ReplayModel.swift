@@ -685,6 +685,26 @@ struct ReplayDocument {
         return id
     }
 
+    /// Adds the clip for an event the deck just made, honouring the clip-order setting.
+    /// Every event path (mark out, mark last, direct create) goes through this, so none of
+    /// them can quietly append while the operator asked for timecode order.
+    @discardableResult
+    mutating func addEventClip(
+        eventId: UInt64,
+        angleId: UInt32,
+        sortByTimecode: Bool
+    ) -> Bool {
+        guard let event = events.first(where: { $0.id == eventId }) else { return false }
+        let target = ensurePlaylist()
+        guard appendClip(playlistId: target, event: event, angleId: angleId) else {
+            return false
+        }
+        if sortByTimecode {
+            sortClips(playlistId: target)
+        }
+        return true
+    }
+
     /// Puts a playlist's clips in timecode order, for the clip-order setting that inserts
     /// a late highlight where it happened instead of at the end.
     mutating func sortClips(playlistId: UInt64) {

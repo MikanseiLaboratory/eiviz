@@ -528,36 +528,18 @@ struct ReplayView: View {
     }
 
     private var remainingClipText: String {
-        let clipOut = channelOutFrame > displayPlayhead ? channelOutFrame : 0
-        let markOut = outFrame.flatMap { $0 > displayPlayhead ? $0 : nil } ?? 0
-        let end = clipOut != 0 ? clipOut : markOut
-        guard end > displayPlayhead else { return "--:--:--:--" }
-        return ReplayTime.duration(displayPlayhead, end, fps)
+        guard let left = ReplayDeckMath.remainingClip(
+            position: displayPlayhead,
+            channelOut: channelOutFrame,
+            markOut: outFrame)
+        else { return "--:--:--:--" }
+        return ReplayTime.duration(displayPlayhead, displayPlayhead + left, fps)
     }
 
     private var remainPlaylistText: String {
         let frame = displayPlayhead
-        var left: UInt64 = 0
-        for clip in clips {
-            if clip.outFrame <= frame { continue }
-            if frame < clip.inFrame {
-                left += clip.outFrame - clip.inFrame
-            } else {
-                left += clip.outFrame - frame
-            }
-        }
+        let left = ReplayDeckMath.remainingPlaylist(clips: clips, position: frame)
         return left > 0 ? ReplayTime.duration(frame, frame + left, fps) : "--:--:--:--"
-    }
-
-    /// FNV-1a, the hash the mixer reports for the clip a channel is on. The deck has the
-    /// clip ids, not the mixer's channel struct, so it compares hashes to mark the row.
-    private static func clipUidHash(_ uid: String) -> UInt64 {
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in uid.utf8 {
-            hash ^= UInt64(byte)
-            hash = hash &* 0x0000_0100_0000_01b3
-        }
-        return hash
     }
 
     private var fps: (num: UInt32, den: UInt32) {
@@ -1272,7 +1254,7 @@ struct ReplayView: View {
                     speedMilli = state.speed_milli
                 }
                 playingClipUid = clips.first {
-                    Self.clipUidHash($0.uid) == state.clip_uid_hash
+                    ReplayDeckMath.clipUidHash($0.uid) == state.clip_uid_hash
                 }?.uid
                 // Only the engine's own answer may move the bar once a drag is over.
                 if scrubFrame == nil {
@@ -1543,16 +1525,7 @@ struct ReplayView: View {
         // The session validates an event against its recording's range, and the range of a
         // recording still being written is the frame the recorder is on.
         current.setRecordingRange(uuid: recording, first: 0, last: now)
-        if current.autoAddToPlaylist,
-           current.activeAngle != 0,
-           let event = current.events.first(where: { $0.id == id }) {
-            let target = current.ensurePlaylist()
-            _ = current.appendClip(
-                playlistId: target, event: event, angleId: current.activeAngle)
-            if clipOrder == "Timecode" {
-                current.sortClips(playlistId: target)
-            }
-        }
+        addEventClipIfNeeded(id, to: &current)
         inFrame = start
         outFrame = now
         document = current
@@ -1615,14 +1588,7 @@ struct ReplayView: View {
                 outFrame: end,
                 name: name
             )
-            if current.autoAddToPlaylist {
-                let angleId = current.activeAngle
-                if angleId == 0 {
-                    status = L10n.t("replay.needAngle")
-                } else if let event = current.events.first(where: { $0.id == id }) {
-                    _ = current.appendClip(playlistId: current.ensurePlaylist(), event: event, angleId: angleId)
-                }
-            }
+            addEventClipIfNeeded(id, to: &current)
             save(current)
         }
     }
@@ -1644,14 +1610,7 @@ struct ReplayView: View {
             return
         }
         let id = current.appendEvent(uuid: uuid, inFrame: start, outFrame: end, name: name)
-        if current.autoAddToPlaylist {
-            let angleId = current.activeAngle
-            if angleId == 0 {
-                status = L10n.t("replay.needAngle")
-            } else if let event = current.events.first(where: { $0.id == id }) {
-                _ = current.appendClip(playlistId: current.ensurePlaylist(), event: event, angleId: angleId)
-            }
-        }
+        addEventClipIfNeeded(id, to: &current)
         save(current)
     }
 
@@ -1852,6 +1811,20 @@ struct ReplayView: View {
         // it came from; only the reference to an event that is gone goes away.
         save(current)
         selectedEvent = nil
+    }
+
+    /// Every event path shares the auto-add rule, including the clip-order setting.
+    private func addEventClipIfNeeded(_ eventId: UInt64, to current: inout ReplayDocument) {
+        guard current.autoAddToPlaylist else { return }
+        let angleId = current.activeAngle
+        guard angleId != 0 else {
+            status = L10n.t("replay.needAngle")
+            return
+        }
+        _ = current.addEventClip(
+            eventId: eventId,
+            angleId: angleId,
+            sortByTimecode: clipOrder == "Timecode")
     }
 
     private func addEventToPlaylist(_ event: ReplayEventInfo) {
@@ -2099,14 +2072,14 @@ struct ReplayView: View {
     /// the marks when both are set. A step is a look at the next frame, not a jump back
     /// to Mark In, and it must work before any mark has been taken.
     private func seekMarked(_ delta: Int64) {
-        let base = Int64(displayPlayhead)
-        var target = max(0, base + delta)
-        if let start = inFrame, let end = outFrame, end > start {
-            target = min(max(target, Int64(start)), Int64(end))
-        } else {
-            target = min(max(target, Int64(seekRange.lowerBound)), Int64(seekRange.upperBound))
-        }
-        seekHolding(to: UInt64(target), keepPlaying: false)
+        let target = ReplayDeckMath.stepTarget(
+            current: displayPlayhead,
+            delta: delta,
+            markIn: inFrame,
+            markOut: outFrame,
+            range: UInt64(seekRange.lowerBound)...UInt64(seekRange.upperBound)
+        )
+        seekHolding(to: target, keepPlaying: false)
     }
 
     /// A waveform click or mark moves the picture without changing whether the channel
