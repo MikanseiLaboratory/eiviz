@@ -238,6 +238,21 @@ _ = routingDoc.addEventClip(
 check("clip lands in selected playlist", routingDoc.clips(playlistId: secondPlaylist).count == 1)
 check("other playlist untouched", routingDoc.clips(playlistId: firstPlaylist).isEmpty)
 
+
+// MARK: - Export queue
+
+var queue = ReplayExportQueue()
+let jobA = ReplayExportJob(json: "a", label: "a.mp4")
+let jobB = ReplayExportJob(json: "b", label: "b.mp4")
+queue.enqueue(jobA)
+queue.enqueue(jobB)
+check("queue is FIFO", queue.next() == jobA)
+check("queue then second", queue.next() == jobB)
+check("queue empty after drain", queue.isEmpty && queue.next() == nil)
+queue.enqueue(jobA)
+queue.removeAll()
+check("queue removeAll", queue.isEmpty)
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)

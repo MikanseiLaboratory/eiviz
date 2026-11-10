@@ -1039,12 +1039,17 @@ struct ReplayView: View {
             let base = (path as NSString).deletingPathExtension
             let ext = (path as NSString).pathExtension
             for angle in document.angles {
+                let angleSegments = segmentsFor(angle, in: segments)
+                // An angle with nothing recorded has no file to write. Queueing it asked
+                // the mixer to export an empty segment list, which failed and stopped the
+                // remaining (recorded) angles from being written.
+                guard !angleSegments.isEmpty else { continue }
                 let target = "\(base)-angle\(angle.id).\(ext)"
                 // A refusal is the mixer saying this file cannot be written at all, so the
                 // rest of the angles would fail the same way: stop rather than queue them.
                 guard exporter.start(
                     json: exportJson(
-                        path: target, document: document, segments: segmentsFor(angle, in: segments)),
+                        path: target, document: document, segments: angleSegments),
                     label: (target as NSString).lastPathComponent,
                     mixer: mixer)
                 else { break }
