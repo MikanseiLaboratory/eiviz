@@ -57,6 +57,9 @@ struct ReplayView: View {
     /// Recorded waveform of the angle being watched.
     /// Monitor per angle, so each angle scene has somewhere to present.
     @State private var angleMonitors: [UInt32: UInt64] = [:]
+    /// Show every angle as a live picture instead of the selected one, the way the
+    /// Windows deck's Multiview does.
+    @State private var multiview = false
     /// Monitor ids of the deck's output and live-input pictures.
     @State private var outputMonitor: UInt64 = 0
     @State private var liveMonitor: UInt64 = 0
@@ -72,7 +75,9 @@ struct ReplayView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            deckMonitors
+            if !multiview {
+                deckMonitors
+            }
             if angles.isEmpty {
                 // The angle strip collapses to its controls when there are no angles, so a
                 // sentence inside it wrapped into a column a few characters wide. The way
@@ -84,7 +89,11 @@ struct ReplayView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack(alignment: .top, spacing: 10) {
-                angleStrip
+                if multiview {
+                    angleMultiview
+                } else {
+                    angleStrip
+                }
                 VStack(spacing: 8) {
                     eventList
                     playlist
@@ -132,6 +141,10 @@ struct ReplayView: View {
                 .frame(minWidth: 148, alignment: .trailing)
             // The deck is where an operator notices that storage or angles are
             // missing, so the way into the recording settings belongs here too.
+            Button(L10n.t("replay.multiview")) { multiview.toggle() }
+                .frame(height: 32)
+                .tint(multiview ? .green : nil)
+                .help(L10n.t("replay.multiview"))
             Button(L10n.t("replay.openSetup")) { mixer.openReplaySettings() }
                 .frame(height: 32)
                 .help(L10n.t("replay.openSetupHint"))
@@ -243,6 +256,57 @@ struct ReplayView: View {
             return L10n.t("replay.stateRecordingUnknown")
         }
         return L10n.format("replay.stateRecording", ReplayTime.clock(snapshot.remaining_secs))
+    }
+
+    /// Every angle at once, live from its own monitor. The selected angle keeps the
+    /// same border the numbered strip uses, so clicking a tile still means "use this
+    /// one for the next mark".
+    private var angleMultiview: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(L10n.t("replay.angles")).fontWeight(.bold)
+                Button(L10n.t("replay.multiview")) { multiview = false }
+                    .controlSize(.small)
+                    .tint(.green)
+                Spacer()
+            }
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 190), spacing: 6)],
+                spacing: 6
+            ) {
+                ForEach(angles) { angle in
+                    let selected = (document?.activeAngleId ?? 0) == angle.id
+                    Button {
+                        selectAngle(angle.id)
+                    } label: {
+                        VStack(spacing: 2) {
+                            if let monitor = angleMonitors[angle.id], monitor != 0 {
+                                MetalPreviewRepresentable(
+                                    role: .monitor(monitorId: monitor, sourceId: angle.liveSourceId)
+                                )
+                                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                                .frame(maxWidth: .infinity)
+                                .background(Color.black)
+                            } else {
+                                Color.black.aspectRatio(16.0 / 9.0, contentMode: .fit)
+                            }
+                            Text(angle.label)
+                                .font(.caption2)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(selected ? Color.green : Color.gray.opacity(0.4),
+                                    lineWidth: selected ? 3 : 1)
+                    )
+                }
+            }
+        }
+        .frame(width: 430, alignment: .leading)
     }
 
     /// One numbered button per camera, the way a replay controller labels its cameras.

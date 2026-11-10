@@ -573,6 +573,7 @@ enum L10n {
         "replay.playlistDeleteClips": "{0} clip(s) on this playlist were deleted.",
         "replay.playlistInUse": "{0} channels play this playlist. Point them elsewhere first.",
         "replay.playlistLast": "The last playlist cannot be deleted.",
+        "replay.multiview": "Multiview",
     ]
 
     private static let ja: [String: String] = [
@@ -1102,5 +1103,6 @@ enum L10n {
         "replay.playlistDeleteClips": "このプレイリストのクリップ {0} 件も削除しました。",
         "replay.playlistInUse": "このプレイリストは {0} チャンネルが使用中です。先に切り替えてください。",
         "replay.playlistLast": "最後の1つは削除できません。",
+        "replay.multiview": "マルチビュー",
     ]
 }
