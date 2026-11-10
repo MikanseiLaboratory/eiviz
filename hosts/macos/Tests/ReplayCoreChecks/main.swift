@@ -599,6 +599,55 @@ check("seek target inside range", ReplayDeckMath.clampedFrame(50, range: 0...100
 check("seek target below range", ReplayDeckMath.clampedFrame(0, range: 10...100) == 10)
 check("seek target above range", ReplayDeckMath.clampedFrame(500, range: 10...100) == 100)
 
+
+// MARK: - Localisation table integrity
+
+func l10nEntries(_ language: String, source: String) -> [(key: String, value: String)]? {
+    let marker = "private static let \(language): [String: String] = ["
+    guard let start = source.range(of: marker)?.upperBound,
+          let end = source.range(of: "\n    ]", range: start..<source.endIndex)
+    else { return nil }
+    let body = String(source[start..<end.lowerBound])
+    let regex = try! NSRegularExpression(pattern: "\"([^\"]+)\": \"((?:[^\"\\\\]|\\\\.)*)\"")
+    let range = NSRange(body.startIndex..<body.endIndex, in: body)
+    return regex.matches(in: body, range: range).compactMap { match in
+        guard let keyRange = Range(match.range(at: 1), in: body),
+              let valueRange = Range(match.range(at: 2), in: body)
+        else { return nil }
+        return (String(body[keyRange]), String(body[valueRange]))
+    }
+}
+
+let l10nPath = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .deletingLastPathComponent()
+    .appendingPathComponent("Sources/EivizMac/L10n.swift")
+if let source = try? String(contentsOf: l10nPath, encoding: .utf8),
+   let english = l10nEntries("en", source: source),
+   let japanese = l10nEntries("ja", source: source) {
+    let englishKeys = english.map(\.key)
+    let japaneseKeys = japanese.map(\.key)
+    check("l10n en has no duplicate keys", Set(englishKeys).count == englishKeys.count)
+    check("l10n ja has no duplicate keys", Set(japaneseKeys).count == japaneseKeys.count)
+    check("l10n key sets match", Set(englishKeys) == Set(japaneseKeys))
+    let englishValues = Dictionary(uniqueKeysWithValues: english)
+    let japaneseValues = Dictionary(uniqueKeysWithValues: japanese)
+    func placeholders(_ value: String) -> Set<String> {
+        let regex = try! NSRegularExpression(pattern: "\\{(\\d+)\\}")
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        return Set(regex.matches(in: value, range: range).compactMap { match in
+            Range(match.range(at: 1), in: value).map { String(value[$0]) }
+        })
+    }
+    let mismatched = englishKeys.filter {
+        placeholders(englishValues[$0] ?? "") != placeholders(japaneseValues[$0] ?? "")
+    }
+    check("l10n placeholders match", mismatched.isEmpty)
+} else {
+    check("l10n source readable", false)
+}
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)
