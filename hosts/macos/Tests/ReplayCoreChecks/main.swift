@@ -648,6 +648,27 @@ if let source = try? String(contentsOf: l10nPath, encoding: .utf8),
     check("l10n source readable", false)
 }
 
+
+// MARK: - Real core session fixture
+
+let fixturePath = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .appendingPathComponent("session-fixture.json")
+if let data = try? Data(contentsOf: fixturePath) {
+    do {
+        let session = try JSONDecoder().decode(MixerSessionData.self, from: data)
+        check("core session fixture decodes", true)
+        check("core session keeps replay input", session.inputs.contains { $0.id == 524289 })
+        check("core session keeps replay document", session.replay != nil)
+        check("core session keeps next input id", session.nextInputId == 10)
+    } catch {
+        print("fixture decode error: \(error)")
+        check("core session fixture decodes", false)
+    }
+} else {
+    check("core session fixture readable", false)
+}
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)
