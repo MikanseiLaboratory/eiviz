@@ -574,6 +574,10 @@ enum L10n {
         "replay.playlistInUse": "{0} channels play this playlist. Point them elsewhere first.",
         "replay.playlistLast": "The last playlist cannot be deleted.",
         "replay.multiview": "Multiview",
+        "replay.decodeAhead": "Decode ahead",
+        "replay.decodeAheadHelp": "Decodes a frame or two ahead of the picture so a slow frame cannot make the picture late. Costs about 8 MB of video memory per frame per channel. Turn it off only when a playback problem is blamed on it.",
+        "replay.profiling": "Performance log",
+        "replay.profilingHelp": "Writes per-stage playout timings to the mixer log every two seconds: decode, publish, readback, frames taken from the queue, and late frames. Meant for measuring a machine.",
     ]
 
     private static let ja: [String: String] = [
@@ -1104,5 +1108,9 @@ enum L10n {
         "replay.playlistInUse": "このプレイリストは {0} チャンネルが使用中です。先に切り替えてください。",
         "replay.playlistLast": "最後の1つは削除できません。",
         "replay.multiview": "マルチビュー",
+        "replay.decodeAhead": "先読みデコード",
+        "replay.decodeAheadHelp": "表示より1〜2フレーム先にデコードしておき、デコードが遅れても絵が締切を過ぎないようにします。1フレームあたり約8MBのビデオメモリを使います。再生に問題が出たときの切り分けにだけオフにしてください。",
+        "replay.profiling": "パフォーマンスログ",
+        "replay.profilingHelp": "再生の段階別の所要時間（デコード・公開・読み戻し・先読みから出した枚数・遅延フレーム）を2秒ごとにミキサーのログへ出します。マシンの計測用です。",
     ]
 }

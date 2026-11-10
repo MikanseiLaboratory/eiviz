@@ -21,6 +21,8 @@ struct ReplaySettingsView: View {
     @State private var reserve = "2048"
     @State private var overflow = "DropFrames"
     @State private var autoAdd = false
+    @State private var decodeAhead = true
+    @State private var profiling = false
     @State private var angles: [ReplayAngleInfo] = []
     @State private var status = ""
 
@@ -178,6 +180,10 @@ struct ReplaySettingsView: View {
                     }
                     Toggle(L10n.t("replay.autoAdd"), isOn: $autoAdd)
                     Text(L10n.t("replay.autoAddHelp")).font(.caption)
+                    Toggle(L10n.t("replay.decodeAhead"), isOn: $decodeAhead)
+                    Text(L10n.t("replay.decodeAheadHelp")).font(.caption)
+                    Toggle(L10n.t("replay.profiling"), isOn: $profiling)
+                    Text(L10n.t("replay.profilingHelp")).font(.caption)
                     if let active = document?.activeAngleId, active != 0 {
                         Text(L10n.format("replay.activeAngle", document?.angleLabel(active) ?? ""))
                     } else {
@@ -254,6 +260,8 @@ struct ReplaySettingsView: View {
         reserve = "\(buffering.reserve)"
         overflow = buffering.overflow
         autoAdd = current.autoAddToPlaylist
+        decodeAhead = current.raw["decodeAhead"]?.boolValue ?? true
+        profiling = current.raw["profiling"]?.boolValue ?? false
         angles = current.angles
     }
 
@@ -532,6 +540,8 @@ struct ReplaySettingsView: View {
         current.setRetention(retention)
         current.setAngles(angles)
         current.setAutoAddToPlaylist(autoAdd)
+        current.raw["decodeAhead"] = .bool(decodeAhead)
+        current.raw["profiling"] = .bool(profiling)
         document = current
         // Applying either works or says why. A window that closes without a word
         // leaves the operator unable to tell the two apart.
