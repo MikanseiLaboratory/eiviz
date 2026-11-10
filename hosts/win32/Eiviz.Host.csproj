@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -14,6 +14,8 @@
     <Version>0.4.0</Version>
     <InformationalVersion>0.4.0</InformationalVersion>
     <RepoRoot>$(MSBuildThisFileDirectory)..\..\</RepoRoot>
+    <AppIcon>$(RepoRoot)docs\src\assets\branding\app-icon\windows\eiviz.ico</AppIcon>
+    <ApplicationIcon>$(AppIcon)</ApplicationIcon>
     <MixerLibrary>$(RepoRoot)target\release\eiviz_mixer.dll</MixerLibrary>
     <RemoteLibrary>$(RepoRoot)target\release\eiviz_remote.dll</RemoteLibrary>
   </PropertyGroup>
