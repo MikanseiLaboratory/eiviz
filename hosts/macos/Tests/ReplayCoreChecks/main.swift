@@ -513,6 +513,45 @@ if let encoded = try? JSONEncoder().encode(fullSession),
     check("session round trip encodes", false)
 }
 
+
+// MARK: - Transition persistence
+
+var transitionRoundTrip = ReplayDocument.empty(format: format)
+let roundTripPlaylist = transitionRoundTrip.ensurePlaylist()
+transitionRoundTrip.setDefaultTransition(
+    playlistId: roundTripPlaylist,
+    transition: ReplayTransitionInfo(kind: "Wipe", direction: "Right", timing: "Additive", durationFrames: 24))
+let roundTripEvent = transitionRoundTrip.appendEvent(uuid: "rec", inFrame: 0, outFrame: 24, name: "tr")
+_ = transitionRoundTrip.appendClip(
+    playlistId: roundTripPlaylist,
+    event: transitionRoundTrip.events.first(where: { $0.id == roundTripEvent })!,
+    angleId: 1)
+let inherited = transitionRoundTrip.clips(playlistId: roundTripPlaylist).first?.transition
+check("clip inherits default kind", inherited?.kind == "Wipe")
+check("clip inherits default direction", inherited?.direction == "Right")
+check("clip inherits default timing", inherited?.timing == "Additive")
+check("clip inherits default frames", inherited?.durationFrames == 24)
+
+let clipUid = transitionRoundTrip.clips(playlistId: roundTripPlaylist).first!.uid
+transitionRoundTrip.setClipTransition(
+    playlistId: roundTripPlaylist,
+    uid: clipUid,
+    transition: ReplayTransitionInfo(kind: "Wipe", direction: "Down", timing: "Overwrap", durationFrames: 12))
+let edited = transitionRoundTrip.clips(playlistId: roundTripPlaylist).first?.transition
+check("clip transition direction edit", edited?.direction == "Down")
+check("clip transition timing edit", edited?.timing == "Overwrap")
+check("clip transition frames edit", edited?.durationFrames == 12)
+
+var cutDoc = ReplayDocument.empty(format: format)
+let cutPlaylist = cutDoc.ensurePlaylist()
+let cutEvent = cutDoc.appendEvent(uuid: "rec", inFrame: 0, outFrame: 10, name: "c")
+_ = cutDoc.appendClip(playlistId: cutPlaylist, event: cutDoc.events[0], angleId: 1)
+let cutUid = cutDoc.clips(playlistId: cutPlaylist).first!.uid
+cutDoc.setClipTransition(
+    playlistId: cutPlaylist, uid: cutUid,
+    transition: ReplayTransitionInfo(kind: "Cut", timing: "Overwrap", durationFrames: 30))
+check("cut transition has no frames", cutDoc.clips(playlistId: cutPlaylist).first?.transition.isCut == true)
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)
