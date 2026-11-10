@@ -606,13 +606,15 @@ extension MixerController {
         } else if entry.sourceKind == .scene, entry.sourceId != 0, entry.sourceId < EIVIZ_SCENE_BASE {
             entry.sourceId = EIVIZ_SCENE_BASE | entry.sourceId
         }
+        if entry.transport == .rtmp, entry.rtmpSecretRef.isEmpty {
+            entry.rtmpSecretRef = "stream-\(entry.id)"
+        }
         if let index = session.outputs.firstIndex(where: { $0.id == entry.id }) {
             session.outputs[index] = entry
+        } else {
+            session.outputs.append(entry)
         }
         if entry.transport == .rtmp {
-            if entry.rtmpSecretRef.isEmpty {
-                entry.rtmpSecretRef = "stream-\(entry.id)"
-            }
             let previousEncoder = session.outputs.first { $0.id == entry.id }?.streamEncoderId
                 ?? entry.streamEncoderId
             if previousEncoder != 0 {
