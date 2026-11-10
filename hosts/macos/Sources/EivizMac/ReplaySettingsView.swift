@@ -652,7 +652,9 @@ struct ReplaySettingsView: View {
             } else {
                 AppKitDialog.toast(L10n.t("replay.applied"))
             }
-            mixer.closeReplaySettings()
+            // Windows keeps the settings window open after Apply: an operator tuning four
+            // cameras should not have to reopen it between attempts. Closing is its own
+            // button, and it is what discards.
         } else {
             status = L10n.t("replay.publishRefused")
         }
