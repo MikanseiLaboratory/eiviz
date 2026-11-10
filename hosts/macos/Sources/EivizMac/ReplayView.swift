@@ -1477,6 +1477,7 @@ struct ReplayView: View {
         } else {
             let detail = MixerFFI.lastErrorText()
             status = detail.isEmpty ? L10n.t("replay.seekRefused") : detail
+            scrubFrame = nil
         }
     }
 
@@ -2182,6 +2183,7 @@ struct ReplayView: View {
             settleUntil = Date().addingTimeInterval(0.4)
         } else {
             status = L10n.t("replay.seekRefused")
+            scrubFrame = nil
         }
     }
 
