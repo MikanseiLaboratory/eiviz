@@ -206,6 +206,24 @@ let secondAngle = angleDoc.reserveAngleId()
 check("angle ids advance", firstAngle == 1 && secondAngle == 2)
 check("angle next id stored", angleDoc.raw["nextAngleId"]?.uint32Value == 3)
 
+
+// MARK: - Protected events and playlist removal
+
+var protectDoc = ReplayDocument.empty(format: format)
+let protectedId = protectDoc.appendEvent(uuid: "rec", inFrame: 0, outFrame: 10, name: "p")
+protectDoc.setEventProtected(protectedId, true)
+check("protected event refuses delete", !protectDoc.removeEventIfUnprotected(protectedId))
+check("protected event remains", protectDoc.events.count == 1)
+protectDoc.setEventProtected(protectedId, false)
+check("unprotected event deletes", protectDoc.removeEventIfUnprotected(protectedId))
+check("unprotected event gone", protectDoc.events.isEmpty)
+
+var playlistDoc = ReplayDocument.empty(format: format)
+let playlistA = playlistDoc.ensurePlaylist()
+let playlistB = playlistDoc.addPlaylist(name: "B")
+check("playlist ids advance", playlistA == 1 && playlistB == 2)
+check("playlist next id stored", playlistDoc.raw["nextPlaylistId"]?.uint64Value == 3)
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)

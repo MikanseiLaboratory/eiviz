@@ -758,6 +758,17 @@ struct ReplayDocument {
         raw["events"] = .array(events)
     }
 
+    /// Removes an event unless it is protected. Protected is the operator saying the
+    /// recording must not be overwritten; a delete button or key must not override it.
+    @discardableResult
+    mutating func removeEventIfUnprotected(_ id: UInt64) -> Bool {
+        guard let event = events.first(where: { $0.id == id }), !event.protected else {
+            return false
+        }
+        removeEvent(id)
+        return true
+    }
+
     mutating func removeEvent(_ id: UInt64) {
         raw["events"] = .array(array("events").filter { item in
             (item.objectValue?["id"]?.uint64Value ?? 0) != id

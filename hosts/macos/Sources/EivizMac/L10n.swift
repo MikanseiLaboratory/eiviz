@@ -399,6 +399,8 @@ enum L10n {
         "replay.noChannels": "This project has no Replay channel.",
         "replay.needSetup": "Recording needs a storage drive and at least one angle: set them up in Replay Setup.",
         "replay.needClip": "Select a clip in the playlist first.",
+        "replay.eventProtected": "This event is protected. Clear Protect before deleting it.",
+        "replay.eventProtected": "このイベントは保護されています。削除する前に保護を解除してください。",
         "replay.needEvent": "Select an event first.",
         "replay.recordRefused": "Recording could not start.",
         "replay.playRefused": "Playback did not start: check that a clip is cued.",

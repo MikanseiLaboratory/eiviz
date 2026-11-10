@@ -1689,7 +1689,10 @@ struct ReplayView: View {
 
     private func deleteEvent(_ id: UInt64) {
         guard var current = document else { return }
-        current.removeEvent(id)
+        guard current.removeEventIfUnprotected(id) else {
+            status = L10n.t("replay.eventProtected")
+            return
+        }
         // A clip keeps its own recording, range and angle, so it survives the event it
         // came from; only the reference to an event that is gone goes away.
         save(current, deletedEvents: [id])
@@ -1829,7 +1832,11 @@ struct ReplayView: View {
         }
         let clips = current.clips(playlistId: playlistId).count
         if clips > 0 {
-            status = L10n.format("replay.playlistDeleteClips", "\(clips)")
+            let alert = NSAlert()
+            alert.messageText = L10n.format("replay.playlistDeleteClips", "\(clips)")
+            alert.addButton(withTitle: L10n.t("dialog.ok"))
+            alert.addButton(withTitle: L10n.t("dialog.cancel"))
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
         _ = current.removePlaylist(playlistId)
         if let next = current.playlists.first {
@@ -1855,10 +1862,13 @@ struct ReplayView: View {
             status = L10n.t("replay.needEvent")
             return
         }
-        current.removeEvent(id)
+        guard current.removeEventIfUnprotected(id) else {
+            status = L10n.t("replay.eventProtected")
+            return
+        }
         // A clip keeps its own recording, range and angle, so it survives the event
         // it came from; only the reference to an event that is gone goes away.
-        save(current)
+        save(current, deletedEvents: [id])
         selectedEvent = nil
     }
 
