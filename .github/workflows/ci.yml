@@ -244,10 +244,11 @@ jobs:
       - name: Run Swift replay checks
         run: |
           cd hosts/macos
-          swift run -c release \
-            -Xlinker -L"$GITHUB_WORKSPACE/target/release" \
-            -Xlinker -rpath -Xlinker "$GITHUB_WORKSPACE/target/release" \
-            replay-core-checks
+          mkdir -p .build/out/Products/Release
+          cp "$GITHUB_WORKSPACE/target/release/libeiviz_mixer.dylib" \
+             "$GITHUB_WORKSPACE/target/release/libeiviz_remote.dylib" \
+             .build/out/Products/Release/
+          swift run -c release replay-core-checks
 
       - name: Verify macOS runtime linkage and architecture
         run: |
