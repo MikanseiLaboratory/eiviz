@@ -239,11 +239,8 @@ jobs:
           fi
           cat "$out" "$err"
 
-      - name: Build Mac host
-        run: |
-          chmod +x hosts/macos/build.sh
-          hosts/macos/build.sh
-
+      # The app itself is built by the macos-swift job. Building it a second time here
+      # added twenty minutes to the critical path without testing anything new.
       - name: Run Swift replay checks
         run: |
           cd hosts/macos
