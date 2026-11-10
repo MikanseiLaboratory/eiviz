@@ -95,7 +95,9 @@ final class ReplayExportRunner: ObservableObject {
         guard mixer.startReplayExport(job.json) else {
             // A refusal is the mixer saying this file cannot be written at all. Stop
             // rather than working through the rest of the queue, which would fail the
-            // same way; the caller sees false and can tell the operator.
+            // same way. The queue has to be emptied too: leaving it behind made the next
+            // export start with the refused job instead of the one just requested.
+            queue = []
             busy = false
             status = L10n.t("replay.exportFailed")
             return false

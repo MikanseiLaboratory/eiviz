@@ -1552,15 +1552,23 @@ struct ReplayView: View {
     /// Marks the last N seconds as one event without walking the playhead: the range is
     /// written straight into the session, the same range Mark In / Mark Out would leave.
     private func markLast() {
-        guard isRecording else { status = "markLast: not recording"; return }
-        guard let snapshot = stats else { status = "markLast: no stats"; return }
-        guard var current = document else { status = "markLast: no document"; return }
+        guard isRecording else {
+            status = L10n.t("replay.markLastNeedsRecording")
+            return
+        }
+        guard let snapshot = stats, var current = document else {
+            status = L10n.t("replay.markOutFailed")
+            return
+        }
         let seconds = max(1.0, Double(markLastSeconds) ?? 10)
         let span = UInt64(seconds * ReplayTime.rate(fps))
         let now = max(snapshot.recording_frame, snapshot.last_frame)
         let start = now > span ? now - span : 0
         let recording = mixer.replayRecordingUuid()
-        guard !recording.isEmpty else { status = "markLast: no recording uuid"; return }
+        guard !recording.isEmpty else {
+            status = L10n.t("replay.markOutFailed")
+            return
+        }
         let name = L10n.format("replay.eventName", "\(current.events.count + 1)")
         let id = current.appendEvent(
             uuid: recording,
@@ -1573,9 +1581,7 @@ struct ReplayView: View {
         addEventClipIfNeeded(id, to: &current)
         inFrame = start
         outFrame = now
-        document = current
-        let applied = mixer.applyReplayDeck(current)
-        if !applied { status = "markLast: rejected" }
+        save(current)
     }
 
     private func markIn() {
@@ -1677,8 +1683,7 @@ struct ReplayView: View {
         }
         guard var current = document else { return }
         current.setEventRange(id, inFrame: inFrame, outFrame: outFrame)
-        document = current
-        _ = mixer.applyReplayDeck(current)
+        save(current)
     }
 
     private func setEventProtected(_ id: UInt64, _ value: Bool) {
