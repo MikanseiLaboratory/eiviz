@@ -141,62 +141,70 @@ struct ReplaySettingsView: View {
                             Text(L10n.t("replay.anglesHelp")).font(.caption)
                             // Every angle is edited in its own row: name, what it records, how, its
                             // audio and its drive are cells, not a separate panel.
-                            List {
-                                ForEach($angles) { $angle in
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        HStack(spacing: 6) {
-                                            TextField(L10n.t("replay.name"), text: $angle.name)
-                                                .frame(minWidth: 140)
-                                            Picker("", selection: $angle.source) {
-                                                Text(L10n.t("replay.sourceScene")).tag("Scene")
-                                                Text(L10n.t("replay.sourceInput")).tag("Input")
-                                            }
-                                            .labelsHidden()
-                                            .frame(width: 90)
-                                            .onChange(of: angle.source) { _, _ in resetAngleSource(angle.id) }
-                                            Picker("", selection: sourceBinding($angle)) {
-                                                ForEach(sources(for: angle), id: \.id) { source in
-                                                    Text(source.name).tag(source.id)
-                                                }
-                                            }
-                                            .labelsHidden()
-                                            .frame(minWidth: 170)
-                                            Spacer(minLength: 4)
-                                            Button(L10n.t("replay.removeAngle")) { removeAngle(angle.id) }
-                                        }
-                                        // A second line keeps every control at full width; one row
-                                        // clipped the drive and the remove button on a 620 point window.
-                                        HStack(spacing: 6) {
-                                            Picker("", selection: $angle.encoder) {
-                                                Text(L10n.t("replay.encoderGpu")).tag("Gpu")
-                                                Text(L10n.t("replay.encoderCpu")).tag("Cpu")
-                                            }
-                                            .labelsHidden()
-                                            .frame(width: 90)
-                                            .help(L10n.t("replay.encoderHelp"))
-                                            Picker("", selection: $angle.audioUnitId) {
-                                                Text(L10n.t("replay.audioSilent")).tag(UInt64(0))
-                                                ForEach(mixer.session.units) { unit in
-                                                    Text(unit.name).tag(unit.id)
-                                                }
-                                            }
-                                            .labelsHidden()
-                                            .frame(minWidth: 140)
-                                            .help(L10n.t("replay.audioHelp"))
-                                            Picker("", selection: driveBinding(angle.id)) {
-                                                Text(L10n.t("replay.driveUnassigned")).tag(-1)
-                                                ForEach(Array(storages.enumerated()), id: \.offset) { index, storage in
-                                                    Text("\(index + 1): \(storage.path)").tag(index)
-                                                }
-                                            }
-                                            .labelsHidden()
-                                            .frame(minWidth: 170)
-                                            .help(L10n.t("replay.storageHelp"))
-                                        }
+                            Table($angles) {
+                                TableColumn(L10n.t("replay.name")) { $angle in
+                                    TextField("", text: $angle.name)
+                                }
+                                .width(170)
+                                TableColumn(L10n.t("replay.sourceKind")) { $angle in
+                                    Picker("", selection: $angle.source) {
+                                        Text(L10n.t("replay.sourceScene")).tag("Scene")
+                                        Text(L10n.t("replay.sourceInput")).tag("Input")
+                                    }
+                                    .labelsHidden()
+                                    .onChange(of: $angle.wrappedValue.source) { _, _ in
+                                        resetAngleSource($angle.wrappedValue.id)
                                     }
                                 }
+                                .width(100)
+                                TableColumn(L10n.t("replay.source")) { $angle in
+                                    Picker("", selection: sourceBinding($angle)) {
+                                        ForEach(sources(for: $angle.wrappedValue), id: \.id) { source in
+                                            Text(source.name).tag(source.id)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                }
+                                .width(240)
+                                TableColumn(L10n.t("replay.encoder")) { $angle in
+                                    Picker("", selection: $angle.encoder) {
+                                        Text(L10n.t("replay.encoderGpu")).tag("Gpu")
+                                        Text(L10n.t("replay.encoderCpu")).tag("Cpu")
+                                    }
+                                    .labelsHidden()
+                                    .help(L10n.t("replay.encoderHelp"))
+                                }
+                                .width(110)
+                                TableColumn(L10n.t("replay.audio")) { $angle in
+                                    Picker("", selection: $angle.audioUnitId) {
+                                        Text(L10n.t("replay.audioSilent")).tag(UInt64(0))
+                                        ForEach(mixer.session.units) { unit in
+                                            Text(unit.name).tag(unit.id)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .help(L10n.t("replay.audioHelp"))
+                                }
+                                .width(160)
+                                TableColumn(L10n.t("replay.drive")) { $angle in
+                                    Picker("", selection: driveBinding($angle.wrappedValue.id)) {
+                                        Text(L10n.t("replay.driveUnassigned")).tag(-1)
+                                        ForEach(Array(storages.enumerated()), id: \.offset) { index, storage in
+                                            Text("\(index + 1): \(storage.path)").tag(index)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .help(L10n.t("replay.storageHelp"))
+                                }
+                                .width(160)
+                                TableColumn("") { $angle in
+                                    Button(L10n.t("replay.removeAngle")) {
+                                        removeAngle($angle.wrappedValue.id)
+                                    }
+                                }
+                                .width(80)
                             }
-                            .frame(minHeight: 230)
+                            .frame(minHeight: 210)                            .frame(minHeight: 230)
                             HStack {
                                 Button(L10n.t("replay.addAngleRow")) { addAngle() }
                                 Text(L10n.t("replay.angleRowHelp")).font(.caption)
