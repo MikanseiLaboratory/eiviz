@@ -114,7 +114,7 @@ struct ReplayView: View {
                 Text(L10n.t("replay.recordTc"))
                     .font(.system(size: 11))
                     .foregroundStyle(Color(white: 0.54))
-                Text(ReplayTime.timecode(stats?.recording_frame ?? 0, fps))
+                Text(ReplayTime.timecode(recordingHead, fps))
                     .font(.system(size: 18, design: .monospaced))
                     .foregroundStyle(Color(red: 0.49, green: 0.82, blue: 0.29))
             }
@@ -128,6 +128,12 @@ struct ReplayView: View {
             Button(L10n.t("replay.openSetup")) { mixer.openReplaySettings() }
                 .frame(minWidth: 150, minHeight: 30)
         }
+    }
+
+    /// The frame the recorder is on. The test store reports the recording store's head in
+    /// last_frame and leaves recording_frame at zero, so the deck reads whichever is ahead.
+    private var recordingHead: UInt64 {
+        max(stats?.recording_frame ?? 0, stats?.last_frame ?? 0)
     }
 
     private var capacityLine: String {
@@ -293,7 +299,7 @@ struct ReplayView: View {
             HStack(spacing: 8) {
                 Slider(
                     value: Binding(
-                        get: { Double(stats?.recording_frame ?? 0) },
+                        get: { Double(recordingHead) },
                         set: { seekKeepingPlay(Int64($0)) }
                     ),
                     in: 0...Double(max(1, stats?.last_frame ?? 1))
@@ -309,7 +315,7 @@ struct ReplayView: View {
                 Spacer()
                 transportReadout(
                     L10n.t("replay.playhead"),
-                    ReplayTime.timecode(stats?.recording_frame ?? 0, fps),
+                    ReplayTime.timecode(recordingHead, fps),
                     color: Color(red: 0.49, green: 0.82, blue: 0.29)
                 )
                 transportReadout(L10n.t("replay.remainingInClip"), remainingClipText)
@@ -440,14 +446,14 @@ struct ReplayView: View {
     }
 
     private var remainingClipText: String {
-        guard let out = outFrame, let frame = stats?.recording_frame, out > frame else {
+        guard let out = outFrame, out > recordingHead else {
             return "--:--:--:--"
         }
-        return ReplayTime.duration(frame, out, fps)
+        return ReplayTime.duration(recordingHead, out, fps)
     }
 
     private var remainPlaylistText: String {
-        guard let frame = stats?.recording_frame else { return "--:--:--:--" }
+        let frame = recordingHead
         let left = clips.filter { $0.outFrame > frame }.map { $0.outFrame - frame }.reduce(0, +)
         return left > 0 ? ReplayTime.duration(frame, frame + left, fps) : "--:--:--:--"
     }
@@ -481,7 +487,7 @@ struct ReplayView: View {
             }
             Spacer()
             Text(L10n.t("replay.recordTc")).font(.caption)
-            Text(mixer.isRemote ? "--:--:--:--" : ReplayTime.timecode(stats?.recording_frame ?? 0, fps))
+            Text(mixer.isRemote ? "--:--:--:--" : ReplayTime.timecode(recordingHead, fps))
                 .font(.system(.title3, design: .monospaced))
                 .frame(minWidth: 148, alignment: .trailing)
             // The deck is where an operator notices that storage or angles are
@@ -711,6 +717,7 @@ struct ReplayView: View {
                 fps: fps,
                 rename: { renameEvent($0, $1) },
                 protect: { setEventProtected($0, $1) },
+                setRange: { id, start, end in setEventRange(id, start, end) },
                 addToPlaylist: { addEventToPlaylist($0) },
                 remove: { deleteEvent($0) })
             if (document?.events ?? []).isEmpty {
@@ -1329,27 +1336,29 @@ struct ReplayView: View {
     /// Marks the last N seconds as one event without walking the playhead: the range is
     /// written straight into the session, the same range Mark In / Mark Out would leave.
     private func markLast() {
-        guard isRecording,
-              let snapshot = stats,
-              var current = document
-        else { return }
+        guard isRecording else { status = "markLast: not recording"; return }
+        guard let snapshot = stats else { status = "markLast: no stats"; return }
+        guard var current = document else { status = "markLast: no document"; return }
         let seconds = max(1.0, Double(markLastSeconds) ?? 10)
         let span = UInt64(seconds * ReplayTime.rate(fps))
-        let now = snapshot.recording_frame
+        let now = max(snapshot.recording_frame, snapshot.last_frame)
         let start = now > span ? now - span : 0
         let recording = mixer.replayRecordingUuid()
-        guard !recording.isEmpty else { return }
+        guard !recording.isEmpty else { status = "markLast: no recording uuid"; return }
         let name = L10n.format("replay.eventName", "\(current.events.count + 1)")
         _ = current.appendEvent(
             uuid: recording,
             inFrame: start,
             outFrame: now,
             name: name)
+        // The session validates an event against its recording's range, and the range of a
+        // recording still being written is the frame the recorder is on.
+        current.setRecordingRange(uuid: recording, first: 0, last: now)
         inFrame = start
         outFrame = now
         document = current
-        let applied = mixer.applyReplay(current)
-        if !applied { status = L10n.t("replay.publishRefused") }
+        let applied = mixer.applyReplayDeck(current)
+        if !applied { status = "markLast: rejected" }
     }
 
     private func markIn() {
@@ -1456,6 +1465,13 @@ struct ReplayView: View {
         guard var current = document else { return }
         current.renameEvent(id, name: name)
         save(current)
+    }
+
+    private func setEventRange(_ id: UInt64, _ inFrame: UInt64, _ outFrame: UInt64) {
+        guard var current = document else { return }
+        current.setEventRange(id, inFrame: inFrame, outFrame: outFrame)
+        document = current
+        _ = mixer.applyReplayDeck(current)
     }
 
     private func setEventProtected(_ id: UInt64, _ value: Bool) {

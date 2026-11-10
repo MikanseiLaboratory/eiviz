@@ -685,6 +685,17 @@ struct ReplayDocument {
         return id
     }
 
+    mutating func setEventRange(_ id: UInt64, inFrame: UInt64, outFrame: UInt64) {
+        var events = array("events")
+        guard let index = events.firstIndex(where: {
+            ($0.objectValue?["id"]?.uint64Value ?? 0) == id
+        }), var event = events[index].objectValue else { return }
+        event["inFrame"] = .number(Double(inFrame))
+        event["outFrame"] = .number(Double(outFrame))
+        events[index] = .object(event)
+        raw["events"] = .array(events)
+    }
+
     mutating func setEventProtected(_ id: UInt64, _ value: Bool) {
         var events = array("events")
         for index in events.indices {
