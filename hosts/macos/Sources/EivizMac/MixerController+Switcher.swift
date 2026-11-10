@@ -610,6 +610,9 @@ extension MixerController {
             session.outputs[index] = entry
         }
         if entry.transport == .rtmp {
+            if entry.rtmpSecretRef.isEmpty {
+                entry.rtmpSecretRef = "stream-\(entry.id)"
+            }
             let previousEncoder = session.outputs.first { $0.id == entry.id }?.streamEncoderId
                 ?? entry.streamEncoderId
             if previousEncoder != 0 {
