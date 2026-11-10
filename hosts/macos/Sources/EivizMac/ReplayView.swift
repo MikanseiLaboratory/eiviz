@@ -1016,11 +1016,12 @@ struct ReplayView: View {
 
     private func startExport() {
         guard let document else { return }
-        let path = exportPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !path.isEmpty else {
+        let typedPath = exportPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !typedPath.isEmpty else {
             exporter.report(L10n.t("replay.exportNeedPath"))
             return
         }
+        let path = ReplayExportPlan.outputPath(typedPath)
         if stats?.state == 1 {
             let alert = NSAlert()
             alert.messageText = L10n.t("replay.exportWhileRecording")

@@ -7,6 +7,15 @@ import Foundation
 /// that needs SwiftUI, and keeping it apart is what lets it be tested and what keeps the
 /// window from growing again.
 enum ReplayExportPlan {
+    /// The MP4 the exporter writes. A path without an extension would otherwise be
+    /// handed to the writer without a container name at all; the save panel normally adds
+    /// one, but a typed path does not have to.
+    static func outputPath(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ext = (trimmed as NSString).pathExtension
+        return ext.isEmpty ? trimmed + ".mp4" : trimmed
+    }
+
     /// The file for one angle of an all-angles export. A path with no extension must not
     /// grow a trailing dot, and an extension stays on the new name.
     static func anglePath(_ path: String, angleId: UInt32) -> String {

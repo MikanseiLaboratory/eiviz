@@ -342,6 +342,14 @@ check("angle path without extension",
 check("angle path with dotted directory",
       ReplayExportPlan.anglePath("/tmp/a.b/out.mp4", angleId: 3) == "/tmp/a.b/out-angle3.mp4")
 
+
+// MARK: - Export output path
+
+check("output path adds mp4", ReplayExportPlan.outputPath("/tmp/out") == "/tmp/out.mp4")
+check("output path keeps mp4", ReplayExportPlan.outputPath("/tmp/out.mp4") == "/tmp/out.mp4")
+check("output path trims", ReplayExportPlan.outputPath(" /tmp/out ") == "/tmp/out.mp4")
+check("output path dotted directory", ReplayExportPlan.outputPath("/tmp/a.b/out") == "/tmp/a.b/out.mp4")
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)
