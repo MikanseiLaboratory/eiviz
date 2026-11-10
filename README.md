@@ -33,8 +33,8 @@ signed until notarization credentials are wired into the release; if Gatekeeper
 blocks it, right-click the package and choose Open, or run
 `xattr -dr com.apple.quarantine /Applications/eiviz.app` after installing.
 
-macOS DeckLink hardware and the zero-copy AVFoundation → Metal decode path are not
-yet verified; the linked GitHub issues track the remaining platform work.
+macOS DeckLink hardware is not yet verified; the linked GitHub issues track the
+remaining platform work.
 
 ### macOS Intel (`macos-x64`)
 

@@ -3432,6 +3432,10 @@ unsafe fn mixer_video_start_ffi(
             Ok(uploads) => uploads,
             Err(code) => return code,
         };
+        let gpu_device = match with_mixer(|mixer| mixer.surface_gpu.device.clone()) {
+            Ok(device) => device,
+            Err(code) => return code,
+        };
         return match VideoPump::start(
             id,
             path,
@@ -3442,6 +3446,7 @@ unsafe fn mixer_video_start_ffi(
             fps_den,
             uploads,
             depth,
+            Some(gpu_device),
         ) {
             Ok(pump) => insert_video(id, pump),
             Err(error) => report_io(error),

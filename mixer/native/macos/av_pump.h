@@ -19,6 +19,10 @@ typedef struct EivizAvSample {
     int64_t pts_hns;
     const uint8_t *data;
     uint32_t bytes;
+    /// Retained MTLTexture when AVFoundation decoded straight into Metal; NULL otherwise.
+    void *texture;
+    /// Retained CVPixelBuffer backing `texture`; released when the wgpu texture drops.
+    void *pixel_buffer;
 } EivizAvSample;
 
 typedef struct EivizAvPump EivizAvPump;
@@ -47,6 +51,8 @@ int eiviz_av_enum_capture_modes(const char *device_id, EivizAvCaptureMode *out, 
 void eiviz_av_close(EivizAvPump *pump);
 int64_t eiviz_av_duration_hns(const EivizAvPump *pump);
 int eiviz_av_next(EivizAvPump *pump, EivizAvSample *out);
+/// Enables BGRA CVMetalTextureCache decode. `device` is a borrowed id<MTLDevice>.
+void eiviz_av_set_metal(EivizAvPump *pump, void *device);
 
 #ifdef __cplusplus
 }

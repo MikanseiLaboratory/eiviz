@@ -10,7 +10,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::abi::MixerVideoInfo;
-use crate::upload::{AudioPacket, CpuFormat, UploadStore, ingest_audio_clocked, ingest_audio_live};
+use crate::upload::{
+    AudioPacket, CpuFormat, GpuVideoFrame, UploadStore, ingest_audio_clocked, ingest_audio_live,
+};
 
 const KIND_VIDEO: i32 = 1;
 const KIND_AUDIO: i32 = 2;
@@ -30,6 +32,8 @@ struct AvSample {
     pts_hns: i64,
     data: *const u8,
     bytes: u32,
+    texture: *mut std::ffi::c_void,
+    pixel_buffer: *mut std::ffi::c_void,
 }
 
 enum AvPump {}
@@ -59,6 +63,8 @@ unsafe extern "C" {
     fn eiviz_av_close(pump: *mut AvPump);
     fn eiviz_av_duration_hns(pump: *const AvPump) -> i64;
     fn eiviz_av_next(pump: *mut AvPump, out: *mut AvSample) -> i32;
+    fn eiviz_av_set_metal(pump: *mut AvPump, device: *mut std::ffi::c_void);
+    fn CFRelease(value: *const std::ffi::c_void);
 }
 
 fn cstr_field(bytes: &[u8]) -> Option<String> {
@@ -141,6 +147,14 @@ impl NativePump {
         unsafe { eiviz_av_duration_hns(self.ptr) }
     }
 
+    fn set_metal(&self, device: &wgpu::Device) {
+        if let Some(hal) = unsafe { device.as_hal::<wgpu::hal::api::Metal>() } {
+            let raw = hal.raw_device();
+            let pointer = objc2::rc::Retained::as_ptr(raw) as *mut std::ffi::c_void;
+            unsafe { eiviz_av_set_metal(self.ptr, pointer) };
+        }
+    }
+
     fn next(&mut self) -> Result<Option<AvSample>, bool> {
         let mut sample = AvSample {
             kind: 0,
@@ -153,6 +167,8 @@ impl NativePump {
             pts_hns: 0,
             data: std::ptr::null(),
             bytes: 0,
+            texture: std::ptr::null_mut(),
+            pixel_buffer: std::ptr::null_mut(),
         };
         let code = unsafe { eiviz_av_next(self.ptr, &mut sample) };
         match code {
@@ -195,6 +211,7 @@ impl VideoPump {
         fps_den: u32,
         uploads: Arc<Mutex<UploadStore>>,
         frame_buffer_frames: u32,
+        gpu_device: Option<wgpu::Device>,
     ) -> Result<Self, String> {
         if !capture && !std::path::Path::new(&path).is_file() {
             return Err(format!("video file not found: {path}"));
@@ -219,7 +236,7 @@ impl VideoPump {
                 crate::platform::set_thread_qos(crate::platform::QOS_USER_INITIATED);
                 if let Err(error) = run_loop(
                     source_id, path, capture, width, height, fps_num, fps_den, uploads, depth,
-                    stop_t, playing_t, looping_t, seek_t, pos_t, dur_t, ready_tx,
+                    gpu_device, stop_t, playing_t, looping_t, seek_t, pos_t, dur_t, ready_tx,
                 ) {
                     eprintln!("eiviz video: {error}");
                 }
@@ -298,6 +315,7 @@ fn run_loop(
     fps_den: u32,
     uploads: Arc<Mutex<UploadStore>>,
     depth: u32,
+    gpu_device: Option<wgpu::Device>,
     stop: Arc<AtomicBool>,
     playing: Arc<AtomicBool>,
     looping: Arc<AtomicBool>,
@@ -325,6 +343,9 @@ fn run_loop(
             }
         };
         duration_hns.store(native.duration_hns(), Ordering::Relaxed);
+        if let Some(device) = gpu_device.as_ref() {
+            native.set_metal(device);
+        }
         send_ready(&mut ready, Ok(()));
         let live_depth = depth;
         let file_prefetch = depth.max(3) as usize;
@@ -344,6 +365,9 @@ fn run_loop(
                     Ok(pump) => pump,
                     Err(error) => return Err(error),
                 };
+                if let Some(device) = gpu_device.as_ref() {
+                    native.set_metal(device);
+                }
                 duration_hns.store(native.duration_hns(), Ordering::Relaxed);
                 prefetch.clear();
                 {
@@ -386,7 +410,7 @@ fn run_loop(
             }
             if !capture && prefetch.len() >= file_prefetch && !need_frame {
                 if let Some(front) = prefetch.front() {
-                    let wait = pts_wait(front.pts, clock_pts, clock_start);
+                    let wait = pts_wait(front.pts(), clock_pts, clock_start);
                     if wait > Duration::ZERO && wait < Duration::from_secs(2) {
                         thread::sleep(wait.min(Duration::from_millis(8)));
                     }
@@ -435,10 +459,26 @@ fn run_loop(
                         clock_start = Instant::now();
                     }
                     position_hns.store(seek_base + (pts - clock_pts).max(0), Ordering::Relaxed);
-                    match copy_video(&sample) {
+                    let decoded = if !sample.texture.is_null() {
+                        gpu_device
+                            .as_ref()
+                            .ok_or_else(|| "Metal device is unavailable".to_string())
+                            .and_then(|device| import_video(&sample, device))
+                            .map(DecodedFrame::Gpu)
+                    } else {
+                        copy_video(&sample).map(DecodedFrame::Cpu)
+                    };
+                    match decoded {
                         Ok(frame) => {
                             if capture {
-                                push_live_cpu(&uploads, source_id, &frame, live_depth);
+                                match frame {
+                                    DecodedFrame::Cpu(frame) => {
+                                        push_live_cpu(&uploads, source_id, &frame, live_depth)
+                                    }
+                                    DecodedFrame::Gpu(frame) => {
+                                        push_live_gpu(&uploads, source_id, frame, live_depth)
+                                    }
+                                }
                                 need_frame = false;
                             } else {
                                 prefetch.push_back(frame);
@@ -499,6 +539,20 @@ fn audio_packet(sample: &AvSample) -> Option<AudioPacket> {
     })
 }
 
+enum DecodedFrame {
+    Cpu(CpuFrame),
+    Gpu(GpuVideoFrame),
+}
+
+impl DecodedFrame {
+    fn pts(&self) -> i64 {
+        match self {
+            Self::Cpu(frame) => frame.pts,
+            Self::Gpu(frame) => frame.pts,
+        }
+    }
+}
+
 struct CpuFrame {
     pixels: Vec<u8>,
     stride: usize,
@@ -523,7 +577,7 @@ fn pts_wait(pts: i64, clock_pts: i64, clock_start: Instant) -> Duration {
 fn present_due_file(
     uploads: &Mutex<UploadStore>,
     source_id: u64,
-    prefetch: &mut std::collections::VecDeque<CpuFrame>,
+    prefetch: &mut std::collections::VecDeque<DecodedFrame>,
     clock_pts: &mut i64,
     clock_start: &mut Instant,
     seek_base: i64,
@@ -535,7 +589,7 @@ fn present_due_file(
         return;
     }
     while let Some(front) = prefetch.front() {
-        let pts = front.pts;
+        let pts = front.pts();
         if *clock_pts < 0 {
             *clock_pts = pts;
             *clock_start = Instant::now();
@@ -545,11 +599,80 @@ fn present_due_file(
         }
         let frame = prefetch.pop_front().expect("front");
         position_hns.store(seek_base + (pts - *clock_pts).max(0), Ordering::Relaxed);
-        push_file_cpu(uploads, source_id, &frame);
+        match frame {
+            DecodedFrame::Cpu(frame) => push_file_cpu(uploads, source_id, &frame),
+            DecodedFrame::Gpu(frame) => push_file_gpu(uploads, source_id, frame),
+        }
         if force {
             break;
         }
     }
+}
+
+fn import_video(sample: &AvSample, device: &wgpu::Device) -> Result<GpuVideoFrame, String> {
+    if sample.texture.is_null() {
+        return Err("AVFoundation did not supply a Metal texture".into());
+    }
+    let width = (sample.width as u32).max(2);
+    let height = (sample.height as u32).max(2);
+    let raw = unsafe {
+        objc2::rc::Retained::from_raw(
+            sample.texture as *mut objc2::runtime::ProtocolObject<dyn objc2_metal::MTLTexture>,
+        )
+    }
+    .ok_or("invalid Metal texture")?;
+    let pixel_buffer = sample.pixel_buffer as usize;
+    let release_pixels = Box::new(move || {
+        if pixel_buffer != 0 {
+            unsafe { CFRelease(pixel_buffer as *const std::ffi::c_void) };
+        }
+    });
+    let hal_texture = unsafe {
+        wgpu::hal::metal::Device::texture_from_raw(
+            raw,
+            wgpu::TextureFormat::Bgra8Unorm,
+            objc2_metal::MTLTextureType::Type2D,
+            1,
+            1,
+            wgpu::hal::CopyExtent {
+                width,
+                height,
+                depth: 1,
+            },
+            Some(release_pixels),
+        )
+    };
+    let texture = unsafe {
+        device.create_texture_from_hal::<wgpu::hal::api::Metal>(
+            hal_texture,
+            &wgpu::TextureDescriptor {
+                label: Some("eiviz av metal"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            },
+            wgpu::TextureUses::RESOURCE | wgpu::TextureUses::COPY_SRC,
+        )
+    };
+    let view = texture.create_view(&Default::default());
+    Ok(GpuVideoFrame {
+        pts: sample.pts_hns,
+        width,
+        height,
+        packed: false,
+        bgra: true,
+        texture,
+        view,
+        lease: Some(Arc::new(())),
+    })
 }
 
 fn copy_video(sample: &AvSample) -> Result<CpuFrame, String> {
@@ -574,8 +697,68 @@ fn push_live_cpu(uploads: &Mutex<UploadStore>, source_id: u64, frame: &CpuFrame,
     let _ = store.push_playout_cpu(source_id, &frame.pixels, frame.stride, frame.pts);
 }
 
+fn push_live_gpu(uploads: &Mutex<UploadStore>, source_id: u64, frame: GpuVideoFrame, depth: u32) {
+    let mut store = uploads.lock_or_recover();
+    store.ensure_playout(
+        source_id,
+        frame.width.max(2),
+        frame.height.max(2),
+        CpuFormat::GpuRgba,
+        depth,
+    );
+    let _ = store.push_gpu(source_id, frame);
+}
+
+fn push_file_gpu(uploads: &Mutex<UploadStore>, source_id: u64, frame: GpuVideoFrame) {
+    let mut store = uploads.lock_or_recover();
+    store.ensure_playout(
+        source_id,
+        frame.width.max(2),
+        frame.height.max(2),
+        CpuFormat::GpuRgba,
+        1,
+    );
+    let _ = store.push_gpu(source_id, frame);
+}
+
 fn push_file_cpu(uploads: &Mutex<UploadStore>, source_id: u64, frame: &CpuFrame) {
     let mut store = uploads.lock_or_recover();
     store.ensure_playout(source_id, frame.width, frame.height, CpuFormat::Bgra, 1);
     let _ = store.push(source_id, &frame.pixels, frame.stride, frame.pts);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::device::{BackendRequest, GpuDevice};
+
+    #[test]
+    fn avfoundation_file_decodes_into_a_metal_texture() {
+        let Some(path) = std::env::var_os("EIVIZ_MP4_FIXTURE") else {
+            eprintln!("EIVIZ_MP4_FIXTURE is not set; Metal decode test skipped");
+            return;
+        };
+        let path = path.to_string_lossy().to_string();
+        let gpu = GpuDevice::with_backend(BackendRequest::Metal).expect("Metal device");
+        let mut pump = NativePump::open_file(&path, 0).expect("video pump");
+        pump.set_metal(&gpu.device);
+        for _ in 0..60 {
+            match pump.next() {
+                Ok(Some(sample)) if sample.kind == KIND_VIDEO => {
+                    assert!(
+                        !sample.texture.is_null(),
+                        "AVFoundation should decode straight into a Metal texture"
+                    );
+                    let frame = import_video(&sample, &gpu.device).expect("import texture");
+                    assert_eq!(frame.width, sample.width as u32);
+                    assert_eq!(frame.height, sample.height as u32);
+                    assert!(frame.bgra && !frame.packed);
+                    return;
+                }
+                Ok(Some(_)) | Ok(None) => {}
+                Err(_) => break,
+            }
+        }
+        panic!("no video frame reached the Metal path");
+    }
 }

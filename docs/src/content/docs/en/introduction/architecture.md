@@ -198,10 +198,11 @@ CPU pictures usually upload through system memory.
 On Windows with Resizable BAR on a discrete GPU, the host reaches through wgpu to the DX12 low-level API and writes straight into VRAM.  
 Apple Silicon uses unified memory for a similar path.
 
-File and UVC decode currently uses AVFoundation on the CPU, then uploads through the
-Unified Memory path on Apple Silicon. Moving the decoded `CVPixelBuffer` straight into
-a Metal texture is tracked as the next macOS performance step; it is not enabled yet.  
-That upload path can be changed in [Settings](/eiviz/en/introduction/settings/).
+File and UVC decode on macOS uses `CVMetalTextureCache` and hands the decoded
+`CVPixelBuffer` to Metal without a CPU copy. The texture is imported through the Metal
+HAL and released with the wgpu texture. NDI ingest uses the same unified-memory
+approach with a leased shared-texture ring.  
+GPU upload can be changed in [Settings](/eiviz/en/introduction/settings/).
 
 ```mermaid
 flowchart TB

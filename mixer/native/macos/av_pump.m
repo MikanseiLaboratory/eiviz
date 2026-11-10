@@ -6,6 +6,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
+#import <Metal/Metal.h>
 
 enum {
     EIVIZ_AV_RETRY = 0,
@@ -45,6 +46,8 @@ static void release_sample(CMSampleBufferRef *slot) {
 @property (nonatomic, strong) NSCondition *cond;
 @property (nonatomic, strong) NSMutableArray<NSValue *> *inbox;
 @property (nonatomic, strong) NSMutableArray<NSNumber *> *inboxAudio;
+@property (nonatomic) id<MTLDevice> metal;
+@property (nonatomic) CVMetalTextureCacheRef metalCache;
 @end
 
 @implementation EivizAvPumpObj
@@ -89,12 +92,77 @@ static void release_sample(CMSampleBufferRef *slot) {
     }
     release_sample(&_pendingVideo);
     release_sample(&_pendingAudio);
+    if (_metalCache) {
+        CVMetalTextureCacheFlush(_metalCache, 0);
+        CFRelease(_metalCache);
+        _metalCache = NULL;
+    }
+    _metal = nil;
+}
+
+- (void)setMetalDevice:(id<MTLDevice>)device {
+    self.metal = device;
+    if (self.metalCache) {
+        CFRelease(self.metalCache);
+        self.metalCache = NULL;
+    }
+    if (device) {
+        CVMetalTextureCacheCreate(NULL, NULL, device, NULL, &_metalCache);
+    }
+}
+
+- (BOOL)fillMetalVideo:(CVPixelBufferRef)pixels sample:(CMSampleBufferRef)sample out:(EivizAvSample *)out {
+    if (!self.metalCache) {
+        return NO;
+    }
+    size_t width = CVPixelBufferGetWidth(pixels);
+    size_t height = CVPixelBufferGetHeight(pixels);
+    if (width == 0 || height == 0) {
+        return NO;
+    }
+    CVMetalTextureRef metalTexture = NULL;
+    CVReturn status = CVMetalTextureCacheCreateTextureFromImage(
+        NULL,
+        self.metalCache,
+        pixels,
+        NULL,
+        MTLPixelFormatBGRA8Unorm,
+        width,
+        height,
+        0,
+        &metalTexture);
+    if (status != kCVReturnSuccess || !metalTexture) {
+        return NO;
+    }
+    id<MTLTexture> texture = CVMetalTextureGetTexture(metalTexture);
+    if (!texture) {
+        CFRelease(metalTexture);
+        return NO;
+    }
+    CVPixelBufferRetain(pixels);
+    out->kind = EIVIZ_AV_KIND_VIDEO;
+    out->width = (int32_t)width;
+    out->height = (int32_t)height;
+    out->stride = (int32_t)CVPixelBufferGetBytesPerRow(pixels);
+    out->sample_rate = 0;
+    out->channels = 0;
+    out->frames = 0;
+    out->pts_hns = cm_to_hns(CMSampleBufferGetPresentationTimeStamp(sample));
+    out->data = NULL;
+    out->bytes = 0;
+    out->texture = (__bridge_retained void *)texture;
+    out->pixel_buffer = (void *)pixels;
+    CFRelease(metalTexture);
+    return YES;
 }
 
 - (BOOL)fillVideo:(CMSampleBufferRef)sample out:(EivizAvSample *)out {
     CVPixelBufferRef pixels = CMSampleBufferGetImageBuffer(sample);
     if (!pixels) {
         return NO;
+    }
+    if ([self fillMetalVideo:pixels sample:sample out:out]) {
+        return YES;
     }
     if (CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) {
         return NO;
@@ -125,6 +193,8 @@ static void release_sample(CMSampleBufferRef *slot) {
     out->pts_hns = cm_to_hns(CMSampleBufferGetPresentationTimeStamp(sample));
     out->data = self.scratch.bytes;
     out->bytes = (uint32_t)bytes;
+    out->texture = NULL;
+    out->pixel_buffer = NULL;
     return YES;
 }
 
@@ -585,6 +655,15 @@ EivizAvPump *eiviz_av_open_capture(const char *device_id, uint32_t width, uint32
         NSLog(@"eiviz av: open_capture aborted: %@", ex);
         return NULL;
     }
+}
+
+void eiviz_av_set_metal(EivizAvPump *pump, void *device) {
+    if (!pump) {
+        return;
+    }
+    EivizAvPumpObj *obj = (__bridge EivizAvPumpObj *)pump;
+    id<MTLDevice> metal = (__bridge id<MTLDevice>)device;
+    [obj setMetalDevice:metal];
 }
 
 void eiviz_av_close(EivizAvPump *pump) {
