@@ -82,6 +82,7 @@ struct ReplayView: View {
     /// While the operator drags the bar the engine has not moved yet, so the drag value
     /// owns the bar until the seek lands.
     @State private var scrubFrame: Double?
+    @State private var sliderEditing = false
 
     private let tick = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
@@ -351,6 +352,7 @@ struct ReplayView: View {
                     ),
                     in: seekRange
                 ) { editing in
+                    sliderEditing = editing
                     guard !editing, let target = scrubFrame else { return }
                     let frame = UInt64(max(0, target.rounded()))
                     playheadFrame = frame
@@ -364,6 +366,19 @@ struct ReplayView: View {
                     }
                 }
                 .help(L10n.t("replay.seekWholeHint"))
+                // Keyboard arrows change a Slider's value without starting an edit, so the
+                // end-of-drag callback never runs. Commit those changes here.
+                .onChange(of: scrubFrame) { _, value in
+                    guard !sliderEditing, let value else { return }
+                    let frame = UInt64(max(0, value.rounded()))
+                    playheadFrame = frame
+                    seekWhole(to: frame)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                        if let current = scrubFrame, abs(current - value) < 0.5 {
+                            scrubFrame = nil
+                        }
+                    }
+                }
                 Button(L10n.t("replay.jumpLive")) { live() }
                     .frame(minWidth: 130, minHeight: 26)
                     .help(L10n.t("replay.jumpLiveHint"))
@@ -952,8 +967,11 @@ struct ReplayView: View {
                 Button(L10n.t("replay.exportStart")) { startExport() }
                     .disabled(exporter.busy)
                     .frame(minWidth: 130, minHeight: 36)
-                Button(L10n.t("replay.close")) { showExport = false }
-                    .frame(minWidth: 110, minHeight: 36)
+                Button(L10n.t("replay.close")) {
+                    if exporter.busy { cancelExport() }
+                    showExport = false
+                }
+                .frame(minWidth: 110, minHeight: 36)
             }
         }
         .padding(16)
