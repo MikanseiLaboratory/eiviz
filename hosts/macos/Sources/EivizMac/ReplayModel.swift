@@ -268,7 +268,9 @@ struct ReplayExportProgress {
         else {
             return nil
         }
-        state = ReplayExportState(rawValue: object["state"]?.uint32Value ?? 0) ?? .idle
+        // An unknown state comes from a newer mixer than this host. Treating it as idle
+        // left the runner busy forever; failing it at least ends the export and says so.
+        state = ReplayExportState(rawValue: object["state"]?.uint32Value ?? 0) ?? .failed
         done = object["done"]?.uint64Value ?? 0
         total = object["total"]?.uint64Value ?? 0
         skipped = object["skipped"]?.uint64Value ?? 0

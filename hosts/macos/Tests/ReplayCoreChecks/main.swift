@@ -350,6 +350,63 @@ check("output path keeps mp4", ReplayExportPlan.outputPath("/tmp/out.mp4") == "/
 check("output path trims", ReplayExportPlan.outputPath(" /tmp/out ") == "/tmp/out.mp4")
 check("output path dotted directory", ReplayExportPlan.outputPath("/tmp/a.b/out") == "/tmp/a.b/out.mp4")
 
+
+// MARK: - Recording presence and export progress parsing
+
+let tempRoot = (NSTemporaryDirectory() as NSString)
+    .appendingPathComponent("eiviz-replay-checks-\(UUID().uuidString)")
+try? FileManager.default.createDirectory(atPath: tempRoot, withIntermediateDirectories: true)
+let recordingUuid = "rec-check"
+let recordingFile = (tempRoot as NSString).appendingPathComponent(recordingUuid)
+FileManager.default.createFile(atPath: recordingFile, contents: Data("x".utf8))
+var presenceDoc = ReplayDocument(raw: [
+    "recordings": .array([
+        .object([
+            "uuid": .string(recordingUuid),
+            "storage": .string(tempRoot),
+            "firstFrame": .number(0),
+            "lastFrame": .number(10),
+        ])
+    ]),
+    "events": .array([
+        .object([
+            "id": .number(1),
+            "recordingUuid": .string(recordingUuid),
+            "inFrame": .number(0),
+            "outFrame": .number(10),
+            "name": .string("e"),
+            "protected": .bool(false),
+            "tags": .array([]),
+        ])
+    ]),
+    "playlists": .array([
+        .object([
+            "id": .number(1),
+            "name": .string("p"),
+            "revision": .number(1),
+            "clips": .array([
+                .object([
+                    "uid": .string("c"),
+                    "recordingUuid": .string(recordingUuid),
+                    "angleId": .number(1),
+                    "inFrame": .number(0),
+                    "outFrame": .number(10),
+                ])
+            ]),
+        ])
+    ]),
+])
+check("present recording is not missing", presenceDoc.missingRecordingCount(skip: nil) == 0)
+check("active recording skipped", presenceDoc.missingRecordingCount(skip: recordingUuid) == 0)
+try? FileManager.default.removeItem(atPath: recordingFile)
+check("missing recording counted once", presenceDoc.missingRecordingCount(skip: nil) == 1)
+check("missing recording skip current", presenceDoc.missingRecordingCount(skip: recordingUuid) == 0)
+try? FileManager.default.removeItem(atPath: tempRoot)
+
+check("cancelled progress parses", ReplayExportProgress(json: "{\"state\":4,\"done\":0,\"total\":1}")?.state == .cancelled)
+check("invalid progress is nil", ReplayExportProgress(json: "not json") == nil)
+check("unknown state falls back to failed", ReplayExportProgress(json: "{\"state\":99}")?.state == .failed)
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)
