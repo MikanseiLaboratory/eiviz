@@ -487,6 +487,32 @@ let mixedAngles = [
 ]
 check("cpu angles do not count", ReplayDeckMath.gpuAnglesOverCapacity(mixedAngles) == nil)
 
+
+// MARK: - Full session round trip
+
+var fullSession = MixerSessionData.default()
+fullSession.nextMonitorId = 4321
+fullSession.replay = .object([
+    "events": .array([.object(["id": .number(1), "recordingUuid": .string("r"), "inFrame": .number(0), "outFrame": .number(10), "name": .string("e"), "protected": .bool(true), "tags": .array([])])]),
+    "playlists": .array([]),
+    "recordings": .array([]),
+])
+if var scene = fullSession.scenes.first {
+    scene.sequences = [SceneSequence(id: 1, name: "s", steps: [
+        SequenceStep(stateId: 1, motion: nil, holdFrames: 0, replay: SequenceReplayAction(channel: 0, clipUid: "clip-1", play: true))
+    ])]
+    fullSession.scenes[0] = scene
+}
+if let encoded = try? JSONEncoder().encode(fullSession),
+   let decoded = try? JSONDecoder().decode(MixerSessionData.self, from: encoded) {
+    check("session keeps next monitor id", decoded.nextMonitorId == 4321)
+    check("session keeps replay document", decoded.replay?.objectValue?["events"] != nil)
+    check("session keeps replay cue", decoded.scenes.first?.sequences.first?.steps.first?.replay?.clipUid == "clip-1")
+    check("session keeps cue play", decoded.scenes.first?.sequences.first?.steps.first?.replay?.play == true)
+} else {
+    check("session round trip encodes", false)
+}
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)
