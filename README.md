@@ -33,8 +33,8 @@ signed until notarization credentials are wired into the release; if Gatekeeper
 blocks it, right-click the package and choose Open, or run
 `xattr -dr com.apple.quarantine /Applications/eiviz.app` after installing.
 
-macOS DeckLink hardware is not yet verified; the linked GitHub issues track the
-remaining platform work.
+macOS DeckLink I/O is not supported; use Windows for DeckLink hardware. The
+macOS Pro module still provides RTMP, Replay, and licensing.
 
 ### macOS Intel (`macos-x64`)
 

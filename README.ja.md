@@ -41,7 +41,7 @@ macOS 14以降のApple Siliconがサポート対象です。公証の資格情�
 ad-hoc署名のため、Gatekeeperに止められた場合はpkgを右クリックして「開く」を選ぶか、
 インストール後に`xattr -dr com.apple.quarantine /Applications/eiviz.app`を実行してください。
 
-macOSのDeckLinkハードウェアは未検証です。残作業はGitHub Issueで追跡しています。
+macOSのDeckLink入出力は非対応です。DeckLinkを使う場合はWindowsを使用してください。macOS版ProモジュールはRTMP・Replay・ライセンスを提供します。
 
 ### macOS Intel（`macos-x64`）
 
