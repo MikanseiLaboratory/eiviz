@@ -64,11 +64,23 @@ impl AudioCaptureStore {
         let stop_t = Arc::clone(&stop);
         let id = spec.id;
         let (ready_tx, ready_rx) = mpsc::channel();
+        // Core Audio asks for Audio Recording permission while creating a process tap.
+        // The first prompt can stay up longer than the device-open timeout.
+        #[cfg(target_os = "macos")]
+        let ready_timeout = if spec.mode == CAPTURE_MODE_ENDPOINT_LOOPBACK
+            || spec.mode == CAPTURE_MODE_PROCESS_LOOPBACK
+        {
+            Duration::from_secs(60)
+        } else {
+            Duration::from_secs(8)
+        };
+        #[cfg(not(target_os = "macos"))]
+        let ready_timeout = Duration::from_secs(8);
         let join = thread::Builder::new()
             .name(format!("eiviz-acap-{id}"))
             .spawn(move || run_capture(spec, uploads, stop_t, Some(ready_tx)))
             .map_err(|error| error.to_string())?;
-        match ready_rx.recv_timeout(Duration::from_secs(8)) {
+        match ready_rx.recv_timeout(ready_timeout) {
             Ok(Ok(())) => {
                 self.captures.insert(
                     id,
