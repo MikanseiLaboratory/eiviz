@@ -2177,8 +2177,9 @@ struct ReplayView: View {
 
     /// Leaves live follow when needed, seeks, and either holds or keeps playing.
     private func seekHolding(to frame: UInt64, keepPlaying: Bool) {
-        let target = min(max(frame, UInt64(seekRange.lowerBound)),
-                         UInt64(seekRange.upperBound))
+        let target = ReplayDeckMath.clampedFrame(
+            frame,
+            range: UInt64(seekRange.lowerBound)...UInt64(seekRange.upperBound))
         cueScratchForSeek(target: target)
         let action = ReplayTransportRules.leaveEdge(transport)
         let playing = keepPlaying && action.playing

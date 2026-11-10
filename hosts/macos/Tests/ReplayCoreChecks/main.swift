@@ -592,6 +592,13 @@ check("live pause keeps playhead when ahead",
       ReplayDeckMath.liveHoldTarget(playhead: 1600, recordingHead: 1500) == 1600)
 check("live target both zero", ReplayDeckMath.liveHoldTarget(playhead: 0, recordingHead: 0) == 0)
 
+
+// MARK: - Seek clamping
+
+check("seek target inside range", ReplayDeckMath.clampedFrame(50, range: 0...100) == 50)
+check("seek target below range", ReplayDeckMath.clampedFrame(0, range: 10...100) == 10)
+check("seek target above range", ReplayDeckMath.clampedFrame(500, range: 10...100) == 100)
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)

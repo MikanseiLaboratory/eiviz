@@ -127,6 +127,12 @@ enum ReplayDeckMath {
         return nil
     }
 
+    /// Keeps a waveform/seek target inside the recorded range. Clicking past either end
+    /// must clamp, not ask the mixer for a frame the recording does not have.
+    static func clampedFrame(_ frame: UInt64, range: ClosedRange<UInt64>) -> UInt64 {
+        min(max(frame, range.lowerBound), range.upperBound)
+    }
+
     /// Where a live channel is parked when the operator pauses or changes speed: the
     /// playhead if the deck has one, otherwise the recording head. A stale zero playhead
     /// must not send the picture back to the first frame.
