@@ -610,7 +610,11 @@ extension MixerController {
             session.outputs[index] = entry
         }
         if entry.transport == .rtmp {
-            _ = MixerFFI.streamEncoderRemove(entry.id)
+            let previousEncoder = session.outputs.first { $0.id == entry.id }?.streamEncoderId
+                ?? entry.streamEncoderId
+            if previousEncoder != 0 {
+                _ = MixerFFI.streamEncoderRemove(previousEncoder)
+            }
             guard entry.enabled else { return }
             let key = KeychainStore.load(account: "rtmp/" + entry.rtmpSecretRef)
             guard !entry.rtmpSecretRef.isEmpty, !key.isEmpty else {
