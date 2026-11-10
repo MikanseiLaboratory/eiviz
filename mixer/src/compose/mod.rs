@@ -972,7 +972,7 @@ impl Composer {
             let pixels = snap.pixels.as_slice();
             if direct_sample {
                 if let Some(uploader) = self.uploader.as_mut() {
-                    if let Some(Ok((texture, view))) = uploader.upload_direct(
+                    if let Some(Ok((texture, view, lease))) = uploader.upload_direct(
                         device,
                         id,
                         pixels,
@@ -1000,7 +1000,7 @@ impl Composer {
                                 uploaded_pts: snap.last_pts,
                                 direct: true,
                                 owned: true,
-                                lease: None,
+                                lease: Some(lease),
                             },
                         );
                         continue;
