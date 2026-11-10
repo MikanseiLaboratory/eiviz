@@ -587,6 +587,8 @@ struct ReplaySettingsView: View {
                 status = L10n.format(
                     kind == "Input" ? "replay.angleDuplicateInput" : "replay.angleDuplicate",
                     name(id))
+            case let .duplicateStorage(path):
+                status = L10n.format("replay.duplicateStorage", path)
             }
             return
         }

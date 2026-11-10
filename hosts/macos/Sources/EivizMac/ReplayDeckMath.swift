@@ -82,6 +82,7 @@ enum ReplayDeckMath {
         case angleNeedsDrive(UInt32)
         case angleNeedsSource(UInt32)
         case angleDuplicate(UInt32, kind: String)
+        case duplicateStorage(String)
     }
 
     /// Checks the setup the Windows settings window refuses: a drive, at least one angle,
@@ -95,6 +96,15 @@ enum ReplayDeckMath {
             !$0.path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         guard !usable.isEmpty else { return .noStorage }
+        var paths = Set<String>()
+        for storage in usable {
+            let key = storage.path
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            if !paths.insert(key).inserted {
+                return .duplicateStorage(storage.path)
+            }
+        }
         guard !angles.isEmpty else { return .noAngles }
         for angle in angles {
             let drive = storages.firstIndex { $0.angleIds.contains(angle.id) }

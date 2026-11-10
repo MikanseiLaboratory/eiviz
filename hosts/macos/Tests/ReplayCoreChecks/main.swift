@@ -571,6 +571,18 @@ check("existing channel kept", ReplayDeckMath.channelToShow(channels: channelsA,
 check("missing channel falls back", ReplayDeckMath.channelToShow(channels: channelsA, current: 7) == 0)
 check("empty channels keep current", ReplayDeckMath.channelToShow(channels: [], current: 7) == 7)
 
+
+// MARK: - Duplicate storage paths
+
+let duplicateStorageA = ReplayDocument.StorageSpec(path: "/tmp/replay", angleIds: [1])
+let duplicateStorageB = ReplayDocument.StorageSpec(path: " /tmp/REPLAY ", angleIds: [2])
+let duplicateAngles = [
+    ReplayAngleInfo(id: 1, name: "A", source: "Scene", sceneId: 1, inputId: 0, audioUnitId: 0, encoder: "Cpu"),
+    ReplayAngleInfo(id: 2, name: "B", source: "Scene", sceneId: 2, inputId: 0, audioUnitId: 0, encoder: "Cpu"),
+]
+check("duplicate storage refused",
+      ReplayDeckMath.setupProblem(angles: duplicateAngles, storages: [duplicateStorageA, duplicateStorageB]) == .duplicateStorage(" /tmp/REPLAY "))
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)
