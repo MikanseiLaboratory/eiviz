@@ -253,6 +253,85 @@ queue.enqueue(jobA)
 queue.removeAll()
 check("queue removeAll", queue.isEmpty)
 
+
+// MARK: - Export runner state machine
+
+@MainActor
+final class FakeExportMachine: ReplayExportMachine {
+    var starts: [String] = []
+    var startResult = true
+    var progress: [ReplayExportProgress?] = []
+    private(set) var cancelled = false
+
+    func startReplayExport(_ json: String) -> Bool {
+        starts.append(json)
+        return startResult
+    }
+
+    func cancelReplayExport() {
+        cancelled = true
+    }
+
+    func replayExportProgress() -> ReplayExportProgress? {
+        guard !progress.isEmpty else { return nil }
+        return progress.removeFirst()
+    }
+}
+
+@MainActor
+func exportProgress(_ state: Int, message: String = "") -> ReplayExportProgress {
+    ReplayExportProgress(json: "{\"state\":\(state),\"done\":1,\"total\":2,\"skipped\":0,\"bytes\":10,\"message\":\"\(message)\"}")!
+}
+
+@MainActor
+func runExportRunnerChecks() {
+    let fake = FakeExportMachine()
+    let runner = ReplayExportRunner()
+    fake.startResult = false
+    check("export refusal returns false", !runner.start(json: "a", label: "a", mixer: fake))
+    check("export refusal reports", runner.status == L10n.t("replay.exportFailed"))
+    fake.startResult = true
+    check("export after refusal starts fresh", runner.start(json: "b", label: "b", mixer: fake))
+    check("export after refusal used new job", fake.starts == ["a", "b"])
+    check("export busy after start", runner.busy)
+
+    fake.progress = [exportProgress(2)]
+    runner.poll(mixer: fake)
+    check("export done clears busy", !runner.busy)
+    check("export done reports", runner.status == L10n.format("replay.exportDone", "1", "0"))
+
+    let queued = FakeExportMachine()
+    let runner2 = ReplayExportRunner()
+    check("export first queues", runner2.start(json: "1", label: "1", mixer: queued))
+    check("export second queues", runner2.start(json: "2", label: "2", mixer: queued))
+    check("export only first started", queued.starts == ["1"])
+    queued.progress = [exportProgress(2)]
+    runner2.poll(mixer: queued)
+    check("export advances to second", queued.starts == ["1", "2"])
+    queued.progress = [exportProgress(2)]
+    runner2.poll(mixer: queued)
+    check("export finishes queue", !runner2.busy)
+
+    let cancelled = FakeExportMachine()
+    let runner3 = ReplayExportRunner()
+    _ = runner3.start(json: "x", label: "x", mixer: cancelled)
+    runner3.cancel(mixer: cancelled)
+    check("export cancel reaches mixer", cancelled.cancelled)
+    cancelled.progress = [exportProgress(4)]
+    runner3.poll(mixer: cancelled)
+    check("export cancelled clears busy", !runner3.busy)
+    check("export cancelled reports", runner3.status == L10n.t("replay.exportCancelled"))
+
+    let failed = FakeExportMachine()
+    let runner4 = ReplayExportRunner()
+    _ = runner4.start(json: "f", label: "f", mixer: failed)
+    failed.progress = [exportProgress(3, message: "disk")]
+    runner4.poll(mixer: failed)
+    check("export failure clears busy", !runner4.busy)
+    check("export failure reports", runner4.status.contains("disk"))
+}
+runExportRunnerChecks()
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)

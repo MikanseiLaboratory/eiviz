@@ -10,6 +10,17 @@ import Combine
 ///
 /// It is an `ObservableObject` like `MixerController`, so the view watches it the same way
 /// it watches everything else in this host.
+/// The three mixer calls the export runner needs. Keeping them behind a protocol lets the
+/// runner's busy/status/queue behaviour be exercised without a live mixer or Pro module.
+@MainActor
+protocol ReplayExportMachine: AnyObject {
+    func startReplayExport(_ json: String) -> Bool
+    func cancelReplayExport()
+    func replayExportProgress() -> ReplayExportProgress?
+}
+
+extension MixerController: ReplayExportMachine {}
+
 @MainActor
 final class ReplayExportRunner: ObservableObject {
     private var queue = ReplayExportQueue()
@@ -31,7 +42,7 @@ final class ReplayExportRunner: ObservableObject {
     /// that queued several files (one per angle) should stop adding them, and a caller that
     /// queued one should see the refusal rather than a queue it silently discarded.
     @discardableResult
-    func start(json: String, label: String, mixer: MixerController) -> Bool {
+    func start(json: String, label: String, mixer: any ReplayExportMachine) -> Bool {
         queue.enqueue(ReplayExportJob(json: json, label: label))
         guard !busy else { return true }
         return startNext(mixer: mixer)
@@ -44,13 +55,13 @@ final class ReplayExportRunner: ObservableObject {
     /// let the operator start a second export while the first was still running, and the
     /// later `done` of the first one was then read as the second one finishing — which
     /// skipped the next queued file.
-    func cancel(mixer: MixerController) {
+    func cancel(mixer: any ReplayExportMachine) {
         queue.removeAll()
         mixer.cancelReplayExport()
     }
 
     /// Follows the running export. Called from the deck's poll; does nothing while idle.
-    func poll(mixer: MixerController) {
+    func poll(mixer: any ReplayExportMachine) {
         guard busy, let progress = mixer.replayExportProgress() else { return }
         switch progress.state {
         case .running:
@@ -80,7 +91,7 @@ final class ReplayExportRunner: ObservableObject {
 
     /// Starts the next queued file, or stops when the queue is empty.
     @discardableResult
-    private func startNext(mixer: MixerController) -> Bool {
+    private func startNext(mixer: any ReplayExportMachine) -> Bool {
         guard let job = queue.next() else {
             busy = false
             return true
