@@ -67,8 +67,12 @@ installs the apps into `/Applications` and `eivizctl` / `eiviz-headless` into
 plus `eiviz-pro.required` beside it; the pkg script copies them when they are in
 the staging directory.
 
-The current release workflow signs ad-hoc. On a machine with a Developer ID,
-replace `codesign --force --sign -` with the identity and add notarization.
+The current release workflow signs ad-hoc. Notarization is **not** performed
+because this repository has no Apple Developer ID credentials. On a machine
+with a Developer ID, replace `codesign --force --sign -` with the identity,
+enable hardened runtime, and add `xcrun notarytool submit` plus `stapler`. An
+ad-hoc package is not notarized and Gatekeeper requires the manual Open step
+below.
 
 ## Troubleshooting
 
