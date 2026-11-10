@@ -505,10 +505,18 @@ if var scene = fullSession.scenes.first {
 }
 if let encoded = try? JSONEncoder().encode(fullSession),
    let decoded = try? JSONDecoder().decode(MixerSessionData.self, from: encoded) {
-    check("session keeps next monitor id", decoded.nextMonitorId == 4321)
+    // The core session format has no nextMonitorId; the host allocates monitors on load.
+    // A missing key must not fail the whole session decode, or inputs stop syncing.
+    check("session defaults missing monitor counter", decoded.nextMonitorId == 1000)
     check("session keeps replay document", decoded.replay?.objectValue?["events"] != nil)
     check("session keeps replay cue", decoded.scenes.first?.sequences.first?.steps.first?.replay?.clipUid == "clip-1")
     check("session keeps cue play", decoded.scenes.first?.sequences.first?.steps.first?.replay?.play == true)
+    if let encodedText = String(data: encoded, encoding: .utf8) {
+        check("session omits monitor counter", !encodedText.contains("nextMonitorId"))
+    } else {
+        check("session encodes text", false)
+    }
+    check("session keeps inputs", decoded.inputs.count == fullSession.inputs.count)
 } else {
     check("session round trip encodes", false)
 }

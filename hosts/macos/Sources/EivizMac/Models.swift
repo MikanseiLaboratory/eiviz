@@ -1840,7 +1840,7 @@ struct MixerSessionData: Codable {
     enum CodingKeys: String, CodingKey {
         case version, settings, inputs, scenes, scenePresets, units, transitions, overlays, nextOverlayId, outputs, streamEncoders, multiviews, headphone
         case inputTags, sceneTags, replayTags
-        case nextInputId, nextSceneId, nextUnitId, nextMonitorId, nextOutputId, nextStreamEncoderId, nextMultiviewId
+        case nextInputId, nextSceneId, nextUnitId, nextOutputId, nextStreamEncoderId, nextMultiviewId
         case selectedUnitId, headphoneCopyMonitor, headphoneListenKind, headphoneListenId, replay
     }
 
