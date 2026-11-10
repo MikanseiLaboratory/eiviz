@@ -734,11 +734,11 @@ mod tests {
 
     #[test]
     fn avfoundation_file_decodes_into_a_metal_texture() {
-        let Some(path) = std::env::var_os("EIVIZ_MP4_FIXTURE") else {
-            eprintln!("EIVIZ_MP4_FIXTURE is not set; Metal decode test skipped");
-            return;
-        };
-        let path = path.to_string_lossy().to_string();
+        let path = std::env::var_os("EIVIZ_MP4_FIXTURE")
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| {
+                format!("{}/tests/fixtures/av_metal.mp4", env!("CARGO_MANIFEST_DIR"))
+            });
         let gpu = GpuDevice::with_backend(BackendRequest::Metal).expect("Metal device");
         let mut pump = NativePump::open_file(&path, 0).expect("video pump");
         pump.set_metal(&gpu.device);
@@ -764,15 +764,16 @@ mod tests {
 
     #[test]
     fn file_pump_publishes_a_gpu_frame_without_a_cpu_copy() {
-        let Some(path) = std::env::var_os("EIVIZ_MP4_FIXTURE") else {
-            eprintln!("EIVIZ_MP4_FIXTURE is not set; GPU pump test skipped");
-            return;
-        };
+        let path = std::env::var_os("EIVIZ_MP4_FIXTURE")
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| {
+                format!("{}/tests/fixtures/av_metal.mp4", env!("CARGO_MANIFEST_DIR"))
+            });
         let gpu = GpuDevice::with_backend(BackendRequest::Metal).expect("Metal device");
         let uploads = Arc::new(Mutex::new(UploadStore::default()));
         let pump = VideoPump::start(
             77,
-            path.to_string_lossy().to_string(),
+            path,
             false,
             0,
             0,
