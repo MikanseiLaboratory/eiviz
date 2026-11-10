@@ -332,6 +332,16 @@ func runExportRunnerChecks() {
 }
 runExportRunnerChecks()
 
+
+// MARK: - All-angle export paths
+
+check("angle path keeps extension",
+      ReplayExportPlan.anglePath("/tmp/out.mp4", angleId: 2) == "/tmp/out-angle2.mp4")
+check("angle path without extension",
+      ReplayExportPlan.anglePath("/tmp/out", angleId: 1) == "/tmp/out-angle1")
+check("angle path with dotted directory",
+      ReplayExportPlan.anglePath("/tmp/a.b/out.mp4", angleId: 3) == "/tmp/a.b/out-angle3.mp4")
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)

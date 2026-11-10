@@ -7,6 +7,14 @@ import Foundation
 /// that needs SwiftUI, and keeping it apart is what lets it be tested and what keeps the
 /// window from growing again.
 enum ReplayExportPlan {
+    /// The file for one angle of an all-angles export. A path with no extension must not
+    /// grow a trailing dot, and an extension stays on the new name.
+    static func anglePath(_ path: String, angleId: UInt32) -> String {
+        let base = (path as NSString).deletingPathExtension
+        let ext = (path as NSString).pathExtension
+        return ext.isEmpty ? "\(base)-angle\(angleId)" : "\(base)-angle\(angleId).\(ext)"
+    }
+
     /// The modes the operator can choose, in the order the picker shows them.
     enum Mode: String, CaseIterable {
         case clip = "Clip"
