@@ -916,7 +916,10 @@ impl ControlService {
         else {
             return Ok(());
         };
-        let first = state.get("firstFrame").and_then(|v| v.as_u64()).unwrap_or(0);
+        let first = state
+            .get("firstFrame")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
         let last = state.get("lastFrame").and_then(|v| v.as_u64()).unwrap_or(0);
         let Some(mut doc) = self.store.document_cloned() else {
             return Ok(());
