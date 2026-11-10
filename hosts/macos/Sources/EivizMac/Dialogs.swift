@@ -1324,13 +1324,13 @@ struct AddInputView: View {
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         case "Audio":
-            Picker("Audio capture", selection: $audioMode) {
-                Text("Microphone / line input").tag(AudioCaptureMode.mic)
-                Text("Output device loopback").tag(AudioCaptureMode.endpointLoopback)
-                Text("Application audio").tag(AudioCaptureMode.processLoopback)
+            Picker(L10n.t("audio.capture"), selection: $audioMode) {
+                Text(L10n.t("audio.mic")).tag(AudioCaptureMode.mic)
+                Text(L10n.t("audio.loopback")).tag(AudioCaptureMode.endpointLoopback)
+                Text(L10n.t("audio.process")).tag(AudioCaptureMode.processLoopback)
             }
             if audioMode == .processLoopback {
-                Button("Refresh applications") { refreshAudioProcesses() }
+                Button(L10n.t("audio.refreshApps")) { refreshAudioProcesses() }
                 List(audioProcesses, id: \.exe) { process in
                     Button(process.name) {
                         audioProcessExe = process.exe
@@ -1339,15 +1339,15 @@ struct AddInputView: View {
                 }
                 .frame(height: 120)
                 if audioProcessExe.isEmpty {
-                    Text("Choose an application.")
+                    Text(L10n.t("audio.chooseApp"))
                         .foregroundStyle(EivizTheme.dim)
                 } else {
                     Text(audioProcesses.first { $0.exe == audioProcessExe }?.name ?? audioProcessExe)
                         .foregroundStyle(EivizTheme.dim)
                 }
             } else {
-                Button("Refresh devices") { refreshAudioDevices() }
-                Picker("Device", selection: $audioDeviceId) {
+                Button(L10n.t("audio.refreshDevices")) { refreshAudioDevices() }
+                Picker(L10n.t("audio.device"), selection: $audioDeviceId) {
                     Text("System default").tag("")
                     ForEach(audioDevices) { device in
                         Text("\(device.name)  (\(device.channels)ch)").tag(device.id)
@@ -1355,14 +1355,14 @@ struct AddInputView: View {
                 }
                 let channels = audioDevices.first { $0.id == audioDeviceId }?.channels ?? 2
                 HStack {
-                    Text("L")
+                    Text(L10n.t("audio.left"))
                     Picker("", selection: $audioMapLeft) {
                         ForEach(0..<Int(max(1, min(channels, 32))), id: \.self) {
                             Text("\($0 + 1)").tag(Int32($0))
                         }
                     }
                     .frame(width: 72)
-                    Text("R")
+                    Text(L10n.t("audio.right"))
                     Picker("", selection: $audioMapRight) {
                         ForEach(0..<Int(max(1, min(channels, 32))), id: \.self) {
                             Text("\($0 + 1)").tag(Int32($0))
@@ -1371,7 +1371,7 @@ struct AddInputView: View {
                     .frame(width: 72)
                 }
             }
-            Text("Audio Inputs route to Mixing Units and stay out of Scene layers. macOS output loopback and application capture use Core Audio process taps.")
+            Text(L10n.t("audio.help"))
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         default:
