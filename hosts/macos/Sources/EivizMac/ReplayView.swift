@@ -537,7 +537,15 @@ struct ReplayView: View {
 
     private var remainPlaylistText: String {
         let frame = displayPlayhead
-        let left = clips.filter { $0.outFrame > frame }.map { $0.outFrame - frame }.reduce(0, +)
+        var left: UInt64 = 0
+        for clip in clips {
+            if clip.outFrame <= frame { continue }
+            if frame < clip.inFrame {
+                left += clip.outFrame - clip.inFrame
+            } else {
+                left += clip.outFrame - frame
+            }
+        }
         return left > 0 ? ReplayTime.duration(frame, frame + left, fps) : "--:--:--:--"
     }
 
@@ -1527,7 +1535,7 @@ struct ReplayView: View {
         let recording = mixer.replayRecordingUuid()
         guard !recording.isEmpty else { status = "markLast: no recording uuid"; return }
         let name = L10n.format("replay.eventName", "\(current.events.count + 1)")
-        _ = current.appendEvent(
+        let id = current.appendEvent(
             uuid: recording,
             inFrame: start,
             outFrame: now,
@@ -1535,6 +1543,16 @@ struct ReplayView: View {
         // The session validates an event against its recording's range, and the range of a
         // recording still being written is the frame the recorder is on.
         current.setRecordingRange(uuid: recording, first: 0, last: now)
+        if current.autoAddToPlaylist,
+           current.activeAngle != 0,
+           let event = current.events.first(where: { $0.id == id }) {
+            let target = current.ensurePlaylist()
+            _ = current.appendClip(
+                playlistId: target, event: event, angleId: current.activeAngle)
+            if clipOrder == "Timecode" {
+                current.sortClips(playlistId: target)
+            }
+        }
         inFrame = start
         outFrame = now
         document = current
@@ -1672,6 +1690,7 @@ struct ReplayView: View {
     private func removeClip(_ uid: String) {
         guard var current = document else { return }
         current.removeClip(playlistId: playlistId, uid: uid)
+        if selectedClip == uid { selectedClip = nil }
         // An animation step that cued this clip has nothing left to fire.
         mixer.clearReplayCues(clipUid: uid)
         save(current, deletedClips: [uid])
@@ -2022,16 +2041,35 @@ struct ReplayView: View {
     }
 
     private func playPlaylist() {
-        if let first = clips.first {
-            cue(first)
+        guard let first = clips.first else {
+            status = L10n.t("replay.needClip")
+            return
         }
-        _ = mixer.replayTransport(
-            channel: channel, playing: true, speedMilli: speedMilli, seekFrame: -1)
+        guard mixer.replayCue(channel: channel, clip: first) else {
+            status = L10n.t("replay.cueRefused")
+            return
+        }
+        if mixer.replayTransport(
+            channel: channel, playing: true, speedMilli: speedMilli, seekFrame: -1) {
+            transport = ReplayTransportState(live: false, playing: true)
+            settleUntil = Date().addingTimeInterval(0.8)
+        } else {
+            status = L10n.t("replay.playRefused")
+        }
     }
 
     private func pausePlaylist() {
-        _ = mixer.replayTransport(
-            channel: channel, playing: false, speedMilli: 0, seekFrame: -1)
+        if transport.live {
+            seekHolding(to: max(displayPlayhead, recordingHead), keepPlaying: false)
+            return
+        }
+        if mixer.replayTransport(
+            channel: channel, playing: false, speedMilli: 0, seekFrame: -1) {
+            transport = .held
+            settleUntil = Date().addingTimeInterval(0.4)
+        } else {
+            status = L10n.t("replay.commandRefused")
+        }
     }
 
     private func stopPlaylist() {
@@ -2040,6 +2078,12 @@ struct ReplayView: View {
 
     private func togglePlay() {
         let action = ReplayTransportRules.toggle(transport)
+        // Pausing a live channel has to leave the edge; a live channel with playing=false
+        // still follows the write head, so the picture would keep moving.
+        if !action.playing && transport.live {
+            seekHolding(to: max(displayPlayhead, recordingHead), keepPlaying: false)
+            return
+        }
         if mixer.replayTransport(
             channel: channel, playing: action.playing, speedMilli: speedMilli, seekFrame: -1)
         {
@@ -2104,7 +2148,16 @@ struct ReplayView: View {
 
     private func setSpeed(_ milli: Int32) {
         speedMilli = milli
-        if !mixer.replayTransport(channel: channel, playing: transport.playing, speedMilli: speedMilli, seekFrame: -1) {
+        // A speed preset is a playback instruction. On a live channel there is no clip to
+        // play, so leave the edge at the current frame and run that clip at the new rate.
+        if transport.live, stats?.last_frame ?? 0 > 0 {
+            // A speed preset on a live channel starts the recorded picture at that rate,
+            // from the newest frame rather than from wherever a stale position said zero.
+            seekHolding(to: max(displayPlayhead, recordingHead), keepPlaying: true)
+            return
+        }
+        if !mixer.replayTransport(
+            channel: channel, playing: transport.playing, speedMilli: speedMilli, seekFrame: -1) {
             status = L10n.t("replay.commandRefused")
         }
     }
