@@ -6,6 +6,7 @@ pub enum Query {
     GetCapabilities,
     GetRevision,
     GetLiveState,
+    GetReplayState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +32,9 @@ pub struct Capabilities {
     pub hardware_encode: bool,
     pub decklink_linked: bool,
     pub rtmp_linked: bool,
+    pub replay_angle_limit: u32,
+    pub replay_channel_limit: u32,
+    pub replay_linked: bool,
 }
 
 impl Default for Capabilities {
@@ -68,6 +72,9 @@ impl Default for Capabilities {
             hardware_encode: false,
             decklink_linked: false,
             rtmp_linked: false,
+            replay_angle_limit: 0,
+            replay_channel_limit: 0,
+            replay_linked: false,
         }
     }
 }

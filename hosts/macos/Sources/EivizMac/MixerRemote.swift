@@ -336,6 +336,13 @@ enum MixerRemote {
                         if let motion = step.motion {
                             wire["motion"] = motionWire(motion)
                         }
+                        if let replay = step.replay {
+                            wire["replay"] = [
+                                "channel": NSNumber(value: replay.channel),
+                                "clipUid": replay.clipUid,
+                                "play": replay.play
+                            ] as [String: Any]
+                        }
                         return wire
                     }
                 ]
@@ -371,6 +378,53 @@ enum MixerRemote {
             "cropWidth": geom.cropWidth,
             "cropHeight": geom.cropHeight
         ]
+    }
+
+    /// The core owns the replay document in remote mode, so edits go through a
+    /// mutation instead of the local session publish.
+    static func upsertReplaySettings(_ replay: JSONValue) -> String {
+        guard let data = try? JSONEncoder().encode(replay),
+              let raw = try? JSONSerialization.jsonObject(with: data)
+        else { return "{}" }
+        return encode(["kind": "upsertReplaySettings", "replay": raw])
+    }
+
+    /// Creates the replay document and the next free channel input in the core.
+    static func addReplayChannel() -> String {
+        encode(["kind": "addReplayChannel"])
+    }
+
+    /// Removes the replay document and every Replay input it owns.
+    static func deleteReplay() -> String {
+        encode(["kind": "deleteReplay"])
+    }
+}
+
+/// Replay transport against a remote core. The core keeps the mark bookkeeping,
+/// so the mark calls return nothing.
+enum MixerRemoteReplay {
+    static func record(handle: Int32, on: Bool) -> Int32 {
+        mixer_remote_replay_record(handle, on ? 1 : 0)
+    }
+
+    static func markIn(handle: Int32) -> Int32 {
+        mixer_remote_replay_mark_in(handle)
+    }
+
+    static func markOut(handle: Int32, name: String) -> Int32 {
+        name.withCString { mixer_remote_replay_mark_out(handle, $0) }
+    }
+
+    static func cue(handle: Int32, channel: UInt32, clipUid: String) -> Int32 {
+        clipUid.withCString { mixer_remote_replay_cue(handle, channel, $0) }
+    }
+
+    static func transport(handle: Int32, channel: UInt32, playing: Bool, speedMilli: Int32, seekFrame: Int64) -> Int32 {
+        mixer_remote_replay_transport(handle, channel, playing ? 1 : 0, speedMilli, seekFrame)
+    }
+
+    static func jumpToNow(handle: Int32, channel: UInt32) -> Int32 {
+        mixer_remote_replay_jump_to_now(handle, channel)
     }
 }
 

@@ -1,0 +1,332 @@
+<Window x:Class="Eiviz.Host.Dialogs.ReplaySettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:i18n="clr-namespace:Eiviz.Host.I18n"
+        Title="{Binding [replay.setupTitle], Source={x:Static i18n:Loc.Source}}"
+        Width="1140" Height="820" MinWidth="900" MinHeight="600"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource WindowBackground}">
+    <Window.Resources>
+        <Style x:Key="ReplayList" TargetType="ListView">
+            <Setter Property="Background" Value="{DynamicResource ListBackground}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextForeground}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorder}"/>
+            <Setter Property="ItemContainerStyle">
+                <Setter.Value>
+                    <Style TargetType="ListViewItem">
+                        <Setter Property="Foreground" Value="{DynamicResource TextForeground}"/>
+                        <Setter Property="Padding" Value="4,2"/>
+                        <Style.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter Property="Background" Value="#3A3A3A"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="SectionTitle" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,0,0,4"/>
+            <Setter Property="Foreground" Value="#B0B0B8"/>
+        </Style>
+        <Style x:Key="Hint" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#B0B0B8"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+    </Window.Resources>
+    <DockPanel Margin="16">
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button x:Name="ApplyButton" Width="130" Height="34" IsDefault="True" Click="Apply_Click"
+                    Content="{Binding [replay.apply], Source={x:Static i18n:Loc.Source}}"/>
+            <!-- Apply keeps the window open, so closing is its own action: an operator
+                 tuning four cameras should not have to reopen it between attempts. -->
+            <Button Width="130" Height="34" Margin="8,0,0,0" IsCancel="True" Click="Close_Click"
+                    Content="{Binding [replay.close], Source={x:Static i18n:Loc.Source}}"/>
+        </StackPanel>
+
+        <TextBlock x:Name="PlanText" DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,8"/>
+        <!-- Apply and every refusal report here, at the top, where it cannot be
+             missed without scrolling. -->
+        <TextBlock x:Name="StatusText" DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,12"
+                   FontWeight="Bold" Foreground="{DynamicResource HudForeground}"/>
+        <!-- A caution about the setting itself, not about the button press: the chosen encoder
+             can record fewer angles than were asked for, and that is worth saying before the
+             recording starts rather than after it is short. -->
+        <TextBlock x:Name="WarningText" DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,12"
+                   Foreground="{DynamicResource WarnForeground}"/>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <TextBlock Style="{StaticResource SectionTitle}"
+                           Text="{Binding [replay.storage], Source={x:Static i18n:Loc.Source}}"/>
+                <TextBlock Style="{StaticResource Hint}"
+                           Text="{Binding [replay.storageHelp], Source={x:Static i18n:Loc.Source}}"/>
+                <!-- Each drive is edited in its own row: the path is the row's text box,
+                     and its free space is read from the mixer. -->
+                <ListView x:Name="StorageList" Style="{StaticResource ReplayList}" Height="130" Margin="0,8,0,0"
+                          SelectionMode="Single">
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="{Binding [settings.replayPath], Source={x:Static i18n:Loc.Source}}" Width="520">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBox Text="{Binding Path, UpdateSourceTrigger=PropertyChanged}"
+                                                 Height="24" Margin="2,1" VerticalContentAlignment="Center"
+                                                 ToolTip="{Binding [replay.pickStorageHint], Source={x:Static i18n:Loc.Source}}"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Header="{Binding [replay.freeSpace], Source={x:Static i18n:Loc.Source}}" Width="180">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Free}" Margin="4,0" VerticalAlignment="Center"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Header="{Binding [replay.angle], Source={x:Static i18n:Loc.Source}}" Width="200">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Angles}" Margin="4,0" VerticalAlignment="Center"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Width="100">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Height="24" Margin="2,1" Click="BrowseStorageRow_Click" Tag="{Binding}"
+                                                Content="{Binding [replay.browse], Source={x:Static i18n:Loc.Source}}"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Width="80">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Height="24" Margin="2,1" Click="RemoveStorageRow_Click" Tag="{Binding}"
+                                                Content="{Binding [replay.removeStorage], Source={x:Static i18n:Loc.Source}}"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                        </GridView>
+                    </ListView.View>
+                </ListView>
+                <Button Width="200" Height="28" Margin="0,6,0,0" HorizontalAlignment="Left"
+                        Click="AddStorageRow_Click"
+                        Content="{Binding [replay.addStorageRow], Source={x:Static i18n:Loc.Source}}"/>
+                <Grid Margin="0,12,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                        <TextBlock Style="{StaticResource FieldLabel}"
+                                   Text="{Binding [settings.replayProfile], Source={x:Static i18n:Loc.Source}}"/>
+                        <ComboBox x:Name="ProfileBox" Height="28">
+                            <ComboBoxItem Content="HQ" Tag="Hq"/>
+                            <ComboBoxItem Content="SQ" Tag="Sq" IsSelected="True"/>
+                            <ComboBoxItem Content="LQ" Tag="Lq"/>
+                        </ComboBox>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                        <TextBlock Style="{StaticResource FieldLabel}"
+                                   Text="{Binding [replay.retention], Source={x:Static i18n:Loc.Source}}"/>
+                        <ComboBox x:Name="RetentionBox" Height="28" />
+                    </StackPanel>
+                </Grid>
+                <Grid Margin="0,12,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                        <TextBlock Style="{StaticResource FieldLabel}"
+                                   Text="{Binding [settings.replayQueue], Source={x:Static i18n:Loc.Source}}"/>
+                        <TextBox x:Name="QueueBox" Height="28" Text="6"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="8,0,8,0">
+                        <TextBlock Style="{StaticResource FieldLabel}"
+                                   Text="{Binding [settings.replayBuffer], Source={x:Static i18n:Loc.Source}}"/>
+                        <TextBox x:Name="BufferBox" Height="28" Text="512"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Margin="8,0,0,0">
+                        <TextBlock Style="{StaticResource FieldLabel}"
+                                   Text="{Binding [replay.reserve], Source={x:Static i18n:Loc.Source}}"/>
+                        <TextBox x:Name="ReserveBox" Height="28" Text="2048"/>
+                    </StackPanel>
+                </Grid>
+
+                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                    <Button x:Name="CapacityButton" Height="28" MinWidth="150"
+                            AutomationProperties.AutomationId="CapacityButton"
+                            ToolTip="{Binding [replay.capacityIdle], Source={x:Static i18n:Loc.Source}}"
+                            Content="{Binding [replay.capacityRun], Source={x:Static i18n:Loc.Source}}"
+                            Click="Capacity_Click"/>
+                    <TextBlock x:Name="CapacityText" Margin="12,0,0,0" VerticalAlignment="Center"
+                               TextWrapping="Wrap" MaxWidth="620" Foreground="#B0B0B8"
+                               AutomationProperties.AutomationId="CapacityText"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                    <TextBlock Text="{Binding [replay.overflow], Source={x:Static i18n:Loc.Source}}" VerticalAlignment="Center"/>
+                    <ComboBox x:Name="OverflowBox" Width="220" Height="28" Margin="8,0,0,0">
+                        <ComboBoxItem Content="{Binding [replay.overflowDrop], Source={x:Static i18n:Loc.Source}}" Tag="DropFrames" IsSelected="True"/>
+                        <ComboBoxItem Content="{Binding [replay.overflowStop], Source={x:Static i18n:Loc.Source}}" Tag="StopRecording"/>
+                    </ComboBox>
+                </StackPanel>
+                <Grid Margin="0,12,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                        <TextBlock Style="{StaticResource FieldLabel}"
+                                   Text="{Binding [replay.formatFromUnit], Source={x:Static i18n:Loc.Source}}"/>
+                        <TextBlock x:Name="FormatText" Height="28" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                        <TextBlock Style="{StaticResource FieldLabel}"
+                                   Text="{Binding [replay.segmentFrames], Source={x:Static i18n:Loc.Source}}"/>
+                        <TextBox x:Name="SegmentFramesBox" Height="28" Text="120"
+                                 ToolTip="{Binding [replay.segmentFramesRange], Source={x:Static i18n:Loc.Source}}"/>
+                    </StackPanel>
+                    <!-- The deck is a second window onto the same surfaces as the main
+                         window, so how often it repaints is its own setting. -->
+                    <StackPanel Grid.Column="2" Margin="8,0,0,0">
+                        <TextBlock Style="{StaticResource FieldLabel}"
+                                   Text="{Binding [replay.deckRefresh], Source={x:Static i18n:Loc.Source}}"/>
+                        <ComboBox x:Name="DeckPresentBox" Height="28"
+                                  ToolTip="{Binding [replay.deckRefreshHelp], Source={x:Static i18n:Loc.Source}}"/>
+                    </StackPanel>
+                </Grid>
+
+                <TextBlock Style="{StaticResource SectionTitle}" Margin="0,20,0,6"
+                           Text="{Binding [replay.angles], Source={x:Static i18n:Loc.Source}}"/>
+                <TextBlock Style="{StaticResource Hint}" Margin="0,0,0,6"
+                           Text="{Binding [replay.anglesHelp], Source={x:Static i18n:Loc.Source}}"/>
+                <!-- Every angle is edited in its own row: name, what it records, how, its
+                     audio and its drive are cells, not a separate panel. -->
+                <ListView x:Name="AngleList" Style="{StaticResource ReplayList}" Height="210" SelectionMode="Single"
+                          ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="{Binding [replay.name], Source={x:Static i18n:Loc.Source}}" Width="170">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                                 Height="24" Margin="2,1" VerticalContentAlignment="Center"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Header="{Binding [replay.sourceKind], Source={x:Static i18n:Loc.Source}}" Width="100">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <ComboBox ItemsSource="{Binding KindOptions}" DisplayMemberPath="Label"
+                                                  SelectedItem="{Binding KindOption}"
+                                                  Height="24" Margin="2,1"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Header="{Binding [replay.source], Source={x:Static i18n:Loc.Source}}" Width="240">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <ComboBox ItemsSource="{Binding SourceOptions}" DisplayMemberPath="Label"
+                                                  SelectedItem="{Binding SourceOption}"
+                                                  Height="24" Margin="2,1"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <!-- Where this angle is encoded: GPU keeps the picture on
+                                 the GPU from the scene to the stored packet. -->
+                            <GridViewColumn Header="{Binding [replay.encoder], Source={x:Static i18n:Loc.Source}}" Width="110">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <ComboBox ItemsSource="{Binding EncoderOptions}" DisplayMemberPath="Label"
+                                                  SelectedItem="{Binding EncoderOption}"
+                                                  Height="24" Margin="2,1"
+                                                  ToolTip="{Binding [replay.encoderHelp], Source={x:Static i18n:Loc.Source}}"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Header="{Binding [replay.audio], Source={x:Static i18n:Loc.Source}}" Width="160">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <ComboBox ItemsSource="{Binding AudioOptions}" DisplayMemberPath="Label"
+                                                  SelectedItem="{Binding AudioOption}"
+                                                  Height="24" Margin="2,1"
+                                                  ToolTip="{Binding [replay.audioHelp], Source={x:Static i18n:Loc.Source}}"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Header="{Binding [replay.drive], Source={x:Static i18n:Loc.Source}}" Width="160">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <ComboBox ItemsSource="{Binding DriveOptions}" DisplayMemberPath="Label"
+                                                  SelectedItem="{Binding DriveOption}"
+                                                  Height="24" Margin="2,1"
+                                                  ToolTip="{Binding [replay.driveRequired], Source={x:Static i18n:Loc.Source}}">
+                                            <ComboBox.Style>
+                                                <Style TargetType="ComboBox">
+                                                    <Style.Triggers>
+                                                        <!-- An angle without a drive is refused on Apply, so the
+                                                             cell says so before the operator finds out. -->
+                                                        <DataTrigger Binding="{Binding HasDrive}" Value="False">
+                                                            <Setter Property="BorderBrush" Value="#E05252"/>
+                                                            <Setter Property="BorderThickness" Value="2"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ComboBox.Style>
+                                        </ComboBox>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Width="80">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Height="24" Margin="2,1" Click="RemoveAngleRow_Click" Tag="{Binding}"
+                                                Content="{Binding [replay.removeAngle], Source={x:Static i18n:Loc.Source}}"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                        </GridView>
+                    </ListView.View>
+                </ListView>
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <Button x:Name="AddAngleButton" Width="190" Height="28" Click="AddAngleRow_Click"
+                            Content="{Binding [replay.addAngleRow], Source={x:Static i18n:Loc.Source}}"/>
+                    <TextBlock Style="{StaticResource Hint}" Margin="10,0,0,0" VerticalAlignment="Center"
+                               Text="{Binding [replay.angleRowHelp], Source={x:Static i18n:Loc.Source}}"/>
+                </StackPanel>
+
+                <CheckBox x:Name="AutoAddBox" Margin="0,20,0,0" 
+                          Content="{Binding [replay.autoAdd], Source={x:Static i18n:Loc.Source}}"/>
+                <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
+                           Text="{Binding [replay.autoAddHelp], Source={x:Static i18n:Loc.Source}}"/>
+                <TextBlock Margin="0,20,0,0" Text="{Binding [replay.warnings], Source={x:Static i18n:Loc.Source}}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                    <TextBox x:Name="WarnBox" Width="70" Height="26" Margin="0,0,8,0"/>
+                    <TextBox x:Name="AlertBox" Width="70" Height="26" Margin="0,0,8,0"/>
+                    <TextBox x:Name="CriticalBox" Width="70" Height="26"/>
+                </StackPanel>
+                <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
+                           Text="{Binding [replay.warningsHelp], Source={x:Static i18n:Loc.Source}}"/>
+                <CheckBox x:Name="DecodeAheadBox" Margin="0,20,0,0"
+                          Content="{Binding [replay.decodeAhead], Source={x:Static i18n:Loc.Source}}"/>
+                <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
+                           Text="{Binding [replay.decodeAheadHelp], Source={x:Static i18n:Loc.Source}}"/>
+                <CheckBox x:Name="ProfilingBox" Margin="0,12,0,0"
+                          Content="{Binding [replay.profiling], Source={x:Static i18n:Loc.Source}}"/>
+                <TextBlock Style="{StaticResource Hint}" Margin="0,4,0,0"
+                           Text="{Binding [replay.profilingHelp], Source={x:Static i18n:Loc.Source}}"/>
+                <TextBlock x:Name="ActiveAngleText" Margin="0,8,0,0"/>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

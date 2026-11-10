@@ -79,20 +79,40 @@ internal static class MixerApply
         var states = new EivizSceneStateDesc[scene.States.Count];
         foreach (var state in scene.States)
             layerSets.Add(StateLayers(scene, state));
+        var pins = new List<GCHandle>();
         var stepSets = new List<EivizSequenceStepDesc[]>();
         var sequences = new EivizSceneSequenceDesc[scene.Sequences.Count];
         for (var i = 0; i < scene.Sequences.Count; i++)
         {
             var sequence = scene.Sequences[i];
-            stepSets.Add(sequence.Steps.Select(step => new EivizSequenceStepDesc
+            stepSets.Add(sequence.Steps.Select(step =>
             {
-                StateId = step.StateId,
-                Motion = MotionDesc(step.Motion ?? new Motion()),
-                HasMotion = step.Motion is null ? 0u : 1u,
-                HoldFrames = step.HoldFrames
+                // The clip id travels as bytes and must stay pinned until the
+                // define call returns, so its pin joins the others below.
+                var clip = step.Replay is { } action
+                    ? System.Text.Encoding.UTF8.GetBytes(action.ClipUid ?? "")
+                    : [];
+                nint clipPtr = 0;
+                if (clip.Length > 0)
+                {
+                    var clipPin = GCHandle.Alloc(clip, GCHandleType.Pinned);
+                    pins.Add(clipPin);
+                    clipPtr = clipPin.AddrOfPinnedObject();
+                }
+                return new EivizSequenceStepDesc
+                {
+                    StateId = step.StateId,
+                    Motion = MotionDesc(step.Motion ?? new Motion()),
+                    HasMotion = step.Motion is null ? 0u : 1u,
+                    HoldFrames = step.HoldFrames,
+                    ReplayChannel = step.Replay?.Channel ?? 0,
+                    ReplayActive = step.Replay is null ? 0u : 1u,
+                    ReplayPlay = step.Replay?.Play == true ? 1u : 0u,
+                    ReplayClip = clipPtr,
+                    ReplayClipLen = (nuint)clip.Length
+                };
             }).ToArray());
         }
-        var pins = new List<GCHandle>();
         try
         {
             unsafe
@@ -718,6 +738,22 @@ internal static class MixerApply
         _ => ""
     };
 
+    /// <summary>
+    /// Defines a scene from layers the caller built, for surfaces that are not in the session's
+    /// own scene list.
+    /// </summary>
+    /// <remarks>
+    /// The deck's angle grid is one such surface: it is built from whatever angles exist at the
+    /// moment, so no <c>SceneEntry</c> describes it. It goes through the same path as every other
+    /// scene, so the drawing, the labels and the tallies behave identically.
+    /// </remarks>
+    public static void PushSceneLayers(
+        ulong gpuId,
+        uint width,
+        uint height,
+        OverlayDesc[] layers,
+        string[]? labels) => PushLayers(gpuId, width, height, layers, labels);
+
     private static void PushLayers(ulong gpuId, uint width, uint height, OverlayDesc[] layers, string[]? labels = null)
     {
         var pins = new List<nint>();
@@ -794,3 +830,4 @@ internal static class MixerApply
         });
     }
 }
+

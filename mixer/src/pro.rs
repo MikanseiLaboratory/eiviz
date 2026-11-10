@@ -155,6 +155,9 @@ pub fn fill_capabilities(out: &mut MixerCapabilities) {
         hardware_encode: u32::from(ent.hardware_encode),
         decklink_linked: u32::from(decklink),
         rtmp_linked: u32::from(rtmp),
+        replay_angle_limit: ent.replay_angles.abi_count(),
+        replay_channel_limit: ent.replay_channels.abi_count(),
+        replay_linked: u32::from(module().replay().is_some()),
     };
     let _ = Plan::Community;
 }
@@ -205,7 +208,7 @@ pub fn video_frame(
     height: u32,
     stride: u32,
     pts: i64,
-    data: std::sync::Arc<[u8]>,
+    data: std::sync::Arc<Vec<u8>>,
     fps_n: u32,
     fps_d: u32,
 ) -> VideoFrame {

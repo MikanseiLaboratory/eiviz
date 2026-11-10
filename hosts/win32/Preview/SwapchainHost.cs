@@ -33,6 +33,12 @@ internal sealed partial class SwapchainHost : HwndHost
 
     public event EventHandler? SurfaceClicked;
     public event EventHandler? SurfaceDoubleClicked;
+    /// <summary>
+    /// A click with where it landed, as fractions of the surface. A composed view
+    /// holds several pictures, so a click has to say which one was meant. The
+    /// airspace of a native child window keeps WPF from reporting this itself.
+    /// </summary>
+    public event EventHandler<(double X, double Y)>? SurfaceClickedAt;
 
     public SwapchainHost()
     {
@@ -71,7 +77,14 @@ internal sealed partial class SwapchainHost : HwndHost
         if (msg == WmSize && _attached && !_applying)
             ApplySize();
         if (msg == WmLButtonUp)
+        {
+            var x = (short)(lParam.ToInt64() & 0xFFFF);
+            var y = (short)((lParam.ToInt64() >> 16) & 0xFFFF);
+            var width = Math.Max(1.0, ActualWidth);
+            var height = Math.Max(1.0, ActualHeight);
+            SurfaceClickedAt?.Invoke(this, (x / width, y / height));
             SurfaceClicked?.Invoke(this, EventArgs.Empty);
+        }
         else if (msg == WmLButtonDblClk)
             SurfaceDoubleClicked?.Invoke(this, EventArgs.Empty);
         return base.WndProc(hwnd, msg, wParam, lParam, ref handled);

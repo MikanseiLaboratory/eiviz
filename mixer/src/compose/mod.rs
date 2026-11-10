@@ -217,6 +217,19 @@ pub struct Composer {
     mix_bg_layout: wgpu::BindGroupLayout,
     pack_bg_layout: wgpu::BindGroupLayout,
     sources: HashMap<u64, SourceGpu>,
+    /// Both frames of a replay clip transition, held apart so the blend can run on the
+    /// GPU instead of on a CPU buffer.
+    transition_scratch: HashMap<
+        u64,
+        (
+            wgpu::Texture,
+            wgpu::TextureView,
+            wgpu::Texture,
+            wgpu::TextureView,
+        ),
+    >,
+    /// The packed (UYVY) transition pass, built on first use.
+    replay_transition: Option<crate::replay::transition_pass::TransitionPass>,
     units: HashMap<u64, UnitTargets>,
     scenes: HashMap<u64, SceneGpu>,
     generators: HashMap<u64, Generator>,
@@ -457,6 +470,8 @@ impl Composer {
             mix_bg_layout,
             pack_bg_layout,
             sources: HashMap::new(),
+            transition_scratch: HashMap::new(),
+            replay_transition: None,
             units: HashMap::new(),
             scenes: HashMap::new(),
             generators: HashMap::new(),
@@ -682,6 +697,165 @@ impl Composer {
         self.mix_textures.get(&source_id)
     }
 
+    /// Uploads both frames of a replay clip transition and blends them on the GPU into
+    /// the source texture the compositor samples.
+    ///
+    /// Nothing is blended on the CPU: the two frames travel as pictures, which is the
+    /// whole point of moving the transition off the replay thread.
+    #[allow(clippy::too_many_arguments)]
+    fn upload_transition(
+        &mut self,
+        device: &GpuDevice,
+        id: u64,
+        size: (u32, u32, u32),
+        format: wgpu::TextureFormat,
+        packed: bool,
+        bgra: bool,
+        outgoing: &[u8],
+        incoming: &[u8],
+        kind: u8,
+        direction: u8,
+        mix: f32,
+        pts: i64,
+    ) -> Option<()> {
+        let (tex_w, height, stride) = size;
+        let missing = !self.transition_scratch.contains_key(&id)
+            || self
+                .transition_scratch
+                .get(&id)
+                .map(|(a, _, _, _)| a.size().width != tex_w || a.size().height != height)
+                .unwrap_or(true);
+        if missing {
+            let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
+            let first = make_texture_format(device, tex_w, height, usage, format);
+            let second = make_texture_format(device, tex_w, height, usage, format);
+            let first_view = first.create_view(&Default::default());
+            let second_view = second.create_view(&Default::default());
+            self.transition_scratch
+                .insert(id, (first, first_view, second, second_view));
+        }
+        let pass = match self.replay_transition.as_mut() {
+            Some(pass) => pass,
+            None => {
+                self.replay_transition =
+                    Some(crate::replay::transition_pass::TransitionPass::new_packed(
+                        &device.device,
+                        format,
+                    ));
+                self.replay_transition.as_mut()?
+            }
+        };
+        let (first, first_view, second, second_view) = self.transition_scratch.get(&id)?;
+        if pts == i64::MIN {
+            return None;
+        }
+        device.queue.write_texture(
+            first.as_image_copy(),
+            outgoing,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(stride as u32),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width: tex_w,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        device.queue.write_texture(
+            second.as_image_copy(),
+            incoming,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(stride as u32),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width: tex_w,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        // The pass needs a target that is neither input: the source texture is that
+        // target, and the compositor samples it as usual.
+        let recreate = self.sources.get(&id).is_none_or(|gpu| {
+            gpu.width != tex_w || gpu.height != height || gpu.packed != packed || gpu.bgra != bgra
+        });
+        if recreate {
+            self.blit_groups.remove(&id);
+            self.uyvy_groups.remove(&id);
+            self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
+            let texture = make_texture_format(
+                device,
+                tex_w,
+                height,
+                wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC,
+                format,
+            );
+            let view = texture.create_view(&Default::default());
+            self.sources.insert(
+                id,
+                SourceGpu {
+                    texture,
+                    view,
+                    width: tex_w,
+                    height,
+                    packed,
+                    bgra,
+                    uploaded_pts: pts,
+                    direct: false,
+                    owned: true,
+                    lease: None,
+                },
+            );
+        }
+        let target = self.sources.get(&id)?.view.clone();
+        let kind = match kind {
+            0 => crate::replay::channel::TransitionKind::Cut,
+            1 => crate::replay::channel::TransitionKind::Dissolve,
+            2 => crate::replay::channel::TransitionKind::Dip,
+            3 => crate::replay::channel::TransitionKind::Wipe,
+            4 => crate::replay::channel::TransitionKind::Slide,
+            _ => crate::replay::channel::TransitionKind::Push,
+        };
+        let direction = match direction {
+            0 => crate::replay::channel::TransitionDirection::Left,
+            1 => crate::replay::channel::TransitionDirection::Right,
+            2 => crate::replay::channel::TransitionDirection::Up,
+            _ => crate::replay::channel::TransitionDirection::Down,
+        };
+        let mut encoder = device
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("replay-transition-upload"),
+            });
+        pass.run(
+            &device.device,
+            &device.queue,
+            &mut encoder,
+            first_view,
+            second_view,
+            &target,
+            kind,
+            direction,
+            mix,
+        );
+        device.queue.submit(Some(encoder.finish()));
+        if let Some(gpu) = self.sources.get_mut(&id) {
+            gpu.uploaded_pts = pts;
+        }
+        // One line per transition, not per frame of one: this is the only place the
+        // blend is known to have run on the device, so it is worth being able to see.
+        crate::diag::info(&format!(
+            "replay transition on GPU source={id} kind={kind:?} direction={direction:?} mix={mix:.2}"
+        ));
+        Some(())
+    }
+
     pub fn upload_sources(
         &mut self,
         device: &GpuDevice,
@@ -701,6 +875,40 @@ impl Composer {
             }
             let packed = matches!(snap.format, CpuFormat::Uyvy | CpuFormat::Uyva);
             let bgra = snap.format == CpuFormat::Bgra;
+            // A clip transition carries both frames. They are blended here, on the
+            // device, rather than on the replay thread: the replay thread has no
+            // device, and a CPU blend of two 1080p frames is exactly the work this
+            // path exists to remove.
+            if let (Some(incoming), Some((kind, direction, mix))) =
+                (snap.secondary.as_ref(), snap.transition)
+                && (packed || bgra)
+            {
+                let bytes_per_row = if packed {
+                    snap.width * 2
+                } else {
+                    snap.width * 4
+                };
+                let tex_w = if packed { snap.width / 2 } else { snap.width };
+                let _ = self.upload_transition(
+                    device,
+                    id,
+                    (tex_w, snap.height, bytes_per_row),
+                    if packed || !bgra {
+                        wgpu::TextureFormat::Rgba8Unorm
+                    } else {
+                        wgpu::TextureFormat::Bgra8Unorm
+                    },
+                    packed,
+                    bgra,
+                    snap.pixels.as_slice(),
+                    incoming.as_slice(),
+                    kind,
+                    direction,
+                    mix,
+                    snap.last_pts,
+                );
+                continue;
+            }
             if let Some(frame) = snap.gpu.as_ref() {
                 let tex_w = frame.texture.size().width;
                 let tex_h = frame.texture.size().height;

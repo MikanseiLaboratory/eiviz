@@ -449,7 +449,7 @@ impl ProgramSender {
         height: u32,
         stride: u32,
         pts: i64,
-        pixels: Arc<[u8]>,
+        pixels: Arc<Vec<u8>>,
         fps_num: u32,
         fps_den: u32,
     ) -> Result<(), String> {

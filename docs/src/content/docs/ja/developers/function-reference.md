@@ -33,3 +33,33 @@ http://127.0.0.1:8088/api?Function=Snapshot&Mix=1&Value=C:/Temp/eiviz.png
 FUNCTION Fade Duration=500
 FUNCTION Cut Input=3
 ```
+
+## リプレイ
+
+リプレイのFunctionは、プロジェクトにリプレイ入力があり、ProfessionalライセンスとProモジュールが有効な場合に使用できます。`Channel`はリプレイチャンネルを英字（`A`, `B`…）または`0`からの番号で指定します。省略または空はチャンネルA、存在しないチャンネルは別のチャンネルを再生せず拒否されます。
+
+| Function | 引数 | 動作 |
+| --- | --- | --- |
+| `ReplayStartRecording` | | 全アングルの録画を開始します。 |
+| `ReplayStopRecording` | | 録画を停止します。 |
+| `ReplayMarkIn` | | 録画位置にIN点をマークします。 |
+| `ReplayMarkOut` | `Channel`, `Value` | OUT点をマークします。`Value`はイベント名です。イベントを登録し、セッションの設定に従ってプレイリストにも追加します。 |
+| `ReplayCue` | `Channel`, `Value` | チャンネルにクリップをキューします。`Value`はクリップのUIDで、省略または空ならそのチャンネルのプレイリストの最新クリップをキューします。 |
+| `ReplayPlay` | `Channel`, `Value` | キュー中のクリップを再生します。`Value`は等速を1とした倍率です（既定`1`、`0.5`で半速）。 |
+| `ReplayPause` | `Channel` | 現在の速度を保ったまま一時停止します。 |
+| `ReplayChangeSpeed` | `Channel`, `Value` | クリップを読み直さずに速度を変更して再生します。 |
+| `ReplayJumpToNow` | `Channel` | チャンネルを録画位置（最新）に戻します。 |
+
+### リプレイの実行例
+
+```text
+# HTTP API
+http://127.0.0.1:8088/api?Function=ReplayStartRecording
+http://127.0.0.1:8088/api?Function=ReplayMarkIn
+http://127.0.0.1:8088/api?Function=ReplayMarkOut&Channel=A
+http://127.0.0.1:8088/api?Function=ReplayCue&Channel=A
+http://127.0.0.1:8088/api?Function=ReplayPlay&Channel=A&Value=0.5
+
+# TCP API
+FUNCTION ReplayMarkOut Channel=A
+```

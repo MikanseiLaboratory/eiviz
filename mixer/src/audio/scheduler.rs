@@ -157,6 +157,8 @@ fn run_scheduler(
                 generator_audio::sine_packet(phase, *hz, *level, AUDIO_BLOCK_FRAMES, pts),
             ));
         }
+        // What each Replay angle's audio follows, read once per block.
+        let angle_sources = crate::replay::engine().audio_sources();
         let mixed = {
             let mut uploads = uploads.lock_or_recover();
             for (id, packet) in tones {
@@ -171,9 +173,12 @@ fn run_scheduler(
                 &snap.mix_inputs,
                 snap.fps_num,
                 snap.fps_den,
+                &angle_sources,
             )
         };
         publish_monitor(&monitor_pcm, &follow_primed, &mixed);
+        // The replay recorder draws its waveform from what the mixer just mixed.
+        crate::replay::engine().offer_audio(&mixed);
         dispatch_outputs(&snap.outputs, &mixed, pts);
     }
 }

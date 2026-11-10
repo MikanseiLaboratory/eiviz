@@ -13,6 +13,7 @@ enum InputKind: String, Codable, CaseIterable {
     case mix = "Mix"
     case audio = "Audio"
     case deckLink = "DeckLink"
+    case replay = "Replay"
 
     var category: String {
         switch self {
@@ -25,6 +26,7 @@ enum InputKind: String, Codable, CaseIterable {
         case .mix: return "Mix"
         case .audio: return "Audio"
         case .deckLink: return "DeckLink"
+        case .replay: return "Replay"
         }
     }
 
@@ -50,12 +52,19 @@ enum InputKind: String, Codable, CaseIterable {
         try container.encode(rawValue)
     }
 
-    static let tabKinds: [InputKind] = [.color, .still, .video, .omt, .ndi, .uvc, .deckLink, .mix, .audio]
+    static let tabKinds: [InputKind] = [.color, .still, .video, .omt, .ndi, .uvc, .deckLink, .mix, .audio, .replay]
 
     static func deckLinkInputAllowed() -> Bool {
         var caps = EivizCapabilities()
         guard mixer_capabilities(&caps) == 0 else { return false }
         return caps.decklink_linked != 0 && caps.decklink_input_limit != 0
+    }
+
+    /// Instant Replay needs a Professional license and the Pro module.
+    static func replayAllowed() -> Bool {
+        var caps = EivizCapabilities()
+        guard mixer_capabilities(&caps) == 0 else { return false }
+        return caps.replay_linked != 0 && caps.replay_channel_limit != 0
     }
 
     var hasVideo: Bool { self != .audio }
@@ -667,6 +676,17 @@ struct SequenceStep: Codable, Equatable, Hashable {
     var stateId: UInt64 = 0
     var motion: Motion?
     var holdFrames: UInt32 = 0
+    /// Replay cue this step fires. Kept in the session document, so a Windows or
+    /// core edit survives a save here.
+    var replay: SequenceReplayAction?
+}
+
+/// What an animation step does to Replay.
+struct SequenceReplayAction: Codable, Equatable, Hashable {
+    var channel: UInt32 = 0
+    /// Empty means the newest clip on the channel.
+    var clipUid: String = ""
+    var play: Bool = false
 }
 
 struct SceneSequence: Identifiable, Codable, Equatable, Hashable {
@@ -1743,6 +1763,46 @@ struct SessionSettings: Codable {
     }
 }
 
+enum JSONValue: Codable {
+    case object([String: JSONValue])
+    case array([JSONValue])
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([String: JSONValue].self) {
+            self = .object(value)
+        } else if let value = try? container.decode([JSONValue].self) {
+            self = .array(value)
+        } else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "unsupported JSON")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .null: try container.encodeNil()
+        case .bool(let value): try container.encode(value)
+        case .number(let value): try container.encode(value)
+        case .string(let value): try container.encode(value)
+        case .object(let value): try container.encode(value)
+        case .array(let value): try container.encode(value)
+        }
+    }
+}
+
 struct MixerSessionData: Codable {
     var version: Int = 2
     var settings = SessionSettings()
@@ -1759,6 +1819,7 @@ struct MixerSessionData: Codable {
     var headphone = HeadphoneEntry()
     var inputTags: [String] = []
     var sceneTags: [String] = []
+    var replayTags: [String] = []
     var nextInputId: UInt64 = 10
     var nextSceneId: UInt64 = 1
     var nextUnitId: UInt64 = 2
@@ -1770,12 +1831,13 @@ struct MixerSessionData: Codable {
     var headphoneCopyMonitor: Bool = false
     var headphoneListenKind: UInt32 = 0
     var headphoneListenId: UInt64 = 0
+    var replay: JSONValue?
 
     enum CodingKeys: String, CodingKey {
         case version, settings, inputs, scenes, scenePresets, units, transitions, overlays, nextOverlayId, outputs, streamEncoders, multiviews, headphone
-        case inputTags, sceneTags
+        case inputTags, sceneTags, replayTags
         case nextInputId, nextSceneId, nextUnitId, nextOutputId, nextStreamEncoderId, nextMultiviewId
-        case selectedUnitId, headphoneCopyMonitor, headphoneListenKind, headphoneListenId
+        case selectedUnitId, headphoneCopyMonitor, headphoneListenKind, headphoneListenId, replay
     }
 
     static func `default`() -> MixerSessionData {

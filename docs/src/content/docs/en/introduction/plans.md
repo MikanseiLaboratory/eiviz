@@ -18,6 +18,7 @@ Width, height, and frame rate are evaluated independently. Exceeding any of thes
 | RTMP height | 720 | 1080 | Unlimited |
 | RTMP frame rate | 30 fps | 59.94 fps | Unlimited |
 | Recording / SRT / hardware encode | None | Capability flag only (not implemented) | Capability flag only (not implemented) |
+| Instant Replay (angles / channels) | None | 4 / 4 | Unlimited |
 
 Professional 59.94 fps is represented as `60000/1001`. Integer 60 fps (`60/1`) exceeds the limit even when resolution is 1920×1080 or lower. Community 30 fps includes both `30/1` and `30000/1001`. Portrait video (1080×1920) is rejected on Professional because its height exceeds 1080.
 

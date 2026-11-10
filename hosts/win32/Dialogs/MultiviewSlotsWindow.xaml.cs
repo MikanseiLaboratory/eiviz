@@ -10,7 +10,8 @@ namespace Eiviz.Host.Dialogs;
 public partial class MultiviewSlotsWindow : Window
 {
     private readonly MultiviewLayout _layout;
-    private readonly Session _session;
+    // The live document: App.ReplaceDocument swaps the Session object whenever the mixer reports a change, so a window that keeps the instance it was opened with writes its edits back into an outdated copy.
+    private Session _session => ((App)Application.Current).Session;
     private readonly List<MvSlot> _tiles;
     private MultiviewTemplate _template;
     private int _selectedTile;
@@ -19,7 +20,7 @@ public partial class MultiviewSlotsWindow : Window
     public MultiviewSlotsWindow(Session session, MultiviewLayout layout)
     {
         InitializeComponent();
-        _session = session;
+
         _layout = layout;
         _template = layout.Template;
         layout.Template = _template;

@@ -690,7 +690,7 @@ checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 
 [[package]]
 name = "eiviz-api"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64",
  "eiviz-control",
@@ -710,7 +710,7 @@ dependencies = [
 
 [[package]]
 name = "eiviz-control"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "prost",
  "prost-build",
@@ -744,8 +744,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "eiviz-replay"
+version = "0.1.0"
+
+[[package]]
 name = "eiviz_mixer"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "arc-swap",
  "ash",
@@ -758,6 +762,7 @@ dependencies = [
  "eiviz-api",
  "eiviz-control",
  "eiviz-pro-api",
+ "eiviz-replay",
  "eiviz_pro_empty_plugin",
  "eiviz_pro_test_plugin",
  "fontdue",
@@ -781,7 +786,7 @@ dependencies = [
  "tiny_http",
  "tokio",
  "vmix-core",
- "vmx",
+ "vmx 0.1.0 (git+https://github.com/MikanseiLaboratory/vmx-rs?rev=b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3)",
  "wgpu",
  "windows",
  "windows-core",
@@ -796,11 +801,12 @@ name = "eiviz_pro_test_plugin"
 version = "0.3.0"
 dependencies = [
  "eiviz-pro-api",
+ "vmx 0.1.0 (git+https://github.com/MikanseiLaboratory/vmx-rs?rev=b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3)",
 ]
 
 [[package]]
 name = "eiviz_remote"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "eiviz-api",
  "eiviz-control",
@@ -1885,8 +1891,8 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "openmediatransport"
-version = "0.1.0"
-source = "git+https://github.com/MikanseiLaboratory/openmediatransport-rs?rev=7711da45e2ed83330c2e1fced06c5d1673e4d502#7711da45e2ed83330c2e1fced06c5d1673e4d502"
+version = "0.1.2"
+source = "git+https://github.com/MikanseiLaboratory/openmediatransport-rs?rev=9f88abac09d18c0e7cd56cbcfc2318c521413222#9f88abac09d18c0e7cd56cbcfc2318c521413222"
 dependencies = [
  "bytes",
  "mdns-sd",
@@ -1894,7 +1900,7 @@ dependencies = [
  "socket2",
  "thiserror 2.0.20",
  "tracing",
- "vmx",
+ "vmx 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "wgpu",
 ]
 
@@ -3064,6 +3070,19 @@ source = "git+https://github.com/MikanseiLaboratory/vmix-rs#16aeaf8a70f48e91782c
 dependencies = [
  "quick-xml",
  "serde",
+]
+
+[[package]]
+name = "vmx"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05347c70521d66bb4ffb091d8875409a400ffb8f86f28240e1b044e8b0d84909"
+dependencies = [
+ "bytemuck",
+ "pollster",
+ "rayon",
+ "thiserror 2.0.20",
+ "wgpu",
 ]
 
 [[package]]
