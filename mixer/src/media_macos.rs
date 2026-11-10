@@ -761,4 +761,42 @@ mod tests {
         }
         panic!("no video frame reached the Metal path");
     }
+
+    #[test]
+    fn file_pump_publishes_a_gpu_frame_without_a_cpu_copy() {
+        let Some(path) = std::env::var_os("EIVIZ_MP4_FIXTURE") else {
+            eprintln!("EIVIZ_MP4_FIXTURE is not set; GPU pump test skipped");
+            return;
+        };
+        let gpu = GpuDevice::with_backend(BackendRequest::Metal).expect("Metal device");
+        let uploads = Arc::new(Mutex::new(UploadStore::default()));
+        let pump = VideoPump::start(
+            77,
+            path.to_string_lossy().to_string(),
+            false,
+            0,
+            0,
+            30_000,
+            1_001,
+            Arc::clone(&uploads),
+            3,
+            Some(gpu.device.clone()),
+        )
+        .expect("video pump");
+        for _ in 0..300 {
+            if let Some(frame) = uploads
+                .lock_or_recover()
+                .get(77)
+                .and_then(|ring| ring.gpu.as_ref())
+            {
+                assert!(frame.width >= 2 && frame.height >= 2);
+                assert!(frame.bgra && !frame.packed);
+                drop(pump);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(pump);
+        panic!("the file pump did not publish a GPU frame");
+    }
 }
