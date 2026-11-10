@@ -636,6 +636,11 @@ struct ContentView: View {
             .buttonStyle(MixerButtonStyle())
             Button(L10n.t("chrome.overlay")) { mixer.openOverlay() }
                 .buttonStyle(MixerButtonStyle())
+            if mixer.hasReplayInput {
+                // One entry: the deck opens the recording settings itself.
+                Button(L10n.t("chrome.replay")) { mixer.openReplay() }
+                    .buttonStyle(MixerButtonStyle())
+            }
         }
         .padding(8)
         .background(EivizTheme.panel)

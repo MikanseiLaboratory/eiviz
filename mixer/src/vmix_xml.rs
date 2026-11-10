@@ -406,6 +406,7 @@ fn input_type(kind: InputKind) -> String {
         InputKind::Mix => "Mix",
         InputKind::Audio => "Audio",
         InputKind::DeckLink => "DeckLink",
+        InputKind::Replay => "Replay",
     }
     .into()
 }

@@ -37,6 +37,17 @@ struct StepDef {
     state_id: u64,
     motion: Option<MotionDef>,
     hold_frames: u32,
+    /// Replay cue this step fires when it is reached.
+    replay: Option<ReplayAction>,
+}
+
+/// What a step asks Replay to do.
+#[derive(Clone, Debug)]
+pub struct ReplayAction {
+    pub channel: u32,
+    /// Empty means the newest clip on the channel.
+    pub clip_uid: String,
+    pub play: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -614,6 +625,17 @@ impl SceneRuntime {
         };
         let state_id = step.state_id;
         let motion = step.motion;
+        let replay = step.replay.clone();
+        // An animation may cue Replay on its own timecode. A cue that cannot be
+        // resolved is an error, not something to swallow.
+        if let Some(action) = replay {
+            if crate::replay::engine()
+                .fire_animation_action(action.channel, &action.clip_uid, action.play)
+                .is_err()
+            {
+                return Err("scene sequence step cues a clip that is not on the channel");
+            }
+        }
         if let Some(play) = self.playing.get_mut(&sequence_id) {
             play.phase = Phase::Moving { move_id: 0 };
         }
@@ -999,10 +1021,22 @@ fn step_from_ffi(step: EivizSequenceStepDesc) -> Result<StepDef, &'static str> {
     } else {
         Some(motion_from_ffi(step.motion)?)
     };
+    // The clipboard text belongs to the caller and is only valid for this call.
+    let replay = if step.replay_active == 0 || step.replay_clip.is_null() {
+        None
+    } else {
+        let bytes = unsafe { std::slice::from_raw_parts(step.replay_clip, step.replay_clip_len) };
+        Some(ReplayAction {
+            channel: step.replay_channel,
+            clip_uid: String::from_utf8_lossy(bytes).into_owned(),
+            play: step.replay_play != 0,
+        })
+    };
     Ok(StepDef {
         state_id: step.state_id,
         motion,
         hold_frames: step.hold_frames,
+        replay,
     })
 }
 
@@ -1011,7 +1045,64 @@ mod tests {
     use super::*;
     use crate::abi::Rect;
 
+    #[test]
+    fn a_defined_step_carries_its_replay_action() {
+        // The session names a channel, a clip and whether to play; the descriptor
+        // that crosses the ABI must carry all three into the runtime.
+        let mut rt = SceneRuntime::default();
+        let clip = b"clip-9";
+        let steps = [
+            EivizSequenceStepDesc {
+                state_id: 1,
+                motion: linear_motion(1),
+                has_motion: 0,
+                hold_frames: 0,
+                replay_channel: 0,
+                replay_active: 0,
+                replay_play: 0,
+                replay_clip: std::ptr::null(),
+                replay_clip_len: 0,
+            },
+            EivizSequenceStepDesc {
+                state_id: 1,
+                motion: linear_motion(1),
+                has_motion: 0,
+                hold_frames: 0,
+                replay_channel: 3,
+                replay_active: 1,
+                replay_play: 1,
+                replay_clip: clip.as_ptr(),
+                replay_clip_len: clip.len(),
+            },
+        ];
+        let sequences = [EivizSceneSequenceDesc {
+            id: 4,
+            steps: steps.as_ptr(),
+            step_count: steps.len() as u32,
+        }];
+        unsafe { rt.define_sequences_raw(sequences.as_ptr(), 1) }.unwrap();
+
+        let def = rt.sequences.get(&4).expect("sequence 4");
+        assert!(def.steps[0].replay.is_none(), "a plain step cues nothing");
+        let action = def.steps[1].replay.as_ref().expect("the second step cues");
+        assert_eq!(action.channel, 3);
+        assert_eq!(action.clip_uid, "clip-9");
+        assert!(action.play, "the step asked for playback");
+    }
+
     const CAM: SceneCamera = SceneCamera::IDENTITY;
+
+    fn linear_motion(frames: u32) -> EivizMotion {
+        EivizMotion {
+            duration_frames: frames,
+            easing: 0,
+            x1: 0.0,
+            y1: 0.0,
+            x2: 1.0,
+            y2: 1.0,
+            has_bezier: 0,
+        }
+    }
 
     fn layer(id: u64, x: f32) -> OverlayDesc {
         OverlayDesc {
@@ -1137,16 +1228,19 @@ mod tests {
                         state_id: 1,
                         motion: None,
                         hold_frames: 3,
+                        replay: None,
                     },
                     StepDef {
                         state_id: 2,
                         motion: None,
                         hold_frames: 0,
+                        replay: None,
                     },
                     StepDef {
                         state_id: 3,
                         motion: None,
                         hold_frames: 0,
+                        replay: None,
                     },
                 ],
             },
@@ -1170,11 +1264,13 @@ mod tests {
                         state_id: 1,
                         motion: Some(linear(2)),
                         hold_frames: 0,
+                        replay: None,
                     },
                     StepDef {
                         state_id: 3,
                         motion: Some(linear(2)),
                         hold_frames: 0,
+                        replay: None,
                     },
                 ],
             },
@@ -1201,11 +1297,13 @@ mod tests {
                         state_id: 1,
                         motion: Some(linear(2)),
                         hold_frames: 0,
+                        replay: None,
                     },
                     StepDef {
                         state_id: 2,
                         motion: Some(linear(2)),
                         hold_frames: 0,
+                        replay: None,
                     },
                 ],
             },

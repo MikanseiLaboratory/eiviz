@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json.Nodes;
 using System.Windows;
 using Eiviz.Host.I18n;
 using Eiviz.Host.Interop;
@@ -17,7 +18,8 @@ public enum InputKind
     UVC,
     Mix,
     Audio,
-    DeckLink
+    DeckLink,
+    Replay
 }
 
 public enum AudioCaptureMode
@@ -401,7 +403,8 @@ internal static class InputKindNames
         InputKind.UVC,
         InputKind.DeckLink,
         InputKind.Mix,
-        InputKind.Audio
+        InputKind.Audio,
+        InputKind.Replay
     ];
 
     public static string Category(InputKind kind) => kind switch
@@ -415,6 +418,7 @@ internal static class InputKindNames
         InputKind.Mix => "Mix",
         InputKind.Audio => "Audio",
         InputKind.DeckLink => "DeckLink",
+        InputKind.Replay => "Replay",
         _ => kind.ToString()
     };
 
@@ -698,6 +702,17 @@ public sealed class SequenceStep
     public ulong StateId { get; set; }
     public Motion? Motion { get; set; }
     public uint HoldFrames { get; set; }
+    /// <summary>Replay action fired when the step is reached.</summary>
+    public SequenceReplayAction? Replay { get; set; }
+}
+
+/// <summary>What an animation step does to Replay.</summary>
+public sealed class SequenceReplayAction
+{
+    public uint Channel { get; set; }
+    /// <summary>Empty means the newest clip on the channel.</summary>
+    public string ClipUid { get; set; } = "";
+    public bool Play { get; set; }
 }
 
 public sealed class SceneSequence
@@ -874,7 +889,7 @@ public sealed class MultiviewLayout
     public uint ResolvedPresentInterval(SessionSettings settings)
     {
         if (PresentInterval == 0)
-            return ClampPresentInterval(settings.DefaultPresentInterval == 0 ? 3 : settings.DefaultPresentInterval);
+            return ClampPresentInterval(settings.DefaultPresentInterval == 0 ? 2 : settings.DefaultPresentInterval);
         return ClampPresentInterval(PresentInterval);
     }
 
@@ -1206,6 +1221,53 @@ public sealed class SessionSettings
     public uint MasterFpsNum { get; set; } = 60_000;
     public uint MasterFpsDen { get; set; } = 1_001;
 
+    /// <summary>A copy, so a dialog can tell what the operator changed.</summary>
+    public SessionSettings Clone() => (SessionSettings)MemberwiseClone();
+
+    /// <summary>
+    /// Applies the values a dialog changed onto a live settings object, leaving every
+    /// other value as it is. Copying the whole object put back values the operator never
+    /// touched, undoing settings changed elsewhere (the replay deck, the API, a port
+    /// conflict at startup) while the dialog was open.
+    /// </summary>
+    public static void ApplyChanges(SessionSettings live, SessionSettings opened, SessionSettings edited)
+    {
+        static void Apply<T>(T was, T now, Action<T> set)
+        {
+            if (!EqualityComparer<T>.Default.Equals(was, now))
+                set(now);
+        }
+        Apply(opened.MasterFpsNum, edited.MasterFpsNum, value => live.MasterFpsNum = value);
+        Apply(opened.MasterFpsDen, edited.MasterFpsDen, value => live.MasterFpsDen = value);
+        Apply(opened.DefaultWidth, edited.DefaultWidth, value => live.DefaultWidth = value);
+        Apply(opened.DefaultHeight, edited.DefaultHeight, value => live.DefaultHeight = value);
+        Apply(opened.DefaultMultiviewUnitId, edited.DefaultMultiviewUnitId, value => live.DefaultMultiviewUnitId = value);
+        Apply(opened.FrameBufferFrames, edited.FrameBufferFrames, value => live.FrameBufferFrames = value);
+        Apply(opened.DefaultPresentInterval, edited.DefaultPresentInterval, value => live.DefaultPresentInterval = value);
+        Apply(opened.FlipSwapchainLimit, edited.FlipSwapchainLimit, value => live.FlipSwapchainLimit = value);
+        Apply(opened.InternalColorFormat, edited.InternalColorFormat, value => live.InternalColorFormat = value);
+        Apply(opened.RebarOptimization, edited.RebarOptimization, value => live.RebarOptimization = value);
+        Apply(opened.NdiGpuUpload, edited.NdiGpuUpload, value => live.NdiGpuUpload = value);
+        if (!EqualityComparer<RgbColor>.Default.Equals(opened.PreviewColor!, edited.PreviewColor!))
+            live.PreviewColor = RgbColor.FromOrDefault(edited.PreviewColor, RgbColor.PreviewDefault);
+        if (!EqualityComparer<RgbColor>.Default.Equals(opened.ProgramColor!, edited.ProgramColor!))
+            live.ProgramColor = RgbColor.FromOrDefault(edited.ProgramColor, RgbColor.ProgramDefault);
+        if (!EqualityComparer<RgbColor>.Default.Equals(opened.InactiveColor!, edited.InactiveColor!))
+            live.InactiveColor = RgbColor.FromOrDefault(edited.InactiveColor, RgbColor.InactiveDefault);
+        Apply(opened.MultiviewLabelSize, edited.MultiviewLabelSize, value => live.MultiviewLabelSize = value);
+        Apply(opened.MultiviewLabelUnit, edited.MultiviewLabelUnit, value => live.MultiviewLabelUnit = value);
+        Apply(opened.MultiviewLabelAnchor, edited.MultiviewLabelAnchor, value => live.MultiviewLabelAnchor = value);
+        Apply(opened.VmixApiEnabled, edited.VmixApiEnabled, value => live.VmixApiEnabled = value);
+        if (opened.VmixApiPort != edited.VmixApiPort)
+            live.VmixApiPort = edited.VmixApiPort == 0 ? 8088 : edited.VmixApiPort;
+        Apply(opened.VmixApiUser, edited.VmixApiUser, value => live.VmixApiUser = value ?? "");
+        Apply(opened.VmixApiPassword, edited.VmixApiPassword, value => live.VmixApiPassword = value ?? "");
+        Apply(opened.VmixTcpEnabled, edited.VmixTcpEnabled, value => live.VmixTcpEnabled = value);
+        Apply(opened.NativeApiEnabled, edited.NativeApiEnabled, value => live.NativeApiEnabled = value);
+        if (opened.NativeApiPort != edited.NativeApiPort)
+            live.NativeApiPort = edited.NativeApiPort == 0 ? 9400 : edited.NativeApiPort;
+    }
+
     public uint FramesFor(uint value, uint unit) =>
         unit == MixerNative.DurationMs
             ? (uint)Math.Max(1, Math.Round(value * (double)MasterFpsNum / Math.Max(1, MasterFpsDen) / 1000.0))
@@ -1218,7 +1280,17 @@ public sealed class SessionSettings
     public string Theme { get; set; } = "Charcoal";
     public ulong DefaultMultiviewUnitId { get; set; } = 1;
     public uint FrameBufferFrames { get; set; } = 3;
-    public uint DefaultPresentInterval { get; set; } = 3;
+    /// <summary>
+    /// Presentation interval for preview surfaces. Every second frame by default: a
+    /// preview at half the master rate is still smooth to the eye, and it costs half the
+    /// GPU time of presenting every frame.
+    /// </summary>
+    public uint DefaultPresentInterval { get; set; } = 2;
+    /// <summary>
+    /// Presentation interval for the replay deck's monitors. Zero follows
+    /// <see cref="DefaultPresentInterval"/>.
+    /// </summary>
+    public uint ReplayPresentInterval { get; set; }
     public uint FlipSwapchainLimit { get; set; }
     public InternalColorFormat InternalColorFormat { get; set; } = InternalColorFormat.Uyvy;
     public bool? RebarOptimization { get; set; } = true;
@@ -1257,7 +1329,65 @@ public sealed class SessionSettings
     }
 
     public uint ResolvedPresentInterval() =>
-        MultiviewLayout.ClampPresentInterval(DefaultPresentInterval == 0 ? 3 : DefaultPresentInterval);
+        MultiviewLayout.ClampPresentInterval(DefaultPresentInterval == 0 ? 2 : DefaultPresentInterval);
+
+    /// <summary>
+    /// How often the replay deck's monitors are presented. Zero follows
+    /// <see cref="ResolvedPresentInterval"/>. Any other value is that many master frames.
+    /// </summary>
+    public uint ResolvedReplayPresentInterval() =>
+        ReplayPresentInterval == 0
+            ? ResolvedPresentInterval()
+            : MultiviewLayout.ClampPresentInterval(ReplayPresentInterval);
+
+    /// Copies every stored setting, then applies the load-time clamps. A new
+    /// field on this class survives a save and an open without another assignment.
+    public void AdoptFrom(SessionSettings source)
+    {
+        foreach (var property in typeof(SessionSettings).GetProperties())
+        {
+            if (!property.CanRead || !property.CanWrite || property.GetIndexParameters().Length != 0)
+                continue;
+            property.SetValue(this, property.GetValue(source));
+        }
+        ClampLoaded();
+    }
+
+    /// The values a saved session is allowed to hold. Zero on a present interval
+    /// that follows the project stays zero.
+    public void ClampLoaded()
+    {
+        FrameBufferFrames = FrameBufferFrames == 0 ? 3 : Math.Clamp(FrameBufferFrames, 1u, 8u);
+        DefaultPresentInterval = DefaultPresentInterval == 0
+            ? 2
+            : Math.Clamp(DefaultPresentInterval, 1u, 8u);
+        ReplayPresentInterval = ReplayPresentInterval == 0
+            ? 0
+            : MultiviewLayout.ClampPresentInterval(ReplayPresentInterval);
+        if (FlipSwapchainLimit is not (0 or 4 or 6 or 8 or 10 or 12 or 16))
+            FlipSwapchainLimit = 0;
+        RebarOptimization = RebarOptimization != false;
+        NdiGpuUpload = NdiGpuUpload != false;
+        PreviewColor = RgbColor.FromOrDefault(PreviewColor, RgbColor.PreviewDefault);
+        ProgramColor = RgbColor.FromOrDefault(ProgramColor, RgbColor.ProgramDefault);
+        InactiveColor = RgbColor.FromOrDefault(InactiveColor, RgbColor.InactiveDefault);
+        if (MultiviewLabelSize <= 0)
+            MultiviewLabelSize = 18;
+        else
+            MultiviewLabelSize = Math.Clamp(MultiviewLabelSize, 1f, 200f);
+        if (VmixApiEnabled is null)
+            VmixApiEnabled = true;
+        if (VmixTcpEnabled is null)
+            VmixTcpEnabled = true;
+        if (NativeApiEnabled is null)
+            NativeApiEnabled = true;
+        if (VmixApiPort == 0)
+            VmixApiPort = 8088;
+        VmixApiUser ??= "";
+        VmixApiPassword ??= "";
+        if (NativeApiPort == 0)
+            NativeApiPort = 9400;
+    }
 }
 
 public sealed class RgbColor
@@ -1290,6 +1420,8 @@ public sealed class Session
     public List<SceneLayoutPreset> ScenePresets { get; } = [];
     public List<string> InputTags { get; } = [];
     public List<string> SceneTags { get; } = [];
+    /// Tag suggestions for replay clips, the same way inputs and scenes have one.
+    public List<string> ReplayTags { get; } = [];
     public ulong NextInputId { get; set; } = 10;
     public ulong NextSceneId { get; set; } = 1;
     public ulong NextUnitId { get; set; } = 1;
@@ -1303,6 +1435,7 @@ public sealed class Session
     public bool HeadphoneCopyMonitor { get; set; }
     public uint HeadphoneListenKind { get; set; }
     public ulong HeadphoneListenId { get; set; }
+    public string ReplayJson { get; set; } = "";
 
     public void EnsureDefaultTransitions()
     {
@@ -1458,6 +1591,41 @@ public sealed class Session
             TagCatalog.Replace(scene.Tags, scene.Tags);
             TagCatalog.MergeInto(SceneTags, scene.Tags);
         }
+        var replayCatalog = TagCatalog.NormalizeList(ReplayTags);
+        ReplayTags.Clear();
+        ReplayTags.AddRange(replayCatalog);
+        NormalizeReplayTags();
+    }
+
+    /// Normalizes every clip's tags in the replay document and folds them into the
+    /// catalog, the same way input and scene tags are kept tidy.
+    private void NormalizeReplayTags()
+    {
+        var root = ReplayModel.Parse(this);
+        if (root?["playlists"] is not JsonArray playlists)
+            return;
+        var changed = false;
+        foreach (var list in playlists)
+        {
+            if (list is not JsonObject playlist || playlist["clips"] is not JsonArray clips)
+                continue;
+            foreach (var item in clips)
+            {
+                if (item is not JsonObject clip)
+                    continue;
+                var normalized = TagCatalog.NormalizeList(
+                    (clip["tags"] as JsonArray ?? []).Select(tag => tag?.GetValue<string>() ?? ""));
+                var array = new JsonArray();
+                foreach (var tag in normalized)
+                    array.Add(tag);
+                clip["tags"] = array;
+                TagCatalog.MergeInto(ReplayTags, normalized);
+                changed = true;
+            }
+        }
+        if (changed)
+            ReplayJson = ReplayModel.Serialize(root);
     }
 
 }
+

@@ -11,8 +11,8 @@
     <Authors>Shugo Kawamura; Mikansei Laboratory</Authors>
     <Copyright>Copyright 2026 Shugo Kawamura / Mikansei Laboratory</Copyright>
     <PackageLicenseExpression>PolyForm-Shield-1.0.0</PackageLicenseExpression>
-    <Version>0.4.0</Version>
-    <InformationalVersion>0.4.0</InformationalVersion>
+    <Version>0.5.0</Version>
+    <InformationalVersion>0.5.0</InformationalVersion>
     <RepoRoot>$(MSBuildThisFileDirectory)..\..\</RepoRoot>
     <AppIcon>$(RepoRoot)docs\src\assets\branding\app-icon\windows\eiviz.ico</AppIcon>
     <ApplicationIcon>$(AppIcon)</ApplicationIcon>

@@ -13,6 +13,7 @@ pub struct SourceRoles {
     pub on_program: bool,
     pub on_preview: bool,
     pub on_multiview: bool,
+    pub on_replay: bool,
 }
 
 impl SourceRoles {
@@ -26,6 +27,10 @@ impl SourceRoles {
 
     fn mark_multiview(&mut self) {
         self.on_multiview = true;
+    }
+
+    fn mark_replay(&mut self) {
+        self.on_replay = true;
     }
 }
 
@@ -59,6 +64,9 @@ pub fn debounce_want_full(want: bool, drop_at: &mut Option<Instant>) -> bool {
 }
 
 pub fn want_full(save: LiveSave, roles: SourceRoles) -> bool {
+    if roles.on_replay {
+        return true;
+    }
     let keep_mv = save.flags & SAVE_FLAG_MULTIVIEW != 0 && roles.on_multiview;
     match save.mode {
         SAVE_ALWAYS_LOW => false,
@@ -106,11 +114,34 @@ pub fn collect_source_roles(
     roles
 }
 
+pub fn mark_replay_scenes(
+    scene_specs: &[(u64, u32, u32, Arc<[OverlayDesc]>, crate::MvLabelStyle)],
+    scene_ids: &[u64],
+    roles: &mut HashMap<u64, SourceRoles>,
+) {
+    let spec_map: HashMap<u64, &[OverlayDesc]> = scene_specs
+        .iter()
+        .map(|spec| (spec.0, spec.3.as_ref()))
+        .collect();
+    for id in scene_ids {
+        add(*id, Role::Replay, &spec_map, roles);
+    }
+}
+
+/// Inputs an input angle records directly. Their receivers must stay at full
+/// quality while recording, exactly like an angle scene's inputs do.
+pub fn mark_replay_inputs(input_ids: &[u64], roles: &mut HashMap<u64, SourceRoles>) {
+    for id in input_ids {
+        roles.entry(*id).or_default().on_replay = true;
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Role {
     Program,
     Preview,
     Multiview,
+    Replay,
 }
 
 fn add(
@@ -123,7 +154,7 @@ fn add(
         // Mosaic ids are not ingest sources. Walk tiles; monitor/output stay
         // Multiview so the window does not count as Preview by itself.
         let role = match role {
-            Role::Program => Role::Program,
+            Role::Program | Role::Replay => role,
             _ => Role::Multiview,
         };
         if let Some(layers) = spec_map.get(&id) {
@@ -152,6 +183,7 @@ fn add(
         Role::Program => entry.mark_program(),
         Role::Preview => entry.mark_preview(),
         Role::Multiview => entry.mark_multiview(),
+        Role::Replay => entry.mark_replay(),
     }
 }
 

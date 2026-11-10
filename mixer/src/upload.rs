@@ -130,6 +130,12 @@ pub struct SourceRing {
     pub last_pts: i64,
     pub has_frame: bool,
     pub gpu: Option<GpuVideoFrame>,
+    /// The incoming frame while a clip transition is in progress. The blend itself
+    /// happens on the GPU, so both frames travel as pictures rather than one blended
+    /// buffer.
+    pub secondary: Option<Arc<Vec<u8>>>,
+    /// `(kind, direction, mix)` while a transition is in progress.
+    pub transition: Option<(u8, u8, f32)>,
     playout_depth: usize,
     cpu_fifo: VecDeque<CpuQueuedFrame>,
     gpu_fifo: VecDeque<GpuVideoFrame>,
@@ -151,6 +157,10 @@ pub struct CpuFrameSnap {
     pub has_frame: bool,
     pub pixels: Arc<Vec<u8>>,
     pub gpu: Option<GpuVideoFrame>,
+    /// The incoming frame while a clip transition is in progress.
+    pub secondary: Option<Arc<Vec<u8>>>,
+    /// `(kind, direction, mix)` while a transition is in progress.
+    pub transition: Option<(u8, u8, f32)>,
 }
 
 /// Marks a ring slot as in use. Ring slots are only rewritten once the ring holds the sole
@@ -405,6 +415,8 @@ impl SourceRing {
             last_pts: 0,
             has_frame: false,
             gpu: None,
+            secondary: None,
+            transition: None,
             playout_depth: 1,
             cpu_fifo: VecDeque::new(),
             gpu_fifo: VecDeque::new(),
@@ -456,6 +468,10 @@ impl SourceRing {
         self.last_pts = frame.pts;
         self.has_frame = true;
         self.gpu = Some(frame);
+        // A GPU frame is a whole picture of its own. A transition left armed from
+        // an earlier CPU frame would be blended with it again, at a stale mix.
+        self.secondary = None;
+        self.transition = None;
     }
 
     pub fn set_playout_depth(&mut self, depth: u32) {
@@ -494,12 +510,37 @@ impl SourceRing {
         self.finish_playout_cpu(pixels, pts);
     }
 
+    /// Queues both frames of a clip transition. The pictures are blended on the GPU,
+    /// so nothing is mixed here.
+    pub fn finish_playout_transition(
+        &mut self,
+        pixels: Vec<u8>,
+        secondary: Vec<u8>,
+        pts: i64,
+        kind: u8,
+        direction: u8,
+        mix: f32,
+    ) {
+        self.finish_playout_cpu(pixels, pts);
+        self.secondary = Some(Arc::new(secondary));
+        self.transition = Some((kind, direction, mix));
+    }
+
     pub fn take_playout_buf(&mut self) -> Vec<u8> {
         let bytes = slot_bytes(self.width, self.height, self.format);
         self.take_free(bytes)
     }
 
+    /// Returns a buffer taken for a playout fill that never reached the ring, so a
+    /// decoder that refused a frame does not turn every failure into an allocation.
+    pub fn recycle_playout_buf(&mut self, buf: Vec<u8>) {
+        self.recycle(buf);
+    }
+
     pub fn finish_playout_cpu(&mut self, pixels: Vec<u8>, pts: i64) {
+        // A frame on its own ends any transition that was running.
+        self.secondary = None;
+        self.transition = None;
         if self.playout_depth <= 1 {
             let idx = (self.write.load(Ordering::Relaxed) + 1) % SLOTS;
             let old = std::mem::replace(&mut self.slots[idx], Arc::new(pixels));
@@ -958,6 +999,29 @@ impl UploadStore {
         }
     }
 
+    /// Returns a playout buffer that was taken but never filled. Keeps a failed
+    /// decode from allocating a fresh frame on the next tick.
+    pub fn recycle_playout_buf(&mut self, id: u64, pixels: Vec<u8>) {
+        if let Some(ring) = self.sources.get_mut(&id) {
+            ring.recycle_playout_buf(pixels);
+        }
+    }
+
+    pub fn finish_playout_transition(
+        &mut self,
+        id: u64,
+        pixels: Vec<u8>,
+        secondary: Vec<u8>,
+        pts: i64,
+        kind: u8,
+        direction: u8,
+        mix: f32,
+    ) {
+        if let Some(ring) = self.sources.get_mut(&id) {
+            ring.finish_playout_transition(pixels, secondary, pts, kind, direction, mix);
+        }
+    }
+
     pub fn snapshot(&self, needed: &HashSet<u64>) -> Vec<CpuFrameSnap> {
         let mut out = Vec::with_capacity(needed.len());
         for id in needed {
@@ -973,6 +1037,8 @@ impl UploadStore {
                 has_frame: ring.has_frame,
                 pixels: ring.latest_pixels(),
                 gpu: ring.gpu.clone(),
+                secondary: ring.secondary.clone(),
+                transition: ring.transition,
             });
         }
         out
@@ -1039,7 +1105,6 @@ impl UploadStore {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn push_audio(
         &mut self,
         id: u64,

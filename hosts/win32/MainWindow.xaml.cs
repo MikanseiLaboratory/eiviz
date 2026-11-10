@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
@@ -98,6 +98,7 @@ public partial class MainWindow : Window
         RebuildScenes();
         RebuildTransitions();
         RebuildOverlayToggles();
+        RefreshReplayUi();
         RebuildStreamToggles();
         RebuildMeters();
         _meterTimer.Tick += (_, _) => TickMeters();
@@ -201,6 +202,7 @@ public partial class MainWindow : Window
         }
         RebuildTransitions();
         RebuildOverlayToggles();
+        RefreshReplayUi();
         RebuildStreamToggles();
         RebuildMeters();
         ApplyAspect();

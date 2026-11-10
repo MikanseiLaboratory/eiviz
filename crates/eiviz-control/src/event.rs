@@ -56,6 +56,14 @@ pub enum Event {
     Shutdown {
         meta: EnvelopeMeta,
     },
+    ReplayHealth {
+        meta: EnvelopeMeta,
+        severity: u32,
+        issues: u32,
+        stop_reason: u32,
+        remaining_secs: u32,
+        message: String,
+    },
 }
 
 impl Event {
@@ -71,7 +79,8 @@ impl Event {
             | Self::Lag { meta, .. }
             | Self::Failed { meta, .. }
             | Self::Discovered { meta, .. }
-            | Self::Shutdown { meta } => meta,
+            | Self::Shutdown { meta }
+            | Self::ReplayHealth { meta, .. } => meta,
         }
     }
 
@@ -88,6 +97,7 @@ impl Event {
             Self::Failed { .. } => "Failed",
             Self::Discovered { .. } => "Discovered",
             Self::Shutdown { .. } => "Shutdown",
+            Self::ReplayHealth { .. } => "ReplayHealth",
         }
     }
 }
@@ -112,5 +122,11 @@ pub fn command_name(command: &Command) -> &'static str {
         Command::Discover { .. } => "Discover",
         Command::Shutdown => "Shutdown",
         Command::SaveSession => "SaveSession",
+        Command::ReplayRecord { .. } => "ReplayRecord",
+        Command::ReplayMarkIn => "ReplayMarkIn",
+        Command::ReplayMarkOut { .. } => "ReplayMarkOut",
+        Command::ReplayCue { .. } => "ReplayCue",
+        Command::ReplayTransport { .. } => "ReplayTransport",
+        Command::ReplayJumpToNow { .. } => "ReplayJumpToNow",
     }
 }

@@ -9,10 +9,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use eiviz_pro_api::{
-    ABI_MAJOR, Entitlements, FEATURE_DECKLINK, FEATURE_LICENSE, FEATURE_RTMP, LAYOUT_UYVY,
-    PRO_BUSY, PRO_DEVICE, PRO_INVALID, PRO_OK, ProApi, ProAudioView, ProCaptureCallbacks,
-    ProCaptureStatsAbi, ProEntitlementsAbi, ProLicenseStatusAbi, ProOutputStatsAbi,
-    ProPlayoutConfig, ProStatus, ProStreamConfig, ProVideoView, abi_hash, copy_to_buffer,
+    ABI_MAJOR, Entitlements, FEATURE_DECKLINK, FEATURE_LICENSE, FEATURE_RTMP, LAYOUT_BGRA,
+    LAYOUT_UYVY, PRO_BUSY, PRO_DEVICE, PRO_INVALID, PRO_OK, PRO_UNAVAILABLE, ProApi, ProAudioView,
+    ProCaptureCallbacks, ProCaptureStatsAbi, ProEntitlementsAbi, ProLicenseStatusAbi,
+    ProOutputStatsAbi, ProPlayoutConfig, ProReplayConfig, ProReplayDecoded, ProReplayEstimateAbi,
+    ProReplayPacket, ProReplayStatsAbi, ProStatus, ProStreamConfig, ProVideoView,
+    REPLAY_CODEC_VMX1, abi_hash, copy_to_buffer,
 };
 
 const VERSION: &str = "0.3.0";
@@ -25,6 +27,8 @@ static CALLBACK_ENTERED: AtomicBool = AtomicBool::new(false);
 static HOLD_DESTROY: AtomicBool = AtomicBool::new(false);
 static CAPTURE: Mutex<Option<CaptureState>> = Mutex::new(None);
 static LICENSE_OK: AtomicBool = AtomicBool::new(false);
+/// Frames stored through the passthrough path, so a test can see them arrive.
+static ENCODED_FRAMES: AtomicUsize = AtomicUsize::new(0);
 
 struct CaptureState {
     callbacks: ProCaptureCallbacks,
@@ -483,7 +487,667 @@ fn base_api() -> ProApi {
         license_clear: Some(license_clear),
         license_fingerprint: Some(license_fingerprint),
         license_email: Some(license_email),
+        replay_open: Some(replay_open),
+        // The test plugin has no recording to attach to.
+        replay_attach: None,
+        replay_close: Some(replay_close),
+        replay_write_video: Some(replay_write_video),
+        replay_decode: Some(replay_decode),
+        replay_range: Some(replay_range),
+        replay_stats: Some(replay_stats),
+        replay_estimate: Some(replay_estimate),
+        replay_write_audio: Some(replay_write_audio),
+        replay_write_encoded: Some(replay_write_encoded),
+        replay_read_audio: Some(replay_read_audio),
+        replay_copy_peaks: Some(replay_copy_peaks),
+        replay_export_start: Some(replay_export_start),
+        replay_export_progress: Some(replay_export_progress),
+        replay_export_cancel: Some(replay_export_cancel),
+        // The test store stores raw pictures; it encodes one into a VMX1 packet
+        // on demand so the mixer's GPU playback path is exercised too.
+        replay_read_packet: Some(replay_read_packet),
     }
+}
+
+unsafe extern "C" fn replay_export_start(
+    handle: *mut c_void,
+    _request: *const eiviz_pro_api::ProReplayExportRequest,
+) -> ProStatus {
+    guard(|| {
+        if handle != 9 as *mut c_void {
+            return error("bad replay export start");
+        }
+        ProStatus::ok()
+    })
+}
+
+unsafe extern "C" fn replay_export_progress(
+    handle: *mut c_void,
+    out: *mut eiviz_pro_api::ProReplayExportProgress,
+    _message: *mut u8,
+    _cap: usize,
+    written: *mut usize,
+) -> ProStatus {
+    guard(|| {
+        if handle != 9 as *mut c_void || out.is_null() {
+            return error("bad replay export progress");
+        }
+        unsafe {
+            *out = eiviz_pro_api::ProReplayExportProgress {
+                struct_size: std::mem::size_of::<eiviz_pro_api::ProReplayExportProgress>() as u32,
+                ..Default::default()
+            };
+        }
+        if !written.is_null() {
+            unsafe { *written = 0 };
+        }
+        ProStatus::ok()
+    })
+}
+
+unsafe extern "C" fn replay_export_cancel(handle: *mut c_void) -> ProStatus {
+    guard(|| {
+        if handle != 9 as *mut c_void {
+            return error("bad replay export cancel");
+        }
+        ProStatus::ok()
+    })
+}
+unsafe extern "C" fn replay_write_audio(
+    handle: *mut c_void,
+    angle_id: u32,
+    frame_index: u64,
+    view: *const eiviz_pro_api::ProReplayAudioView,
+) -> ProStatus {
+    guard(|| {
+        if handle != 9 as *mut c_void || view.is_null() {
+            return error("bad replay audio write");
+        }
+        let view = unsafe { &*view };
+        if view.channels == 0 || view.data.is_null() {
+            return error("bad replay audio write");
+        }
+        let samples = unsafe {
+            std::slice::from_raw_parts(view.data, view.data_len / std::mem::size_of::<f32>())
+        };
+        let channels = view.channels as usize;
+        let mut store = REPLAY_AUDIO
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let Some(store) = store.as_mut() else {
+            return ProStatus::new(PRO_UNAVAILABLE);
+        };
+        // The mixer asks for a frame's worth of audio at the frame it belongs to,
+        // so the recording keeps one timeline for picture and sound.
+        let track = store.entry(angle_id).or_default();
+        let offset = frame_index as usize * channels;
+        let end = offset.saturating_add(samples.len());
+        if frame_index == 0 {
+            // A new recording starts at its own frame 0. This store keeps one track per
+            // angle rather than one per recording, so the track is cleared at that first
+            // write: without this the tail of the previous, longer recording stayed on
+            // the track and a second recording played back someone else's sound.
+            track.clear();
+        }
+        if track.len() < end {
+            track.resize(end, 0.0);
+        }
+        track[offset..end].copy_from_slice(samples);
+        ProStatus::ok()
+    })
+}
+
+unsafe extern "C" fn replay_read_audio(
+    handle: *mut c_void,
+    angle_id: u32,
+    from_frame: u64,
+    frames: usize,
+    out: *mut f32,
+    written: *mut u32,
+) -> ProStatus {
+    guard(|| {
+        if handle != 9 as *mut c_void || out.is_null() {
+            return error("bad replay audio read");
+        }
+        if !written.is_null() {
+            unsafe { *written = 0 };
+        }
+        let store = REPLAY_AUDIO
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let Some(track) = store.as_ref().and_then(|store| store.get(&angle_id)) else {
+            return ProStatus::ok();
+        };
+        // The mixer reads interleaved stereo, which is what it records.
+        let channels = 2usize;
+        let offset = from_frame as usize * channels;
+        let available = track.len().saturating_sub(offset) / channels;
+        let count = frames.min(available);
+        if count == 0 {
+            return ProStatus::ok();
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(track.as_ptr().add(offset), out, count * channels);
+            if !written.is_null() {
+                *written = count as u32;
+            }
+        }
+        ProStatus::ok()
+    })
+}
+
+unsafe extern "C" fn replay_copy_peaks(
+    handle: *mut c_void,
+    _angle_id: u32,
+    _from: u32,
+    _min_out: *mut f32,
+    _max_out: *mut f32,
+    _cap: u32,
+    copied: *mut u32,
+    dropped: *mut u32,
+) -> ProStatus {
+    guard(|| {
+        if handle != 9 as *mut c_void {
+            return error("bad replay peaks");
+        }
+        if !copied.is_null() {
+            unsafe { *copied = 0 };
+        }
+        if !dropped.is_null() {
+            unsafe { *dropped = 0 };
+        }
+        ProStatus::ok()
+    })
+}
+
+struct ReplayFrame {
+    bytes: Vec<u8>,
+    width: u32,
+    height: u32,
+    stride: u32,
+    layout: u32,
+    pts_100ns: i64,
+}
+
+static REPLAY: Mutex<Option<std::collections::HashMap<(u32, u64), ReplayFrame>>> = Mutex::new(None);
+
+/// One codec per angle, used only to turn a stored raw picture into a VMX1 packet
+/// for the mixer's GPU playback path.
+/// Encoded packets a GPU angle produced, kept so playback can decode them.
+static REPLAY_PACKETS: Mutex<Option<std::collections::HashMap<(u32, u64), ReplayPacket>>> =
+    Mutex::new(None);
+
+/// One decoder per angle, used to turn a stored VMX1 packet back into a picture.
+static REPLAY_DECODERS: Mutex<Option<std::collections::HashMap<u32, vmx::Codec>>> =
+    Mutex::new(None);
+
+/// A packet a GPU angle recorded, with the picture it holds.
+struct ReplayPacket {
+    bytes: Vec<u8>,
+    width: u32,
+    height: u32,
+    pts_100ns: i64,
+}
+
+static REPLAY_ENCODERS: Mutex<Option<std::collections::HashMap<u32, vmx::Codec>>> =
+    Mutex::new(None);
+
+/// Recorded replay audio, interleaved stereo at 48 kHz, indexed by frame.
+static REPLAY_AUDIO: Mutex<Option<std::collections::HashMap<u32, Vec<f32>>>> = Mutex::new(None);
+
+unsafe extern "C" fn replay_open(
+    module: *mut c_void,
+    _config: *const ProReplayConfig,
+    out: *mut *mut c_void,
+) -> ProStatus {
+    guard(|| {
+        if module != module_ptr() || out.is_null() {
+            return error("bad replay open");
+        }
+        *REPLAY.lock().unwrap_or_else(|poison| poison.into_inner()) =
+            Some(std::collections::HashMap::new());
+        *REPLAY_AUDIO
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(std::collections::HashMap::new());
+        *REPLAY_ENCODERS
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(std::collections::HashMap::new());
+        HANDLES.fetch_add(1, Ordering::SeqCst);
+        unsafe { *out = 9 as *mut c_void };
+        ProStatus::ok()
+    })
+}
+
+unsafe extern "C" fn replay_close(handle: *mut c_void) -> ProStatus {
+    guard(|| {
+        if handle != 9 as *mut c_void {
+            return error("bad replay handle");
+        }
+        *REPLAY.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
+        *REPLAY_AUDIO
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = None;
+        *REPLAY_ENCODERS
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = None;
+        HANDLES.fetch_sub(1, Ordering::SeqCst);
+        ProStatus::ok()
+    })
+}
+
+unsafe extern "C" fn replay_write_video(
+    handle: *mut c_void,
+    angle_id: u32,
+    frame_index: u64,
+    view: *const ProVideoView,
+) -> ProStatus {
+    guard(|| {
+        if handle != 9 as *mut c_void || view.is_null() {
+            return error("bad replay write");
+        }
+        if std::env::var("EIVIZ_TEST_REPLAY_BUSY").ok().as_deref() == Some("1") {
+            return ProStatus::new(PRO_BUSY);
+        }
+        let view = unsafe { &*view };
+        let bytes = unsafe { std::slice::from_raw_parts(view.data, view.data_len) }.to_vec();
+        REPLAY
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .as_mut()
+            .ok_or(())
+            .map(|map| {
+                map.insert(
+                    (angle_id, frame_index),
+                    ReplayFrame {
+                        bytes,
+                        width: view.width,
+                        height: view.height,
+                        stride: view.stride,
+                        layout: view.layout,
+                        pts_100ns: view.pts_100ns,
+                    },
+                );
+            })
+            .map_err(|_| ())
+            .ok();
+        ProStatus::ok()
+    })
+}
+
+/// Stores a frame the sender already encoded. The test module keeps no bitstream
+/// (the real store does), but it counts what arrived so a test can prove the
+/// passthrough path is wired, and it refuses an empty payload like a real store.
+unsafe extern "C" fn replay_write_encoded(
+    handle: *mut c_void,
+    angle_id: u32,
+    frame_index: u64,
+    view: *const eiviz_pro_api::ProReplayEncodedView,
+) -> ProStatus {
+    guard(|| {
+        if handle != 9 as *mut c_void || view.is_null() {
+            return error("bad encoded replay write");
+        }
+        let view = unsafe { &*view };
+        if view.data_len == 0 || view.data.is_null() || view.width == 0 || view.height == 0 {
+            return error("an encoded frame needs a bitstream and a size");
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(view.data, view.data_len) }.to_vec();
+        REPLAY_PACKETS
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get_or_insert_with(Default::default)
+            .insert(
+                (angle_id, frame_index),
+                ReplayPacket {
+                    bytes,
+                    width: view.width,
+                    height: view.height,
+                    pts_100ns: view.pts_100ns,
+                },
+            );
+        ENCODED_FRAMES.fetch_add(1, Ordering::Relaxed);
+        ProStatus::ok()
+    })
+}
+
+unsafe extern "C" fn replay_decode(
+    handle: *mut c_void,
+    angle_id: u32,
+    frame_index: u64,
+    dst: *mut u8,
+    dst_cap: usize,
+    out: *mut ProReplayDecoded,
+) -> ProStatus {
+    guard(|| {
+        if handle != 9 as *mut c_void || dst.is_null() || out.is_null() {
+            return error("bad replay decode");
+        }
+        // A GPU angle stores encoded packets rather than raw pictures, so the raw store may hold
+        // nothing for this frame. The packet is tried before the frame is called missing.
+        let raw = {
+            let map = REPLAY.lock().unwrap_or_else(|poison| poison.into_inner());
+            map.as_ref()
+                .and_then(|map| map.get(&(angle_id, frame_index)))
+                .map(|frame| {
+                    (
+                        frame.bytes.clone(),
+                        frame.width,
+                        frame.height,
+                        frame.stride,
+                        frame.layout,
+                        frame.pts_100ns,
+                    )
+                })
+        };
+        let stored = if let Some(raw) = raw {
+            raw
+        } else {
+            let packet = {
+                let packets = REPLAY_PACKETS
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                packets.as_ref().and_then(|packets| {
+                    packets.get(&(angle_id, frame_index)).map(|packet| {
+                        (
+                            packet.bytes.clone(),
+                            packet.width,
+                            packet.height,
+                            packet.pts_100ns,
+                        )
+                    })
+                })
+            };
+            let Some((bytes, width, height, pts)) = packet else {
+                return ProStatus::new(PRO_UNAVAILABLE);
+            };
+            // Decoded into UYVY, which is what the caller's buffer is sized for.
+            let stride = width as usize * 2;
+            let mut decoded = vec![0u8; stride * height as usize];
+            {
+                let mut decoders = REPLAY_DECODERS
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                let decoders = decoders.get_or_insert_with(Default::default);
+                let codec = match decoders.entry(angle_id) {
+                    std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        let Ok(codec) = vmx::Codec::new(vmx::Config {
+                            width: width as i32,
+                            height: height as i32,
+                            profile: vmx::Profile::Sq,
+                            color_space: vmx::ColorSpace::Bt709,
+                        }) else {
+                            return error("replay decoder could not be built");
+                        };
+                        entry.insert(codec)
+                    }
+                };
+                if codec.load_from(&bytes).is_err() {
+                    return error("replay packet could not be loaded");
+                }
+                if codec.decode_uyvy(&mut decoded, stride).is_err() {
+                    return error("replay packet could not be decoded");
+                }
+            }
+            (decoded, width, height, width * 2, LAYOUT_UYVY, pts)
+        };
+        let (bytes, width, height, stride, layout, pts_100ns) = stored;
+        let frame = ReplayFrame {
+            bytes,
+            width,
+            height,
+            stride,
+            layout,
+            pts_100ns,
+        };
+        let uyvy_len = frame.width as usize * frame.height as usize * 2;
+        if dst_cap < uyvy_len {
+            return error("replay decode buffer is short");
+        }
+        unsafe {
+            if frame.layout == LAYOUT_UYVY {
+                std::ptr::copy_nonoverlapping(
+                    frame.bytes.as_ptr(),
+                    dst,
+                    uyvy_len.min(frame.bytes.len()),
+                );
+            } else if frame.layout == LAYOUT_BGRA {
+                for y in 0..frame.height as usize {
+                    for x in (0..frame.width as usize).step_by(2) {
+                        let source = y * frame.stride as usize + x * 4;
+                        let target = y * frame.width as usize * 2 + x * 2;
+                        let b0 = frame.bytes.get(source).copied().unwrap_or(0) as i32;
+                        let g0 = frame.bytes.get(source + 1).copied().unwrap_or(0) as i32;
+                        let r0 = frame.bytes.get(source + 2).copied().unwrap_or(0) as i32;
+                        let b1 = frame.bytes.get(source + 4).copied().unwrap_or(b0 as u8) as i32;
+                        let g1 = frame.bytes.get(source + 5).copied().unwrap_or(g0 as u8) as i32;
+                        let r1 = frame.bytes.get(source + 6).copied().unwrap_or(r0 as u8) as i32;
+                        let y0 = ((77 * r0 + 150 * g0 + 29 * b0) >> 8) as u8;
+                        let y1 = ((77 * r1 + 150 * g1 + 29 * b1) >> 8) as u8;
+                        *dst.add(target) = ((b0 - y0 as i32) / 2 + 128).clamp(0, 255) as u8;
+                        *dst.add(target + 1) = y0;
+                        *dst.add(target + 2) = ((r1 - y1 as i32) / 2 + 128).clamp(0, 255) as u8;
+                        *dst.add(target + 3) = y1;
+                    }
+                }
+            } else {
+                return error("unsupported replay pixel layout");
+            }
+            *out = ProReplayDecoded {
+                struct_size: std::mem::size_of::<ProReplayDecoded>() as u32,
+                actual_frame_index: frame_index,
+                width: frame.width,
+                height: frame.height,
+                stride: frame.width * 2,
+                pts_100ns: frame.pts_100ns,
+                substituted: 0,
+            };
+        }
+        ProStatus::ok()
+    })
+}
+
+fn encode_replay_packet(angle_id: u32, frame: &ReplayFrame) -> Option<Vec<u8>> {
+    let mut guard = REPLAY_ENCODERS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let cache = guard.as_mut()?;
+    if !cache.contains_key(&angle_id) {
+        let codec = vmx::Codec::new(vmx::Config {
+            width: frame.width as i32,
+            height: frame.height as i32,
+            profile: vmx::Profile::Sq,
+            color_space: vmx::ColorSpace::Bt709,
+        })
+        .ok()?;
+        cache.insert(angle_id, codec);
+    }
+    let codec = cache.get_mut(&angle_id)?;
+    let encoded = match frame.layout {
+        LAYOUT_UYVY => codec
+            .encode_uyvy(&frame.bytes, frame.stride as usize)
+            .is_ok(),
+        LAYOUT_BGRA => codec
+            .encode_bgrx(&frame.bytes, frame.stride as usize)
+            .is_ok(),
+        _ => false,
+    };
+    if !encoded {
+        return None;
+    }
+    let mut packet = vec![0u8; 1024 * 1024];
+    loop {
+        match codec.save_to(&mut packet) {
+            Ok(size) => {
+                packet.truncate(size);
+                return Some(packet);
+            }
+            Err(_) => packet.resize(packet.len().saturating_mul(2).max(1024), 0),
+        }
+    }
+}
+
+unsafe extern "C" fn replay_read_packet(
+    handle: *mut c_void,
+    angle_id: u32,
+    frame_index: u64,
+    data: *mut u8,
+    data_cap: usize,
+    required: *mut usize,
+    out: *mut ProReplayPacket,
+) -> ProStatus {
+    guard(|| {
+        if handle != 9 as *mut c_void || required.is_null() || out.is_null() {
+            return error("bad replay packet");
+        }
+        // A GPU angle stored its packet already encoded, so it is handed back as stored; a CPU
+        // angle stored a raw picture, which has to be encoded here.
+        let from_raw = {
+            let map = REPLAY.lock().unwrap_or_else(|poison| poison.into_inner());
+            map.as_ref()
+                .and_then(|map| map.get(&(angle_id, frame_index)))
+                .map(|frame| {
+                    (
+                        frame.width,
+                        frame.height,
+                        frame.pts_100ns,
+                        encode_replay_packet(angle_id, frame),
+                    )
+                })
+        };
+        let (width, height, pts, packet) = match from_raw {
+            Some((width, height, pts, Some(packet))) => (width, height, pts, packet),
+            Some((_, _, _, None)) => return error("replay packet encode failed"),
+            None => {
+                let stored = {
+                    let packets = REPLAY_PACKETS
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner());
+                    packets.as_ref().and_then(|packets| {
+                        packets.get(&(angle_id, frame_index)).map(|packet| {
+                            (
+                                packet.width,
+                                packet.height,
+                                packet.pts_100ns,
+                                packet.bytes.clone(),
+                            )
+                        })
+                    })
+                };
+                let Some(stored) = stored else {
+                    return ProStatus::new(PRO_UNAVAILABLE);
+                };
+                stored
+            }
+        };
+        unsafe { *required = packet.len() };
+        if data.is_null() || data_cap < packet.len() {
+            return ProStatus::new(PRO_BUSY);
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(packet.as_ptr(), data, packet.len());
+            *out = ProReplayPacket {
+                struct_size: std::mem::size_of::<ProReplayPacket>() as u32,
+                actual_frame_index: frame_index,
+                width,
+                height,
+                pts_100ns: pts,
+                substituted: 0,
+                codec: REPLAY_CODEC_VMX1,
+                required_len: packet.len(),
+            };
+        }
+        ProStatus::ok()
+    })
+}
+
+unsafe extern "C" fn replay_range(
+    handle: *mut c_void,
+    angle_id: u32,
+    first: *mut u64,
+    last: *mut u64,
+) -> ProStatus {
+    guard(|| {
+        if handle != 9 as *mut c_void || first.is_null() || last.is_null() {
+            return error("bad replay range");
+        }
+        let map = REPLAY.lock().unwrap_or_else(|poison| poison.into_inner());
+        let Some(map) = map.as_ref() else {
+            return ProStatus::new(PRO_UNAVAILABLE);
+        };
+        let mut found: Option<(u64, u64)> = None;
+        for ((angle, frame), _) in map {
+            if *angle != angle_id {
+                continue;
+            }
+            found = Some(match found {
+                None => (*frame, *frame),
+                Some((start, end)) => (start.min(*frame), end.max(*frame)),
+            });
+        }
+        let Some((start, end)) = found else {
+            return ProStatus::new(PRO_UNAVAILABLE);
+        };
+        unsafe {
+            *first = start;
+            *last = end;
+        }
+        ProStatus::ok()
+    })
+}
+
+unsafe extern "C" fn replay_stats(
+    handle: *mut c_void,
+    stats: *mut ProReplayStatsAbi,
+    _angles: *mut eiviz_pro_api::ProReplayAngleStatsAbi,
+    _cap: u32,
+    written: *mut u32,
+) -> ProStatus {
+    guard(|| {
+        if handle != 9 as *mut c_void || stats.is_null() || written.is_null() {
+            return error("bad replay stats");
+        }
+        unsafe {
+            *stats = ProReplayStatsAbi {
+                struct_size: std::mem::size_of::<ProReplayStatsAbi>() as u32,
+                state: 1,
+                encoded_frames: ENCODED_FRAMES.load(Ordering::Relaxed) as u64,
+                ..ProReplayStatsAbi::default()
+            };
+            *written = 0;
+        }
+        ProStatus::ok()
+    })
+}
+
+unsafe extern "C" fn replay_estimate(
+    module: *mut c_void,
+    _path: *const u8,
+    _path_len: usize,
+    _width: u32,
+    _height: u32,
+    _fps_num: u32,
+    _fps_den: u32,
+    _profile: u32,
+    _angles: u32,
+    _reserve: u64,
+    out: *mut ProReplayEstimateAbi,
+) -> ProStatus {
+    guard(|| {
+        if module != module_ptr() || out.is_null() {
+            return error("bad replay estimate");
+        }
+        unsafe {
+            *out = ProReplayEstimateAbi {
+                struct_size: std::mem::size_of::<ProReplayEstimateAbi>() as u32,
+                free_bytes: 1 << 40,
+                estimate_rate_bps: 1,
+                remaining_secs: 60,
+                path_writable: 1,
+            };
+        }
+        ProStatus::ok()
+    })
 }
 
 fn published() -> &'static Mutex<ProApi> {

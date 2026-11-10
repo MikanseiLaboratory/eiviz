@@ -149,6 +149,9 @@ fn blank_caps() -> MixerCapabilities {
         hardware_encode: 0,
         decklink_linked: 0,
         rtmp_linked: 0,
+        replay_angle_limit: 0,
+        replay_channel_limit: 0,
+        replay_linked: 0,
     }
 }
 

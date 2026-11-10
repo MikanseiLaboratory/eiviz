@@ -93,6 +93,12 @@ final class MixerController: ObservableObject {
     let switcherCloser = SwitcherCloser()
     var multiviewWindows: [UInt64: NSWindow] = [:]
     let multiviewCloser = SwitcherCloser()
+    /// Replay is one window pair per project, available only while a Replay input
+    /// exists.
+    var replayWindow: NSWindow?
+    var replaySettingsWindow: NSWindow?
+    let replayCloser = ReplayCloser()
+    let replaySettingsCloser = ReplayCloser()
     var videoRoles: [UInt64: (program: Bool, preview: Bool)] = [:]
     var remoteHandle: Int32 = 0
     var remoteConnecting = false
@@ -495,13 +501,78 @@ final class MixerController: ObservableObject {
         replaceRuntime()
     }
 
-    func replaceRuntime() {
-        if isRemote { return }
+    /// Applies the session to the mixer. Returns false when the core refused the
+    /// document, so a caller that promised the operator something can say so
+    /// instead of closing as if it worked.
+    @discardableResult
+    func replaceRuntime() -> Bool {
+        if isRemote { return true }
         session.selectedUnitId = selectedUnitId
-        guard let json = try? SessionFile.encode(session) else { return }
-        json.withUnsafeBytes { ptr in
-            _ = mixer_session_replace(ptr.bindMemory(to: UInt8.self).baseAddress, json.count, 0)
+        guard let json = try? SessionFile.encode(session) else { return false }
+        let code = json.withUnsafeBytes { ptr in
+            mixer_session_replace(ptr.bindMemory(to: UInt8.self).baseAddress, json.count, 0)
         }
+        guard code == EIVIZ_OK else {
+            let detail = MixerFFI.lastErrorText()
+            presentError(
+                detail.isEmpty ? L10n.error("Replace session", code) : detail,
+                title: L10n.t("msg.sessionRefused")
+            )
+            return false
+        }
+        adoptCanonicalReplay()
+        return true
+    }
+
+    /// Applies one session mutation to the live document.
+    ///
+    /// This is the way a window edits the document. Reading the document, changing it and
+    /// replacing it back loses anything another writer added in between, which is why every
+    /// window used to grow its own merge — in C#, in Swift and in the core — and why those
+    /// merges drifted. A mutation says what changed; the core decides what that means.
+    @discardableResult
+    func mutateLocal(_ mutation: String) -> Bool {
+        if isRemote {
+            return mutateRemote(mutation)
+        }
+        guard let data = mutation.data(using: .utf8) else { return false }
+        let code = data.withUnsafeBytes { ptr in
+            mixer_session_mutate(ptr.bindMemory(to: UInt8.self).baseAddress, data.count)
+        }
+        guard code == EIVIZ_OK else {
+            let detail = MixerFFI.lastErrorText()
+            presentError(
+                detail.isEmpty ? L10n.error("Mutate session", code) : detail,
+                title: L10n.t("msg.sessionRefused")
+            )
+            return false
+        }
+        adoptCanonicalReplay()
+        return true
+    }
+
+    /// The core normalizes the replay document on replace. The host keeps that copy.
+    private func adoptCanonicalReplay() {
+        var buffer = [UInt8](repeating: 0, count: 8 * 1024 * 1024)
+        let n = buffer.withUnsafeMutableBufferPointer { ptr in
+            mixer_copy_snapshot(ptr.baseAddress, ptr.count)
+        }
+        guard n > 0,
+              let text = String(bytes: buffer.prefix(Int(n)), encoding: .utf8),
+              let data = text.data(using: .utf8),
+              let root = try? JSONDecoder().decode(JSONValue.self, from: data),
+              case .object(let object) = root,
+              let replay = object["replay"]
+        else { return }
+        // A `null` is the core saying Replay is gone: the last channel was removed and the
+        // document went with it. Keeping the copy the host last had would publish the
+        // deleted Replay straight back, and the core would refuse the session because a
+        // Replay input cannot exist without its document.
+        if case .null = replay {
+            session.replay = nil
+            return
+        }
+        session.replay = replay
     }
 
     func shutdown() {
@@ -514,6 +585,7 @@ final class MixerController: ObservableObject {
         closeAllInputPreviews()
         closeAllAudioInputs()
         closeAllSwitchers()
+        closeReplayWindows()
         if remoteHandle != 0 {
             _ = mixer_remote_close(remoteHandle)
             remoteHandle = 0

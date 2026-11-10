@@ -322,6 +322,6 @@ mod tests {
             },
         );
         let roles = collect_roles(&doc, &live);
-        assert_eq!(roles.get(&2).copied().unwrap_or_default().on_program, true);
+        assert!(roles.get(&2).copied().unwrap_or_default().on_program);
     }
 }

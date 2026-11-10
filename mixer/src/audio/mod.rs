@@ -296,11 +296,21 @@ impl AudioEngine {
         mix_inputs: &std::collections::HashMap<u64, crate::abi::MixInputSpec>,
         fps_num: u32,
         fps_den: u32,
+        angle_sources: &[crate::replay::AudioSourceSpec],
     ) -> MixedAudio {
         let mut graph = self.graph.lock_or_recover();
         let mut delay = self.delay.lock_or_recover();
         graph.mix(
-            uploads, snapshot, scenes, frames, &mut delay, produce, mix_inputs, fps_num, fps_den,
+            uploads,
+            snapshot,
+            scenes,
+            frames,
+            &mut delay,
+            produce,
+            mix_inputs,
+            fps_num,
+            fps_den,
+            angle_sources,
         )
     }
 

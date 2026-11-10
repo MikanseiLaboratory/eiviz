@@ -9,6 +9,7 @@ use crate::session::{
 pub enum TagCatalog {
     Input,
     Scene,
+    Replay,
 }
 
 impl TagCatalog {
@@ -16,7 +17,10 @@ impl TagCatalog {
         match raw.trim().to_ascii_lowercase().as_str() {
             "input" | "inputs" => Ok(Self::Input),
             "scene" | "scenes" => Ok(Self::Scene),
-            _ => Err(ControlError::invalid("catalog must be input or scene")),
+            "replay" | "replays" | "clip" | "clips" => Ok(Self::Replay),
+            _ => Err(ControlError::invalid(
+                "catalog must be input, scene or replay",
+            )),
         }
     }
 
@@ -24,6 +28,7 @@ impl TagCatalog {
         match self {
             Self::Input => "input",
             Self::Scene => "scene",
+            Self::Replay => "replay",
         }
     }
 }
@@ -205,6 +210,19 @@ pub fn rename_catalog_tag(
                 }
             }
         }
+        TagCatalog::Replay => {
+            if let Some(replay) = document.replay.as_mut() {
+                for list in &mut replay.playlists {
+                    for clip in &mut list.clips {
+                        for tag in &mut clip.tags {
+                            if tag == from {
+                                *tag = to.to_string();
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -233,6 +251,15 @@ pub fn delete_catalog_tag(
         TagCatalog::Scene => {
             for scene in &mut document.scenes {
                 scene.tags.retain(|item| item != tag);
+            }
+        }
+        TagCatalog::Replay => {
+            if let Some(replay) = document.replay.as_mut() {
+                for list in &mut replay.playlists {
+                    for clip in &mut list.clips {
+                        clip.tags.retain(|item| item != tag);
+                    }
+                }
             }
         }
     }
@@ -279,6 +306,7 @@ fn catalog_mut(document: &mut Document, catalog: TagCatalog) -> &mut Vec<String>
     match catalog {
         TagCatalog::Input => &mut document.input_tags,
         TagCatalog::Scene => &mut document.scene_tags,
+        TagCatalog::Replay => &mut document.replay_tags,
     }
 }
 
@@ -289,7 +317,7 @@ fn next_input_id(document: &Document) -> u64 {
         .map(|item| item.id)
         .max()
         .unwrap_or(9);
-    document.next_input_id.max(max.saturating_add(1)).max(10)
+    crate::ids::skip_reserved_bands(document.next_input_id.max(max.saturating_add(1)).max(10))
 }
 
 fn next_scene_id(document: &Document) -> u64 {
@@ -379,6 +407,54 @@ mod tests {
         delete_catalog_tag(&mut doc, TagCatalog::Input, "Cams").unwrap();
         assert!(doc.input_tags.is_empty());
         assert!(doc.inputs[0].tags.is_empty());
+    }
+
+    #[test]
+    fn replay_tag_catalog_rewrites_clip_tags() {
+        use crate::session::replay::{ClipDto, ClipTransitionDto, PlaylistDto, ReplayDto};
+        let mut doc = bars();
+        doc.replay = Some(ReplayDto::default());
+        crate::session::replay::add_channel_input(&mut doc).unwrap();
+        let replay = doc.replay.as_mut().unwrap();
+        replay.angles.push(crate::session::replay::AngleDto {
+            id: 1,
+            name: "A".into(),
+            source: crate::session::replay::AngleSourceKind::Scene,
+            input_id: 0,
+            scene_id: 1,
+            audio: crate::session::replay::AngleAudio::Silent,
+            audio_unit_id: 0,
+            encoder: crate::session::replay::AngleEncoder::Gpu,
+        });
+        replay.playlists.push(PlaylistDto {
+            id: 1,
+            name: "Replay".into(),
+            revision: 1,
+            clips: vec![ClipDto {
+                uid: "clip-1".into(),
+                angle_id: 1,
+                tags: vec!["Goal".into()],
+                transition: ClipTransitionDto::default(),
+                ..ClipDto::default()
+            }],
+            default_transition: ClipTransitionDto::default(),
+        });
+
+        add_catalog_tag(&mut doc, TagCatalog::Replay, "Goal".into()).unwrap();
+        assert_eq!(doc.replay_tags, ["Goal"]);
+        rename_catalog_tag(&mut doc, TagCatalog::Replay, "Goal", "Score").unwrap();
+        assert_eq!(doc.replay_tags, ["Score"]);
+        assert_eq!(
+            doc.replay.as_ref().unwrap().playlists[0].clips[0].tags,
+            ["Score"]
+        );
+        delete_catalog_tag(&mut doc, TagCatalog::Replay, "Score").unwrap();
+        assert!(doc.replay_tags.is_empty());
+        assert!(
+            doc.replay.as_ref().unwrap().playlists[0].clips[0]
+                .tags
+                .is_empty()
+        );
     }
 
     #[test]

@@ -53,7 +53,13 @@ jobs:
 
       - name: Test mixer
         # mixer_create is process-global, so GPU/integration tests cannot share the process.
-        run: cargo test -p eiviz_mixer --locked --release -- --test-threads=1
+        #
+        # `pro-test-key` lets the Replay suite load the signed stand-in for the Pro module, so the
+        # tests that record, mark, play back, transition and check audio run here — including the GPU
+        # encoder, which is the default and which the readback path cannot reach.
+        run: >
+          cargo test -p eiviz_mixer --locked --release --features pro-test-key
+          -- --test-threads=1
 
       - name: Build headless
         run: cargo build -p eiviz-headless --locked --release --bins
@@ -119,6 +125,44 @@ jobs:
       - name: Build host
         run: dotnet build eiviz.slnx -c Release
 
+  # The replay integration tests are not run here. They load a Pro module, which is
+  # process-wide and permanent, so they only compile under debug_assertions; on a
+  # shared runner they repeatedly exhaust their frame budgets (one waited 303 s on a
+  # 300 s budget) and fail for reasons that say nothing about the change. They are run
+  # on a development machine instead, where the same list finishes in seconds.
+  macos-swift:
+    name: Mac host (Swift compile)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup NDI SDK
+        uses: ./.github/actions/setup-ndi-macos
+
+      - name: Install Rust 1.97
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.0
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          key: macos-swift
+
+      - name: Build the mixer dylib and the Swift host
+        # Swift type errors only need a compiler. The full `macos` job runs the mixer's
+        # release test suite first, which takes twenty minutes, so a missing import or a
+        # type in the wrong scope used to surface at the very end — the last pass of this
+        # work needed six follow-up commits for exactly that. This job builds the dylib
+        # the Swift package links against (a plain `cargo build`, no tests) and then the
+        # host, so it fails in minutes. Keep it small; put nothing slower in here.
+        run: |
+          chmod +x hosts/macos/build.sh
+          hosts/macos/build.sh
+
   macos:
     name: Test mixer and Mac host
     runs-on: macos-latest
@@ -142,7 +186,13 @@ jobs:
 
       - name: Test mixer
         # mixer_create is process-global, so GPU/integration tests cannot share the process.
-        run: cargo test -p eiviz_mixer --locked --release -- --test-threads=1
+        #
+        # `pro-test-key` lets the Replay suite load the signed stand-in for the Pro module, so the
+        # tests that record, mark, play back, transition and check audio run here — including the GPU
+        # encoder, which is the default and which the readback path cannot reach.
+        run: >
+          cargo test -p eiviz_mixer --locked --release --features pro-test-key
+          -- --test-threads=1
 
       - name: Build headless
         run: cargo build -p eiviz-headless --locked --release --bins
@@ -174,14 +224,27 @@ jobs:
         with:
           workspaces: .
 
+      - name: Check the Windows session DTOs against the core
+        # The host writes its session document by hand. A field it forgets is silently
+        # reset in the core on the next publish, so the two sides are compared rather
+        # than trusted (the scene camera went missing that way).
+        run: python3 scripts/check-session-dto.py
+
+      - name: Check every crate is rustfmt-clean
+        # rustfmt is a single tool with a single answer, so it is asked once for the whole
+        # workspace rather than per crate. A crate left out of a per-crate list drifts
+        # silently: the replay work left `mixer` and `eiviz-pro-api` unformatted while
+        # every other format step stayed green.
+        run: python3 scripts/check-rustfmt.py
+
       - name: Format control API
-        run: cargo fmt -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless -- --check
+        run: cargo fmt -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless -p eiviz-replay -- --check
 
       - name: Clippy control API
-        run: cargo clippy -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless --locked --no-default-features -- -D warnings
+        run: cargo clippy -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless -p eiviz-replay --locked --no-default-features -- -D warnings
 
       - name: Test control and API
-        run: cargo test -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless --locked --no-default-features
+        run: cargo test -p eiviz-control -p eiviz-api -p eiviz_remote -p eiviz-headless -p eiviz-replay --locked --no-default-features
 
       - name: Build eivizctl and headless without GPU
         run: cargo build -p eiviz-headless --locked --bins --no-default-features

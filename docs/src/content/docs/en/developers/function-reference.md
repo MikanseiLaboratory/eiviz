@@ -29,3 +29,33 @@ Examples:
 - TCP: `FUNCTION Fade Duration=500`
 - TCP: `FUNCTION Cut Input=3`
 
+## Replay
+
+Replay functions need a Replay input in the project, a Professional license, and the Pro module. `Channel` selects the replay channel, written as a letter (`A`, `B`, …) or a number from `0`. Omitted or empty means channel A; a channel that does not exist is rejected instead of playing another one.
+
+| Function | Parameters | Action |
+| --- | --- | --- |
+| `ReplayStartRecording` | | Starts recording on every angle |
+| `ReplayStopRecording` | | Stops recording |
+| `ReplayMarkIn` | | Marks the in point at the recording edge |
+| `ReplayMarkOut` | `Channel`, `Value` | Marks the out point. `Value` is the event name. The event is filed, and added to the playlist when the session asks for it |
+| `ReplayCue` | `Channel`, `Value` | Cues a clip onto the channel. `Value` is a clip uid; omitted or empty cues the newest clip on the channel's playlist |
+| `ReplayPlay` | `Channel`, `Value` | Plays the cued clip. `Value` is a multiple of normal speed (default `1`, so `0.5` is half speed) |
+| `ReplayPause` | `Channel` | Pauses, keeping the current speed |
+| `ReplayChangeSpeed` | `Channel`, `Value` | Plays at a new speed without reloading the clip |
+| `ReplayJumpToNow` | `Channel` | Returns the channel to the recording edge |
+
+Replay examples:
+
+```text
+# HTTP API
+http://127.0.0.1:8088/api?Function=ReplayStartRecording
+http://127.0.0.1:8088/api?Function=ReplayMarkIn
+http://127.0.0.1:8088/api?Function=ReplayMarkOut&Channel=A
+http://127.0.0.1:8088/api?Function=ReplayCue&Channel=A
+http://127.0.0.1:8088/api?Function=ReplayPlay&Channel=A&Value=0.5
+
+# TCP API
+FUNCTION ReplayMarkOut Channel=A
+```
+

@@ -112,6 +112,13 @@ mod tests {
         validate(&doc).unwrap();
         crate::session::validate_for_apply(&doc).unwrap();
         assert_eq!(doc.inputs.len(), 4);
+        assert!(doc.replay.is_none());
+        assert!(
+            !doc.inputs
+                .iter()
+                .any(|input| input.kind == crate::session::InputKind::Replay),
+            "Replay is added by the operator, never by a default session"
+        );
         assert_eq!(doc.scenes.len(), 2);
         assert_eq!(doc.units.len(), 1);
         assert!(!doc.outputs[0].use_gpu);

@@ -11,7 +11,8 @@ namespace Eiviz.Host.Dialogs;
 
 public partial class OverlayWindow : Window
 {
-    private readonly Session _session;
+    // The live document: App.ReplaceDocument swaps the Session object whenever the mixer reports a change, so a window that keeps the instance it was opened with writes its edits back into an outdated copy.
+    private Session _session => ((App)Application.Current).Session;
     private MixingUnitEntry _unit;
     private OverlaySlot? _selected;
     private bool _dragging;
@@ -34,7 +35,7 @@ public partial class OverlayWindow : Window
         InitializeComponent();
         LayoutSnapButton.Content = "🧲";
         LayoutSnapButton.ToolTip = $"{Loc.T("editor.layoutSnap")}\n{Loc.T("editor.layoutSnapHelp")}";
-        _session = session;
+
         _unit = unit;
         AddKindBox.SelectedIndex = 0;
         FillAddSources();
@@ -99,8 +100,23 @@ public partial class OverlayWindow : Window
 
     private bool OnAir(OverlaySlot slot) => _unit.OverlaysOnAir.Contains(slot.Id);
 
+    /// <summary>
+    /// Re-resolves the slot and the unit this window opened with against the document
+    /// that is live now. The document is replaced whenever the mixer reports a change,
+    /// and an object from the old copy is no longer in it: edits to it would reach
+    /// neither the mixer nor the saved file.
+    /// </summary>
+    private void EnsureLive()
+    {
+        if (_unit is not null && !_session.Units.Contains(_unit))
+            _unit = _session.Units.FirstOrDefault(item => item.Id == _unit.Id) ?? _unit;
+        if (_selected is not null && !_session.Overlays.Contains(_selected))
+            _selected = _session.Overlays.FirstOrDefault(slot => slot.Id == _selected.Id) ?? _selected;
+    }
+
     private void Push()
     {
+        EnsureLive();
         if (Application.Current is App { Backend.IsRemote: true } && _selected is not null)
         {
             if (Owner is MainWindow remote)
@@ -544,6 +560,7 @@ public partial class OverlayWindow : Window
 
     private void ApplyNumeric(bool push, object? sender)
     {
+        EnsureLive();
         if (_selected is null || _selected.Locked)
             return;
         if (float.TryParse(XBox.Text, out var x)) _selected.X = x / WidthPx;

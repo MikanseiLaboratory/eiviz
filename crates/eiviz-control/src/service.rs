@@ -12,6 +12,7 @@ use crate::live::ResourceStatus;
 use crate::port::{AutoApply, MixerPort, OverlayAutoApply};
 use crate::query::{Query, Snapshot};
 use crate::session::Document;
+use crate::session::InputKind;
 use crate::session::mutate;
 use crate::session::reconcile::{plan, reinforce_streams, repair_live};
 use crate::session::store::CanonicalSessionStore;
@@ -151,7 +152,8 @@ impl ControlService {
             Query::GetSnapshot
             | Query::GetCapabilities
             | Query::GetRevision
-            | Query::GetLiveState => self.snapshot(),
+            | Query::GetLiveState
+            | Query::GetReplayState => self.snapshot(),
         }
     }
 
@@ -174,6 +176,16 @@ impl ControlService {
             lifecycle: self.lifecycle,
             epoch: self.epoch.clone(),
         })
+    }
+
+    /// Live Replay state for `GetReplayState`. The session document says what is
+    /// configured; only the mixer knows what is actually playing, so both are
+    /// returned together.
+    pub fn replay_state_json(&self) -> ControlResult<String> {
+        let document = self.store.document().and_then(|doc| doc.replay.clone());
+        let live: serde_json::Value =
+            serde_json::from_str(&self.port.replay_state_json()).unwrap_or(serde_json::Value::Null);
+        Ok(serde_json::json!({ "document": document, "live": live }).to_string())
     }
 
     pub fn execute(&mut self, key: RequestKey, command: Command) -> ControlResult<CommandOutcome> {
@@ -377,6 +389,45 @@ impl ControlService {
                 self.port.scene_sequence(gpu, sequence_id, op)?;
                 self.after_live("SceneSequence", request_id, None, false)
             }
+            Command::ReplayRecord { on } => {
+                // The document says whether a recording can run at all. Refusing
+                // here names the missing piece; the mixer would only see a
+                // document that was never applied.
+                if on {
+                    self.check_replay_can_record()?;
+                }
+                self.port.replay_record(on)?;
+                if on {
+                    // Link the recording into the session here, not in a host: a client
+                    // that starts a recording through the API must leave the same
+                    // document a deck would.
+                    self.link_recording()?;
+                }
+                self.after_live("ReplayRecord", request_id, None, false)
+            }
+            Command::ReplayMarkIn => {
+                self.port.replay_mark_in()?;
+                self.after_live("ReplayMarkIn", request_id, None, false)
+            }
+            Command::ReplayMarkOut { name } => self.replay_mark_out(request_id, &name),
+            Command::ReplayCue { channel, clip_uid } => {
+                self.replay_cue(channel, &clip_uid)?;
+                self.after_live("ReplayCue", request_id, None, false)
+            }
+            Command::ReplayTransport {
+                channel,
+                playing,
+                speed_milli,
+                seek_frame,
+            } => {
+                self.port
+                    .replay_transport(channel, playing, speed_milli, seek_frame)?;
+                self.after_live("ReplayTransport", request_id, None, false)
+            }
+            Command::ReplayJumpToNow { channel } => {
+                self.port.replay_jump_to_now(channel)?;
+                self.after_live("ReplayJumpToNow", request_id, None, false)
+            }
             Command::Shutdown => {
                 self.destroy_runtime()?;
                 Ok(CommandOutcome {
@@ -425,6 +476,7 @@ impl ControlService {
         expected_revision: Option<u64>,
         request_id: &str,
     ) -> ControlResult<CommandOutcome> {
+        self.check_replay_angles_unchanged(&document)?;
         if !self.port.is_ready() {
             self.create_runtime(
                 document.settings.master_fps_num,
@@ -492,8 +544,69 @@ impl ControlService {
             .store
             .document_cloned()
             .ok_or_else(|| ControlError::unavailable("session not published"))?;
+        self.check_replay_quota(&document, &mutation)?;
         mutate::apply(&mut document, mutation)?;
         self.replace_session(document.canonicalize(), expected_revision, request_id)
+    }
+
+    /// Rejects Replay changes the current plan does not allow, at the point of
+    /// the mutation. Waiting for the mixer to refuse leaves the session holding a
+    /// configuration that can never run.
+    fn check_replay_quota(
+        &self,
+        document: &Document,
+        mutation: &SessionMutation,
+    ) -> ControlResult<()> {
+        // Every path that can end up with Replay state is checked here: a client
+        // that adds the Replay input itself (`UpsertInput`) used to slip past the
+        // channel limit, and the session then held a document that could never run.
+        let adds_channel = match mutation {
+            SessionMutation::AddReplayChannel => true,
+            SessionMutation::CreateInput { input } | SessionMutation::UpsertInput { input } => {
+                input.kind == InputKind::Replay
+            }
+            _ => false,
+        };
+        let current = document.replay.as_ref();
+        let current_channels = current.map(|replay| replay.channels.len()).unwrap_or(0);
+        let current_angles = current.map(|replay| replay.angles.len()).unwrap_or(0);
+        // `UpdateReplaySettings` never touches the channels, so they stay as they
+        // are; a whole-document upsert brings its own.
+        let (channels, angles) = match mutation {
+            SessionMutation::UpsertReplaySettings { replay } => {
+                (replay.channels.len(), replay.angles.len())
+            }
+            SessionMutation::UpdateReplaySettings { settings } => {
+                (current_channels, settings.angles.len())
+            }
+            _ if adds_channel => (current_channels + 1, current_angles),
+            _ => return Ok(()),
+        };
+        let capabilities = self.port.capabilities();
+        if !capabilities.replay_linked || capabilities.replay_channel_limit == 0 {
+            // Community, and a build with no Pro module, keep the timecodes and
+            // tags. Record and play are refused by the mixer. Adding another
+            // channel is the operation that still needs the plan.
+            if adds_channel {
+                return Err(ControlError::invalid(
+                    "Instant Replay requires a Professional license and the Pro module",
+                ));
+            }
+            return Ok(());
+        }
+        if u64::from(capabilities.replay_channel_limit) < channels as u64 {
+            return Err(ControlError::invalid(format!(
+                "this plan allows {} Replay channels",
+                capabilities.replay_channel_limit
+            )));
+        }
+        if u64::from(capabilities.replay_angle_limit) < angles as u64 {
+            return Err(ControlError::invalid(format!(
+                "this plan allows {} Replay angles",
+                capabilities.replay_angle_limit
+            )));
+        }
+        Ok(())
     }
 
     fn master_rate(&self) -> (u32, u32) {
@@ -683,6 +796,195 @@ impl ControlService {
         Ok(crate::ids::scene_gpu_id(scene.id))
     }
 
+    /// Replay records a fixed set of angles: the module was opened with it, so a
+    /// change mid-recording cannot be honoured. Refusing it here keeps the document
+    /// and the running mixer in step, and the operator gets told why.
+    fn check_replay_angles_unchanged(&self, next: &Document) -> ControlResult<()> {
+        let Some(previous) = self.store.document_cloned() else {
+            return Ok(());
+        };
+        let angles = |doc: &Document| -> std::collections::BTreeSet<u32> {
+            doc.replay
+                .as_ref()
+                .map(|replay| replay.angles.iter().map(|angle| angle.id).collect())
+                .unwrap_or_default()
+        };
+        let current = angles(&previous);
+        if current == angles(next) {
+            return Ok(());
+        }
+        // Only a recording run pins the set; an idle or stopped engine reconfigures.
+        if replay_is_recording(&self.port.replay_state_json()) {
+            return Err(ControlError::invalid(
+                "stop Replay recording before changing the Replay angles",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Whether the Replay document can start a recording at all.
+    ///
+    /// The mixer checks its own configuration too, but a document that was never
+    /// applied (or that a client wrote without a format) reaches the mixer as a
+    /// half-built engine. Naming the missing piece here is what the operator can
+    /// act on.
+    fn check_replay_can_record(&self) -> ControlResult<()> {
+        let Some(document) = self.store.document_cloned() else {
+            return Err(ControlError::invalid(
+                "the session has no Replay settings yet",
+            ));
+        };
+        let Some(replay) = document.replay.as_ref() else {
+            return Err(ControlError::invalid("add a Replay input before recording"));
+        };
+        if !replay.enabled {
+            return Err(ControlError::invalid(
+                "replay is not enabled; apply Replay Setup with at least one drive and one angle",
+            ));
+        }
+        if replay.storage.is_empty() {
+            return Err(ControlError::invalid(
+                "replay has no storage drive; add one in Replay Setup",
+            ));
+        }
+        if replay.angles.is_empty() {
+            return Err(ControlError::invalid(
+                "replay has no angles; add one in Replay Setup",
+            ));
+        }
+        let format = &replay.format;
+        if format.width == 0 || format.height == 0 || format.fps_num == 0 || format.fps_den == 0 {
+            return Err(ControlError::invalid(
+                "replay format needs a resolution and a frame rate; apply Replay Setup",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Writes the recording the recorder just opened into the session's list, so the
+    /// clips it produces name a recording whose drive the session knows.
+    fn link_recording(&mut self) -> ControlResult<()> {
+        let (uuid, started_ms) = self.port.replay_recording()?;
+        if uuid.trim().is_empty() {
+            return Ok(());
+        }
+        let Some(doc) = self.store.document_cloned() else {
+            return Ok(());
+        };
+        let Some(replay) = doc.replay.clone() else {
+            return Ok(());
+        };
+        let storage = replay
+            .storage
+            .first()
+            .map(|item| item.path.clone())
+            .unwrap_or_default();
+        let mut doc = doc;
+        let linked = doc.replay.as_mut().is_some_and(|replay| {
+            let recorded = crate::session::replay::RecordedRecording {
+                uuid: &uuid,
+                storage: &storage,
+                width: replay.format.width,
+                height: replay.format.height,
+                fps_num: replay.format.fps_num,
+                fps_den: replay.format.fps_den,
+                started_ms,
+            };
+            replay.link_recording(recorded)
+        });
+        if linked {
+            // No request id: the document change is a consequence of the record
+            // command, and the caller already gets its outcome.
+            let _ = self.replace_session(doc, None, "");
+        }
+        Ok(())
+    }
+    fn replay_mark_out(&mut self, request_id: &str, name: &str) -> ControlResult<CommandOutcome> {
+        let (uuid, in_frame, out_frame) = self.port.replay_close_mark()?;
+        let mut doc = self
+            .store
+            .document_cloned()
+            .ok_or_else(|| ControlError::unavailable("session not published"))?;
+        let replay = doc
+            .replay
+            .as_mut()
+            .ok_or_else(|| ControlError::invalid("Replay input has not been added"))?;
+        // The event, and the clip the operator asked for, are the session model's
+        // business; the service only carries the result back.
+        replay
+            .note_mark_out(&uuid, in_frame, out_frame, name)
+            .map_err(ControlError::invalid)?;
+        self.replace_session(doc, None, request_id)
+    }
+
+    fn replay_cue(&mut self, channel: u32, clip_uid: &str) -> ControlResult<()> {
+        let doc = self
+            .store
+            .document()
+            .ok_or_else(|| ControlError::unavailable("session not published"))?;
+        let replay = doc
+            .replay
+            .as_ref()
+            .ok_or_else(|| ControlError::invalid("Replay input has not been added"))?;
+        // An empty id means the newest clip on the channel, which is the convention
+        // the session and the animation cues already use.
+        let clip = if clip_uid.is_empty() {
+            let playlist_id = replay
+                .channels
+                .iter()
+                .find(|item| item.index == channel)
+                .and_then(|item| item.playlist_id)
+                .ok_or_else(|| {
+                    ControlError::invalid(format!(
+                        "Replay channel {channel} selects no playlist to cue from"
+                    ))
+                })?;
+            replay
+                .playlists
+                .iter()
+                .find(|list| list.id == playlist_id)
+                .and_then(|list| list.clips.last())
+                .cloned()
+                .ok_or_else(|| {
+                    ControlError::not_found(format!("Replay channel {channel} has no clips"))
+                })?
+        } else {
+            replay
+                .playlists
+                .iter()
+                .flat_map(|list| list.clips.iter())
+                .find(|clip| clip.uid == clip_uid)
+                .cloned()
+                .ok_or_else(|| ControlError::not_found(format!("replay clip {clip_uid}")))?
+        };
+        self.port.replay_cue(
+            channel,
+            clip.angle_id,
+            clip.in_frame,
+            clip.out_frame,
+            &clip.recording_uuid,
+        )
+    }
+
+    pub fn publish_replay_health(
+        &mut self,
+        severity: u32,
+        issues: u32,
+        stop_reason: u32,
+        remaining_secs: u32,
+        message: String,
+    ) {
+        let meta = self.meta("");
+        self.hub.publish(Event::ReplayHealth {
+            meta,
+            severity,
+            issues,
+            stop_reason,
+            remaining_secs,
+            message,
+        });
+    }
+
     fn after_live(
         &mut self,
         name: &str,
@@ -767,6 +1069,10 @@ pub trait ControlFacade: Send + Sync {
     fn snapshot(&self) -> ControlResult<Snapshot>;
     fn events_after(&self, after: u64) -> Vec<Event>;
     fn lifecycle(&self) -> Lifecycle;
+    /// Live Replay state as JSON. Facades without a replay backend return `{}`.
+    fn replay_state_json(&self) -> ControlResult<String> {
+        Ok("{}".into())
+    }
     fn epoch(&self) -> String {
         String::new()
     }
@@ -784,6 +1090,12 @@ impl ControlFacade for std::sync::Mutex<ControlService> {
         self.lock()
             .map_err(|_| ControlError::internal("control lock"))?
             .snapshot()
+    }
+
+    fn replay_state_json(&self) -> ControlResult<String> {
+        self.lock()
+            .map_err(|_| ControlError::internal("control lock"))?
+            .replay_state_json()
     }
 
     fn events_after(&self, after: u64) -> Vec<Event> {
@@ -811,6 +1123,15 @@ impl ControlFacade for std::sync::Mutex<ControlService> {
     }
 }
 
+/// True while the replay backend reports a running recording, which is what pins
+/// the angle set. A facade without Replay reports nothing, which is not recording.
+fn replay_is_recording(state_json: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(state_json)
+        .ok()
+        .and_then(|value| value.get("state").and_then(serde_json::Value::as_u64))
+        == Some(1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -825,6 +1146,8 @@ mod tests {
         scenes: usize,
         ops: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
         fail_next: bool,
+        /// What the replay backend reports as its live state.
+        replay_recording: std::sync::Arc<std::sync::atomic::AtomicBool>,
     }
 
     impl FakeMixer {
@@ -1086,6 +1409,30 @@ mod tests {
                 .and_then(|slot| slot.get(&unit_id).cloned())
                 .ok_or_else(|| ControlError::not_found("unit"))
         }
+        fn replay_cue(
+            &mut self,
+            channel: u32,
+            angle_id: u32,
+            in_frame: u64,
+            out_frame: u64,
+            recording_uuid: &str,
+        ) -> ControlResult<()> {
+            self.push_op(format!(
+                "replay_cue {channel} {angle_id} {in_frame} {out_frame} {recording_uuid}"
+            ));
+            Ok(())
+        }
+        fn replay_state_json(&self) -> String {
+            let state = if self
+                .replay_recording
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                1
+            } else {
+                0
+            };
+            format!("{{\"state\":{state}}}")
+        }
         fn live_state(&self) -> ControlResult<LiveState> {
             Ok(LiveState {
                 units: self
@@ -1192,6 +1539,173 @@ mod tests {
             let ops = probe.ops();
             assert!(ops.len() >= first);
             assert!(!ops[first..].iter().any(|op| op.starts_with("generator")));
+        });
+    }
+
+    /// A Replay document with one channel that selects a two-clip playlist.
+    fn replay_doc() -> Document {
+        parse(
+            br#"{
+          "version": 2,
+          "inputs": [
+            { "id": 2, "name": "Bars", "kind": "Bars" },
+            { "id": 524289, "name": "Replay A", "kind": "Replay" }
+          ],
+          "scenes": [
+            { "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] },
+            { "id": 2, "name": "Scene 2", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] },
+            { "id": 3, "name": "Scene 3", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }
+          ],
+          "units": [{ "id": 1, "name": "MU 1" }],
+          "replay": {
+            "enabled": true,
+            "storage": [{ "path": "D:/replay", "angleIds": [1] }],
+            "format": { "width": 1920, "height": 1080, "fpsNum": 60000, "fpsDen": 1001, "profile": "Sq", "segmentFrames": 120 },
+            "angles": [{ "id": 1, "name": "Cam 1", "sceneId": 1, "audio": "Silent" }],
+            "channels": [{ "index": 0, "playlistId": 7, "inputId": 524289 }],
+            "playlists": [{ "id": 7, "name": "Replay", "revision": 1, "clips": [
+              { "uid": "clip-1", "angleId": 1, "recordingUuid": "rec", "inFrame": 10, "outFrame": 40 },
+              { "uid": "clip-2", "angleId": 1, "recordingUuid": "rec", "inFrame": 100, "outFrame": 160 }
+            ] }]
+          }
+        }"#,
+        )
+        .unwrap()
+    }
+
+    /// An empty clip id cues the newest clip on the channel, which is how the
+    /// session and the animation cues write "the clip that was just marked".
+    #[test]
+    fn cueing_the_newest_clip_uses_the_channels_playlist() {
+        on_big_stack(|| {
+            let fake = FakeMixer::default();
+            let probe = fake.clone();
+            let mut svc = ControlService::new(fake);
+            svc.replace_session(replay_doc(), None, "1").unwrap();
+            svc.execute(
+                RequestKey {
+                    client_instance_id: "test".into(),
+                    request_id: "1".into(),
+                },
+                Command::ReplayCue {
+                    channel: 0,
+                    clip_uid: String::new(),
+                },
+            )
+            .unwrap();
+            let ops = probe.ops();
+            assert!(
+                ops.iter().any(|op| op == "replay_cue 0 1 100 160 rec"),
+                "the newest clip must be cued: {ops:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn cueing_a_named_clip_uses_that_clip() {
+        on_big_stack(|| {
+            let fake = FakeMixer::default();
+            let probe = fake.clone();
+            let mut svc = ControlService::new(fake);
+            svc.replace_session(replay_doc(), None, "1").unwrap();
+            svc.execute(
+                RequestKey {
+                    client_instance_id: "test".into(),
+                    request_id: "1".into(),
+                },
+                Command::ReplayCue {
+                    channel: 0,
+                    clip_uid: "clip-1".into(),
+                },
+            )
+            .unwrap();
+            let ops = probe.ops();
+            assert!(
+                ops.iter().any(|op| op == "replay_cue 0 1 10 40 rec"),
+                "the named clip must be cued: {ops:?}"
+            );
+
+            // A clip nobody has is refused rather than silently cueing another.
+            let err = svc
+                .execute(
+                    RequestKey {
+                        client_instance_id: "test".into(),
+                        request_id: "2".into(),
+                    },
+                    Command::ReplayCue {
+                        channel: 0,
+                        clip_uid: "clip-9".into(),
+                    },
+                )
+                .unwrap_err();
+            assert!(err.message().contains("clip-9"), "{}", err.message());
+        });
+    }
+
+    /// Replay records a fixed set of angles, so a change while recording is refused
+    /// with a reason instead of leaving the document and the mixer apart.
+    #[test]
+    fn changing_the_replay_angles_while_recording_is_refused() {
+        use crate::session::replay::{AngleAudio, AngleDto, AngleSourceKind};
+        on_big_stack(|| {
+            let recording = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let fake = FakeMixer {
+                replay_recording: std::sync::Arc::clone(&recording),
+                ..FakeMixer::default()
+            };
+            let mut svc = ControlService::new(fake);
+            let angle = |id: u32| AngleDto {
+                id,
+                name: format!("Cam {id}"),
+                source: AngleSourceKind::Scene,
+                // One scene per angle: two angles on one scene is a document the
+                // control layer refuses, and this test is about the angle set.
+                scene_id: u64::from(id),
+                input_id: 0,
+                audio: AngleAudio::Silent,
+                audio_unit_id: 0,
+                encoder: crate::session::replay::AngleEncoder::Gpu,
+            };
+            svc.replace_session(replay_doc(), None, "1").unwrap();
+
+            // Idle: the angle set may change freely. A new angle also needs a
+            // drive, because recording never guesses which disk to use.
+            let mut two = replay_doc();
+            {
+                let replay = two.replay.as_mut().unwrap();
+                replay.angles.push(angle(2));
+                replay.storage[0].angle_ids = vec![1, 2];
+            }
+            svc.replace_session(two.clone(), None, "2").unwrap();
+
+            // The same set is fine while recording.
+            recording.store(true, std::sync::atomic::Ordering::Relaxed);
+            svc.replace_session(two.clone(), None, "3").unwrap();
+
+            // Adding an angle is not, and the document keeps the set it had.
+            let mut three = two.clone();
+            {
+                let replay = three.replay.as_mut().unwrap();
+                replay.angles.push(angle(3));
+                replay.storage[0].angle_ids = vec![1, 2, 3];
+            }
+            let err = svc.replace_session(three.clone(), None, "4").unwrap_err();
+            assert!(
+                err.message().contains("stop Replay recording"),
+                "{}",
+                err.message()
+            );
+            let state: serde_json::Value =
+                serde_json::from_str(&svc.replay_state_json().unwrap()).unwrap();
+            assert_eq!(
+                state["document"]["angles"].as_array().map(Vec::len),
+                Some(2),
+                "a refused change must not land in the document: {state}"
+            );
+
+            // Stopping releases the set again.
+            recording.store(false, std::sync::atomic::Ordering::Relaxed);
+            svc.replace_session(three, None, "5").unwrap();
         });
     }
 

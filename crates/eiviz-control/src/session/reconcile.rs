@@ -104,6 +104,9 @@ pub enum ReconcileOp {
         enabled: bool,
         port: u32,
     },
+    ReplayConfigure {
+        json: String,
+    },
 }
 
 #[inline(never)]
@@ -336,6 +339,14 @@ pub fn plan(previous: Option<&Document>, next: &Document) -> Vec<ReconcileOp> {
         });
     }
 
+    if previous.is_none_or(|prev| prev.replay != next.replay) {
+        // The mixer reads "null" as "clear every Replay channel", so a
+        // serialization failure must never be turned into one.
+        if let Ok(json) = serde_json::to_string(&next.replay) {
+            ops.push(ReconcileOp::ReplayConfigure { json });
+        }
+    }
+
     for id in prev_units {
         if !next_units.contains(&id) {
             ops.push(ReconcileOp::DestroyUnit { id });
@@ -391,17 +402,20 @@ fn source_still_live(doc: &Document, source: u64) -> bool {
         let unit_id = source & ids::MU_ID_MASK;
         return doc.units.iter().any(|unit| unit.id == unit_id);
     }
-    if source & ids::MULTIVIEW_BASE == ids::MULTIVIEW_BASE {
-        return doc
-            .multiviews
-            .iter()
-            .any(|layout| ids::multiview_gpu_id(layout.id) == source);
-    }
-    if source & ids::SCENE_BASE == ids::SCENE_BASE {
+    // Range checks, not bit masks. A mask matches every id that happens to share
+    // the bit, which is how a `0x0005_0001` Replay channel was read as a Scene
+    // and had program retargeted off it on every MarkOut.
+    if (ids::SCENE_BASE..ids::MULTIVIEW_BASE).contains(&source) {
         return doc
             .scenes
             .iter()
             .any(|scene| ids::scene_gpu_id(scene.id) == source);
+    }
+    if (ids::MULTIVIEW_BASE..ids::LABEL_BASE).contains(&source) {
+        return doc
+            .multiviews
+            .iter()
+            .any(|layout| ids::multiview_gpu_id(layout.id) == source);
     }
     doc.inputs.iter().any(|input| input.id == source)
 }
@@ -658,6 +672,10 @@ fn apply_live<P: crate::port::MixerPort + ?Sized>(
             enabled,
             port: ws_port,
         } => port.configure_native_api(*enabled, *ws_port),
+        // A refused configure used to be recorded as "retrying" and the new
+        // document was committed anyway. Nothing retried it, so Replay Setup
+        // could report success while the mixer kept the previous settings.
+        ReconcileOp::ReplayConfigure { json } => port.replay_configure(json),
         _ => Ok(()),
     }
 }
@@ -877,6 +895,7 @@ fn input_ops(input: &InputDto) -> Vec<ReconcileOp> {
             process_exe: input.audio_process_exe.clone(),
             process_aumid: input.audio_process_aumid.clone(),
         })],
+        InputKind::Replay => Vec::new(),
     }
 }
 
@@ -975,6 +994,14 @@ fn scene_anim_apply(scene: &SceneDto) -> SceneAnimApply {
                         state_id: step.state_id,
                         motion: step.motion.as_ref().map(motion_apply),
                         hold_frames: step.hold_frames,
+                        replay: step
+                            .replay
+                            .as_ref()
+                            .map(|action| crate::port::ReplayActionApply {
+                                channel: action.channel,
+                                clip_uid: action.clip_uid.clone(),
+                                play: action.play,
+                            }),
                     })
                     .collect(),
             })

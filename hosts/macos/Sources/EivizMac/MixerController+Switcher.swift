@@ -213,6 +213,12 @@ extension MixerController {
 
     func upsertInput(_ input: InputEntry, replacing: UInt64?) {
         if isRemote {
+            // The core creates the replay document and the channel input, with the
+            // reserved channel id.
+            if input.kind == .replay, replacing == nil {
+                _ = mutateRemote(MixerRemote.addReplayChannel())
+                return
+            }
             if replacing == nil, input.kind == .still || input.kind == .video {
                 guard let path = input.pathOrAddress else { return }
                 guard !remoteUploading else { return }
@@ -279,7 +285,14 @@ extension MixerController {
             }
             session.inputs[index] = entry
         } else {
-            if entry.id == 0 || session.inputs.contains(where: { $0.id == entry.id }) {
+            // A Replay channel owns a reserved id and brings the replay document
+            // with it; it never takes a normal input id.
+            if entry.kind == .replay {
+                guard assignReplayChannel(&entry) else {
+                    presentInputError(L10n.t("replay.channelsFull"))
+                    return
+                }
+            } else if entry.id == 0 || session.inputs.contains(where: { $0.id == entry.id }) {
                 entry.id = session.nextInputId
                 session.nextInputId += 1
             }
@@ -287,6 +300,11 @@ extension MixerController {
         }
         attach(entry)
         selectedInputId = entry.id
+        // The mixer learns a Replay channel and its document from the session, so
+        // adding the input publishes straight away instead of at the first edit.
+        if entry.kind == .replay {
+            publishSession()
+        }
         objectWillChange.send()
     }
 
@@ -296,13 +314,19 @@ extension MixerController {
               !session.inputs[index].isBuiltin
         else { return }
         if isRemote {
-            _ = mutateRemote(MixerRemote.deleteInput(id))
+            if session.inputs[index].kind == .replay, isLastReplayChannel(inputId: id) {
+                // Removing the last channel removes the whole replay document.
+                _ = mutateRemote(MixerRemote.deleteReplay())
+            } else {
+                _ = mutateRemote(MixerRemote.deleteInput(id))
+            }
             return
         }
         closeInputPreview(id)
         closeAudioInput(id)
         videoRoles.removeValue(forKey: id)
         _ = mixer_destroy_source(id)
+        removeReplayChannel(inputId: id)
         session.inputs.remove(at: index)
         session.overlays.removeAll { $0.sourceKind == .input && $0.sceneGpuId == id }
         for unitIndex in session.units.indices {
@@ -334,6 +358,15 @@ extension MixerController {
 
     func deleteScene(_ scene: SceneEntry) {
         guard session.scenes.count > 1 else { return }
+        // An angle records a scene's composited output, so the scene is not the
+        // operator's to delete while Replay depends on it.
+        if let angle = replayAngle(recording: scene.id) {
+            presentError(
+                L10n.format("replay.sceneRecorded", angle.label),
+                title: L10n.t("replay.windowTitle")
+            )
+            return
+        }
         if isRemote {
             _ = mutateRemote(MixerRemote.deleteScene(scene.id))
             return
@@ -467,6 +500,15 @@ extension MixerController {
     func deleteUnit() {
         guard session.units.count > 1 else { return }
         let id = selectedUnitId
+        // An angle may record a unit's program mix, which makes the unit the wrong
+        // thing to delete.
+        if let angle = replayAngle(listening: id) {
+            presentError(
+                L10n.format("replay.unitRecorded", angle.label),
+                title: L10n.t("replay.windowTitle")
+            )
+            return
+        }
         if isRemote {
             _ = mutateRemote(MixerRemote.deleteUnit(id))
             return

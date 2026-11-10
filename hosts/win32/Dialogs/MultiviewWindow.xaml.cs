@@ -10,7 +10,8 @@ namespace Eiviz.Host.Dialogs;
 
 public partial class MultiviewWindow : Window
 {
-    private readonly Session _session;
+    // The live document: App.ReplaceDocument swaps the Session object whenever the mixer reports a change, so a window that keeps the instance it was opened with writes its edits back into an outdated copy.
+    private Session _session => ((App)Application.Current).Session;
     private readonly MultiviewLayout _layout;
     private bool _fullscreen;
     private bool _suppressPresent;
@@ -21,7 +22,7 @@ public partial class MultiviewWindow : Window
     public MultiviewWindow(Session session, MultiviewLayout layout)
     {
         InitializeComponent();
-        _session = session;
+
         _layout = layout;
         Title = layout.Name;
         TitleText.Text = layout.Name;

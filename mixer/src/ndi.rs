@@ -7,7 +7,7 @@ use std::time::Duration;
 
 enum NdiVideoCmd {
     Video {
-        packed: Arc<[u8]>,
+        packed: Arc<Vec<u8>>,
         width: i32,
         height: i32,
         stride: i32,
@@ -230,7 +230,7 @@ impl NdiSender {
         let worker = thread::Builder::new()
             .name("eiviz-ndi-send".into())
             .spawn(move || {
-                let mut inflight: Option<Arc<[u8]>> = None;
+                let mut inflight: Option<Arc<Vec<u8>>> = None;
                 loop {
                     while let Ok(ctrl) = ctrl_rx.try_recv() {
                         match ctrl {
@@ -326,7 +326,7 @@ impl NdiSender {
         height: u32,
         stride: u32,
         pts: i64,
-        pixels: Arc<[u8]>,
+        pixels: Arc<Vec<u8>>,
         fps_num: u32,
         fps_den: u32,
     ) -> Result<(), String> {
@@ -735,11 +735,11 @@ fn uyvy_is_packed(width: u32, height: u32, stride: u32, pixels: &[u8]) -> bool {
 }
 
 /// Packed UYVY (stride = width*2) is sent as-is. Padded rows are copied once.
-fn packed_uyvy(width: u32, height: u32, stride: u32, pixels: Arc<[u8]>) -> Arc<[u8]> {
+fn packed_uyvy(width: u32, height: u32, stride: u32, pixels: Arc<Vec<u8>>) -> Arc<Vec<u8>> {
     if uyvy_is_packed(width, height, stride, &pixels) {
         pixels
     } else {
-        Arc::from(pack_uyvy(width, height, stride, &pixels))
+        Arc::new(pack_uyvy(width, height, stride, &pixels))
     }
 }
 
@@ -770,7 +770,7 @@ mod tests {
         let width = 4u32;
         let height = 2u32;
         let stride = 8u32;
-        let src: Arc<[u8]> = vec![1u8; (stride * height) as usize].into();
+        let src: Arc<Vec<u8>> = Arc::new(vec![1u8; (stride * height) as usize]);
         let packed = packed_uyvy(width, height, stride, Arc::clone(&src));
         assert!(Arc::ptr_eq(&src, &packed));
     }
@@ -783,7 +783,7 @@ mod tests {
         let mut src = vec![0u8; (stride * height) as usize];
         src[0..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
         src[16..24].copy_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
-        let src: Arc<[u8]> = src.into();
+        let src: Arc<Vec<u8>> = Arc::new(src);
         let packed = packed_uyvy(width, height, stride, Arc::clone(&src));
         assert!(!Arc::ptr_eq(&src, &packed));
         assert_eq!(
