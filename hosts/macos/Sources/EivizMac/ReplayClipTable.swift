@@ -194,7 +194,7 @@ struct ReplayClipTable: View {
                 }
                 .width(70)
             }
-            .frame(minHeight: 140)
+            .frame(minHeight: 100)
             if clips.isEmpty {
                 Text(L10n.t("replay.noClips"))
                     .font(.caption)

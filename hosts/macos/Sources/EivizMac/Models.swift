@@ -1692,6 +1692,9 @@ struct SessionSettings: Codable {
     var defaultMultiviewUnitId: UInt64 = 1
     var frameBufferFrames: UInt32 = 3
     var defaultPresentInterval: UInt32 = 3
+    /// Presentation interval for the replay deck's monitors. Zero follows
+    /// `defaultPresentInterval`, the same rule the Windows settings window uses.
+    var replayPresentInterval: UInt32 = 0
     var flipSwapchainLimit: UInt32 = 0
     var internalColorFormat: InternalColorFormat = .uyvy
     var rebarOptimization: Bool?
@@ -1736,6 +1739,7 @@ struct SessionSettings: Codable {
         defaultMultiviewUnitId = try container.decodeIfPresent(UInt64.self, forKey: .defaultMultiviewUnitId) ?? 1
         frameBufferFrames = try container.decodeIfPresent(UInt32.self, forKey: .frameBufferFrames) ?? 3
         defaultPresentInterval = try container.decodeIfPresent(UInt32.self, forKey: .defaultPresentInterval) ?? 3
+        replayPresentInterval = try container.decodeIfPresent(UInt32.self, forKey: .replayPresentInterval) ?? 0
         let flip = try container.decodeIfPresent(UInt32.self, forKey: .flipSwapchainLimit) ?? 0
         flipSwapchainLimit = [0, 4, 6, 8, 10, 12, 16].contains(flip) ? flip : 0
         internalColorFormat = try container.decodeIfPresent(InternalColorFormat.self, forKey: .internalColorFormat) ?? .uyvy
@@ -1763,7 +1767,7 @@ struct SessionSettings: Codable {
     }
 }
 
-enum JSONValue: Codable {
+enum JSONValue: Codable, Equatable {
     case object([String: JSONValue])
     case array([JSONValue])
     case string(String)

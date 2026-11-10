@@ -5800,6 +5800,43 @@ unsafe fn mixer_session_import_ffi(
     }
 }
 
+/// Revision of the session the control API (vMix HTTP, eivizctl) mutates.
+///
+/// The host keeps its own copy of the document for the UI. Without a revision the host
+/// cannot tell an external edit from its own, so marks and clips made through the API never
+/// reached the deck.
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_session_revision() -> u64 {
+    crate::control_service()
+        .lock()
+        .map(|svc| svc.revision())
+        .unwrap_or(0)
+}
+
+/// Copies the control session's canonical document as JSON. The caller retries with a
+/// larger buffer when the return value is negative.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_copy_json(out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_session_copy_json", -1, || unsafe {
+        mixer_session_copy_json_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_session_copy_json_ffi(out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() || cap == 0 {
+        return -ERR_INVALID_ARGUMENT;
+    }
+    let json = crate::control_service()
+        .lock()
+        .ok()
+        .and_then(|svc| {
+            svc.document()
+                .and_then(|document| serde_json::to_string(document).ok())
+        })
+        .unwrap_or_default();
+    copy_bytes(json.as_bytes(), out, cap)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_session_current_path(out: *mut u8, cap: usize) -> i32 {
     ffi_guard("mixer_session_current_path", -1, || unsafe {

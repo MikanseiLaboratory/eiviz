@@ -32,16 +32,19 @@ enum EivizTheme {
     }
 
     static func applyAppAppearance() {
+        // `NSApp` is still nil while SwiftUI calls `App.init()` on macOS 27, so ask for the
+        // shared application instead of using the implicitly unwrapped global.
+        let app = NSApplication.shared
         switch AppPrefs.shared.theme {
         case .dark:
-            NSApp.appearance = NSAppearance(named: .darkAqua)
+            app.appearance = NSAppearance(named: .darkAqua)
         case .light:
-            NSApp.appearance = NSAppearance(named: .aqua)
+            app.appearance = NSAppearance(named: .aqua)
         case .system:
-            NSApp.appearance = nil
+            app.appearance = nil
         }
-        for window in NSApp.windows {
-            window.appearance = NSApp.appearance
+        for window in app.windows {
+            window.appearance = app.appearance
         }
     }
 

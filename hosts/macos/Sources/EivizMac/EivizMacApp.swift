@@ -39,7 +39,10 @@ struct EivizMacApp: App {
 
     init() {
         HostLog.install()
-        EivizTheme.applyAppAppearance()
+        // Never touch NSApplication from `App.init()` on macOS 27: even when `NSApp` looks
+        // non-nil, asking for the shared application this early can abort inside AppKit
+        // ("Dictionary literal contains duplicate keys"). The appearance is applied from
+        // the scene's `.onAppear`, once the application is fully up.
     }
 
     var body: some Scene {

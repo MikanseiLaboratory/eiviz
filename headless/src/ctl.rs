@@ -864,6 +864,8 @@ pub enum ReplayCmd {
         #[arg(long)]
         path: String,
     },
+    /// Removes Replay and its channels/events/playlists from the project.
+    Delete,
 }
 
 async fn replay_cmd(session: &ControlSession, cmd: ReplayCmd) -> Result<CmdResult, String> {
@@ -940,6 +942,9 @@ async fn replay_cmd(session: &ControlSession, cmd: ReplayCmd) -> Result<CmdResul
         ReplayCmd::JumpToNow { channel } => {
             session.replay_jump_to_now(channel).await.map_err(map_err)?;
             ok_live(session, json!({ "channel": channel })).await
+        }
+        ReplayCmd::Delete => {
+            mutate(session, SessionMutation::DeleteReplay, None, false).await
         }
         ReplayCmd::State => {
             let json = session.replay_state().await.map_err(map_err)?;
@@ -1961,6 +1966,22 @@ pub fn print_ok(json: bool, command: &str, revision: u64, resource: Value) {
             serde_json::to_string_pretty(&resource).unwrap_or_else(|_| resource.to_string())
         );
     } else if resource.is_array() || resource.is_object() && resource.get("id").is_some() {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&resource).unwrap_or_else(|_| resource.to_string())
+        );
+    } else if command == "replay"
+        && resource.get("document").is_some()
+        && resource.get("live").is_some()
+    {
+        // `replay state` promises the document and the measured state in one call; the
+        // generic "ok" hid both of them behind --json.
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&resource).unwrap_or_else(|_| resource.to_string())
+        );
+    } else if command == "replay" && resource.get("note").is_some() {
+        // `replay estimate` answers with a note on this client; print it rather than "ok".
         println!(
             "{}",
             serde_json::to_string_pretty(&resource).unwrap_or_else(|_| resource.to_string())
