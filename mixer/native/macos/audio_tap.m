@@ -50,6 +50,21 @@ static CFStringRef copy_default_output_uid(void) {
     return uid;
 }
 
+static AudioObjectID translate_pid_to_object(pid_t pid) {
+    AudioObjectPropertyAddress address = {
+        .mSelector = kAudioHardwarePropertyTranslatePIDToProcessObject,
+        .mScope = kAudioObjectPropertyScopeGlobal,
+        .mElement = kAudioObjectPropertyElementMain,
+    };
+    AudioObjectID objectID = kAudioObjectUnknown;
+    UInt32 size = sizeof(objectID);
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, sizeof(pid), &pid, &size,
+                                   &objectID) != noErr) {
+        return kAudioObjectUnknown;
+    }
+    return objectID;
+}
+
 @interface EivizAudioTapObj : NSObject
 @property(nonatomic) AudioObjectID tapID;
 @property(nonatomic) AudioDeviceID aggregateID;
@@ -115,8 +130,14 @@ static CFStringRef copy_default_output_uid(void) {
 
     CATapDescription *description = nil;
     if (mode == 1) {
+        // The exclude list takes process objects, not PIDs. Exclude our own
+        // output when Core Audio knows this process; otherwise tap the system mix.
+        AudioObjectID selfObject = translate_pid_to_object(getpid());
+        NSArray<NSNumber *> *exclude = selfObject == kAudioObjectUnknown
+            ? @[]
+            : @[ @(selfObject) ];
         description = [[CATapDescription alloc]
-            initStereoGlobalTapButExcludeProcesses:@[ @(getpid()) ]];
+            initStereoGlobalTapButExcludeProcesses:exclude];
     } else {
         NSMutableArray<NSNumber *> *objects = [NSMutableArray array];
         NSString *wantedExe = processExe ?: @"";
@@ -139,17 +160,8 @@ static CFStringRef copy_default_output_uid(void) {
             if (!match) {
                 continue;
             }
-            AudioObjectPropertyAddress address = {
-                .mSelector = kAudioHardwarePropertyTranslatePIDToProcessObject,
-                .mScope = kAudioObjectPropertyScopeGlobal,
-                .mElement = kAudioObjectPropertyElementMain,
-            };
-            pid_t pid = app.processIdentifier;
-            AudioObjectID objectID = kAudioObjectUnknown;
-            UInt32 size = sizeof(objectID);
-            if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, sizeof(pid), &pid, &size,
-                                           &objectID) == noErr &&
-                objectID != kAudioObjectUnknown) {
+            AudioObjectID objectID = translate_pid_to_object(app.processIdentifier);
+            if (objectID != kAudioObjectUnknown) {
                 [objects addObject:@(objectID)];
             }
         }
