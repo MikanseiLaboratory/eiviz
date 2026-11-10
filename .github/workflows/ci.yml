@@ -243,6 +243,8 @@ jobs:
       # added twenty minutes to the critical path without testing anything new.
       - name: Run Swift replay checks
         run: |
+          cd "$GITHUB_WORKSPACE"
+          cargo build -p eiviz_mixer -p eiviz_remote --release --locked
           cd hosts/macos
           mkdir -p .build/out/Products/Release
           cp "$GITHUB_WORKSPACE/target/release/libeiviz_mixer.dylib" \
