@@ -102,7 +102,7 @@ struct ReplayView: View {
             transportBar
         }
         .padding(12)
-        .frame(minWidth: 1240, minHeight: 780)
+        .frame(minWidth: 1240, minHeight: 860)
         .onAppear { load() }
         .onReceive(tick) { _ in refresh() }
     }
@@ -130,7 +130,7 @@ struct ReplayView: View {
             }
             .labelsHidden()
             .frame(width: 140, height: 32)
-            Text(stateText).fontWeight(.bold)
+            Text(stateText).fontWeight(.bold).foregroundStyle(isRecording ? Color.red : Color.primary)
             if !status.isEmpty {
                 Text(status).font(.caption).foregroundStyle(EivizTheme.dim).lineLimit(1)
             }
@@ -173,7 +173,7 @@ struct ReplayView: View {
             if monitorId != 0 && sourceId != 0 {
                 MetalPreviewRepresentable(role: .monitor(monitorId: monitorId, sourceId: sourceId))
                     .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: 180)
                     .background(Color.black)
             } else {
                 Color.black.aspectRatio(16.0 / 9.0, contentMode: .fit)
@@ -231,12 +231,19 @@ struct ReplayView: View {
         return base
     }
 
-    private func markReadout(_ title: String, _ value: String) -> some View {
+    private var isRecording: Bool { stats?.state == 1 }
+
+    private func markReadout(_ title: String, _ value: String, color: Color = EivizTheme.text) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption)
-            Text(value).font(.system(.body, design: .monospaced))
+            Text(title).font(.caption).foregroundStyle(EivizTheme.dim)
+            Text(value)
+                .font(.system(.body, design: .monospaced))
+                .foregroundStyle(value.hasPrefix("--") ? EivizTheme.dim : color)
         }
-        .frame(width: 120, height: 44, alignment: .leading)
+        .padding(.horizontal, 8)
+        .frame(width: 130, height: 44, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 5).fill(EivizTheme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 5).stroke(EivizTheme.stroke))
     }
 
     /// Length of the mark, or a placeholder while it is incomplete.
@@ -287,6 +294,7 @@ struct ReplayView: View {
                                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
                                 .frame(maxWidth: .infinity)
                                 .background(Color.black)
+                                .allowsHitTesting(false)
                             } else {
                                 Color.black.aspectRatio(16.0 / 9.0, contentMode: .fit)
                             }
@@ -298,6 +306,7 @@ struct ReplayView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .contentShape(Rectangle())
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
                             .stroke(selected ? Color.green : Color.gray.opacity(0.4),
@@ -327,9 +336,11 @@ struct ReplayView: View {
                             selectAngle(angle.id)
                         } label: {
                             angleTile(index: index + 1, angle: angle, selected: selected)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .frame(width: 48, height: 44)
+                        .contentShape(Rectangle())
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
                                 .stroke(selected ? Color.green : Color.gray.opacity(0.4),
@@ -389,7 +400,7 @@ struct ReplayView: View {
                     }
                 }
             }
-            .frame(minHeight: 120)
+            .frame(minHeight: 90)
             if (document?.events ?? []).isEmpty {
                 Text(L10n.t("replay.noEvents")).font(.caption).foregroundStyle(EivizTheme.dim)
             }
@@ -650,42 +661,56 @@ struct ReplayView: View {
                 Button(L10n.t("replay.markIn")) { markIn() }
                     .keyboardShortcut("i", modifiers: [])
                     .help(L10n.t("replay.markInHint"))
-                    .frame(width: 160, height: 44)
+                    .tint(inFrame != nil ? .orange : nil)
+                    .frame(width: 150, height: 44)
                 Button(L10n.t("replay.markOut")) { markOut() }
                     .keyboardShortcut("o", modifiers: [])
                     .help(L10n.t("replay.markOutHint"))
-                    .frame(width: 160, height: 44)
+                    .tint(outFrame != nil ? .orange : nil)
+                    .frame(width: 150, height: 44)
                     .disabled(!markOpen)
                 Button(L10n.t("replay.cancelMark")) { cancelMark() }
-                    .frame(width: 120, height: 44)
-                Spacer()
-                markReadout(L10n.t("replay.in"), inFrame.map { ReplayTime.timecode($0, fps) } ?? "--:--:--:--")
-                markReadout(L10n.t("replay.out"), outFrame.map { ReplayTime.timecode($0, fps) } ?? "--:--:--:--")
+                    .frame(width: 110, height: 44)
+                markReadout(L10n.t("replay.in"), inFrame.map { ReplayTime.timecode($0, fps) } ?? "--:--:--:--", color: .orange)
+                markReadout(L10n.t("replay.out"), outFrame.map { ReplayTime.timecode($0, fps) } ?? "--:--:--:--", color: .orange)
                 markReadout(L10n.t("replay.duration"), markDuration)
+                Spacer()
             }
             HStack(alignment: .center, spacing: 8) {
-                Button(L10n.t("replay.record")) { record(true) }
-                    .frame(width: 96, height: 36)
+                Button {
+                    record(true)
+                } label: {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(isRecording ? Color.red : EivizTheme.dim)
+                            .frame(width: 8, height: 8)
+                        Text(isRecording ? "REC" : L10n.t("replay.record"))
+                    }
+                }
+                .tint(isRecording ? .red : nil)
+                .disabled(isRecording)
+                .frame(width: 88, height: 36)
                 Button(L10n.t("replay.stop")) { record(false) }
-                    .frame(width: 96, height: 36)
+                    .disabled(!isRecording)
+                    .frame(width: 84, height: 36)
                 Button(L10n.t("replay.live")) { live() }
                     .keyboardShortcut("l", modifiers: [])
-                    .frame(width: 96, height: 36)
+                    .frame(width: 84, height: 36)
                 Button(L10n.t(transport.playing ? "replay.pause" : "replay.play")) { togglePlay() }
                     .keyboardShortcut(.space, modifiers: [])
-                    .frame(width: 108, height: 36)
+                    .frame(width: 100, height: 36)
                 Button("◀") { step(-1) }
                     .keyboardShortcut(.leftArrow, modifiers: [])
                     .help(L10n.t("replay.stepBackHint"))
-                    .frame(width: 44, height: 36)
+                    .frame(width: 40, height: 36)
                 Button("▶") { step(1) }
                     .keyboardShortcut(.rightArrow, modifiers: [])
                     .help(L10n.t("replay.stepForwardHint"))
-                    .frame(width: 44, height: 36)
-                Button("25%") { setSpeed(250) }.frame(width: 64, height: 36)
-                Button("50%") { setSpeed(500) }.frame(width: 64, height: 36)
-                Button("75%") { setSpeed(750) }.frame(width: 64, height: 36)
-                Button("100%") { setSpeed(1000) }.frame(width: 64, height: 36)
+                    .frame(width: 40, height: 36)
+                Button("25%") { setSpeed(250) }.frame(width: 56, height: 36)
+                Button("50%") { setSpeed(500) }.frame(width: 56, height: 36)
+                Button("75%") { setSpeed(750) }.frame(width: 56, height: 36)
+                Button("100%") { setSpeed(1000) }.frame(width: 60, height: 36)
                 // Loops the playlist at its end, the way the deck's own button does.
                 Toggle(L10n.t("replay.playlistLoop"), isOn: Binding(
                     get: { looping },
@@ -694,7 +719,7 @@ struct ReplayView: View {
                         _ = mixer.replayLoop(channel: channel, on: next)
                     }))
                 .toggleStyle(.button)
-                .frame(width: 72, height: 36)
+                .frame(width: 64, height: 36)
                 .help(L10n.t("replay.playlistLoopHint"))
                 // What happens when the list ends, next to looping because it is the same
                 // question. Looping wins when both are on.
@@ -705,7 +730,7 @@ struct ReplayView: View {
                         _ = mixer.replayHoldLast(channel: channel, on: next)
                     }))
                 .toggleStyle(.button)
-                .frame(width: 96, height: 36)
+                .frame(width: 88, height: 36)
                 .help(L10n.t("replay.playlistHoldHint"))
                 Spacer(minLength: 8)
                 Text(L10n.t("replay.jog"))
@@ -715,7 +740,7 @@ struct ReplayView: View {
                         jogValue = 0
                     }
                 }
-                .frame(width: 200, height: 36)
+                .frame(width: 160, height: 36)
             }
         }
     }
@@ -1510,6 +1535,7 @@ struct ReplayView: View {
             )
             .frame(width: 48, height: 44)
             .clipped()
+            .allowsHitTesting(false)
         } else if transport.live || mixer.isRemote {
             Text("\(index)")
                 .font(.title3)
