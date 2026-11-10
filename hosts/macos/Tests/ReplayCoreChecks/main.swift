@@ -552,6 +552,17 @@ cutDoc.setClipTransition(
     transition: ReplayTransitionInfo(kind: "Cut", timing: "Overwrap", durationFrames: 30))
 check("cut transition has no frames", cutDoc.clips(playlistId: cutPlaylist).first?.transition.isCut == true)
 
+
+// MARK: - Channel clamp after external edits
+
+let channelsA = [
+    ReplayChannelInfo(index: 0, inputId: 1),
+    ReplayChannelInfo(index: 1, inputId: 2),
+]
+check("existing channel kept", ReplayDeckMath.channelToShow(channels: channelsA, current: 1) == 1)
+check("missing channel falls back", ReplayDeckMath.channelToShow(channels: channelsA, current: 7) == 0)
+check("empty channels keep current", ReplayDeckMath.channelToShow(channels: [], current: 7) == 7)
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)

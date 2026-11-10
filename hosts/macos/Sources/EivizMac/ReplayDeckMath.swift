@@ -117,6 +117,14 @@ enum ReplayDeckMath {
         return nil
     }
 
+    /// The channel the deck should show after an external session edit. A selected channel
+    /// that no longer exists used to leave the picker and the transport on a channel the
+    /// document never had.
+    static func channelToShow(channels: [ReplayChannelInfo], current: UInt32) -> UInt32 {
+        if channels.contains(where: { $0.index == current }) { return current }
+        return channels.first?.index ?? current
+    }
+
     /// FNV-1a, the hash the mixer reports for the clip a channel is on.
     static func clipUidHash(_ uid: String) -> UInt64 {
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325

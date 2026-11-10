@@ -1281,6 +1281,19 @@ struct ReplayView: View {
         }
         if channels.isEmpty {
             load()
+        } else {
+            let shown = ReplayDeckMath.channelToShow(channels: channels, current: channel)
+            if shown != channel {
+                channel = shown
+            }
+        }
+        // A selection that names something the document no longer has is not a selection.
+        if let uid = selectedClip, !clips.contains(where: { $0.uid == uid }) {
+            selectedClip = nil
+        }
+        if let id = selectedEvent,
+           !(document?.events.contains(where: { $0.id == id }) ?? false) {
+            selectedEvent = nil
         }
         // The mixer owns the transport, so the deck reads the play state back instead of
         // trusting the button it last pressed. A Remote cannot read it and keeps its own.
