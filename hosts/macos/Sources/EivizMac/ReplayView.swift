@@ -296,6 +296,7 @@ struct ReplayView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Color(white: 0.54))
                 Spacer()
+                clipTagPanel
             }
             HStack(spacing: 8) {
                 Slider(
@@ -421,6 +422,29 @@ struct ReplayView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(Color(white: 0.42))
                 .lineLimit(1)
+        }
+    }
+
+    /// The tags of the selected clip, on the right of the transition row where the Windows
+    /// deck keeps them.
+    private var clipTagPanel: some View {
+        HStack(spacing: 4) {
+            Text(L10n.t("replay.tags"))
+                .font(.system(size: 11))
+                .foregroundStyle(Color(white: 0.54))
+            if let uid = selectedClip, let clip = clips.first(where: { $0.uid == uid }),
+               !clip.tags.isEmpty {
+                ForEach(clip.tags, id: \.self) { tag in
+                    Text(tag)
+                        .font(.system(size: 11))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(white: 0.18))
+                        .clipShape(Capsule())
+                }
+            } else {
+                Text("—").font(.system(size: 11)).foregroundStyle(Color(white: 0.4))
+            }
         }
     }
 
@@ -814,7 +838,8 @@ struct ReplayView: View {
                     audio: { setClipAudioChoice($0, $1) },
                     tags: { setClipTagsText($0, $1) },
                     cue: { cue($0) },
-                    remove: { removeClip($0) }))
+                    remove: { removeClip($0) }),
+                selection: $selectedClip)
         }
     }
 
