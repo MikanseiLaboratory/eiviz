@@ -90,3 +90,7 @@ below.
   installation run `xattr -dr com.apple.quarantine /Applications/eiviz.app`.
 - Crash logs: `~/Library/Logs/DiagnosticReports` contains `.ips` files. Keep the
   dSYM for the app, mixer dylib, and Pro module to symbolicate them.
+- Xcode 30 beta fails to link the app with `ld: mis-aligned LINKEDIT string
+  pool` for `libeiviz_mixer.dylib`. This is a linker bug in that toolchain, not
+  the mixer; CI uses the `macos-26` runner and links normally. Build with a
+  macOS 26 / Xcode 26 toolchain when the local linker hits it.
