@@ -35,6 +35,7 @@ mod native_ws;
 #[cfg(any(windows, target_os = "macos"))]
 mod ndi;
 mod omt;
+mod platform;
 mod pool;
 mod present;
 mod pro;
@@ -1154,6 +1155,7 @@ pub(crate) fn start_mixer(
     let render = thread::Builder::new()
         .name("eiviz-render".into())
         .spawn(move || {
+            crate::platform::set_thread_qos(crate::platform::QOS_USER_INTERACTIVE);
             let panic_telemetry = Arc::clone(&render_telemetry);
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 render_loop(

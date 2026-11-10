@@ -216,6 +216,7 @@ impl VideoPump {
         let join = thread::Builder::new()
             .name(format!("eiviz-av-{source_id}"))
             .spawn(move || {
+                crate::platform::set_thread_qos(crate::platform::QOS_USER_INITIATED);
                 if let Err(error) = run_loop(
                     source_id, path, capture, width, height, fps_num, fps_den, uploads, depth,
                     stop_t, playing_t, looping_t, seek_t, pos_t, dur_t, ready_tx,

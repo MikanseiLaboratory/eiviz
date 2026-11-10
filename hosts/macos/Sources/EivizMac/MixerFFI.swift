@@ -200,6 +200,79 @@ enum MixerFFI {
         return devices.filter { $0.direction == direction || $0.direction == 2 }
     }
 
+    static func streamEncoderAdd(_ encoder: StreamEncoderEntry, sourceKind: UInt32, sourceId: UInt64) -> Int32 {
+        let threads = encoder.encoderThreads == 0
+            ? UInt32(max(1, min(4, ProcessInfo.processInfo.activeProcessorCount)))
+            : encoder.encoderThreads
+        return mixer_stream_encoder_add(
+            encoder.id,
+            sourceKind,
+            sourceId,
+            encoder.unitId,
+            encoder.audioUnitId,
+            encoder.width,
+            encoder.height,
+            encoder.fpsNum,
+            encoder.fpsDen,
+            encoder.videoBitrate,
+            encoder.audioBitrate,
+            encoder.keyint,
+            encoder.videoOnly ? 1 : 0,
+            threads,
+            encoder.bufferMs,
+            encoder.encoder == "OpenH264" ? 0 : 1,
+            encoder.complexity,
+            encoder.refFrames,
+            encoder.cabac ? 1 : 0,
+            encoder.deblock ? 1 : 0,
+            encoder.backgroundDetection ? 1 : 0,
+            encoder.adaptiveQuant ? 1 : 0,
+            encoder.sceneChange ? 1 : 0,
+            encoder.audioDelayMs
+        )
+    }
+
+    static func streamDestinationAdd(encoderId: UInt64, destinationId: UInt64, url: String, secretRef: String) -> Int32 {
+        url.withCString { cUrl in
+            secretRef.withCString { cSecret in
+                mixer_stream_destination_add(encoderId, destinationId, cUrl, cSecret)
+            }
+        }
+    }
+
+    static func streamEncoderRemove(_ encoderId: UInt64) -> Int32 {
+        mixer_stream_encoder_remove(encoderId)
+    }
+
+    static func replayCapacity(path: String, width: UInt32, height: UInt32) -> (ReplayCapacity?, String) {
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        var written = 0
+        let code: Int32 = path.withCString { text in
+            buffer.withUnsafeMutableBufferPointer { ptr in
+                mixer_bench_capacity(
+                    UnsafeRawPointer(text).assumingMemoryBound(to: UInt8.self),
+                    path.utf8.count,
+                    width,
+                    height,
+                    ptr.baseAddress,
+                    ptr.count,
+                    &written
+                )
+            }
+        }
+        guard code == 0, written > 0 else {
+            let detail = lastErrorText()
+            return (nil, detail.isEmpty ? "Capacity measurement failed" : detail)
+        }
+        guard let capacity = try? JSONDecoder().decode(
+            ReplayCapacity.self,
+            from: Data(buffer.prefix(written))
+        ) else {
+            return (nil, "Capacity measurement returned invalid JSON")
+        }
+        return (capacity, "")
+    }
+
     static func audioProcesses() -> [AudioProcess] {
         var buffer = [UInt8](repeating: 0, count: 1 << 20)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in

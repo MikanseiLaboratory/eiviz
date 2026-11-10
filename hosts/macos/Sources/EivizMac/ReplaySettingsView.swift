@@ -25,6 +25,8 @@ struct ReplaySettingsView: View {
     @State private var profiling = false
     @State private var angles: [ReplayAngleInfo] = []
     @State private var status = ""
+    @State private var capacityText = ""
+    @State private var capacityRunning = false
 
     var body: some View {
         // The settings are taller than the smallest window the view allows, so they scroll
@@ -102,13 +104,16 @@ struct ReplaySettingsView: View {
                                 .frame(minWidth: 230, alignment: .leading)
                             }
                             HStack(spacing: 12) {
-                                Button(L10n.t("replay.capacityRun")) {}
-                                    .disabled(true)
-                                    .frame(minWidth: 150, minHeight: 28)
-                                    .help(L10n.t("replay.capacityIdle"))
-                                Text("—")
+                                Button(capacityRunning ? L10n.t("replay.capacityRunning") : L10n.t("replay.capacityRun")) {
+                                    runCapacity()
+                                }
+                                .disabled(capacityRunning)
+                                .frame(minWidth: 150, minHeight: 28)
+                                .help(L10n.t("replay.capacityIdle"))
+                                Text(capacityText.isEmpty ? "—" : capacityText)
                                     .font(.system(size: 11))
                                     .foregroundStyle(EivizTheme.dim)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                             HStack(alignment: .top) {
                                 // One format for every angle, taken from the first Mixing Unit.
@@ -528,6 +533,43 @@ struct ReplaySettingsView: View {
 
     /// Free space for one drive, from the same mixer model the recorder uses. The
     /// settings table is where an operator sees a full drive before pressing Apply.
+    private func runCapacity() {
+        guard let path = storages.map(\.path).first(where: { !$0.isEmpty }) else {
+            capacityText = L10n.t("replay.capacityNoStorage")
+            return
+        }
+        let format = document?.formatValues
+            ?? mixer.replayDocument?.formatValues
+            ?? ReplayFormatValues(
+                width: mixer.session.settings.defaultWidth,
+                height: mixer.session.settings.defaultHeight,
+                fpsNum: mixer.session.settings.masterFpsNum,
+                fpsDen: mixer.session.settings.masterFpsDen
+            )
+        capacityRunning = true
+        capacityText = L10n.t("replay.capacityRunning")
+        DispatchQueue.global(qos: .userInitiated).async {
+            let (capacity, error) = MixerFFI.replayCapacity(
+                path: path,
+                width: format.width,
+                height: format.height
+            )
+            DispatchQueue.main.async {
+                capacityRunning = false
+                guard let capacity else {
+                    capacityText = error.isEmpty ? L10n.t("replay.capacityFailed") : error
+                    return
+                }
+                capacityText = L10n.format(
+                    "replay.capacityResult",
+                    "\(capacity.anglesAt60)",
+                    "\(Int(capacity.encodeFps.rounded()))",
+                    "\(Int(capacity.diskWriteMbS.rounded()))"
+                )
+            }
+        }
+    }
+
     private func freeSpaceText(_ path: String, angles: [UInt32]) -> String {
         let trimmed = path.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, let unit = mixer.session.units.first else { return "—" }

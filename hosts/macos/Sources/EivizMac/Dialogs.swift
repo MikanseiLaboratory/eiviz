@@ -608,6 +608,7 @@ struct SettingsView: View {
                 }
                 if output.wrappedValue.transport == .rtmp {
                     mixerTextField(output.rtmpUrl, placeholder: L10n.t("settings.rtmpUrl"))
+                    RtmpKeyEditor(output: output)
                 }
                 if output.wrappedValue.transport == .deckLink {
                     deckLinkOutputFields(output)
@@ -1847,6 +1848,26 @@ struct MixingUnitView: View {
     }
 }
 
+private struct RtmpKeyEditor: View {
+    @Binding var output: OutputEntry
+    @State private var key = ""
+
+    var body: some View {
+        SecureField(L10n.t("settings.streamKey"), text: $key)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 180)
+            .onAppear {
+                if output.rtmpSecretRef.isEmpty {
+                    output.rtmpSecretRef = "stream-\(output.id)"
+                }
+                key = KeychainStore.load(account: "rtmp/" + output.rtmpSecretRef)
+            }
+            .onChange(of: key) { _, value in
+                KeychainStore.save(account: "rtmp/" + output.rtmpSecretRef, token: value)
+            }
+    }
+}
+
 struct MultiviewView: View {
     @EnvironmentObject private var mixer: MixerController
     @Environment(\.dismiss) private var dismiss
@@ -1876,6 +1897,19 @@ struct MultiviewView: View {
                             mixer.applyMultiviewWindowLevel(mixer.session.multiviews[index])
                         }
                     ))
+                    Picker(L10n.t("mv.previewRefresh"), selection: Binding(
+                        get: { mixer.session.multiviews[index].presentInterval },
+                        set: {
+                            mixer.session.multiviews[index].presentInterval = $0
+                            mixer.pushMultiview(mixer.session.multiviews[index])
+                        }
+                    )) {
+                        Text(L10n.t("mv.previewRefreshFollow")).tag(UInt32(0))
+                        ForEach(Array(1...8), id: \.self) { value in
+                            Text("\(value)").tag(UInt32(value))
+                        }
+                    }
+                    .frame(width: 110)
                     Picker(L10n.t("settings.labelPosition"), selection: Binding(
                         get: { mixer.session.multiviews[index].labelAnchor ?? mixer.session.settings.multiviewLabelAnchor },
                         set: { mixer.session.multiviews[index].labelAnchor = $0; mixer.applyBusColors() }

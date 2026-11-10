@@ -30,6 +30,8 @@ struct ReplayView: View {
     /// is taken, so this, not `inFrame`, decides whether Mark Out may run.
     @State private var markOpen = false
     @State private var stats: EivizReplayStats?
+    @State private var capacityText = ""
+    @State private var capacityRunning = false
     @State private var selectedEvent: UInt64?
     @State private var selectedClip: String?
     @State private var kind = "Cut"
@@ -150,11 +152,13 @@ struct ReplayView: View {
             Text(String(format: "%.2f fps", ReplayTime.rate(fps)))
                 .font(.system(size: 11))
                 .foregroundStyle(Color(white: 0.54))
-            Button(L10n.t("replay.capacityRun")) {}
-                .disabled(true)
-                .frame(minWidth: 130, minHeight: 30)
-                .help(L10n.t("replay.capacityIdle"))
-                .layoutPriority(2)
+            Button(capacityRunning ? L10n.t("replay.capacityRunning") : L10n.t("replay.capacityRun")) {
+                runCapacity()
+            }
+            .disabled(capacityRunning)
+            .frame(minWidth: 130, minHeight: 30)
+            .help(capacityText.isEmpty ? L10n.t("replay.capacityIdle") : capacityText)
+            .layoutPriority(2)
             Button(L10n.t("replay.openSetup")) { mixer.openReplaySettings() }
                 .frame(minWidth: 130, minHeight: 30)
                 .layoutPriority(2)
@@ -189,6 +193,42 @@ struct ReplayView: View {
 
     private var displayPlayhead: UInt64 {
         scrubFrame.map { UInt64(max(0, $0.rounded())) } ?? playheadFrame
+    }
+
+    private func runCapacity() {
+        guard let path = mixer.replayDocument?.storages.map(\.path).first(where: { !$0.isEmpty }) else {
+            capacityText = L10n.t("replay.capacityNoStorage")
+            return
+        }
+        let format = mixer.replayDocument?.formatValues
+            ?? ReplayFormatValues(
+                width: mixer.session.settings.defaultWidth,
+                height: mixer.session.settings.defaultHeight,
+                fpsNum: mixer.session.settings.masterFpsNum,
+                fpsDen: mixer.session.settings.masterFpsDen
+            )
+        capacityRunning = true
+        capacityText = L10n.t("replay.capacityRunning")
+        DispatchQueue.global(qos: .userInitiated).async {
+            let (capacity, error) = MixerFFI.replayCapacity(
+                path: path,
+                width: format.width,
+                height: format.height
+            )
+            DispatchQueue.main.async {
+                capacityRunning = false
+                guard let capacity else {
+                    capacityText = error.isEmpty ? L10n.t("replay.capacityFailed") : error
+                    return
+                }
+                capacityText = L10n.format(
+                    "replay.capacityResult",
+                    "\(capacity.anglesAt60)",
+                    "\(Int(capacity.encodeFps.rounded()))",
+                    "\(Int(capacity.diskWriteMbS.rounded()))"
+                )
+            }
+        }
     }
 
     private var capacityLine: String {

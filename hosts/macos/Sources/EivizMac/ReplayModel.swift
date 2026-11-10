@@ -129,6 +129,19 @@ struct ReplayFormatValues {
     var fpsDen: UInt32
 }
 
+struct ReplayCapacity: Decodable {
+    var encodeFps: Double = 0
+    var encodeFpsCpu: Double = 0
+    var diskWriteMbS: Double = 0
+    var diskReadMbS: Double = 0
+    var readbackMbS: Double = 0
+    var anglesByReadback: UInt32 = 0
+    var anglesAt60Cpu: UInt32 = 0
+    var anglesAt60: UInt32 = 0
+    var anglesByDisk: UInt32 = 0
+    var totalFps: Double = 0
+}
+
 struct ReplayAngleInfo: Identifiable, Hashable {
     let id: UInt32
     /// Name the operator sees and edits.

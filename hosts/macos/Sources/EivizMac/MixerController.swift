@@ -128,8 +128,26 @@ final class MixerController: ObservableObject {
         session.units.first { $0.id == selectedUnitId } ?? session.units[0]
     }
 
+    private var activity: NSObjectProtocol?
+
+    private func beginActivity() {
+        guard activity == nil else { return }
+        activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .idleSystemSleepDisabled],
+            reason: "eiviz is running a live video mixer"
+        )
+    }
+
+    private func endActivity() {
+        if let activity {
+            ProcessInfo.processInfo.endActivity(activity)
+            self.activity = nil
+        }
+    }
+
     func boot() {
         guard !booted else { return }
+        beginActivity()
         isRemote = HostRole.isRemote
         guard mixer_ping() == 0x4549_5649 else {
             presentError(L10n.t("error.abiMismatch"), title: L10n.t("action.Metal mixer initialization"))
@@ -628,6 +646,7 @@ final class MixerController: ObservableObject {
     }
 
     func shutdown() {
+        endActivity()
         remoteDiscoverTask?.cancel()
         remoteDiscoverTask = nil
         mixTimer?.invalidate()

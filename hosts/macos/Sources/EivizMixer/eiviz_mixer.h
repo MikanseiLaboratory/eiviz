@@ -652,6 +652,25 @@ int32_t mixer_bench_capacity(
     uint8_t *out,
     size_t cap,
     size_t *written);
+// Stream encoder API. RTMP is not an Output; it is an encoder plus destinations.
+int32_t mixer_stream_encoder_add(
+    uint64_t encoder_id, uint32_t source_kind, uint64_t source_id, uint64_t unit_id,
+    uint64_t audio_unit_id, uint32_t width, uint32_t height, uint32_t fps_num,
+    uint32_t fps_den, uint32_t video_bitrate, uint32_t audio_bitrate, uint32_t keyint,
+    uint32_t video_only, uint32_t encoder_threads, uint32_t buffer_ms, uint32_t encoder,
+    uint32_t complexity, uint32_t ref_frames, uint32_t cabac, uint32_t deblock,
+    uint32_t background_detection, uint32_t adaptive_quant, uint32_t scene_change,
+    uint32_t audio_delay_ms);
+int32_t mixer_stream_encoder_remove(uint64_t encoder_id);
+int32_t mixer_stream_destination_add(
+    uint64_t encoder_id, uint64_t destination_id, const char *url, const char *secret_ref);
+int32_t mixer_stream_destination_remove(uint64_t encoder_id, uint64_t destination_id);
+int32_t mixer_stream_destination_stats(
+    uint64_t encoder_id, uint64_t destination_id, uint32_t *connected,
+    uint64_t *video_frames, uint64_t *dropped, uint32_t *bitrate,
+    uint32_t *encoder_threads, uint32_t *media_lag_ms, uint32_t *sent_fps_milli,
+    uint8_t *message, size_t message_cap);
+
 int32_t mixer_audio_capture_start(uint64_t id, uint32_t kind, const char *device_id, uint32_t mode, int32_t map_left, int32_t map_right, const char *process_exe, const char *process_aumid);
 int32_t mixer_audio_capture_stop(uint64_t id);
 

@@ -610,6 +610,54 @@ extension MixerController {
             session.outputs[index] = entry
         }
         if entry.transport == .rtmp {
+            _ = MixerFFI.streamEncoderRemove(entry.id)
+            guard entry.enabled else { return }
+            let key = KeychainStore.load(account: "rtmp/" + entry.rtmpSecretRef)
+            guard !entry.rtmpSecretRef.isEmpty, !key.isEmpty else {
+                presentInputError(L10n.t("settings.streamKeyMissing"), editing: false)
+                return
+            }
+            var encoder = session.streamEncoders.first { $0.id == entry.streamEncoderId }
+                ?? StreamEncoderEntry(id: entry.streamEncoderId == 0 ? session.nextStreamEncoderId : entry.streamEncoderId)
+            if encoder.id == session.nextStreamEncoderId {
+                session.nextStreamEncoderId = max(session.nextStreamEncoderId + 1, encoder.id + 1)
+            }
+            encoder.sourceKind = entry.sourceKind
+            encoder.sourceId = entry.sourceId
+            encoder.unitId = entry.unitId
+            encoder.audioUnitId = entry.audioUnitId
+            encoder.width = entry.width == 0 ? 1920 : entry.width
+            encoder.height = entry.height == 0 ? 1080 : entry.height
+            encoder.fpsNum = entry.fpsNum == 0 ? session.settings.masterFpsNum : entry.fpsNum
+            encoder.fpsDen = entry.fpsDen == 0 ? session.settings.masterFpsDen : entry.fpsDen
+            encoder.name = entry.name.isEmpty ? "Stream" : entry.name
+            let sourceId = entry.sourceId
+            entry.streamEncoderId = encoder.id
+            if let index = session.streamEncoders.firstIndex(where: { $0.id == encoder.id }) {
+                session.streamEncoders[index] = encoder
+            } else {
+                session.streamEncoders.append(encoder)
+            }
+            if let index = session.outputs.firstIndex(where: { $0.id == entry.id }) {
+                session.outputs[index] = entry
+            }
+            let code = MixerFFI.streamEncoderAdd(encoder, sourceKind: entry.sourceKind.rawValueU32, sourceId: sourceId)
+            guard code == 0 else {
+                _ = fail(code, "Start stream encoder")
+                return
+            }
+            MixerFFI.withCString(entry.rtmpSecretRef) { name in
+                MixerFFI.withCString(key) { value in
+                    _ = mixer_secret_set(name, value)
+                }
+            }
+            let destination = MixerFFI.streamDestinationAdd(
+                encoderId: encoder.id,
+                destinationId: entry.id,
+                url: entry.rtmpUrl,
+                secretRef: entry.rtmpSecretRef
+            )
+            _ = fail(destination, "Start RTMP destination")
             return
         }
         _ = mixer_output_remove(entry.id)
