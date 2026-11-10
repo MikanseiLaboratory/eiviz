@@ -22,7 +22,7 @@ eivizは特定の企業ではなく、メインメンテナとコミュニティ
 | 環境 | 描画 | 状態 |
 | --- | --- | --- |
 | Windows x64 | Direct3D 12またはVulkan | 対応済み |
-| macOS | Metal | 対応済み(未テスト) |
+| macOS | Metal | 対応済み（Apple Silicon、M3で検証） |
 | Linux | Vulkan | headlessのみ |
 
 ## インストール
@@ -36,6 +36,10 @@ eivizは特定の企業ではなく、メインメンテナとコミュニティ
 ### macOS Apple Silicon（`macos-arm64`）
 
 `eiviz-*-macos-arm64.pkg`を実行します。
+
+macOS 14以降のApple Siliconがサポート対象です。公証の資格情報がリリースに入るまでは
+ad-hoc署名のため、Gatekeeperに止められた場合はpkgを右クリックして「開く」を選ぶか、
+インストール後に`xattr -dr com.apple.quarantine /Applications/eiviz.app`を実行してください。
 
 ### macOS Intel（`macos-x64`）
 

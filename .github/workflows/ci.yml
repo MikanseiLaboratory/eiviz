@@ -22,6 +22,7 @@ env:
   NDI_SDK_URL: https://downloads.ndi.tv/SDK/NDI_SDK/NDI%206%20SDK.exe
   NDI_SDK_URL_MACOS: https://downloads.ndi.tv/SDK/NDI_SDK_Mac/Install_NDI_SDK_v6_Apple.pkg
   LLVM_VERSION: "20.1.8"
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
 
 jobs:
   windows-x64:
@@ -132,7 +133,7 @@ jobs:
   # on a development machine instead, where the same list finishes in seconds.
   macos-swift:
     name: Mac host (Swift compile)
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -165,7 +166,7 @@ jobs:
 
   macos:
     name: Test mixer and Mac host
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -200,10 +201,63 @@ jobs:
       - name: Validate sample session
         run: ./target/release/eiviz-headless validate --session headless/tests/fixtures/bars.eivz
 
+      - name: Run headless on Metal without DYLD_LIBRARY_PATH
+        # The NDI setup action exports DYLD_LIBRARY_PATH, which hid a missing LC_RPATH
+        # on eiviz-headless and every packaged CLI. Unset it here: the installed binary
+        # must find libndi next to itself, not through the developer environment.
+        run: |
+          set -euo pipefail
+          out="$(mktemp)"
+          err="$(mktemp)"
+          env -u DYLD_LIBRARY_PATH ./target/release/eiviz-headless run \
+            --session headless/tests/fixtures/bars.eivz \
+            --bind 127.0.0.1:0 --renderer metal >"$out" 2>"$err" &
+          pid=$!
+          ws=""
+          for _ in $(seq 1 40); do
+            if grep -q "eiviz-headless ready ws=" "$out" "$err"; then
+              ws="$(grep -ho "eiviz-headless ready ws=[^ ]*" "$out" "$err" | head -n1 | sed "s/.*ws=//")"
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              cat "$out" "$err"
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ -z "$ws" ]; then
+            kill "$pid" 2>/dev/null || true
+            cat "$out" "$err"
+            echo "headless did not become ready on Metal"
+            exit 1
+          fi
+          env -u DYLD_LIBRARY_PATH ./target/release/eivizctl --url "ws://$ws" shutdown
+          if ! wait "$pid"; then
+            cat "$out" "$err"
+            echo "headless exited non-zero after shutdown"
+            exit 1
+          fi
+          cat "$out" "$err"
+
       - name: Build Mac host
         run: |
           chmod +x hosts/macos/build.sh
           hosts/macos/build.sh
+
+      - name: Verify macOS runtime linkage and architecture
+        run: |
+          set -euo pipefail
+          BIN="$(cd hosts/macos && swift build -c release --show-bin-path)"
+          file "$BIN/eiviz-mac" | grep -q arm64
+          file "$BIN/libeiviz_mixer.dylib" | grep -q arm64
+          otool -L "$BIN/eiviz-mac" | grep -q "@rpath/libeiviz_mixer.dylib"
+          otool -L "$BIN/eiviz-mac" | grep -q "@rpath/libeiviz_remote.dylib"
+          otool -L target/release/eiviz-headless | grep -q "@rpath/libndi.dylib"
+          otool -l target/release/eiviz-headless | grep -A2 LC_RPATH | grep -q "@executable_path"
+          if otool -L target/release/eiviz-headless | grep -E "/Library/NDI|/usr/local/lib/libndi"; then
+            echo "headless still references libndi by an absolute path" >&2
+            exit 1
+          fi
 
   control-api:
     name: Control and API (Ubuntu, no GPU)
@@ -229,6 +283,11 @@ jobs:
         # reset in the core on the next publish, so the two sides are compared rather
         # than trusted (the scene camera went missing that way).
         run: python3 scripts/check-session-dto.py
+
+      - name: Check the internal C ABI against both hosts
+        # The macOS header and the Windows P/Invoke declarations are hand-written.
+        # A rename or a new export must not compile in Rust while being invisible to a host.
+        run: python3 scripts/check-abi.py
 
       - name: Check every crate is rustfmt-clean
         # rustfmt is a single tool with a single answer, so it is asked once for the whole

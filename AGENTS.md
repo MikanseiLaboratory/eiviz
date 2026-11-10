@@ -51,7 +51,8 @@ eivizは上記のソフトウェア群から影響を受けており、共通の
 # その他
 
 - 現在のメイン開発ターゲットはReBARに対応したWindows x64 + DX12環境です。 サブターゲットとして、ReBAR非対応のWindowsと、macOSがあります。
-- Apple Silicon搭載のmacOSでは非常にパフォーマンスが向上するポテンシャルを秘めています。しかし、現在開発環境にApple Silicon搭載Macが存在せず、Intel CPU搭載のMacbook Air (2019)のみで動作確認を行っています。　スペックが低くビルド能力にも乏しいため、GitHub Actions上でビルドしたAlpha版をMacbookでダウンロードすることでテストを実施しています。
+- Apple Silicon搭載のmacOSでは非常にパフォーマンスが向上するポテンシャルを秘めています。現在はApple M3 MacBook Air / macOS 27で開発・実機確認を行っています。macOS 14以降のApple Siliconを対象とし、Intel Macはビルド確認のみです。
+- macOSの変更では、`hosts/macos/README.md`の手順でビルド・テストしてください。`eiviz-headless`は`DYLD_LIBRARY_PATH`なしで起動できること（`headless/build.rs`の`@executable_path` rpath）を確認してください。CIは`macos-26`（arm64）を使い、`macos-latest`の暗黙のアーキテクチャに依存しません。
 - 
 - 一部のクレート(openmediatransport-rs, vmix-rsなど)は同じ開発者がメンテナンスするクレートです。新機能や不具合修正が必要な場合、ブランチを切って修正し、そのバージョンに切り替えることも可能です。
 - 現在映像処理の抽象化と、音回りの安定化が難航しています。新規の実装内容はこちらに留意してください。

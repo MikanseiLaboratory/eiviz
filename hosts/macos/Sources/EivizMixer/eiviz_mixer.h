@@ -633,6 +633,18 @@ int32_t mixer_audio_enum_devices(uint32_t kind, EivizAudioDeviceInfo *out, uint3
 int32_t mixer_audio_device_channels(uint32_t kind, const char *device_id);
 int32_t mixer_audio_device_io_channels(uint32_t kind, const char *device_id, int32_t *inputs, int32_t *outputs);
 int32_t mixer_audio_process_list(uint8_t *out, size_t cap);
+
+// Measures the replay encoder and the target drive, and writes the capacity as
+// JSON. A negative return is the output buffer being too small; the caller retries
+// with the size written to `written`.
+int32_t mixer_bench_capacity(
+    const uint8_t *path,
+    size_t path_len,
+    uint32_t width,
+    uint32_t height,
+    uint8_t *out,
+    size_t cap,
+    size_t *written);
 int32_t mixer_audio_capture_start(uint64_t id, uint32_t kind, const char *device_id, uint32_t mode, int32_t map_left, int32_t map_right, const char *process_exe, const char *process_aumid);
 int32_t mixer_audio_capture_stop(uint64_t id);
 

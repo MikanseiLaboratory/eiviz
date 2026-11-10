@@ -29,7 +29,7 @@ Direct3D 12対応GPUであれば基本動作は可能ですが、快適な運用
 - Intel Macおよび外付けGPU（eGPU）は非対応です。
 
 :::note
-開発チームの機材環境の都合により、現在はIntel Macでのビルド・動作確認を中心に進めており、Apple Silicon実機での最適化は順次進めています。
+Apple M3 MacBook Air / macOS 27で検証しています。サポート対象はmacOS 14以降のApple Siliconです。Intel Macと外付けGPUは引き続き対象外です。macOSでは音声入力、RTMP出力、Replayの一部書き出し経路を順次対応中です。詳細はリリースノートからリンクするGitHub Issueを参照してください。
 :::
 
 ## Linux（実験的）

@@ -32,7 +32,10 @@ The target is **macOS 14 or later on Apple Silicon**.
 Intel Macs and external GPUs are out of scope.
 
 :::note
-Nobody on the current team uses an Apple Silicon Mac day to day, so those performance claims are unverified. Development machines are Intel-generation MacBooks.
+Verified on an Apple M3 MacBook Air running macOS 27. The supported target is
+macOS 14 or later on Apple Silicon. Intel Macs and external GPUs remain out of
+scope. Audio Input, RTMP output, and some Replay export paths are still being
+brought up on macOS; see the GitHub issues linked from the release notes.
 :::
 
 ## Linux

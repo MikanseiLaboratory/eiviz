@@ -53,7 +53,8 @@ The macOS host lives in `hosts/macos`. It is Swift 6 / SwiftUI and calls the mix
 On Apple Silicon, unified memory gives transfer characteristics close to ReBAR on Windows.
 
 :::note
-Nobody on the current team uses an Apple Silicon Mac day to day, so those performance claims are unverified. Development machines are Intel-generation MacBooks.
+Verified on an Apple M3 MacBook Air running macOS 27. Apple Silicon unified memory
+is the target upload path; Intel Macs and external GPUs are out of scope.
 :::
 
 Discrete GPUs on Mac are not planned.

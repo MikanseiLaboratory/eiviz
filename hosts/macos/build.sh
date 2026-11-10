@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# The Swift package targets macOS 14. Keep the Rust dylibs from drifting above it.
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
 ARCH="${EIVIZ_MAC_ARCH:-}"
 SWIFT_ARGS=(-c release)
 if [ -n "$ARCH" ]; then
