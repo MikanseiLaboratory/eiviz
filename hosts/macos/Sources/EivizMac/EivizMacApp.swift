@@ -39,12 +39,10 @@ struct EivizMacApp: App {
 
     init() {
         HostLog.install()
-        // macOS 27 runs `App.init()` before the shared application exists. Creating or
-        // touching it here leaves SwiftUI without a window, so the appearance is applied
-        // in `.onAppear` there instead.
-        if NSApp != nil {
-            EivizTheme.applyAppAppearance()
-        }
+        // Never touch NSApplication from `App.init()` on macOS 27: even when `NSApp` looks
+        // non-nil, asking for the shared application this early can abort inside AppKit
+        // ("Dictionary literal contains duplicate keys"). The appearance is applied from
+        // the scene's `.onAppear`, once the application is fully up.
     }
 
     var body: some Scene {
