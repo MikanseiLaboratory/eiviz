@@ -17,7 +17,7 @@ eivizは特定の企業ではなく、メインメンテナとコミュニティ
 
 [ドキュメント](https://mikanseilaboratory.github.io/eiviz/ja/) · [English](README.md)
 
-<img width="1916" height="1030" alt="eiviz" src="https://github.com/user-attachments/assets/7b2f30c0-7870-49d7-9fdc-369da2e10ef4" />
+<img width="480" height="258" alt="eiviz" src="https://raw.githubusercontent.com/MikanseiLaboratory/eiviz/main/docs/src/assets/branding/png/eiviz-07-I1-frameless-text-right.png" />
 
 | 環境 | 描画 | 状態 |
 | --- | --- | --- |
@@ -89,3 +89,7 @@ Vibe codingアプリケーションではなく、開発の要所・必要なタ
 有償・無償を問わず、eivizの競合となる映像スイッチャーを開発・販売を禁止します。河村柊吾/未完成成果物研究所がこのソースコードを利用して出している他の製品についても同じ条件が適用されます。競合製品を出したい場合は、別途ライセンス契約が必要です。詳細はお問い合わせください。
 
 同梱の第三者ライブラリは、それぞれのMIT、Apache-2.0、Zlibのままです。[NOTICE](NOTICE)と[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)を見てください。
+
+### クレジット
+
+ロゴ: Guleruun (https://twitter.com/guleruun)

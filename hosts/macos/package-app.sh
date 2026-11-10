@@ -5,6 +5,11 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DIR="${1:?directory containing eiviz-mac}"
 DIR="$(cd "$DIR" && pwd)"
 chmod +x "$ROOT/hosts/macos/relocate-dylib.sh"
+ICON="$ROOT/docs/src/assets/branding/app-icon/macos/eiviz.icns"
+if [[ ! -f "$ICON" ]]; then
+  echo "missing $ICON" >&2
+  exit 1
+fi
 
 assemble() {
   local bin="$1"
@@ -27,6 +32,8 @@ assemble() {
     cp "$DIR/eiviz-pro.required" "$app/Contents/MacOS/"
   fi
   cp "$plist" "$app/Contents/Info.plist"
+  mkdir -p "$app/Contents/Resources"
+  cp "$ICON" "$app/Contents/Resources/eiviz.icns"
   if [ -n "${EIVIZ_VERSION:-}" ]; then
     /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $EIVIZ_VERSION" "$app/Contents/Info.plist"
     /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $EIVIZ_VERSION" "$app/Contents/Info.plist"

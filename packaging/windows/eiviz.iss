@@ -17,12 +17,16 @@
 #ifndef OutputDir
   #define OutputDir "..\..\dist"
 #endif
+#ifndef RepoRoot
+  #define RepoRoot "..\.."
+#endif
 
 #define MyAppName "eiviz"
 #define MyAppPublisher "Mikansei Laboratory"
 #define MyAppPublisherDir "MikanseiLaboratory"
 #define MyAppURL "https://github.com/MikanseiLaboratory/eiviz"
 #define MyAppExeName "Eiviz.Host.exe"
+#define MyAppIcon RepoRoot + "\docs\src\assets\branding\app-icon\windows\eiviz.ico"
 
 [Setup]
 AppId={{8F3C2A71-6B4E-4D19-9A2C-71E104A0B164}
@@ -41,6 +45,7 @@ OutputBaseFilename=eiviz-{#MyAppTag}-win-x64-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile={#MyAppIcon}
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
@@ -59,10 +64,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{group}\{#MyAppName} Remote"; Filename: "{app}\Eiviz.Remote.exe"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
-Name: "{autodesktop}\{#MyAppName} Remote"; Filename: "{app}\Eiviz.Remote.exe"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{#MyAppIcon}"
+Name: "{group}\{#MyAppName} Remote"; Filename: "{app}\Eiviz.Remote.exe"; IconFilename: "{#MyAppIcon}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "{#MyAppIcon}"
+Name: "{autodesktop}\{#MyAppName} Remote"; Filename: "{app}\Eiviz.Remote.exe"; Tasks: desktopicon; IconFilename: "{#MyAppIcon}"
 
 [Registry]
 Root: HKCR; Subkey: ".eivz"; ValueType: string; ValueName: ""; ValueData: "eiviz.session"; Flags: uninsdeletevalue

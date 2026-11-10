@@ -51,7 +51,7 @@ export default defineConfig({
 			logo: {
 				light: './src/assets/logo-light.png',
 				dark: './src/assets/logo-dark.png',
-				alt: 'Mikansei Laboratory',
+				alt: 'eiviz',
 			},
 			favicon: '/favicon.png',
 			components: {
