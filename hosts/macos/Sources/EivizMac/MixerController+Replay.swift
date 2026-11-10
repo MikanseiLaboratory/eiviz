@@ -141,7 +141,7 @@ extension MixerController {
                 .environment(\.mixerSurfaceEpoch, surfaceEpoch)
         )
         let window = SwitcherHostWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 640),
+            contentRect: NSRect(x: 0, y: 0, width: 1140, height: 800),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -160,7 +160,7 @@ extension MixerController {
         window.makeKeyAndOrderFront(nil)
         // SwiftUI fits the window to the view's minimum, which is shorter than the
         // settings need. Open tall enough that the first read shows every section.
-        window.setContentSize(NSSize(width: 720, height: 700))
+        window.setContentSize(NSSize(width: 1140, height: 800))
         replaySettingsWindow = window
     }
 
