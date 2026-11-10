@@ -99,7 +99,7 @@ struct ReplayView: View {
                 ForEach(channels) { item in Text(item.label).tag(item.index) }
             }
             .labelsHidden()
-            .frame(width: 120, height: 30)
+            .frame(width: 110, height: 30)
             Divider().frame(height: 24)
             Text(stateText)
                 .font(.system(size: 14, weight: .bold))
@@ -110,24 +110,33 @@ struct ReplayView: View {
                 .foregroundStyle(Color(white: 0.54))
                 .lineLimit(1)
                 .truncationMode(.tail)
+                .frame(maxWidth: 200)
+                .layoutPriority(0)
             Spacer(minLength: 8)
             HStack(spacing: 6) {
                 Text(L10n.t("replay.recordTc"))
                     .font(.system(size: 11))
                     .foregroundStyle(Color(white: 0.54))
                 Text(ReplayTime.timecode(recordingHead, fps))
-                    .font(.system(size: 18, design: .monospaced))
+                    .font(.system(size: 16, design: .monospaced))
                     .foregroundStyle(Color(red: 0.49, green: 0.82, blue: 0.29))
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(Color.black.opacity(0.22))
             .clipShape(RoundedRectangle(cornerRadius: 3))
+            .layoutPriority(2)
             Text(String(format: "%.2f fps", ReplayTime.rate(fps)))
                 .font(.system(size: 11))
                 .foregroundStyle(Color(white: 0.54))
+            Button(L10n.t("replay.capacityRun")) {}
+                .disabled(true)
+                .frame(minWidth: 130, minHeight: 30)
+                .help(L10n.t("replay.capacityIdle"))
+                .layoutPriority(2)
             Button(L10n.t("replay.openSetup")) { mixer.openReplaySettings() }
-                .frame(minWidth: 150, minHeight: 30)
+                .frame(minWidth: 130, minHeight: 30)
+                .layoutPriority(2)
         }
     }
 

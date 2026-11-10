@@ -99,6 +99,15 @@ struct ReplaySettingsView: View {
                                 }
                                 .frame(minWidth: 230, alignment: .leading)
                             }
+                            HStack(spacing: 12) {
+                                Button(L10n.t("replay.capacityRun")) {}
+                                    .disabled(true)
+                                    .frame(minWidth: 150, minHeight: 28)
+                                    .help(L10n.t("replay.capacityIdle"))
+                                Text("—")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(EivizTheme.dim)
+                            }
                             HStack(alignment: .top) {
                                 // One format for every angle, taken from the first Mixing Unit.
                                 // It is shown rather than edited here.
