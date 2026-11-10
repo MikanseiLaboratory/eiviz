@@ -38,7 +38,9 @@ struct ReplaySettingsView: View {
                         // Apply and every refusal report here, where it cannot be missed.
                         Text(status).fontWeight(.bold).foregroundStyle(EivizTheme.dim)
                     }
-                    GroupBox(L10n.t("replay.storage")) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(L10n.t("replay.storage"))
+                            .font(.system(size: 14, weight: .bold))
                         VStack(alignment: .leading, spacing: 6) {
                             Text(L10n.t("replay.storageHelp"))
                                 .font(.caption)
@@ -132,7 +134,9 @@ struct ReplaySettingsView: View {
                             Text(L10n.t("replay.retentionHelp")).font(.caption)
                         }
                     }
-                    GroupBox(L10n.t("replay.angles")) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(L10n.t("replay.angles"))
+                            .font(.system(size: 14, weight: .bold))
                         VStack(alignment: .leading, spacing: 6) {
                             Text(L10n.t("replay.anglesHelp")).font(.caption)
                             // Every angle is edited in its own row: name, what it records, how, its

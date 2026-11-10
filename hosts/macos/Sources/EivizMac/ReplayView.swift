@@ -72,6 +72,7 @@ struct ReplayView: View {
     @State private var showExport = false
     @State private var markLastSeconds = "10"
     @State private var clipOrder = "Append"
+    @State private var playingClipUid: String?
 
     private let tick = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
@@ -492,6 +493,17 @@ struct ReplayView: View {
         return left > 0 ? ReplayTime.duration(frame, frame + left, fps) : "--:--:--:--"
     }
 
+    /// FNV-1a, the hash the mixer reports for the clip a channel is on. The deck has the
+    /// clip ids, not the mixer's channel struct, so it compares hashes to mark the row.
+    private static func clipUidHash(_ uid: String) -> UInt64 {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in uid.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        return hash
+    }
+
     private var fps: (num: UInt32, den: UInt32) {
         guard let document else { return (60_000, 1_001) }
         return mixer.replayFps(document)
@@ -848,6 +860,7 @@ struct ReplayView: View {
                     tags: { setClipTagsText($0, $1) },
                     cue: { cue($0) },
                     remove: { removeClip($0) }),
+                playingUid: playingClipUid,
                 selection: $selectedClip)
         }
     }
@@ -1188,6 +1201,9 @@ struct ReplayView: View {
                 if state.speed_milli > 0 {
                     speedMilli = state.speed_milli
                 }
+                playingClipUid = clips.first {
+                    Self.clipUidHash($0.uid) == state.clip_uid_hash
+                }?.uid
             }
         }
         refreshExport()

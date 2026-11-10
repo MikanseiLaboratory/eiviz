@@ -7,6 +7,7 @@ struct ReplayClipTableWindows: View {
     let angles: [ReplayAngleInfo]
     let fps: (num: UInt32, den: UInt32)
     let handlers: ReplayClipTable.Handlers
+    let playingUid: String?
     @Binding var selection: String?
 
     @State private var tagUid: String?
@@ -14,8 +15,9 @@ struct ReplayClipTableWindows: View {
 
     var body: some View {
         Table(clips, selection: $selection) {
-            TableColumn("") { _ in
-                Text("")
+            TableColumn("") { clip in
+                Text(clip.uid == playingUid ? "▶" : "")
+                    .foregroundStyle(.green)
                     .frame(width: 22)
             }
             .width(22)
