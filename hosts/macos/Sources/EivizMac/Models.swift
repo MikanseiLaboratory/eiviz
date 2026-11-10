@@ -1739,6 +1739,7 @@ struct SessionSettings: Codable {
         defaultMultiviewUnitId = try container.decodeIfPresent(UInt64.self, forKey: .defaultMultiviewUnitId) ?? 1
         frameBufferFrames = try container.decodeIfPresent(UInt32.self, forKey: .frameBufferFrames) ?? 3
         defaultPresentInterval = try container.decodeIfPresent(UInt32.self, forKey: .defaultPresentInterval) ?? 3
+        replayPresentInterval = try container.decodeIfPresent(UInt32.self, forKey: .replayPresentInterval) ?? 0
         let flip = try container.decodeIfPresent(UInt32.self, forKey: .flipSwapchainLimit) ?? 0
         flipSwapchainLimit = [0, 4, 6, 8, 10, 12, 16].contains(flip) ? flip : 0
         internalColorFormat = try container.decodeIfPresent(InternalColorFormat.self, forKey: .internalColorFormat) ?? .uyvy

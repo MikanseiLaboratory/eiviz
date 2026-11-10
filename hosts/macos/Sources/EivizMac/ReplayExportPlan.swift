@@ -49,7 +49,11 @@ enum ReplayExportPlan {
             }
             return [(clip, nil)]
         case Mode.playlistWithTransitions.rawValue:
-            return clips.map { ($0, $0.transition) }
+            // A range that does not advance has no frames to write, and the writer would
+            // either refuse the whole export or write a zero-length clip.
+            return clips
+                .filter { $0.outFrame > $0.inFrame }
+                .map { ($0, $0.transition) }
         default:
             return []
         }
@@ -69,14 +73,16 @@ enum ReplayExportPlan {
     ) -> [(UInt32, UInt64, UInt64)] {
         switch mode {
         case Mode.playlist.rawValue:
-            return clips.map { ($0.angleId, $0.inFrame, $0.outFrame) }
+            return clips
+                .filter { $0.outFrame > $0.inFrame }
+                .map { ($0.angleId, $0.inFrame, $0.outFrame) }
         case Mode.angle.rawValue, Mode.allAngles.rawValue:
             let ordered = active == 0
                 ? angles
                 : angles.sorted { ($0.id == active ? 0 : 1) < ($1.id == active ? 0 : 1) }
             var result: [(UInt32, UInt64, UInt64)] = []
             for angle in ordered {
-                if let bounds = range(angle.id) {
+                if let bounds = range(angle.id), bounds.last > bounds.first {
                     result.append((angle.id, bounds.first, bounds.last))
                 }
                 if mode == Mode.angle.rawValue {
