@@ -1502,7 +1502,15 @@ struct ReplayView: View {
     /// Live tiles stay the scene. Jog tiles decode the proxy, or say it is missing.
     @ViewBuilder
     private func angleTile(index: Int, angle: ReplayAngleInfo, selected: Bool) -> some View {
-        if transport.live || mixer.isRemote {
+        if !mixer.isRemote, let monitor = angleMonitors[angle.id], monitor != 0 {
+            // Every angle stays live, not only the one in the large monitor: the strip is
+            // how the operator notices a camera that stopped before marking it.
+            MetalPreviewRepresentable(
+                role: .monitor(monitorId: monitor, sourceId: angle.liveSourceId)
+            )
+            .frame(width: 48, height: 44)
+            .clipped()
+        } else if transport.live || mixer.isRemote {
             Text("\(index)")
                 .font(.title3)
                 .fontWeight(selected ? .bold : .regular)
