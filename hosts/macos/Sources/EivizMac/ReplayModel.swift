@@ -999,16 +999,21 @@ struct ReplayDocument {
 
     mutating func setStorages(_ specs: [StorageSpec]) {
         let clean = specs.filter { !$0.path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        // A drive and an angle are a recording setup, so the flag says so. The
-        // control layer refuses the other combinations, and a host that wrote them
-        // would leave a project that can never record.
-        raw["enabled"] = .bool(!clean.isEmpty && !angles.isEmpty)
+        // The flag is refreshed after both the drives and the angles are written: reading
+        // the old angle list here left a first-time setup disabled even though the new
+        // angle and drive were both valid.
         raw["storage"] = .array(clean.map { spec in
             .object([
                 "path": .string(spec.path.trimmingCharacters(in: .whitespacesAndNewlines)),
                 "angleIds": .array(spec.angleIds.sorted().map { .number(Double($0)) }),
             ])
         })
+    }
+
+    /// A project records only when it has both a drive and an angle. Called after the
+    /// drives and angles have both been written, so the flag never describes the old setup.
+    mutating func refreshEnabled() {
+        raw["enabled"] = .bool(!storages.isEmpty && !angles.isEmpty)
     }
 
     /// The format the document records at, so a recording can be linked without

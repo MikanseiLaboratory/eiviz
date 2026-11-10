@@ -619,6 +619,7 @@ struct ReplaySettingsView: View {
         ])
         current.setRetention(retention)
         current.setAngles(angles)
+        current.refreshEnabled()
         current.setAutoAddToPlaylist(autoAdd)
         current.raw["decodeAhead"] = .bool(decodeAhead)
         current.raw["profiling"] = .bool(profiling)

@@ -437,6 +437,21 @@ _ = transitionDoc.appendClip(
 check("clip starts on playlist default transition",
       transitionDoc.clips(playlistId: transitionPlaylist).first?.transition.kind == "Dissolve")
 
+
+// MARK: - Enabled flag follows the setup
+
+var setupDoc = ReplayDocument.empty(format: format)
+setupDoc.setStorages([ReplayDocument.StorageSpec(path: "/tmp/replay", angleIds: [1])])
+setupDoc.refreshEnabled()
+check("drive without angle is disabled", setupDoc.raw["enabled"]?.boolValue == false)
+let setupAngle = ReplayAngleInfo(id: 1, name: "A", source: "Scene", sceneId: 1, inputId: 0, audioUnitId: 0, encoder: "Cpu")
+setupDoc.setAngles([setupAngle])
+setupDoc.refreshEnabled()
+check("first angle and drive enables", setupDoc.raw["enabled"]?.boolValue == true)
+setupDoc.setAngles([])
+setupDoc.refreshEnabled()
+check("no angle disables", setupDoc.raw["enabled"]?.boolValue == false)
+
 if failures > 0 {
     print("\n\(failures) check(s) failed")
     exit(1)
