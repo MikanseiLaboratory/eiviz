@@ -75,9 +75,11 @@ replace `codesign --force --sign -` with the identity and add notarization.
 - `Library not loaded: @rpath/libndi.dylib`: build through `build.sh`, or add
   `-Wl,-rpath,@executable_path` and keep `libndi.dylib` next to the binary.
   `headless/build.rs` does this for `eiviz-headless`.
-- Camera or microphone does not open: allow the app in System Settings →
-  Privacy & Security. For a reset, use `tccutil reset Camera` and
-  `tccutil reset Microphone`.
+- Camera, microphone, or system/application audio does not open: allow the app
+  in System Settings → Privacy & Security. Output loopback and Application Audio
+  use Core Audio process taps and need macOS 14.4 or later. For a reset, use
+  `tccutil reset Camera`, `tccutil reset Microphone`, and
+  `tccutil reset AudioCapture`.
 - NDI is not visible: allow Local Network access, and check Help → Logs for the
   NDI runtime error. The app bundle needs `libndi.dylib` in `Contents/MacOS`.
 - Gatekeeper blocks an ad-hoc pkg: right-click the pkg and choose Open, or after

@@ -34,8 +34,9 @@ Intel Macs and external GPUs are out of scope.
 :::note
 Verified on an Apple M3 MacBook Air running macOS 27. The supported target is
 macOS 14 or later on Apple Silicon. Intel Macs and external GPUs remain out of
-scope. Audio Input, RTMP output, and some Replay export paths are still being
-brought up on macOS; see the GitHub issues linked from the release notes.
+scope. Audio Input, RTMP output, Replay export, and the Replay capacity measurement are
+available on macOS. DeckLink hardware on macOS is not yet verified; see the
+GitHub issues linked from the release notes.
 :::
 
 ## Linux
