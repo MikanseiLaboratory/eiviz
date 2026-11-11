@@ -67,6 +67,7 @@ impl AudioScheduler {
         let join = thread::Builder::new()
             .name("eiviz-audio".into())
             .spawn(move || {
+                crate::platform::set_thread_qos(crate::platform::QOS_USER_INTERACTIVE);
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     run_scheduler(
                         audio,
