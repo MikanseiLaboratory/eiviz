@@ -229,22 +229,22 @@ network outputs. The `eiviz stats` line reports `render_ms`, the frame budget, R
 | Scenario | Process CPU | `render_ms` | Notes |
 |---|---|---|---|
 | Four units + multiview + still | ~22 % | 1.3–1.7 ms | 1.0 GB RSS, 654 MB VRAM |
-| Add file + camera | ~47 % | 1.3–1.9 ms | AVFoundation conversion/decode |
+| Add file + camera | ~31 % | 1.3–1.9 ms | NV12 decode + VideoToolbox transfer |
 | Add OMT + NDI outputs | ~130 % during switching | 1.3–2.9 ms | NDI's CPU SpeedHQ encode dominates |
 | Outputs disabled | ~45 % | 1.3–2.0 ms | same video/camera load |
 
 The frame budget at 59.94 Hz is 16.68 ms, so composition itself keeps roughly a 6–12×
 margin. `surface_lost` stayed zero and no frame deadline was missed. RSS stayed near 1.35 GB
 and VRAM near 682 MB with four units. The largest cost is the NDI SDK's software encoder;
-it is CPU on every platform. OMT can skip encode when no receiver is subscribed. The second
-cost is AVFoundation's BGRA conversion for file/camera frames, visible as
-`videomediaconverter` threads; requesting NV12 and converting on the GPU is the next
-candidate, but it would add a second shader path and is not enabled.
+it is CPU on every platform. OMT can skip encode when no receiver is subscribed. AVFoundation now delivers NV12 and a
+`VTPixelTransferSession` converts it to BGRA before the zero-copy Metal import. That
+removed the previous AVFoundation BGRA conversion from the CPU path and dropped the
+file+camera case from about 47 % to 31 %.
 
 The ARM64 `yuv422_to_bgra` kernel was scalar; a NEON version now converts 1080p in
 1.51 ms instead of 5.21 ms (about 3.5× faster) on the same M3. That kernel is used where
-YUV 4:2:2 is converted on the CPU; the macOS AVFoundation path itself already avoids the
-conversion by importing the decoded Metal texture.
+YUV 4:2:2 is converted on the CPU; the macOS AVFoundation path uses NV12 plus a
+VideoToolbox transfer instead.
 
 These numbers are one machine and one preset, not a Windows comparison. The headless
 session and commands are reproducible through `eivizctl`; the stats line is emitted by

@@ -51,7 +51,8 @@ int eiviz_av_enum_capture_modes(const char *device_id, EivizAvCaptureMode *out, 
 void eiviz_av_close(EivizAvPump *pump);
 int64_t eiviz_av_duration_hns(const EivizAvPump *pump);
 int eiviz_av_next(EivizAvPump *pump, EivizAvSample *out);
-/// Enables BGRA CVMetalTextureCache decode. `device` is a borrowed id<MTLDevice>.
+/// Enables VideoToolbox NV12 decode and the NV12-to-BGRA Metal import.
+/// `device` is a borrowed id<MTLDevice>.
 void eiviz_av_set_metal(EivizAvPump *pump, void *device);
 
 #ifdef __cplusplus

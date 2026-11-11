@@ -162,20 +162,20 @@ Multiview、4Kスチル、1080pファイル、内蔵カメラ、ネットワー�
 | シナリオ | プロセスCPU | `render_ms` | 備考 |
 |---|---|---|---|
 | Unit 4台＋Multiview＋スチル | 約22% | 1.3〜1.7ms | RSS 1.0GB、VRAM 654MB |
-| ファイル＋カメラを追加 | 約47% | 1.3〜1.9ms | AVFoundationの変換／デコード |
+| ファイル＋カメラを追加 | 約31% | 1.3〜1.9ms | NV12デコード＋VideoToolbox変換 |
 | OMT＋NDI出力を追加 | スイッチング中 約130% | 1.3〜2.9ms | NDIのCPU SpeedHQエンコードが支配的 |
 | 出力を無効化 | 約45% | 1.3〜2.0ms | 同じファイル／カメラ負荷 |
 
 59.94Hzの予算は16.68msなので、合成そのものには6〜12倍の余裕があります。`surface_lost`は
 0のままで、フレーム期限の未達もありませんでした。Unit 4台でRSSは約1.35GB、VRAMは約682MB
 でした。最大のコストはNDI SDKのソフトウェアエンコーダーで、これは全OSでCPUです。OMTは
-受信者がいないときエンコードを省略できます。次に大きいのはファイル／カメラのBGRA変換で、
-`videomediaconverter`スレッドとして見えます。NV12で受け取ってGPUで変換する案は次の候補
-ですが、シェーダ経路がもう1本増えるためまだ有効化していません。
+受信者がいないときエンコードを省略できます。ファイル／カメラはNV12で受け取り、`VTPixelTransferSession`でBGRAへ変換してから
+zero-copyでMetalへimportする。これによりAVFoundationのBGRA変換がCPUパスから外れ、
+ファイル＋カメラのケースは約47%から31%へ下がりました。
 
 ARM64の`yuv422_to_bgra`はスカラー実装でしたが、NEON版で1080pが5.21msから1.51msへ
 約3.5倍高速化しました。このカーネルはCPUでYUV 4:2:2を変換する経路で使われ、macOSの
-AVFoundation経路はデコード済みMetalテクスチャをimportするため変換自体を挟みません。
+AVFoundation経路はNV12＋VideoToolbox変換を使います。
 
 この数値は1台・1プリセットの実測で、Windowsとの直接比較ではありません。ヘッドレス
 セッションと`eivizctl`の操作で再現でき、`eiviz stats`は通常実行でもソーク実行でも出ます。

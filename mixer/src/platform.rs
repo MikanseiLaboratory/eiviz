@@ -26,7 +26,7 @@ pub fn accel_profile() -> &'static str {
     }
     #[cfg(target_os = "macos")]
     {
-        "decode=videotoolbox-zero-copy upload=uma ingest=uma export=videotoolbox live=openh264 replay=vmx1-cpu decklink=no"
+        "decode=videotoolbox-nv12-bgra-zero-copy upload=uma ingest=uma export=videotoolbox live=openh264 replay=vmx1-cpu decklink=no"
     }
     #[cfg(target_os = "linux")]
     {

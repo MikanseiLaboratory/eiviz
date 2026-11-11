@@ -7,6 +7,7 @@
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 #import <Metal/Metal.h>
+#import <VideoToolbox/VideoToolbox.h>
 
 enum {
     EIVIZ_AV_RETRY = 0,
@@ -48,6 +49,11 @@ static void release_sample(CMSampleBufferRef *slot) {
 @property (nonatomic, strong) NSMutableArray<NSNumber *> *inboxAudio;
 @property (nonatomic) id<MTLDevice> metal;
 @property (nonatomic) CVMetalTextureCacheRef metalCache;
+@property (nonatomic) VTPixelTransferSessionRef transfer;
+@property (nonatomic) CVPixelBufferPoolRef bgraPool;
+@property (nonatomic) size_t bgraWidth;
+@property (nonatomic) size_t bgraHeight;
+@property (nonatomic) BOOL useNV12;
 @end
 
 @implementation EivizAvPumpObj
@@ -59,6 +65,11 @@ static void release_sample(CMSampleBufferRef *slot) {
         _cond = [[NSCondition alloc] init];
         _inbox = [NSMutableArray array];
         _inboxAudio = [NSMutableArray array];
+        VTPixelTransferSessionRef transfer = NULL;
+        if (VTPixelTransferSessionCreate(NULL, &transfer) == noErr) {
+            _transfer = transfer;
+            _useNV12 = YES;
+        }
     }
     return self;
 }
@@ -97,6 +108,15 @@ static void release_sample(CMSampleBufferRef *slot) {
         CFRelease(_metalCache);
         _metalCache = NULL;
     }
+    if (_bgraPool) {
+        CVPixelBufferPoolRelease(_bgraPool);
+        _bgraPool = NULL;
+    }
+    if (_transfer) {
+        VTPixelTransferSessionInvalidate(_transfer);
+        CFRelease(_transfer);
+        _transfer = NULL;
+    }
     _metal = nil;
 }
 
@@ -111,20 +131,67 @@ static void release_sample(CMSampleBufferRef *slot) {
     }
 }
 
+- (CVPixelBufferRef)copyBGRA:(CVPixelBufferRef)source CF_RETURNS_RETAINED {
+    if (!self.useNV12 || !CVPixelBufferIsPlanar(source)) {
+        return CVPixelBufferRetain(source);
+    }
+    if (!self.transfer) {
+        return NULL;
+    }
+    size_t width = CVPixelBufferGetWidth(source);
+    size_t height = CVPixelBufferGetHeight(source);
+    if (width == 0 || height == 0) {
+        return NULL;
+    }
+    if (!self.bgraPool || self.bgraWidth != width || self.bgraHeight != height) {
+        if (self.bgraPool) {
+            CVPixelBufferPoolRelease(self.bgraPool);
+            self.bgraPool = NULL;
+        }
+        NSDictionary *attrs = @{
+            (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+            (__bridge NSString *)kCVPixelBufferWidthKey: @(width),
+            (__bridge NSString *)kCVPixelBufferHeightKey: @(height),
+            (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
+        };
+        if (CVPixelBufferPoolCreate(NULL, NULL, (__bridge CFDictionaryRef)attrs, &_bgraPool) != kCVReturnSuccess) {
+            self.bgraPool = NULL;
+            return NULL;
+        }
+        self.bgraWidth = width;
+        self.bgraHeight = height;
+    }
+    CVPixelBufferRef destination = NULL;
+    if (CVPixelBufferPoolCreatePixelBuffer(NULL, self.bgraPool, &destination) != kCVReturnSuccess || !destination) {
+        return NULL;
+    }
+    OSStatus status = VTPixelTransferSessionTransferImage(self.transfer, source, destination);
+    if (status != noErr) {
+        CVPixelBufferRelease(destination);
+        return NULL;
+    }
+    return destination;
+}
+
 - (BOOL)fillMetalVideo:(CVPixelBufferRef)pixels sample:(CMSampleBufferRef)sample out:(EivizAvSample *)out {
     if (!self.metalCache) {
         return NO;
     }
-    size_t width = CVPixelBufferGetWidth(pixels);
-    size_t height = CVPixelBufferGetHeight(pixels);
+    CVPixelBufferRef bgra = [self copyBGRA:pixels];
+    if (!bgra) {
+        return NO;
+    }
+    size_t width = CVPixelBufferGetWidth(bgra);
+    size_t height = CVPixelBufferGetHeight(bgra);
     if (width == 0 || height == 0) {
+        CVPixelBufferRelease(bgra);
         return NO;
     }
     CVMetalTextureRef metalTexture = NULL;
     CVReturn status = CVMetalTextureCacheCreateTextureFromImage(
         NULL,
         self.metalCache,
-        pixels,
+        bgra,
         NULL,
         MTLPixelFormatBGRA8Unorm,
         width,
@@ -132,14 +199,15 @@ static void release_sample(CMSampleBufferRef *slot) {
         0,
         &metalTexture);
     if (status != kCVReturnSuccess || !metalTexture) {
+        CVPixelBufferRelease(bgra);
         return NO;
     }
     id<MTLTexture> texture = CVMetalTextureGetTexture(metalTexture);
     if (!texture) {
         CFRelease(metalTexture);
+        CVPixelBufferRelease(bgra);
         return NO;
     }
-    CVPixelBufferRetain(pixels);
     out->kind = EIVIZ_AV_KIND_VIDEO;
     out->width = (int32_t)width;
     out->height = (int32_t)height;
@@ -151,7 +219,7 @@ static void release_sample(CMSampleBufferRef *slot) {
     out->data = NULL;
     out->bytes = 0;
     out->texture = (__bridge_retained void *)texture;
-    out->pixel_buffer = (void *)pixels;
+    out->pixel_buffer = (void *)bgra;
     CFRelease(metalTexture);
     return YES;
 }
@@ -164,25 +232,28 @@ static void release_sample(CMSampleBufferRef *slot) {
     if ([self fillMetalVideo:pixels sample:sample out:out]) {
         return YES;
     }
-    if (CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) {
+    CVPixelBufferRef bgra = [self copyBGRA:pixels];
+    if (!bgra) {
         return NO;
     }
-    size_t width = CVPixelBufferGetWidth(pixels);
-    size_t height = CVPixelBufferGetHeight(pixels);
-    size_t stride = CVPixelBufferGetBytesPerRow(pixels);
-    const void *base = CVPixelBufferGetBaseAddress(pixels);
-    if ((!base || stride == 0) && CVPixelBufferIsPlanar(pixels) && CVPixelBufferGetPlaneCount(pixels) > 0) {
-        base = CVPixelBufferGetBaseAddressOfPlane(pixels, 0);
-        stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, 0);
+    if (CVPixelBufferLockBaseAddress(bgra, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) {
+        CVPixelBufferRelease(bgra);
+        return NO;
     }
+    size_t width = CVPixelBufferGetWidth(bgra);
+    size_t height = CVPixelBufferGetHeight(bgra);
+    size_t stride = CVPixelBufferGetBytesPerRow(bgra);
+    const void *base = CVPixelBufferGetBaseAddress(bgra);
     if (!base || width == 0 || height == 0 || stride == 0) {
-        CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+        CVPixelBufferUnlockBaseAddress(bgra, kCVPixelBufferLock_ReadOnly);
+        CVPixelBufferRelease(bgra);
         return NO;
     }
     size_t bytes = stride * height;
     [self.scratch setLength:bytes];
     memcpy(self.scratch.mutableBytes, base, bytes);
-    CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+    CVPixelBufferUnlockBaseAddress(bgra, kCVPixelBufferLock_ReadOnly);
+    CVPixelBufferRelease(bgra);
     out->kind = EIVIZ_AV_KIND_VIDEO;
     out->width = (int32_t)width;
     out->height = (int32_t)height;
@@ -381,9 +452,10 @@ static void release_sample(CMSampleBufferRef *slot) {
 
 @end
 
-static NSDictionary *video_attrs(void) {
+static NSDictionary *video_attrs(BOOL nv12) {
     return @{
-        (NSString *)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)
+        (NSString *)kCVPixelBufferPixelFormatTypeKey:
+            @(nv12 ? kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange : kCVPixelFormatType_32BGRA)
     };
 }
 
@@ -453,8 +525,9 @@ EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns) {
     if (start_hns > 0) {
         reader.timeRange = CMTimeRangeMake(CMTimeMake(start_hns, 10000000), kCMTimePositiveInfinity);
     }
+    EivizAvPumpObj *pump = [[EivizAvPumpObj alloc] init];
     AVAssetReaderTrackOutput *video_out =
-        [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:video outputSettings:video_attrs()];
+        [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:video outputSettings:video_attrs(pump.useNV12)];
     video_out.alwaysCopiesSampleData = NO;
     if (![reader canAddOutput:video_out]) {
         return NULL;
@@ -474,7 +547,6 @@ EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns) {
     if (![reader startReading]) {
         return NULL;
     }
-    EivizAvPumpObj *pump = [[EivizAvPumpObj alloc] init];
     pump.reader = reader;
     pump.videoOut = video_out;
     pump.audioOut = audio_out;
@@ -629,9 +701,11 @@ EivizAvPump *eiviz_av_open_capture(const char *device_id, uint32_t width, uint32
         AVCaptureVideoDataOutput *video = [[AVCaptureVideoDataOutput alloc] init];
         video.alwaysDiscardsLateVideoFrames = YES;
         @try {
-            video.videoSettings = video_attrs();
+            video.videoSettings = video_attrs(pump.useNV12);
         } @catch (NSException *ex) {
-            NSLog(@"eiviz av: BGRA videoSettings rejected: %@", ex);
+            NSLog(@"eiviz av: NV12 videoSettings rejected: %@", ex);
+            pump.useNV12 = NO;
+            video.videoSettings = video_attrs(NO);
         }
         [video setSampleBufferDelegate:pump queue:pump.capQueue];
         if ([session canAddOutput:video]) {
