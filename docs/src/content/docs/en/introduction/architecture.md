@@ -241,6 +241,11 @@ cost is AVFoundation's BGRA conversion for file/camera frames, visible as
 `videomediaconverter` threads; requesting NV12 and converting on the GPU is the next
 candidate, but it would add a second shader path and is not enabled.
 
+The ARM64 `yuv422_to_bgra` kernel was scalar; a NEON version now converts 1080p in
+1.51 ms instead of 5.21 ms (about 3.5× faster) on the same M3. That kernel is used where
+YUV 4:2:2 is converted on the CPU; the macOS AVFoundation path itself already avoids the
+conversion by importing the decoded Metal texture.
+
 These numbers are one machine and one preset, not a Windows comparison. The headless
 session and commands are reproducible through `eivizctl`; the stats line is emitted by
 `eiviz-headless` in both normal and soak runs.
