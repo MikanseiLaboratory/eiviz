@@ -194,7 +194,19 @@ fn wasapi_capture(
     if spec.mode == CAPTURE_MODE_PROCESS_LOOPBACK {
         return super::rsac_process::run(spec, uploads, stop, ready, signaled);
     }
-    super::cpal_io::run_capture(spec, uploads, stop, ready, signaled)
+    super::cpal_io::run_capture(spec, uploads, stop, ready, signaled).map_err(|error| {
+        if error.contains("permission")
+            || error.contains("not permitted")
+            || error.contains("I/O")
+            || error.contains("I/O error")
+        {
+            format!(
+                "Core Audio input failed: {error}. Allow eiviz in System Settings > Privacy & Security > Microphone, then try again."
+            )
+        } else {
+            error
+        }
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -208,5 +220,17 @@ fn coreaudio_capture(
     if spec.mode == CAPTURE_MODE_ENDPOINT_LOOPBACK || spec.mode == CAPTURE_MODE_PROCESS_LOOPBACK {
         return super::coreaudio_tap::run(spec, uploads, stop, ready, signaled);
     }
-    super::cpal_io::run_capture(spec, uploads, stop, ready, signaled)
+    super::cpal_io::run_capture(spec, uploads, stop, ready, signaled).map_err(|error| {
+        if error.contains("permission")
+            || error.contains("not permitted")
+            || error.contains("I/O")
+            || error.contains("I/O error")
+        {
+            format!(
+                "Core Audio input failed: {error}. Allow eiviz in System Settings > Privacy & Security > Microphone, then try again."
+            )
+        } else {
+            error
+        }
+    })
 }
