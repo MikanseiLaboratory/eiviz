@@ -6,6 +6,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 fn run_until_ready(exe: &str, session: &Path, bind: &str) -> String {
+    let renderer = if cfg!(target_os = "macos") {
+        "metal"
+    } else {
+        "dx12"
+    };
     let mut child = Command::new(exe)
         .args([
             "run",
@@ -14,7 +19,7 @@ fn run_until_ready(exe: &str, session: &Path, bind: &str) -> String {
             "--bind",
             bind,
             "--renderer",
-            "dx12",
+            renderer,
         ])
         .env("EIVIZ_PLAN", "professional")
         .stderr(Stdio::piped())

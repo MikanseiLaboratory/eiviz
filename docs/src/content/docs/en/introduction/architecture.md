@@ -219,6 +219,32 @@ platform encoder without forking the RTMP muxer. It is not enabled yet: the curr
 contract is OpenH264 on every OS, and the Replay container uses the VMX1 codec rather than
 H.264.
 
+### Measured baseline (M3 MacBook Air)
+
+A headless Metal session was measured on a 16 GB M3 MacBook Air. It held four 1080p59.94
+Mixing Units, a nine-pane multiview, a 4K still, a 1080p file, the built-in camera, and two
+network outputs. The `eiviz stats` line reports `render_ms`, the frame budget, RSS/VRAM, and
+`surface_lost` every five seconds.
+
+| Scenario | Process CPU | `render_ms` | Notes |
+|---|---|---|---|
+| Four units + multiview + still | ~22 % | 1.3–1.7 ms | 1.0 GB RSS, 654 MB VRAM |
+| Add file + camera | ~47 % | 1.3–1.9 ms | AVFoundation conversion/decode |
+| Add OMT + NDI outputs | ~130 % during switching | 1.3–2.9 ms | NDI's CPU SpeedHQ encode dominates |
+| Outputs disabled | ~45 % | 1.3–2.0 ms | same video/camera load |
+
+The frame budget at 59.94 Hz is 16.68 ms, so composition itself keeps roughly a 6–12×
+margin. `surface_lost` stayed zero and no frame deadline was missed. RSS stayed near 1.35 GB
+and VRAM near 682 MB with four units. The largest cost is the NDI SDK's software encoder;
+it is CPU on every platform. OMT can skip encode when no receiver is subscribed. The second
+cost is AVFoundation's BGRA conversion for file/camera frames, visible as
+`videomediaconverter` threads; requesting NV12 and converting on the GPU is the next
+candidate, but it would add a second shader path and is not enabled.
+
+These numbers are one machine and one preset, not a Windows comparison. The headless
+session and commands are reproducible through `eivizctl`; the stats line is emitted by
+`eiviz-headless` in both normal and soak runs.
+
 ## GPU
 
 Compose calls the GPU through a wgpu abstraction. Windows is Direct3D 12; macOS is Metal.  
