@@ -125,6 +125,34 @@ sequenceDiagram
   Clock->>Out: 音声
 ```
 
+## 段階ごとのハードウェアアクセラレーション
+
+GPUフレーム型とアップロード／取り込みの契約は全プラットフォームで共通で、異なるのは
+プラットフォーム固有のimport処理だけです。起動時に`accel ...`として選択中の経路を
+ログへ出すため、性能報告では実際の経路を特定できます。
+
+| 段階 | Windows | macOS | Linux |
+|---|---|---|---|
+| ファイル／UVCデコード | Media Foundation（ハードウェアトランスフォーム、D3Dマネージャー） | AVFoundation／VideoToolboxから`CVMetalTextureCache`へ | Vulkan Video |
+| フレームアップロード | ReBARまたはVulkan host-visible ring | Unified Memoryの共有`MTLTexture` ring | Vulkan staging／host-visible |
+| NDI取り込み | ReBAR／Vulkan ingest ring | lease付きUnified Memory ring | Vulkan ingest ring |
+| MP4書き出し | Media FoundationのハードウェアH.264/HEVC | AVAssetWriter／VideoToolboxのH.264/HEVC | 非対応 |
+| RTMPライブ映像 | OpenH264（ソフトウェア） | OpenH264（ソフトウェア） | OpenH264（ソフトウェア） |
+| Replayエンコード | VMX1 CPUエンコーダー。GPU ringは画素コピー | VMX1 CPUエンコーダー。GPU ringは画素コピー | VMX1 CPUエンコーダー |
+| DeckLink入出力 | Proモジュール＋ハードウェア | 非対応 | Proモジュール＋ハードウェア |
+
+macOSはWindowsがハードウェアデコードを使う場面でソフトウェアデコードに落ちている
+わけではありません。デコードはVideoToolboxで、デコード済みサーフェスをCPUコピー
+なしでMetalへimportします。MP4書き出しもプラットフォームのメディアエンジンを使います。
+RTMPライブとReplayの2段階は全OSでソフトウェアなので、macOS固有の劣化ではありません。
+macOSの主な性能トレードオフは、大きなWindowsディスクリートGPUに対するGPUスループットで
+あり、コピーやデコード経路のアーキテクチャ上の不利ではありません。
+
+次の共通化候補は、ゼロコストのenumバックエンド（`VideoToolbox`、Media Foundation、
+OpenH264）を持つ`VideoEncoder`インターフェースです。RTMPマルチプレクサを分岐せずに
+プラットフォームエンコーダーを使えるようになります。ただし現行のRTMP契約は全OSで
+OpenH264、ReplayコンテナはH.264ではなくVMX1のため、まだ有効化していません。
+
 ## GPU最適化
 
 映像パイプラインはwgpuをベースとしつつ、プラットフォーム固有の高速化を行っています。

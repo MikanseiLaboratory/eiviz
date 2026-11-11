@@ -140,6 +140,7 @@ impl GpuDevice {
             "gpu adapter backend={:?} type={:?} name={} driver={}",
             info.backend, info.device_type, info.name, info.driver
         ));
+        crate::diag::info(&format!("accel {}", crate::platform::accel_profile()));
 
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {

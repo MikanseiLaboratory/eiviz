@@ -190,6 +190,35 @@ sequenceDiagram
   Clock->>Out: Audio
 ```
 
+## Hardware acceleration by stage
+
+The mixer keeps one GPU frame type and one upload/ingest contract across platforms; only
+the platform import step differs. The selected profile is logged at startup as
+`accel ...`, so a performance report can name the actual path.
+
+| Stage | Windows | macOS | Linux |
+|---|---|---|---|
+| File / UVC decode | Media Foundation with hardware transforms and a D3D manager | AVFoundation / VideoToolbox into `CVMetalTextureCache` | Vulkan Video |
+| Frame upload | ReBAR or Vulkan host-visible ring | Unified-memory shared `MTLTexture` ring | Vulkan staging/host-visible |
+| NDI ingest | ReBAR / Vulkan ingest ring | Unified-memory ring with frame leases | Vulkan ingest ring |
+| MP4 export | Media Foundation hardware H.264/HEVC | AVAssetWriter / VideoToolbox H.264/HEVC | Not available |
+| Live RTMP video | OpenH264 (software) | OpenH264 (software) | OpenH264 (software) |
+| Replay encode | VMX1 CPU encoder; GPU ring copies pixels | VMX1 CPU encoder; GPU ring copies pixels | VMX1 CPU encoder |
+| DeckLink I/O | Pro module + hardware | Not supported | Pro module + hardware |
+
+macOS is not using a software decode path where Windows uses hardware: decode is
+VideoToolbox and the decoded surface is imported into Metal without a CPU copy. MP4 export
+also uses the platform media engine. The two software stages — live RTMP and Replay — are
+software on every platform, so macOS does not lose parity there. The main macOS
+performance trade-off is GPU throughput versus a large discrete Windows GPU, not an
+architectural copy or decode penalty.
+
+The natural next commonization is a `VideoEncoder` interface with zero-cost enum
+backends (`VideoToolbox`, Media Foundation, OpenH264). It would let live RTMP use the
+platform encoder without forking the RTMP muxer. It is not enabled yet: the current RTMP
+contract is OpenH264 on every OS, and the Replay container uses the VMX1 codec rather than
+H.264.
+
 ## GPU
 
 Compose calls the GPU through a wgpu abstraction. Windows is Direct3D 12; macOS is Metal.  

@@ -16,3 +16,20 @@ pub const QOS_UTILITY: u32 = 0x11;
 
 #[cfg(not(target_os = "macos"))]
 pub fn set_thread_qos(_qos: u32) {}
+
+/// What the platform actually uses for each media stage. Logged once at startup so a
+/// performance report does not have to guess which path a build selected.
+pub fn accel_profile() -> &'static str {
+    #[cfg(windows)]
+    {
+        "decode=media-foundation-dxva upload=rebar/vulkan ingest=rebar/vulkan export=media-foundation live=openh264 replay=vmx1-cpu decklink=yes"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "decode=videotoolbox-zero-copy upload=uma ingest=uma export=videotoolbox live=openh264 replay=vmx1-cpu decklink=no"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "decode=vulkan-video upload=vulkan/staging ingest=vulkan export=vmx1 live=openh264 replay=vmx1-cpu decklink=yes"
+    }
+}
