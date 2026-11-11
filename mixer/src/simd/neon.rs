@@ -49,32 +49,19 @@ unsafe fn yuv422_to_bgra_neon(
         while x + 16 <= w && s + x * 2 + 32 <= src.len() && d + x * 4 + 64 <= dst.len() {
             let p = vld4_u8(src.as_ptr().add(s + x * 2));
             let (y0, cb, cr) = if uyvy {
-                (
-                    p.1,
-                    p.0,
-                    p.2,
-                )
+                (p.1, p.0, p.2)
             } else {
-                (
-                    p.0,
-                    p.1,
-                    p.3,
-                )
+                (p.0, p.1, p.3)
             };
             let (y1, _, _) = if uyvy {
-                (
-                    p.3,
-                    p.0,
-                    p.2,
-                )
+                (p.3, p.0, p.2)
             } else {
-                (
-                    p.2,
-                    p.1,
-                    p.3,
-                )
+                (p.2, p.1, p.3)
             };
-            vst4_u8(dst.as_mut_ptr().add(d + x * 4), yuv8_to_bgra(y0, y1, cb, cr));
+            vst4_u8(
+                dst.as_mut_ptr().add(d + x * 4),
+                yuv8_to_bgra(y0, y1, cb, cr),
+            );
 
             let (y0, cb, cr) = if uyvy {
                 (
@@ -102,7 +89,10 @@ unsafe fn yuv422_to_bgra_neon(
                     vext_u8::<4>(p.3, p.3),
                 )
             };
-            vst4_u8(dst.as_mut_ptr().add(d + x * 4 + 32), yuv8_to_bgra(y0, y1, cb, cr));
+            vst4_u8(
+                dst.as_mut_ptr().add(d + x * 4 + 32),
+                yuv8_to_bgra(y0, y1, cb, cr),
+            );
             x += 16;
         }
         if x < w {
@@ -120,12 +110,7 @@ unsafe fn yuv422_to_bgra_neon(
 
 #[cfg(target_arch = "aarch64")]
 #[inline]
-unsafe fn yuv8_to_bgra(
-    y0: uint8x8_t,
-    y1: uint8x8_t,
-    cb: uint8x8_t,
-    cr: uint8x8_t,
-) -> uint8x8x4_t {
+unsafe fn yuv8_to_bgra(y0: uint8x8_t, y1: uint8x8_t, cb: uint8x8_t, cr: uint8x8_t) -> uint8x8x4_t {
     let (b0, g0, r0) = yuv4_to_bgra(y0, cb, cr);
     let (b1, g1, r1) = yuv4_to_bgra(y1, cb, cr);
     uint8x8x4_t(
@@ -179,9 +164,18 @@ unsafe fn yuv4_to_bgra(
     );
     let r = vminq_f32(vmaxq_f32(vaddq_f32(yv, vmulq_n_f32(v, 1.5748)), zero), max);
     (
-        vmovn_u16(vcombine_u16(vmovn_u32(vcvtq_u32_f32(b)), vmovn_u32(vcvtq_u32_f32(b)))),
-        vmovn_u16(vcombine_u16(vmovn_u32(vcvtq_u32_f32(g)), vmovn_u32(vcvtq_u32_f32(g)))),
-        vmovn_u16(vcombine_u16(vmovn_u32(vcvtq_u32_f32(r)), vmovn_u32(vcvtq_u32_f32(r)))),
+        vmovn_u16(vcombine_u16(
+            vmovn_u32(vcvtq_u32_f32(b)),
+            vmovn_u32(vcvtq_u32_f32(b)),
+        )),
+        vmovn_u16(vcombine_u16(
+            vmovn_u32(vcvtq_u32_f32(g)),
+            vmovn_u32(vcvtq_u32_f32(g)),
+        )),
+        vmovn_u16(vcombine_u16(
+            vmovn_u32(vcvtq_u32_f32(r)),
+            vmovn_u32(vcvtq_u32_f32(r)),
+        )),
     )
 }
 
