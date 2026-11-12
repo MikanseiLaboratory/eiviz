@@ -202,22 +202,23 @@ the platform import step differs. The selected profile is logged at startup as
 | Frame upload | ReBAR or Vulkan host-visible ring | Unified-memory shared `MTLTexture` ring | Vulkan staging/host-visible |
 | NDI ingest | ReBAR / Vulkan ingest ring | Unified-memory ring with frame leases | Vulkan ingest ring |
 | MP4 export | Media Foundation hardware H.264/HEVC | AVAssetWriter / VideoToolbox H.264/HEVC | Not available |
-| Live RTMP video | OpenH264 (software) | OpenH264 (software) | OpenH264 (software) |
+| Live RTMP video | OpenH264 (software) | VideoToolbox H.264 (OpenH264 fallback) | OpenH264 (software) |
 | Replay encode | VMX1 CPU encoder; GPU ring copies pixels | VMX1 CPU encoder; GPU ring copies pixels | VMX1 CPU encoder |
 | DeckLink I/O | Pro module + hardware | Not supported | Pro module + hardware |
 
 macOS is not using a software decode path where Windows uses hardware: decode is
 VideoToolbox and the decoded surface is imported into Metal without a CPU copy. MP4 export
-also uses the platform media engine. The two software stages — live RTMP and Replay — are
-software on every platform, so macOS does not lose parity there. The main macOS
+also uses the platform media engine. On macOS, live RTMP now uses the VideoToolbox H.264
+encoder and falls back to OpenH264 only when hardware encoding is unavailable. Replay
+remains software on every platform. The main macOS
 performance trade-off is GPU throughput versus a large discrete Windows GPU, not an
 architectural copy or decode penalty.
 
-The natural next commonization is a `VideoEncoder` interface with zero-cost enum
-backends (`VideoToolbox`, Media Foundation, OpenH264). It would let live RTMP use the
-platform encoder without forking the RTMP muxer. It is not enabled yet: the current RTMP
-contract is OpenH264 on every OS, and the Replay container uses the VMX1 codec rather than
-H.264.
+macOS deliberately keeps the VideoToolbox H.264 path local to the RTMP module rather than
+forcing a cross-platform encoder interface. The RTMP muxer already consumes AVCC and the
+SPS/PPS sequence header, so the macOS path can bypass OpenH264 without changing the wire
+format. OpenH264 remains the fallback when VideoToolbox hardware encoding is unavailable.
+Replay still uses the VMX1 codec rather than H.264.
 
 ### Measured baseline (M3 MacBook Air)
 
@@ -324,15 +325,14 @@ Vulkan Video; Metal plus VideoToolbox is the native path.
 
 | Codec | Hardware encode | Hardware decode | Current eiviz use |
 |---|---|---|---|
-| H.264 | Yes | Yes | MP4 export; RTMP still uses OpenH264 software |
+| H.264 | Yes | Yes | MP4 export; RTMP uses VideoToolbox with OpenH264 fallback |
 | HEVC | Yes | Yes | MP4 export |
 | AV1 | No | Yes | Not used |
 | ProRes | Yes | — | Not used |
 
-The highest-value remaining optimization is live RTMP: a `VTCompressionSession` H.264
-backend (real-time, no frame reordering, short GOP) can replace OpenH264 while keeping the
-existing RTMP muxer. It should accept NV12 directly and avoid the NV12→BGRA transfer used
-for Metal import. Replay is a smaller opportunity: VMX1 already uses GPU FDCT/quant, and a
-hardware HEVC backend would need all-intra or short-GOP trade-offs for clip seeking. AV1
-software encoding is not suitable for live 1080p60 on a fanless M3; AV1 hardware decode is
-already available. Vulkan Video is not a macOS option.
+The RTMP H.264 backend now uses `VTCompressionSession` (real-time, no frame reordering,
+short GOP), feeds NV12 directly, and keeps the existing muxer. Replay is the next smaller
+opportunity: VMX1 already uses GPU FDCT/quant, and a hardware HEVC backend would need
+all-intra or short-GOP trade-offs for clip seeking. AV1 software encoding is not suitable
+for live 1080p60 on a fanless M3; AV1 hardware decode is already available. Vulkan Video is
+not a macOS option.

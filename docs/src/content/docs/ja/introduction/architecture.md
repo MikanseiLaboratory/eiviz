@@ -137,14 +137,14 @@ GPUフレーム型とアップロード／取り込みの契約は全プラッ�
 | フレームアップロード | ReBARまたはVulkan host-visible ring | Unified Memoryの共有`MTLTexture` ring | Vulkan staging／host-visible |
 | NDI取り込み | ReBAR／Vulkan ingest ring | lease付きUnified Memory ring | Vulkan ingest ring |
 | MP4書き出し | Media FoundationのハードウェアH.264/HEVC | AVAssetWriter／VideoToolboxのH.264/HEVC | 非対応 |
-| RTMPライブ映像 | OpenH264（ソフトウェア） | OpenH264（ソフトウェア） | OpenH264（ソフトウェア） |
+| RTMPライブ映像 | OpenH264（ソフトウェア） | VideoToolbox H.264（OpenH264フォールバック） | OpenH264（ソフトウェア） |
 | Replayエンコード | VMX1 CPUエンコーダー。GPU ringは画素コピー | VMX1 CPUエンコーダー。GPU ringは画素コピー | VMX1 CPUエンコーダー |
 | DeckLink入出力 | Proモジュール＋ハードウェア | 非対応 | Proモジュール＋ハードウェア |
 
 macOSはWindowsがハードウェアデコードを使う場面でソフトウェアデコードに落ちている
 わけではありません。デコードはVideoToolboxで、デコード済みサーフェスをCPUコピー
 なしでMetalへimportします。MP4書き出しもプラットフォームのメディアエンジンを使います。
-RTMPライブとReplayの2段階は全OSでソフトウェアなので、macOS固有の劣化ではありません。
+macOSのRTMPライブはVideoToolbox H.264を使い、ハードウェアエンコードが使えない場合だけOpenH264へフォールバックします。Replayは引き続き全OSでソフトウェアです。
 macOSの主な性能トレードオフは、大きなWindowsディスクリートGPUに対するGPUスループットで
 あり、コピーやデコード経路のアーキテクチャ上の不利ではありません。
 
@@ -210,15 +210,14 @@ macOSにVulkan Videoもない。Metal＋VideoToolboxが正道となる。
 
 | コーデック | ハードウェアEncode | ハードウェアDecode | 現在のeivizでの用途 |
 |---|---|---|---|
-| H.264 | あり | あり | MP4書き出し。RTMPはOpenH264（ソフトウェア） |
+| H.264 | あり | あり | MP4書き出し。RTMPはVideoToolbox（OpenH264フォールバック） |
 | HEVC | あり | あり | MP4書き出し |
 | AV1 | なし | あり | 未使用 |
 | ProRes | あり | — | 未使用 |
 
-最も効果が大きい残りの最適化は**RTMPのライブH.264**。`VTCompressionSession`のH.264
-バックエンド（リアルタイム、Bフレームなし、短いGOP）を既存RTMP muxerへ接続すれば、
-OpenH264を置き換えられる。NV12を直接受け取り、Metal取り込み用のNV12→BGRA変換を避ける。
-ReplayはVMX1が既にGPU FDCT/量子化を使っており、ハードウェアHEVC化はクリップシークのため
+RTMPのH.264バックエンドは`VTCompressionSession`（リアルタイム、Bフレームなし、短いGOP）
+を使い、NV12を直接入力して既存muxerへ渡す。次に小さい候補はReplayで、VMX1が既に
+GPU FDCT/量子化を使っているため、ハードウェアHEVC化はクリップシークのための
 All-Intra／短GOPのトレードオフを伴う。AV1のソフトウェアエンコードはファンレスM3の
 ライブ1080p60には不向きで、AV1ハードウェアデコードは既に利用可能。Vulkan Videoは
 macOSでは選択肢にならない。
