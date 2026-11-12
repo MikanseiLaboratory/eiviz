@@ -247,10 +247,8 @@ final class MixerController: ObservableObject {
     private func syncReplayFromMixer() {
         let revision = MixerFFI.sessionRevision()
         guard revision != syncedSessionRevision else { return }
-        guard let data = MixerFFI.sessionJSON(),
-              let root = try? JSONDecoder().decode(JSONValue.self, from: data),
-              case .object(let object) = root
-        else { return }
+        guard let data = MixerFFI.sessionJSON() else { return }
+        // One decode: the session struct already carries the Replay JSON value.
         guard let decoded = try? JSONDecoder().decode(MixerSessionData.self, from: data) else {
             return
         }
@@ -282,12 +280,7 @@ final class MixerController: ObservableObject {
             selectedInputId = session.inputs.first { !$0.isBuiltin }?.id
             changed = true
         }
-        let replay: JSONValue?
-        if let value = object["replay"], value != .null {
-            replay = value
-        } else {
-            replay = nil
-        }
+        let replay: JSONValue? = decoded.replay
         if replay != session.replay {
             session.replay = replay
             changed = true
