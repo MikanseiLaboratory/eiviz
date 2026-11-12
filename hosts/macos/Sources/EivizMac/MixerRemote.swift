@@ -208,6 +208,17 @@ enum MixerRemote {
         encode(["kind": "deleteMultiview", "id": NSNumber(value: id)])
     }
 
+    static func upsertOutput(_ output: OutputEntry) -> String {
+        guard let data = try? JSONEncoder().encode(output),
+              let object = try? JSONSerialization.jsonObject(with: data)
+        else { return "{}" }
+        return encode(["kind": "upsertOutput", "output": object])
+    }
+
+    static func deleteOutput(_ id: UInt64) -> String {
+        encode(["kind": "deleteOutput", "id": NSNumber(value: id)])
+    }
+
     static func setSettings(_ session: MixerSessionData) -> String {
         let encoder = JSONEncoder()
         guard let settings = try? encoder.encode(session.settings),
@@ -264,6 +275,13 @@ enum MixerRemote {
 
     static func deleteOverlay(_ id: UInt64) -> String {
         encode(["kind": "deleteOverlay", "id": NSNumber(value: id)])
+    }
+
+    static func setOverlays(_ slots: [OverlaySlot]) -> String {
+        guard let data = try? JSONEncoder().encode(slots),
+              let array = try? JSONSerialization.jsonObject(with: data)
+        else { return "{}" }
+        return encode(["kind": "setOverlays", "slots": array])
     }
 
     static func mix(from liveJson: String, unitId: UInt64) -> Float? {

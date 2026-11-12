@@ -167,6 +167,7 @@ extension MixerController {
             showMultiview = false
             openMultiview = nil
         }
+        _ = mutateLocal(MixerRemote.deleteMultiview(id))
     }
 
     func pushMultiview(_ layout: MultiviewLayout) {
@@ -218,6 +219,7 @@ extension MixerController {
         fail(mixer_bind_multiview(item.gpuId, previewUnit == 0 ? 1 : previewUnit, programUnit == 0 ? 1 : programUnit), "Bind Multiview")
         let interval = item.presentInterval == 0 ? session.settings.defaultPresentInterval : item.presentInterval
         _ = mixer_set_monitor_present_interval(item.monitorId, max(1, interval))
+        _ = mutateLocal(MixerRemote.upsertMultiview(item))
     }
 
     func applyBusColors() {

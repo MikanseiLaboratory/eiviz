@@ -85,6 +85,27 @@ document.sortClips(playlistId: playlist)
 let sorted = document.clips(playlistId: playlist)
 check("clips sort by timecode", sorted.first?.inFrame == 40 && sorted.last?.inFrame == 300)
 
+// MARK: - Control document adoption keeps locally added inputs
+
+let documentInputs = [
+    InputEntry(id: 1, name: "Color Red", kind: .color),
+    InputEntry(id: 2, name: "Bars", kind: .bars),
+]
+let localProbe = InputEntry(id: 9, name: "Sync Probe", kind: .color)
+let localInputs = documentInputs + [localProbe]
+let kept = MixerController.mergedInputs(document: documentInputs, local: localInputs, pending: [9])
+check("adopting the document keeps a local input", kept.inputs.map(\.id) == [1, 2, 9])
+check("a local input stays pending until published", kept.pending == [9])
+let published = MixerController.mergedInputs(
+    document: documentInputs + [localProbe], local: localInputs, pending: [9])
+check("a published input stops being pending", published.pending.isEmpty)
+check("a published input is not duplicated", published.inputs.filter { $0.id == 9 }.count == 1)
+let localRemoved = MixerController.mergedInputs(document: documentInputs, local: documentInputs, pending: [9])
+check("a deleted local input leaves no pending entry", localRemoved.pending.isEmpty)
+let documentDeleted = MixerController.mergedInputs(
+    document: [documentInputs[0]], local: [documentInputs[0], documentInputs[1]], pending: [])
+check("an input removed by the document is dropped", documentDeleted.inputs.map(\.id) == [1])
+
 // MARK: - Deleting a playlist repairs the channels that named it
 
 var repointDoc = ReplayDocument.empty(format: format)

@@ -84,6 +84,14 @@ final class MixerController: ObservableObject {
     var sessionSyncTimer: Timer?
     /// Revision of the control session whose Replay document the host has already adopted.
     var syncedSessionRevision: UInt64 = 0
+    /// Inputs created locally that the control document has not seen yet. The sync
+    /// below must keep them: the document is not the only writer, and adopting its
+    /// input list wholesale used to drop every input added from the GUI.
+    var pendingInputAdds: Set<UInt64> = []
+    /// Coalesces overlay edits (drags fire at frame rate) into one document write.
+    var overlayPersistTask: Task<Void, Never>?
+    /// Same coalescing for audio gain/mute drags, per input id.
+    var inputPersistTasks: [UInt64: Task<Void, Never>] = [:]
     @Published var previewByUnit: [UInt64: UInt64] = [:]
     @Published var programByUnit: [UInt64: UInt64] = [:]
     var inputPreviewWindows: [UInt64: NSWindow] = [:]
@@ -249,13 +257,27 @@ final class MixerController: ObservableObject {
         syncedSessionRevision = revision
         var changed = false
         // Inputs are shared with the native API too: a Replay channel added by eivizctl has
-        // to appear in the input list, or the deck cannot be opened for it.
+        // to appear in the input list, or the deck cannot be opened for it. Inputs the
+        // host added and has not published yet are merged back in instead of being
+        // dropped: the document does not know about them.
         if decoded.inputs != session.inputs {
-            session.inputs = decoded.inputs
+            let merged = Self.mergedInputs(
+                document: decoded.inputs,
+                local: session.inputs,
+                pending: pendingInputAdds
+            )
+            pendingInputAdds = merged.pending
+            if merged.inputs != session.inputs {
+                session.inputs = merged.inputs
+                changed = true
+            }
+        }
+        if decoded.nextInputId > session.nextInputId {
+            session.nextInputId = decoded.nextInputId
             changed = true
         }
-        if decoded.nextInputId != session.nextInputId {
-            session.nextInputId = decoded.nextInputId
+        if let id = selectedInputId, !session.inputs.contains(where: { $0.id == id }) {
+            selectedInputId = session.inputs.first { !$0.isBuiltin }?.id
             changed = true
         }
         let replay: JSONValue?
@@ -270,6 +292,58 @@ final class MixerController: ObservableObject {
         }
         if changed {
             objectWillChange.send()
+        }
+    }
+
+    /// Inputs to show after the control document is adopted.
+    ///
+    /// The document is not the only writer: an input added from this host is not in
+    /// it until the host sends the mutation. Adopting the document's list wholesale
+    /// used to drop every such input, which also left scene layers pointing at ids
+    /// the session no longer contained. Local-only additions are kept (and stay
+    /// pending) until the document contains them.
+    nonisolated static func mergedInputs(
+        document: [InputEntry],
+        local: [InputEntry],
+        pending: Set<UInt64>
+    ) -> (inputs: [InputEntry], pending: Set<UInt64>) {
+        let documentIds = Set(document.map(\.id))
+        let localIds = Set(local.map(\.id))
+        var inputs = document
+        for entry in local where pending.contains(entry.id) && !documentIds.contains(entry.id) {
+            inputs.append(entry)
+        }
+        inputs.sort { $0.id < $1.id }
+        let remaining = pending.intersection(localIds).subtracting(documentIds)
+        return (inputs, remaining)
+    }
+
+    /// Writes the overlay list after an edit settles. The editor changes geometry
+    /// while dragging; sending every frame would replace the document far more often
+    /// than it changes in practice.
+    func scheduleOverlayPersist() {
+        guard !isRemote else { return }
+        overlayPersistTask?.cancel()
+        overlayPersistTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.overlayPersistTask = nil
+            _ = self.mutateLocal(MixerRemote.setOverlays(self.session.overlays))
+        }
+    }
+
+    func scheduleInputPersist(_ input: InputEntry) {
+        guard !isRemote else { return }
+        inputPersistTasks[input.id]?.cancel()
+        inputPersistTasks[input.id] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self,
+                  let current = self.session.inputs.first(where: { $0.id == input.id })
+            else { return }
+            self.inputPersistTasks[current.id] = nil
+            if self.mutateLocal(MixerRemote.upsertInput(current)) {
+                self.pendingInputAdds.remove(current.id)
+            }
         }
     }
 
@@ -653,6 +727,12 @@ final class MixerController: ObservableObject {
         remoteDiscoverTask = nil
         sessionSyncTimer?.invalidate()
         sessionSyncTimer = nil
+        overlayPersistTask?.cancel()
+        overlayPersistTask = nil
+        for task in inputPersistTasks.values {
+            task.cancel()
+        }
+        inputPersistTasks.removeAll()
         mixTimer?.invalidate()
         mixTimer = nil
         meterTimer?.invalidate()
@@ -852,6 +932,7 @@ final class MixerController: ObservableObject {
         session.inputs[index].mute = mute
         let input = session.inputs[index]
         pushInputAudio(input)
+        scheduleInputPersist(input)
         if let window = audioInputWindows[id] {
             window.title = L10n.format("audio.inputTitle", input.listLabel(in: session, localFiles: !isRemote))
         }

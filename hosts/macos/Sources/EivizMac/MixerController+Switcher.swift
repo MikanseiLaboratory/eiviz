@@ -16,6 +16,14 @@ extension MixerController {
         updateStatus()
     }
 
+    /// Cut/Fade changes the unit's program/preview scene but the control document
+    /// keeps the buses it had. Send the unit so eivizctl/remote and the saved
+    /// document see the same picture the operator just took.
+    private func persistLiveBuses(_ unitId: UInt64) {
+        guard !isRemote, let unit = session.units.first(where: { $0.id == unitId }) else { return }
+        _ = mutateLocal(MixerRemote.upsertUnit(unit))
+    }
+
     private func fireAuto(_ preset: TransitionPreset, unit: MixingUnitEntry, reason: String) {
         var curve = EivizCurve(
             kind: preset.easing,
@@ -86,6 +94,7 @@ extension MixerController {
         }
         fail(mixer_unit_cut(unit.id, preset.swap ? 1 : 0, EIVIZ_INCOMING_PREVIEW), "CUT")
         syncUnitBuses(unit.id)
+        persistLiveBuses(unit.id)
     }
 
     func auto() {
@@ -97,6 +106,7 @@ extension MixerController {
         fireAuto(preset, unit: selectedUnit, reason: "AUTO")
         tbarLocked = false
         syncUnitBuses(selectedUnit.id)
+        persistLiveBuses(selectedUnit.id)
     }
 
     func firePreset(_ preset: TransitionPreset, index: Int) {
@@ -118,6 +128,7 @@ extension MixerController {
         }
         if !isRemote {
             syncUnitBuses(unit.id)
+            persistLiveBuses(unit.id)
         }
     }
 
@@ -297,6 +308,7 @@ extension MixerController {
                 session.nextInputId += 1
             }
             session.inputs.append(entry)
+            pendingInputAdds.insert(entry.id)
         }
         attach(entry)
         selectedInputId = entry.id
@@ -304,6 +316,14 @@ extension MixerController {
         // adding the input publishes straight away instead of at the first edit.
         if entry.kind == .replay {
             publishSession()
+        } else {
+            // The control document (and with it the vMix API and every other client)
+            // used to stay unaware of an input added here until a whole-session
+            // replace happened. Send this one input instead, and stop tracking it as
+            // local-only once the document accepted it.
+            if mutateLocal(MixerRemote.upsertInput(entry)) {
+                pendingInputAdds.remove(entry.id)
+            }
         }
         objectWillChange.send()
     }
@@ -322,6 +342,9 @@ extension MixerController {
             }
             return
         }
+        let kind = session.inputs[index].kind
+        let lastReplay = kind == .replay && isLastReplayChannel(inputId: id)
+        let wasPending = pendingInputAdds.remove(id) != nil
         closeInputPreview(id)
         closeAudioInput(id)
         videoRoles.removeValue(forKey: id)
@@ -336,6 +359,17 @@ extension MixerController {
         }
         selectedInputId = nil
         pushOverlays()
+        // Same rule as adding: the document has to learn about the removal, or a
+        // client reading it still sees an input the mixer no longer owns. An input
+        // the document never accepted (still pending) has nothing to remove, and the
+        // last Replay channel has to go through DeleteReplay or the core refuses.
+        if !wasPending {
+            if kind == .replay {
+                _ = mutateLocal(lastReplay ? MixerRemote.deleteReplay() : MixerRemote.deleteInput(id))
+            } else {
+                _ = mutateLocal(MixerRemote.deleteInput(id))
+            }
+        }
     }
 
     func addScene() {
@@ -347,6 +381,7 @@ extension MixerController {
         let scene = session.addScene(name: "Scene \(session.nextSceneId)", input: nil)
         pushScene(scene)
         previewScene(scene)
+        _ = mutateLocal(MixerRemote.upsertScene(scene))
     }
 
     func removeScene() {
@@ -384,6 +419,7 @@ extension MixerController {
         if let next = session.scenes.first {
             previewScene(next)
         }
+        _ = mutateLocal(MixerRemote.deleteScene(scene.id))
     }
 
     func cutScene(_ scene: SceneEntry) {
@@ -401,6 +437,7 @@ extension MixerController {
         } else {
             _ = mixer_video_set_loop(video.id, session.inputs[index].videoLoop ? 1 : 0)
         }
+        scheduleInputPersist(session.inputs[index])
         objectWillChange.send()
     }
 
@@ -425,6 +462,7 @@ extension MixerController {
             session.inputs[index].mute = mute
             let input = session.inputs[index]
             pushInputAudio(input)
+            scheduleInputPersist(input)
         }
         objectWillChange.send()
     }
@@ -495,6 +533,7 @@ extension MixerController {
         session.units.append(entry)
         selectedUnitId = entry.id
         updateStatus()
+        _ = mutateLocal(MixerRemote.upsertUnit(entry))
     }
 
     func deleteUnit() {
@@ -517,6 +556,7 @@ extension MixerController {
         _ = mixer_destroy_unit(id)
         session.units.removeAll { $0.id == id }
         selectedUnitId = session.units[0].id
+        _ = mutateLocal(MixerRemote.deleteUnit(id))
     }
 
     func saveUnit(_ unit: MixingUnitEntry) {
@@ -549,6 +589,7 @@ extension MixerController {
             window.level = unit.alwaysOnTop ? .floating : .normal
         }
         updateStatus()
+        _ = mutateLocal(MixerRemote.upsertUnit(unit))
     }
 
     func setSwitcherAlwaysOnTop(_ unitId: UInt64, _ on: Bool) {
@@ -613,6 +654,9 @@ extension MixerController {
         }
         _ = mixer_output_remove(output.id)
         session.outputs.removeAll { $0.id == output.id }
+        if output.transport != .rtmp {
+            _ = mutateLocal(MixerRemote.deleteOutput(output.id))
+        }
     }
 
     func addOutput(_ output: OutputEntry) {
@@ -701,7 +745,12 @@ extension MixerController {
             return
         }
         _ = mixer_output_remove(entry.id)
-        guard entry.enabled else { return }
+        guard entry.enabled else {
+            // Keep the disabled row in the document so another client sees the same
+            // list; its outputs are what the core reconciles against.
+            _ = mutateLocal(MixerRemote.upsertOutput(entry))
+            return
+        }
         let config = outputConfigJSON(entry)
         let id = entry.id
         let transport = entry.transport.rawValueU32
@@ -716,6 +765,7 @@ extension MixerController {
         let height = entry.height
         let fpsNum = entry.fpsNum
         let fpsDen = entry.fpsDen
+        let settledEntry = entry
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             MixerFFI.withCString(name) { cName in
                 MixerFFI.withCString(config) { cConfig in
@@ -735,9 +785,11 @@ extension MixerController {
                     fpsDen,
                     cConfig
                 )
-                if code != 0 {
-                    DispatchQueue.main.async {
+                DispatchQueue.main.async {
+                    if code != 0 {
                         _ = self?.fail(code, "Add output")
+                    } else {
+                        _ = self?.mutateLocal(MixerRemote.upsertOutput(settledEntry))
                     }
                 }
                 }

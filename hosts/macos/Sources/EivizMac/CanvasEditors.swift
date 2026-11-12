@@ -231,7 +231,10 @@ struct SceneEditorView: View {
             } else {
                 mixer.pushScene(scene)
                 mixer.pushSceneAnim(scene)
-                mixer.publishSession()
+                // Send the one scene that changed. Replacing the whole host session
+                // here also sent every input/output the host had, rolling back edits
+                // another client made while this window was open.
+                _ = mixer.mutateLocal(MixerRemote.upsertScene(scene))
             }
         }
     }
@@ -287,15 +290,31 @@ struct SceneEditorView: View {
     }
 
     private func addLayer() {
+        // A selected id can outlive the session that contained it (New/Load, or a
+        // failed add). A layer pointing at such an id draws nothing, so fall back to
+        // an input that has a picture instead of recording a dead source.
+        let source = layerSourceId()
         mutate { scene in
             scene.assignLayerIds()
             let next = (scene.layers.map(\.layerId).max() ?? 0) + 1
             let z = scene.layers.map(\.z).max().map { $0 + 1 } ?? 0
-            let layer = SceneLayer(inputId: mixer.selectedInputId ?? EIVIZ_SRC_BARS, z: z, layerId: next)
+            let layer = SceneLayer(inputId: source, z: z, layerId: next)
             scene.layers.append(layer)
             selectedLayer = layer.id
         }
         push()
+    }
+
+    private func layerSourceId() -> UInt64 {
+        if let id = mixer.selectedInputId,
+           let input = mixer.session.inputs.first(where: { $0.id == id }),
+           input.kind != .audio, input.kind != .replay {
+            return id
+        }
+        if let first = mixer.session.inputs.first(where: { $0.kind != .audio && $0.kind != .replay }) {
+            return first.id
+        }
+        return EIVIZ_SRC_BARS
     }
 
     private func deleteLayer() {
@@ -396,7 +415,7 @@ struct SceneEditorView: View {
             held = nil
             mixer.pushScene(scene)
             mixer.pushSceneAnim(scene)
-            mixer.publishSession()
+            _ = mixer.mutateLocal(MixerRemote.upsertScene(scene))
             releaseDraft()
             return
         }
@@ -418,7 +437,7 @@ struct SceneEditorView: View {
         }
         mixer.pushScene(held)
         mixer.pushSceneAnim(held)
-        mixer.publishSession()
+        _ = mixer.mutateLocal(MixerRemote.upsertScene(held))
     }
 
     private func ensureDraft() {

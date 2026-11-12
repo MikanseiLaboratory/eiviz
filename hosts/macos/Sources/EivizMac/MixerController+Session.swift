@@ -488,7 +488,17 @@ extension MixerController {
         FlipBudget.reset()
         mixer_destroy()
         session = loaded
+        pendingInputAdds.removeAll()
         selectedUnitId = loaded.selectedUnitId == 0 ? 1 : loaded.selectedUnitId
+        // A selection is an id into the previous session. Keeping it after New/Load
+        // leaves the editor pointing at an input or scene that no longer exists, and
+        // a scene layer added from that selection records an unusable source id.
+        if let id = selectedInputId, !session.inputs.contains(where: { $0.id == id }) {
+            selectedInputId = session.inputs.first { !$0.isBuiltin }?.id
+        }
+        if let id = selectedSceneId, !session.scenes.contains(where: { $0.id == id }) {
+            selectedSceneId = session.scenes.first?.id
+        }
         mix = 0
         inputFilter = .all
         sceneFilter = .all
@@ -1081,11 +1091,13 @@ extension MixerController {
         let count = UInt32(descs.count)
         if count == 0 {
             fail(mixer_unit_set_overlays(unit.id, nil, 0), "Overlays")
+            scheduleOverlayPersist()
             return
         }
         descs.withUnsafeMutableBufferPointer { ptr in
             fail(mixer_unit_set_overlays(unit.id, ptr.baseAddress, count), "Overlays")
         }
+        scheduleOverlayPersist()
     }
 
     func pushState(unitId: UInt64, program: UInt64, preview: UInt64, mix: Float, kind: UInt32) {

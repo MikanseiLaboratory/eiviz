@@ -271,6 +271,11 @@ pub enum SessionMutation {
     DeleteOverlay {
         id: u64,
     },
+    /// Replaces the whole overlay list, for editors that add, remove and reorder in
+    /// one step. `DeleteOverlay` stays for clients that remove one slot.
+    SetOverlays {
+        slots: Vec<crate::session::OverlaySlot>,
+    },
     SetTransitions {
         presets: Vec<crate::session::TransitionPreset>,
     },
@@ -288,6 +293,12 @@ pub enum SessionMutation {
         layout: Box<crate::session::MultiviewDto>,
     },
     DeleteMultiview {
+        id: u64,
+    },
+    UpsertOutput {
+        output: Box<crate::session::OutputDto>,
+    },
+    DeleteOutput {
         id: u64,
     },
     SetSettings {
@@ -386,10 +397,13 @@ impl SessionMutation {
             Self::DeleteUnit { .. } => "DeleteUnit",
             Self::UpsertOverlay { .. } => "UpsertOverlay",
             Self::DeleteOverlay { .. } => "DeleteOverlay",
+            Self::SetOverlays { .. } => "SetOverlays",
             Self::SetTransitions { .. } => "SetTransitions",
             Self::AddMediaInput { .. } => "AddMediaInput",
             Self::UpsertMultiview { .. } => "UpsertMultiview",
             Self::DeleteMultiview { .. } => "DeleteMultiview",
+            Self::UpsertOutput { .. } => "UpsertOutput",
+            Self::DeleteOutput { .. } => "DeleteOutput",
             Self::SetSettings { .. } => "SetSettings",
             Self::RelinkMedia { .. } => "RelinkMedia",
             Self::CreateInput { .. } => "CreateInput",

@@ -659,7 +659,9 @@ struct SceneAnimView: View {
         if ended {
             mixer.pushSceneAnim(scene)
             if persist {
-                mixer.publishSession()
+                // The animation lives in the scene; send that scene, not the whole
+                // host document (which would roll back other clients' edits).
+                _ = mixer.mutateLocal(MixerRemote.upsertScene(scene))
             }
         }
     }
@@ -681,7 +683,7 @@ struct SceneAnimView: View {
         guard !mixer.isRemote else { return }
         mixer.pushSceneAnim(scene)
         if persist {
-            mixer.publishSession()
+            _ = mixer.mutateLocal(MixerRemote.upsertScene(scene))
         }
         status = ""
     }
