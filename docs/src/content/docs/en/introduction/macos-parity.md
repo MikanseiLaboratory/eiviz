@@ -23,7 +23,7 @@ This table maps the Windows screens and actions to macOS. **It does not mean tha
 | Add Input: OMT / NDI / UVC | AddInputView | Equivalent (checked on device) |
 | Add Input: Audio | AddInputView | Equivalent; microphone permission is requested first |
 | Add Input: Mix | AddInputView | Equivalent |
-| Add Input: DeckLink | Hidden | Unsupported; the macOS DeckLink headers do not fit |
+| Add Input: DeckLink | Hidden | Unsupported; hidden even with Pro, checked on device |
 | Add Input: Replay | Pro only | Pro only |
 | Scene Editor / Scene Animation | CanvasEditors / SceneAnimView | Equivalent |
 | Overlay | OverlayEditor | Equivalent |
@@ -45,11 +45,11 @@ This table maps the Windows screens and actions to macOS. **It does not mean tha
 | Input Preview | InputPreview | Equivalent |
 | Color Picker | ColorPicker / ColorPick | Equivalent |
 | Custom WGSL | CustomWgslEditor | Equivalent |
-| Replay Window | ReplayView | Pro only |
+| Replay Window | ReplayView | Pro only; opened with the Pro test module |
 | Replay Settings | ReplaySettingsView | Pro only |
 | Replay Export | ReplayExportRunner | Pro only |
-| RTMP output | SettingsView outputs | Pro only |
-| DeckLink I/O | Hidden | Unsupported |
+| RTMP output | SettingsView outputs | Pro only; shown in the transport menu with Pro |
+| DeckLink I/O | Hidden | Unsupported; hidden with Pro, checked on device |
 
 ## Windows-only settings
 

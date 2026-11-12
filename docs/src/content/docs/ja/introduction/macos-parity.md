@@ -23,7 +23,7 @@ description: Windows版の画面とmacOS版の対応、未対応、Pro限定の�
 | Add Input: OMT / NDI / UVC | AddInputView | 同等（実機確認済み） |
 | Add Input: Audio | AddInputView | 同等。マイク権限の事前要求を追加 |
 | Add Input: Mix | AddInputView | 同等 |
-| Add Input: DeckLink | 非表示 | 非対応。macOS版DeckLinkヘッダーが適合しない |
+| Add Input: DeckLink | 非表示 | 非対応。Pro読込時も非表示を実機確認 |
 | Add Input: Replay | Pro時のみ | Pro限定 |
 | Scene Editor / Scene Animation | CanvasEditors / SceneAnimView | 同等 |
 | Overlay | OverlayEditor | 同等 |
@@ -45,11 +45,11 @@ description: Windows版の画面とmacOS版の対応、未対応、Pro限定の�
 | Input Preview | InputPreview | 同等 |
 | Color Picker | ColorPicker / ColorPick | 同等 |
 | Custom WGSL | CustomWgslEditor | 同等 |
-| Replay Window | ReplayView | Pro限定 |
+| Replay Window | ReplayView | Pro限定。Proテストモジュールで起動確認 |
 | Replay Settings | ReplaySettingsView | Pro限定 |
 | Replay Export | ReplayExportRunner | Pro限定 |
-| RTMP出力 | SettingsView outputs | Pro限定 |
-| DeckLink入出力 | 非表示 | 非対応 |
+| RTMP出力 | SettingsView outputs | Pro限定。Pro時にtransportへ表示されることを確認 |
+| DeckLink入出力 | 非表示 | 非対応。Pro時も非表示を実機確認 |
 
 ## Windows固有の設定
 
