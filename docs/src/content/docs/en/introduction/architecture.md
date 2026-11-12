@@ -313,3 +313,26 @@ DeckLink I/O, RTMP streaming, and paid-plan entitlements are provided by a signe
 Calls not permitted under the active plan return `ERR_NOT_SUPPORTED_PLAN`; unlinked implementations return `ERR_IO` (plan validation takes precedence). Host UIs dynamically expose DeckLink and RTMP options based on runtime `mixer_capabilities` rather than compile-time feature flags.
 
 Paid plans are authenticated using cryptographically signed license tickets. The Pro module embeds the Ed25519 public key, evaluates expiration against the later of the system clock and a persisted timestamp, and authenticates the machine if a majority of salted hardware fingerprints match. The host UI is solely responsible for installing tickets and displaying status, containing no entitlement decision logic. Plan limits are detailed in [Plans](/eiviz/en/introduction/plans/).
+
+### macOS video encode audit
+
+`scripts/macos-video-encoders.swift` probes the VideoToolbox encoder list. On the M3 test
+machine it reports hardware H.264 (`com.apple.videotoolbox.videoencoder.ave.avc`), hardware
+HEVC (`com.apple.videotoolbox.videoencoder.ave.hevc`), hardware ProRes, and hardware decode
+for H.264, HEVC, and AV1. There is **no AV1 encoder** in VideoToolbox, and macOS exposes no
+Vulkan Video; Metal plus VideoToolbox is the native path.
+
+| Codec | Hardware encode | Hardware decode | Current eiviz use |
+|---|---|---|---|
+| H.264 | Yes | Yes | MP4 export; RTMP still uses OpenH264 software |
+| HEVC | Yes | Yes | MP4 export |
+| AV1 | No | Yes | Not used |
+| ProRes | Yes | — | Not used |
+
+The highest-value remaining optimization is live RTMP: a `VTCompressionSession` H.264
+backend (real-time, no frame reordering, short GOP) can replace OpenH264 while keeping the
+existing RTMP muxer. It should accept NV12 directly and avoid the NV12→BGRA transfer used
+for Metal import. Replay is a smaller opportunity: VMX1 already uses GPU FDCT/quant, and a
+hardware HEVC backend would need all-intra or short-GOP trade-offs for clip seeking. AV1
+software encoding is not suitable for live 1080p60 on a fanless M3; AV1 hardware decode is
+already available. Vulkan Video is not a macOS option.
