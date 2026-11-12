@@ -1221,10 +1221,15 @@ extension MixerController {
             programByUnit = nextProgram
         }
         if let index = session.units.firstIndex(where: { $0.id == unitId }) {
-            if let scene = session.scenes.first(where: { $0.gpuId == preview }) {
+            // This runs every master frame. Assigning the same id still mutates the
+            // @Published session, and SwiftUI then re-evaluates the whole window at
+            // 60 Hz (the single largest CPU cost in the host). Only write on change.
+            if let scene = session.scenes.first(where: { $0.gpuId == preview }),
+               session.units[index].previewSceneId != scene.id {
                 session.units[index].previewSceneId = scene.id
             }
-            if let scene = session.scenes.first(where: { $0.gpuId == program }) {
+            if let scene = session.scenes.first(where: { $0.gpuId == program }),
+               session.units[index].programSceneId != scene.id {
                 session.units[index].programSceneId = scene.id
             }
         }
