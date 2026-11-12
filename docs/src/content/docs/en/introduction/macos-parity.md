@@ -58,6 +58,7 @@ These are specific to the Windows GPU/driver stack and are not shown on macOS:
 - Direct3D 12 / Vulkan renderer selection
 - ReBAR / DXVA / Media Foundation state
 - Windows output-encode and stream lists
+- Internal color format (UYVY/BGRA): macOS is fixed to UYVY; the Windows BGRA switch is not shown.
 
 macOS uses Metal, VideoToolbox, and unified memory. The settings screen shows only the macOS-relevant controls.
 

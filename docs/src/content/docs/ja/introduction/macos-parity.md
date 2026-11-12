@@ -58,6 +58,7 @@ description: Windows版の画面とmacOS版の対応、未対応、Pro限定の�
 - Direct3D 12 / Vulkan のレンダラー選択
 - ReBAR / DXVA / Media Foundation の状態
 - Windowsの出力エンコード・ストリーム一覧
+- Internal color format（UYVY/BGRA）: macOSはUYVY固定で、WindowsのBGRA切替は表示しない。
 
 macOSではMetal、VideoToolbox、UMAを使う。設定画面ではmacOSで有効な項目だけを表示する。
 
