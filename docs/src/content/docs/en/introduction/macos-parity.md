@@ -72,3 +72,7 @@ swift scripts/macos-ui-smoke.swift "$(pgrep -f eiviz-mac | head -1)" --press "è¨
 ```
 
 It is not a CI test because it needs WindowServer and TCC microphone approval. After approval, add an Audio Input and check the meter, L/R, and device changes.
+
+## Performance parity
+
+This table maps features, not performance. The fanless M3 MacBook Air and a Windows NVIDIA dGPU differ in GPU throughput, memory bandwidth, and cooling. On M3, four Units plus Multiview and a still render in `1.1â€“1.3 ms` against a 16.68 ms budget; file plus camera uses about 31% CPU. No identical NVIDIA machine was available here, so there is no A/B claim of 100% parity.
