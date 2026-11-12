@@ -1388,6 +1388,7 @@ struct AddInputView: View {
                     Text(audioProcesses.first { $0.exe == audioProcessExe }?.name ?? audioProcessExe)
                         .foregroundStyle(EivizTheme.dim)
                 }
+            } else {
                 if audioMode == .mic,
                    AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
                 {
@@ -1400,7 +1401,6 @@ struct AddInputView: View {
                         }
                     }
                 }
-            } else {
                 Button(L10n.t("audio.refreshDevices")) { refreshAudioDevices() }
                 Picker(L10n.t("audio.device"), selection: $audioDeviceId) {
                     Text("System default").tag("")
