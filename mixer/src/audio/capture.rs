@@ -194,19 +194,9 @@ fn wasapi_capture(
     if spec.mode == CAPTURE_MODE_PROCESS_LOOPBACK {
         return super::rsac_process::run(spec, uploads, stop, ready, signaled);
     }
-    super::cpal_io::run_capture(spec, uploads, stop, ready, signaled).map_err(|error| {
-        if error.contains("permission")
-            || error.contains("not permitted")
-            || error.contains("I/O")
-            || error.contains("I/O error")
-        {
-            format!(
-                "Core Audio input failed: {error}. Allow eiviz in System Settings > Privacy & Security > Microphone, then try again."
-            )
-        } else {
-            error
-        }
-    })
+    // WASAPI has no Core Audio permission prompt and no macOS System Settings page:
+    // a Windows capture failure must not be explained with the macOS advice.
+    super::cpal_io::run_capture(spec, uploads, stop, ready, signaled)
 }
 
 #[cfg(target_os = "macos")]
@@ -221,11 +211,12 @@ fn coreaudio_capture(
         return super::coreaudio_tap::run(spec, uploads, stop, ready, signaled);
     }
     super::cpal_io::run_capture(spec, uploads, stop, ready, signaled).map_err(|error| {
-        if error.contains("permission")
-            || error.contains("not permitted")
-            || error.contains("I/O")
-            || error.contains("I/O error")
-        {
+        // Only a message that actually names permissions gets the settings advice.
+        // Matching every "I/O" error told operators to fix the microphone when a
+        // disconnected interface or a busy device was the real cause; the Add Input
+        // sheet already asks for microphone access before capture starts.
+        let permission = error.contains("permission") || error.contains("not permitted");
+        if permission {
             format!(
                 "Core Audio input failed: {error}. Allow eiviz in System Settings > Privacy & Security > Microphone, then try again."
             )

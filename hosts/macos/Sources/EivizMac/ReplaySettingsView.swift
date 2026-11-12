@@ -27,6 +27,8 @@ struct ReplaySettingsView: View {
     @State private var status = ""
     @State private var capacityText = ""
     @State private var capacityRunning = false
+    /// Deck refresh interval, edited here but kept out of the live session until Apply.
+    @State private var deckRefresh: UInt32 = 0
 
     var body: some View {
         // The settings are taller than the smallest window the view allows, so they scroll
@@ -130,7 +132,7 @@ struct ReplaySettingsView: View {
                                 }
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(L10n.t("replay.deckRefresh")).font(.caption)
-                                    Picker("", selection: $mixer.session.settings.replayPresentInterval) {
+                                    Picker("", selection: $deckRefresh) {
                                         Text(L10n.t("replay.deckRefreshFollow")).tag(UInt32(0))
                                         ForEach([UInt32(1), 2, 3, 4, 6, 8], id: \.self) { frames in
                                             Text(L10n.format("replay.deckRefreshEvery", "\(frames)"))
@@ -318,6 +320,7 @@ struct ReplaySettingsView: View {
         decodeAhead = current.raw["decodeAhead"]?.boolValue ?? true
         profiling = current.raw["profiling"]?.boolValue ?? false
         angles = current.angles
+        deckRefresh = mixer.session.settings.replayPresentInterval
     }
 
     private func inputKind(_ inputId: UInt64) -> InputKind? {
@@ -690,8 +693,14 @@ struct ReplaySettingsView: View {
         // leaves the operator unable to tell the two apart.
         if mixer.applyReplay(current) {
             // The deck refresh interval lives in the session settings, not the replay
-            // document, so applying has to publish the session too.
-            mixer.publishSession()
+            // document. Send only that part as a mutation: replacing the whole host
+            // document here would revert inputs/scenes/outputs another writer changed
+            // while this window was open.
+            mixer.session.settings.replayPresentInterval = deckRefresh
+            guard mixer.mutateLocal(MixerRemote.setSettings(mixer.session)) else {
+                status = L10n.t("replay.publishRefused")
+                return
+            }
             if let gpuCount = ReplayDeckMath.gpuAnglesOverCapacity(angles) {
                 AppKitDialog.toast(L10n.format(
                     "replay.gpuAnglesOverCapacity",

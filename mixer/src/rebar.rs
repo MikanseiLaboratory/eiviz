@@ -826,6 +826,25 @@ impl UmaUploader {
         tex_width: u32,
         format: wgpu::TextureFormat,
     ) -> Result<(wgpu::Texture, wgpu::TextureView, crate::upload::FrameLease), String> {
+        self.upload_direct_strided(
+            device, source_id, data, row_bytes, row_bytes, height, tex_width, format,
+        )
+    }
+
+    /// [`Self::upload_direct`] for a source whose rows are padded: `source_stride`
+    /// is the distance between rows in `data`, `row_bytes` the bytes a row holds.
+    #[allow(clippy::too_many_arguments)]
+    fn upload_direct_strided(
+        &mut self,
+        device: &wgpu::Device,
+        source_id: u64,
+        data: &[u8],
+        row_bytes: u32,
+        source_stride: u32,
+        height: u32,
+        tex_width: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<(wgpu::Texture, wgpu::TextureView, crate::upload::FrameLease), String> {
         let (slot_i, lease) = self.ensure_slot(device, source_id, tex_width, height, format)?;
         let raw = self
             .rings
@@ -833,7 +852,7 @@ impl UmaUploader {
             .and_then(|ring| ring.slots.get(slot_i))
             .map(|slot| slot.raw.clone())
             .ok_or("uma ring")?;
-        write_shared(&raw, data, row_bytes, height, tex_width)?;
+        write_shared(&raw, data, row_bytes, height, tex_width, source_stride)?;
         let (texture, view) = {
             let slot = self
                 .rings
@@ -1004,16 +1023,19 @@ impl UmaUploader {
             width.max(1)
         };
         let device = self.device.clone();
-        let (texture, view, lease) = self.upload_direct(
+        // NDI may hand us a padded line stride. replaceRegion takes the *source*
+        // pitch, so the stride belongs there; using the packed row size would skew
+        // every row by the padding.
+        let (texture, view, lease) = self.upload_direct_strided(
             &device,
             0,
             data,
             row_bytes as u32,
+            stride as u32,
             height,
             tex_width,
             format,
         )?;
-        let _ = stride;
         Ok(crate::upload::GpuVideoFrame {
             pts,
             width,
@@ -1034,6 +1056,7 @@ fn write_shared(
     row_bytes: u32,
     height: u32,
     tex_width: u32,
+    source_stride: u32,
 ) -> Result<(), String> {
     use objc2_metal::{MTLOrigin, MTLRegion, MTLSize, MTLTexture};
 
@@ -1049,7 +1072,8 @@ fn write_shared(
         },
     };
     unsafe {
-        texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(region, 0, ptr, row_bytes as _);
+        let pitch = source_stride.max(row_bytes);
+        texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(region, 0, ptr, pitch as _);
     }
     Ok(())
 }
@@ -1257,6 +1281,65 @@ impl FrameIngestRing {
 mod tests {
     use super::*;
     use crate::device::{BackendRequest, GpuDevice};
+
+    #[test]
+    fn uma_ingest_honours_a_padded_line_stride() {
+        use objc2_metal::{MTLOrigin, MTLRegion, MTLSize, MTLTexture};
+        let gpu = GpuDevice::with_backend(BackendRequest::Metal).expect("Metal device");
+        let mut uploader = UmaUploader::from_device(&gpu.device).expect("UMA uploader");
+        let width = 8u32;
+        let height = 4u32;
+        let row_bytes = width as usize * 4;
+        // A sender is allowed to pad its rows; replaceRegion takes the source pitch,
+        // so a padded source must not be read as if it were packed.
+        let stride = row_bytes + 12;
+        let mut data = vec![0xA5u8; stride * height as usize];
+        for y in 0..height as usize {
+            for x in 0..row_bytes {
+                data[y * stride + x] = (y * 32 + x) as u8;
+            }
+        }
+        uploader
+            .upload_ingest(
+                &data,
+                stride,
+                row_bytes,
+                width,
+                height,
+                false,
+                true,
+                wgpu::TextureFormat::Bgra8Unorm,
+                0,
+            )
+            .expect("padded upload");
+        let raw = uploader
+            .rings
+            .get(&0)
+            .and_then(|ring| ring.slots.first())
+            .map(|slot| slot.raw.clone())
+            .expect("slot");
+        let mut out = vec![0u8; row_bytes * height as usize];
+        let region = MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize {
+                width: width as usize,
+                height: height as usize,
+                depth: 1,
+            },
+        };
+        unsafe {
+            let bytes = std::ptr::NonNull::new(out.as_mut_ptr().cast::<std::ffi::c_void>())
+                .expect("output buffer");
+            raw.getBytes_bytesPerRow_fromRegion_mipmapLevel(bytes, row_bytes, region, 0);
+        }
+        for y in 0..height as usize {
+            assert_eq!(
+                &out[y * row_bytes..(y + 1) * row_bytes],
+                &data[y * stride..y * stride + row_bytes],
+                "row {y} was read without the source stride"
+            );
+        }
+    }
 
     #[test]
     fn uma_ingest_ring_grows_only_while_frames_are_held() {

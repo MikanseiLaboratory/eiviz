@@ -252,7 +252,7 @@ jobs:
           chmod +x hosts/macos/build.sh
           hosts/macos/build.sh
           BIN="$(cd hosts/macos && swift build -c release --arch arm64 --show-bin-path)"
-          file "$BIN/eiviz-mac" | grep -E "arm64"
+          file -b "$BIN/eiviz-mac" | grep -q "arm64"
 
       - name: Bundle signed Pro module
         env:
@@ -277,7 +277,8 @@ jobs:
           cp target/aarch64-apple-darwin/release/eiviz-headless "$STAGING/"
           cp target/aarch64-apple-darwin/release/eivizctl "$STAGING/"
           cp headless/eiviz-headless.example.env "$STAGING/"
-          file "$STAGING/eiviz-mac" "$STAGING/eiviz-headless" | grep -q arm64
+          file -b "$STAGING/eiviz-mac" | grep -q "arm64"
+          file -b "$STAGING/eiviz-headless" | grep -q "arm64"
           if [ -f "$BIN/libndi.dylib" ]; then
             cp "$BIN/libndi.dylib" "$STAGING/"
           fi
@@ -363,7 +364,7 @@ jobs:
           chmod +x hosts/macos/build.sh
           hosts/macos/build.sh
           BIN="$(cd hosts/macos && swift build -c release --arch x86_64 --show-bin-path)"
-          file "$BIN/eiviz-mac" | grep -E "x86_64|i386"
+          file -b "$BIN/eiviz-mac" | grep -Eq "x86_64|i386"
 
       - name: Bundle signed Pro module
         env:
@@ -388,7 +389,8 @@ jobs:
           cp target/x86_64-apple-darwin/release/eiviz-headless "$STAGING/"
           cp target/x86_64-apple-darwin/release/eivizctl "$STAGING/"
           cp headless/eiviz-headless.example.env "$STAGING/"
-          file "$STAGING/eiviz-mac" "$STAGING/eiviz-headless" | grep -q x86_64
+          file -b "$STAGING/eiviz-mac" | grep -q "x86_64"
+          file -b "$STAGING/eiviz-headless" | grep -q "x86_64"
           if [ -f "$BIN/libndi.dylib" ]; then
             cp "$BIN/libndi.dylib" "$STAGING/"
           fi

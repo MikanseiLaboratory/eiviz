@@ -37,14 +37,11 @@ struct ReplayView: View {
     @State private var kind = "Cut"
     @State private var timing = "Overwrap"
     @State private var frames = "0"
-    @State private var clipTags = ""
     @State private var preservePitch = false
-    @State private var clipGain = "0"
     /// Default transition for clips added later.
     @State private var defaultKind = "Cut"
     @State private var defaultTiming = "Overwrap"
     @State private var defaultFrames = "0"
-    @State private var clipAudio = "FollowAngle"
     /// Export: the same recordings, written to MP4 with the OS encoder.
     @State private var exportMode = "Clip"
     @State private var exportCodec = "H264"
@@ -54,7 +51,6 @@ struct ReplayView: View {
     /// Recording health: where the frames went.
     @State private var health = ""
     /// True while a selection change fills the editors, so they do not write back.
-    @State private var loadingClip = false
     @State private var status = ""
     /// Recorded waveform of the angle being watched.
     /// Monitor per angle, so each angle scene has somewhere to present.
@@ -477,21 +473,27 @@ struct ReplayView: View {
                         .disabled(!isRecording)
                         .frame(minWidth: 66, minHeight: 44)
                     Button(L10n.t("replay.live")) { live() }
+                        .keyboardShortcut("l", modifiers: [])
                         .frame(minWidth: 74, minHeight: 44)
                     Button(L10n.t(transport.playing ? "replay.pause" : "replay.play")) { togglePlay() }
+                        .keyboardShortcut(.space, modifiers: [])
                         .frame(minWidth: 84, minHeight: 44)
                     Button("◀") { step(-1) }
+                        .keyboardShortcut(.leftArrow, modifiers: [])
                         .frame(width: 44, height: 44)
                         .help(L10n.t("replay.stepBackHint"))
                     Button("▶") { step(1) }
+                        .keyboardShortcut(.rightArrow, modifiers: [])
                         .frame(width: 44, height: 44)
                         .help(L10n.t("replay.stepForwardHint"))
                 }
                 controlGroup {
                     Button(L10n.t("replay.markIn")) { markIn() }
+                        .keyboardShortcut("i", modifiers: [])
                         .tint(inFrame != nil ? .orange : nil)
                         .frame(width: 96, height: 44)
                     Button(L10n.t("replay.markOut")) { markOut() }
+                        .keyboardShortcut("o", modifiers: [])
                         .tint(outFrame != nil ? .orange : nil)
                         .frame(width: 96, height: 44)
                         .disabled(!markOpen)
@@ -621,53 +623,6 @@ struct ReplayView: View {
     private var clips: [ReplayClipInfo] { document?.clips(playlistId: playlistId) ?? [] }
     private var playlists: [PlaylistInfo] { document?.playlists ?? [] }
 
-    private var header: some View {
-        HStack(alignment: .center, spacing: 8) {
-            Text(L10n.t("replay.channel"))
-            Picker("", selection: $channel) {
-                ForEach(channels) { item in
-                    Text(item.label).tag(item.index)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 140, height: 32)
-            Text(stateText).fontWeight(.bold).foregroundStyle(isRecording ? Color.red : Color.primary)
-            if !status.isEmpty {
-                Text(status).font(.caption).foregroundStyle(EivizTheme.dim).lineLimit(1)
-            }
-            Spacer()
-            Text(L10n.t("replay.recordTc")).font(.caption)
-            Text(mixer.isRemote ? "--:--:--:--" : ReplayTime.timecode(recordingHead, fps))
-                .font(.system(.title3, design: .monospaced))
-                .frame(minWidth: 148, alignment: .trailing)
-            // The deck is where an operator notices that storage or angles are
-            // missing, so the way into the recording settings belongs here too.
-            Button(L10n.t("replay.multiview")) { multiview.toggle() }
-                .frame(height: 32)
-                .tint(multiview ? .green : nil)
-                .help(L10n.t("replay.multiview"))
-            Button(L10n.t("replay.openSetup")) { mixer.openReplaySettings() }
-                .frame(height: 32)
-                .help(L10n.t("replay.openSetupHint"))
-        }
-    }
-
-    /// What the channel is sending out and the angle being recorded. A deck that
-    /// only shows the recording is half a deck: the operator cuts from the live
-    /// picture and watches what went out.
-    private var deckMonitors: some View {
-        HStack(alignment: .top, spacing: 8) {
-            monitor(title: L10n.t("replay.output"),
-                    caption: outputCaption,
-                    monitorId: outputMonitor,
-                    sourceId: channelSource)
-            monitor(title: L10n.t("replay.liveInput"),
-                    caption: liveCaption,
-                    monitorId: liveMonitor,
-                    sourceId: activeAngle?.liveSourceId ?? 0)
-        }
-    }
-
     private func monitor(title: String, caption: String, monitorId: UInt64, sourceId: UInt64) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).fontWeight(.bold)
@@ -735,19 +690,6 @@ struct ReplayView: View {
     }
 
     private var isRecording: Bool { stats?.state == 1 }
-
-    private func markReadout(_ title: String, _ value: String, color: Color = EivizTheme.text) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption).foregroundStyle(EivizTheme.dim)
-            Text(value)
-                .font(.system(.body, design: .monospaced))
-                .foregroundStyle(value.hasPrefix("--") ? EivizTheme.dim : color)
-        }
-        .padding(.horizontal, 8)
-        .frame(width: 130, height: 44, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 5).fill(EivizTheme.panel))
-        .overlay(RoundedRectangle(cornerRadius: 5).stroke(EivizTheme.stroke))
-    }
 
     /// Length of the mark, or a placeholder while it is incomplete.
     private var markDuration: String {
@@ -820,44 +762,6 @@ struct ReplayView: View {
             }
         }
         .frame(width: 430, alignment: .leading)
-    }
-
-    /// One numbered button per camera, the way a replay controller labels its cameras.
-    /// The picture of the selected one is the monitor above, so the strip stays a row of
-    /// numbers instead of a row of expensive previews.
-    private var angleStrip: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text(L10n.t("replay.angles")).fontWeight(.bold)
-                if mixer.isRemote {
-                    // Angle previews are the recording machine's scenes, and a Remote has
-                    // no local render of them. Saying where they are beats dead tiles.
-                    Text(L10n.t("replay.remoteAngles")).foregroundStyle(EivizTheme.dim)
-                } else {
-                    ForEach(Array(angles.enumerated()), id: \.element.id) { index, angle in
-                        let selected = (document?.activeAngleId ?? 0) == angle.id
-                        Button {
-                            selectAngle(angle.id)
-                        } label: {
-                            angleTile(index: index + 1, angle: angle, selected: selected)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .frame(width: 48, height: 44)
-                        .contentShape(Rectangle())
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(selected ? Color.green : Color.gray.opacity(0.4),
-                                        lineWidth: selected ? 3 : 1)
-                        )
-                        .help("\(index + 1): \(angle.label)")
-                    }
-                }
-                Spacer()
-            }
-            Text(L10n.t("replay.anglesHelpShort")).font(.caption).foregroundStyle(EivizTheme.dim)
-        }
-        .frame(width: 300, alignment: .leading)
     }
 
     /// Every event on one line, edited in that line: its name and its protection are
@@ -1160,104 +1064,6 @@ struct ReplayView: View {
         "sampleRate":48000,"channels":2,"withAudio":true,"codec":"\(exportCodec)",\
         "segments":[\(list)],"clips":[\(clipList)]}
         """
-    }
-
-    private var transportBar: some View {
-        VStack(spacing: 8) {
-            waveform
-            exportBar
-            HStack(alignment: .center, spacing: 8) {
-                Button(L10n.t("replay.markIn")) { markIn() }
-                    .keyboardShortcut("i", modifiers: [])
-                    .help(L10n.t("replay.markInHint"))
-                    .tint(inFrame != nil ? .orange : nil)
-                    .frame(width: 150, height: 44)
-                Button(L10n.t("replay.markOut")) { markOut() }
-                    .keyboardShortcut("o", modifiers: [])
-                    .help(L10n.t("replay.markOutHint"))
-                    .tint(outFrame != nil ? .orange : nil)
-                    .frame(width: 150, height: 44)
-                    .disabled(!markOpen)
-                Button(L10n.t("replay.cancelMark")) { cancelMark() }
-                    .frame(width: 110, height: 44)
-                markReadout(L10n.t("replay.in"), inFrame.map { ReplayTime.timecode($0, fps) } ?? "--:--:--:--", color: .orange)
-                markReadout(L10n.t("replay.out"), outFrame.map { ReplayTime.timecode($0, fps) } ?? "--:--:--:--", color: .orange)
-                markReadout(L10n.t("replay.duration"), markDuration)
-                Spacer()
-            }
-            HStack(alignment: .center, spacing: 8) {
-                Button {
-                    record(true)
-                } label: {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(isRecording ? Color.red : EivizTheme.dim)
-                            .frame(width: 8, height: 8)
-                        Text(isRecording ? "REC" : L10n.t("replay.record"))
-                    }
-                }
-                .tint(isRecording ? .red : nil)
-                .disabled(isRecording)
-                .frame(width: 88, height: 36)
-                Button(L10n.t("replay.stop")) { record(false) }
-                    .disabled(!isRecording)
-                    .frame(width: 84, height: 36)
-                Button(L10n.t("replay.live")) { live() }
-                    .keyboardShortcut("l", modifiers: [])
-                    .frame(width: 84, height: 36)
-                Button(L10n.t(transport.playing ? "replay.pause" : "replay.play")) { togglePlay() }
-                    .keyboardShortcut(.space, modifiers: [])
-                    .frame(width: 100, height: 36)
-                Button("◀") { step(-1) }
-                    .keyboardShortcut(.leftArrow, modifiers: [])
-                    .help(L10n.t("replay.stepBackHint"))
-                    .frame(width: 40, height: 36)
-                Button("▶") { step(1) }
-                    .keyboardShortcut(.rightArrow, modifiers: [])
-                    .help(L10n.t("replay.stepForwardHint"))
-                    .frame(width: 40, height: 36)
-                Button("25%") { setSpeed(250) }.frame(width: 56, height: 36)
-                Button("50%") { setSpeed(500) }.frame(width: 56, height: 36)
-                Button("75%") { setSpeed(750) }.frame(width: 56, height: 36)
-                Button("100%") { setSpeed(1000) }.frame(width: 60, height: 36)
-                // Loops the playlist at its end, the way the deck's own button does.
-                Toggle(L10n.t("replay.playlistLoop"), isOn: Binding(
-                    get: { looping },
-                    set: { next in
-                        if mixer.replayLoop(channel: channel, on: next) {
-                            looping = next
-                        } else {
-                            status = L10n.t("replay.commandRefused")
-                        }
-                    }))
-                .toggleStyle(.button)
-                .frame(width: 64, height: 36)
-                .help(L10n.t("replay.playlistLoopHint"))
-                // What happens when the list ends, next to looping because it is the same
-                // question. Looping wins when both are on.
-                Toggle(L10n.t("replay.playlistHold"), isOn: Binding(
-                    get: { holdLast },
-                    set: { next in
-                        if mixer.replayHoldLast(channel: channel, on: next) {
-                            holdLast = next
-                        } else {
-                            status = L10n.t("replay.commandRefused")
-                        }
-                    }))
-                .toggleStyle(.button)
-                .frame(width: 88, height: 36)
-                .help(L10n.t("replay.playlistHoldHint"))
-                Spacer(minLength: 8)
-                Text(L10n.t("replay.jog"))
-                Slider(value: $jogValue, in: -30...30, step: 1) { editing in
-                    if !editing {
-                        jog(Int(jogValue.rounded()))
-                        jogValue = 0
-                    }
-                }
-                .frame(width: 160, height: 36)
-            }
-        }
     }
 
     private func load() {
@@ -1568,16 +1374,6 @@ struct ReplayView: View {
             transport = .held
             playingClipUid = nil
         }
-    }
-
-    private func seekKeepingPlay(_ frame: Int64) {
-        let action = ReplayTransportRules.leaveEdge(transport)
-        if !mixer.replayTransport(
-            channel: channel, playing: action.playing, speedMilli: speedMilli, seekFrame: frame)
-        {
-            status = L10n.t("replay.commandRefused")
-        }
-        transport = action.next
     }
 
     /// Writes the document back after an edit.
@@ -1906,22 +1702,14 @@ struct ReplayView: View {
             alert.addButton(withTitle: L10n.t("dialog.cancel"))
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
-        _ = current.removePlaylist(playlistId)
+        let removed = playlistId
+        _ = current.removePlaylist(removed)
         if let next = current.playlists.first {
+            // Any channel that named the deleted playlist has to follow it to the one
+            // this deck now shows; the core does not repair a dangling reference.
+            current.repointChannels(from: removed, to: next.id)
             current.setChannelPlaylist(channelIndex: channel, playlistId: next.id)
         }
-        save(current)
-    }
-
-    private func toggleProtect() {
-        guard var current = document,
-              let id = selectedEvent,
-              let event = current.events.first(where: { $0.id == id })
-        else {
-            status = L10n.t("replay.needEvent")
-            return
-        }
-        current.setEventProtected(id, !event.protected)
         save(current)
     }
 
@@ -1971,58 +1759,11 @@ struct ReplayView: View {
         save(current)
     }
 
-    private func cueSelectedClip() {
-        guard let uid = selectedClip, let clip = clips.first(where: { $0.uid == uid }) else {
-            // A silent no-op reads as a broken button, so say what is missing.
-            status = L10n.t("replay.needClip")
-            return
-        }
-        cue(clip)
-    }
-
     private func cue(_ clip: ReplayClipInfo) {
         if !mixer.replayCue(channel: channel, clip: clip) {
             let detail = MixerFFI.lastErrorText()
             status = detail.isEmpty ? L10n.t("replay.cueRefused") : detail
         }
-    }
-
-    private func removeSelectedClip() {
-        guard var current = document, let uid = selectedClip else { return }
-        current.removeClip(playlistId: playlistId, uid: uid)
-        // An animation step that cued this clip has nothing left to fire.
-        mixer.clearReplayCues(clipUid: uid)
-        save(current, deletedClips: [uid])
-        selectedClip = nil
-    }
-
-    private func loadTransition() {
-        guard let uid = selectedClip, let clip = clips.first(where: { $0.uid == uid }) else { return }
-        kind = clip.transition.kind
-        timing = clip.transition.timing
-        frames = "\(clip.transition.durationFrames)"
-        clipTags = clip.tags.joined(separator: ", ")
-        loadingClip = true
-        clipGain = String(format: "%.1f", clip.gainDb)
-        loadDefaultTransition()
-        preservePitch = clip.preservePitch
-        clipAudio = clip.audioKind == "Angle"
-            ? "Angle:\(clip.audioAngleId)"
-            : clip.audioKind
-        loadingClip = false
-    }
-
-    /// Writes the clip's audio source. A clip may deliberately be silent, or take
-    /// another angle's sound.
-    private func applyClipAudio(_ value: String) {
-        guard !loadingClip, var current = document, let uid = selectedClip else { return }
-        if value.hasPrefix("Angle:") {
-            let id = UInt32(value.dropFirst("Angle:".count)) ?? 0
-            current.setClipAudio(playlistId: playlistId, uid: uid, kind: "Angle", angleId: id)
-        } else {
-            current.setClipAudio(playlistId: playlistId, uid: uid, kind: value, angleId: 0)
-        }
-        save(current)
     }
 
     /// Writes the playlist default. New clips start on it, so an operator who
@@ -2033,73 +1774,6 @@ struct ReplayView: View {
         current.setDefaultTransition(
             playlistId: playlistId,
             transition: ReplayTransitionInfo(kind: defaultKind, timing: defaultTiming, durationFrames: frames)
-        )
-        save(current)
-    }
-
-    /// Shows the playlist default in the editors.
-    private func loadDefaultTransition() {
-        guard let current = document else { return }
-        let fallback = current.defaultTransition(playlistId: playlistId)
-        defaultKind = fallback.kind
-        defaultTiming = fallback.timing
-        defaultFrames = "\(fallback.durationFrames)"
-    }
-
-    /// Writes the clip gain. The mixer clamps it, so a nonsense value is refused
-    /// here rather than silently corrected.
-    private func applyClipGain() {
-        guard !loadingClip, var current = document, let uid = selectedClip else { return }
-        guard let db = Double(clipGain.trimmingCharacters(in: .whitespaces)), db.isFinite,
-              db >= -60.0, db <= 12.0
-        else {
-            if let clip = clips.first(where: { $0.uid == uid }) {
-                clipGain = String(format: "%.1f", clip.gainDb)
-        loadDefaultTransition()
-            }
-            status = L10n.t("replay.gainRange")
-            return
-        }
-        current.setClipGain(playlistId: playlistId, uid: uid, db: db)
-        save(current)
-    }
-
-    /// Writes the pitch flag of the selected clip. Slow motion otherwise drops the
-    /// pitch along with the speed.
-    private func applyPreservePitch(_ value: Bool) {
-        guard !loadingClip, var current = document, let uid = selectedClip else { return }
-        current.setClipPreservePitch(playlistId: playlistId, uid: uid, value: value)
-        save(current)
-    }
-
-    /// Writes the tag list back to the selected clip. Commas separate tags, blank
-    /// entries are dropped, and duplicates collapse.
-    private func applyTags() {
-        guard var current = document, let uid = selectedClip else { return }
-        var tags: [String] = []
-        for raw in clipTags.split(separator: ",") {
-            let tag = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if tag.isEmpty || tags.contains(tag) {
-                continue
-            }
-            tags.append(tag)
-        }
-        current.setClipTags(playlistId: playlistId, uid: uid, tags: tags)
-        save(current)
-        clipTags = tags.joined(separator: ", ")
-    }
-
-    private func applyTransition() {
-        guard var current = document, let uid = selectedClip else { return }
-        var duration = UInt32(frames.trimmingCharacters(in: .whitespaces)) ?? 0
-        duration = min(duration, 600)
-        if kind == "Cut" {
-            duration = 0
-        }
-        current.setClipTransition(
-            playlistId: playlistId,
-            uid: uid,
-            transition: ReplayTransitionInfo(kind: kind, timing: timing, durationFrames: duration)
         )
         save(current)
     }
@@ -2268,70 +1942,6 @@ struct ReplayView: View {
 
     /// Live tiles stay the scene. Jog tiles decode the proxy, or say it is missing.
     @ViewBuilder
-    private func angleTile(index: Int, angle: ReplayAngleInfo, selected: Bool) -> some View {
-        if !mixer.isRemote, let monitor = angleMonitors[angle.id], monitor != 0 {
-            // Every angle stays live, not only the one in the large monitor: the strip is
-            // how the operator notices a camera that stopped before marking it.
-            MetalPreviewRepresentable(
-                role: .monitor(monitorId: monitor, sourceId: angle.liveSourceId),
-                presentInterval: deckPresentInterval
-            )
-            .frame(width: 48, height: 44)
-            .clipped()
-            .allowsHitTesting(false)
-        } else if transport.live || mixer.isRemote {
-            Text("\(index)")
-                .font(.title3)
-                .fontWeight(selected ? .bold : .regular)
-                .frame(width: 48, height: 44)
-        } else if let image = proxyImage(angleId: angle.id) {
-            Image(nsImage: image)
-                .resizable()
-                .frame(width: 48, height: 44)
-        } else {
-            Text(L10n.t("replay.proxyMissing"))
-                .font(.caption2)
-                .multilineTextAlignment(.center)
-                .frame(width: 48, height: 44)
-        }
-    }
-
-    private func proxyImage(angleId: UInt32) -> NSImage? {
-        var bytes = [UInt8](repeating: 0, count: 480 * 270 * 2)
-        var width: UInt32 = 0
-        var height: UInt32 = 0
-        // A store may pad its rows, so the source's own stride is read rather than assumed.
-        var stride: UInt32 = 0
-        let frame = stats?.recording_frame ?? 0
-        let ok = bytes.withUnsafeMutableBufferPointer { ptr in
-            mixer_replay_copy_proxy(
-                angleId, frame, ptr.baseAddress, ptr.count, &width, &height, &stride)
-        }
-        guard ok == 1, width > 0, height > 0 else { return nil }
-        guard let pixels = ReplayUyvy.toRgba(
-                  bytes, width: Int(width), height: Int(height), stride: Int(stride)),
-              let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: Int(width),
-            pixelsHigh: Int(height),
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: Int(width) * 4,
-            bitsPerPixel: 32
-        ) else { return nil }
-        pixels.withUnsafeBytes { raw in
-            if let dest = rep.bitmapData {
-                dest.update(from: raw.bindMemory(to: UInt8.self).baseAddress!, count: pixels.count)
-            }
-        }
-        let image = NSImage(size: NSSize(width: Int(width), height: Int(height)))
-        image.addRepresentation(rep)
-        return image
-    }
-
     private func clipOutText(_ clip: ReplayClipInfo) -> String {
         let time = ReplayTime.timecode(clip.outFrame, fps)
         guard clipExpired(clip) else { return time }

@@ -595,6 +595,26 @@ extension MixerController {
         setOverlayEnabled(slot.id, enabled: enabled)
     }
 
+    /// Removes an output row and stops whatever it started.
+    ///
+    /// RTMP is not an Output in the mixer: a row is an encoder plus a destination and
+    /// `mixer_output_remove` knows neither. Deleting the row alone left the encoder
+    /// publishing to the URL with no UI left to stop it.
+    func removeOutput(_ output: OutputEntry) {
+        if isRemote { return }
+        if output.transport == .rtmp, output.streamEncoderId != 0 {
+            _ = MixerFFI.streamEncoderRemove(output.streamEncoderId)
+            session.streamEncoders.removeAll { $0.id == output.streamEncoderId }
+        }
+        if output.transport == .rtmp, !output.rtmpSecretRef.isEmpty {
+            // The key belongs to the row: leaving it in the Keychain after the row is
+            // gone keeps a live credential around with nothing that uses it.
+            KeychainStore.save(account: "rtmp/" + output.rtmpSecretRef, token: "")
+        }
+        _ = mixer_output_remove(output.id)
+        session.outputs.removeAll { $0.id == output.id }
+    }
+
     func addOutput(_ output: OutputEntry) {
         if isRemote { return }
         var entry = output
@@ -609,23 +629,34 @@ extension MixerController {
         if entry.transport == .rtmp, entry.rtmpSecretRef.isEmpty {
             entry.rtmpSecretRef = "stream-\(entry.id)"
         }
+        // The encoder this row is already running (the row is bound to the session,
+        // so `streamEncoderId` is the one to stop), but stop it only once the new
+        // request is known to be startable: a missing key used to tear down a live
+        // stream and then refuse to start its replacement.
+        let previousEncoder = session.outputs.first { $0.id == entry.id }?.streamEncoderId ?? 0
+        var rtmpKey = ""
+        if entry.transport == .rtmp, entry.enabled {
+            guard !entry.rtmpSecretRef.isEmpty else {
+                presentInputError(L10n.t("settings.streamKeyMissing"), editing: false)
+                return
+            }
+            rtmpKey = KeychainStore.load(account: "rtmp/" + entry.rtmpSecretRef)
+            guard !rtmpKey.isEmpty else {
+                presentInputError(L10n.t("settings.streamKeyMissing"), editing: false)
+                return
+            }
+        }
         if let index = session.outputs.firstIndex(where: { $0.id == entry.id }) {
             session.outputs[index] = entry
         } else {
             session.outputs.append(entry)
         }
         if entry.transport == .rtmp {
-            let previousEncoder = session.outputs.first { $0.id == entry.id }?.streamEncoderId
-                ?? entry.streamEncoderId
             if previousEncoder != 0 {
                 _ = MixerFFI.streamEncoderRemove(previousEncoder)
             }
             guard entry.enabled else { return }
-            let key = KeychainStore.load(account: "rtmp/" + entry.rtmpSecretRef)
-            guard !entry.rtmpSecretRef.isEmpty, !key.isEmpty else {
-                presentInputError(L10n.t("settings.streamKeyMissing"), editing: false)
-                return
-            }
+            let key = rtmpKey
             var encoder = session.streamEncoders.first { $0.id == entry.streamEncoderId }
                 ?? StreamEncoderEntry(id: entry.streamEncoderId == 0 ? session.nextStreamEncoderId : entry.streamEncoderId)
             if encoder.id == session.nextStreamEncoderId {
@@ -671,16 +702,6 @@ extension MixerController {
         }
         _ = mixer_output_remove(entry.id)
         guard entry.enabled else { return }
-        if entry.transport == .rtmp, !entry.rtmpSecretRef.isEmpty {
-            let key = KeychainStore.load(account: "rtmp/" + entry.rtmpSecretRef)
-            if !key.isEmpty {
-            MixerFFI.withCString(entry.rtmpSecretRef) { name in
-                MixerFFI.withCString(key) { value in
-                    _ = mixer_secret_set(name, value)
-                }
-            }
-            }
-        }
         let config = outputConfigJSON(entry)
         let id = entry.id
         let transport = entry.transport.rawValueU32

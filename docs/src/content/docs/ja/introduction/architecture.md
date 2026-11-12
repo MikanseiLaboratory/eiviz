@@ -148,10 +148,11 @@ macOSのRTMPライブはVideoToolbox H.264を使い、ハードウェアエン�
 macOSの主な性能トレードオフは、大きなWindowsディスクリートGPUに対するGPUスループットで
 あり、コピーやデコード経路のアーキテクチャ上の不利ではありません。
 
-次の共通化候補は、ゼロコストのenumバックエンド（`VideoToolbox`、Media Foundation、
-OpenH264）を持つ`VideoEncoder`インターフェースです。RTMPマルチプレクサを分岐せずに
-プラットフォームエンコーダーを使えるようになります。ただし現行のRTMP契約は全OSで
-OpenH264、ReplayコンテナはH.264ではなくVMX1のため、まだ有効化していません。
+macOSはVideoToolbox H.264の経路をRTMPモジュール内に閉じ込め、クロスプラットフォームの
+エンコーダーインターフェースを強制していません。RTMPマルチプレクサはすでにAVCCと
+SPS/PPSシーケンスヘッダーを扱うため、macOS側はワイヤーフォーマットを変えずにOpenH264を
+迂回できます。VideoToolboxのハードウェアエンコードが使えない場合はOpenH264へ
+フォールバックします。Replayは引き続きH.264ではなくVMX1コーデックです。
 
 ### M3 MacBook Airでの実測
 

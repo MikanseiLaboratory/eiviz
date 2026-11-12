@@ -168,8 +168,8 @@ jobs:
         run: |
           set -euo pipefail
           BIN="$(cd hosts/macos && swift build -c release --show-bin-path)"
-          file "$BIN/eiviz-mac" | grep -q arm64
-          file "$BIN/libeiviz_mixer.dylib" | grep -q arm64
+          file -b "$BIN/eiviz-mac" | grep -q "arm64"
+          file -b "$BIN/libeiviz_mixer.dylib" | grep -q "arm64"
           otool -L "$BIN/eiviz-mac" | grep -q "@rpath/libeiviz_mixer.dylib"
           otool -L "$BIN/eiviz-mac" | grep -q "@rpath/libeiviz_remote.dylib"
 

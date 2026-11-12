@@ -85,14 +85,14 @@ static AudioObjectID translate_pid_to_object(pid_t pid) {
 }
 
 - (void)stop {
-    if (!self.running) {
-        return;
-    }
+    // Every step below is guarded by the id it destroys, so cleanup runs even when
+    // `openMode:` failed halfway: returning early on `!running` leaked the process
+    // tap and the aggregate device that had already been created.
     self.running = NO;
     self.callback = NULL;
     if (self.aggregateID != kAudioObjectUnknown) {
-        AudioDeviceStop(self.aggregateID, self.procID);
         if (self.procID) {
+            AudioDeviceStop(self.aggregateID, self.procID);
             AudioDeviceDestroyIOProcID(self.aggregateID, self.procID);
             self.procID = NULL;
         }
@@ -138,6 +138,11 @@ static AudioObjectID translate_pid_to_object(pid_t pid) {
             : @[ @(selfObject) ];
         description = [[CATapDescription alloc]
             initStereoGlobalTapButExcludeProcesses:exclude];
+        // The UI lets the operator pick which output is captured. Without this the
+        // setting was silently ignored and the default output was always tapped.
+        if (deviceId.length > 0) {
+            description.deviceUID = deviceId;
+        }
     } else {
         NSMutableArray<NSNumber *> *objects = [NSMutableArray array];
         NSString *wantedExe = processExe ?: @"";
@@ -199,13 +204,20 @@ static AudioObjectID translate_pid_to_object(pid_t pid) {
     }
 
     self.format = format;
-    CFStringRef outputUID = copy_default_output_uid();
-    if (!outputUID) {
-        [self stop];
-        set_error(err, errCap, @"No default output device is available for the tap");
-        return NO;
+    // The aggregate has to be clocked by the same device the tap records: the selected
+    // one when there is one, otherwise the system default.
+    NSString *outputUIDText = nil;
+    if (deviceId.length > 0) {
+        outputUIDText = deviceId;
+    } else {
+        CFStringRef outputUID = copy_default_output_uid();
+        if (!outputUID) {
+            [self stop];
+            set_error(err, errCap, @"No default output device is available for the tap");
+            return NO;
+        }
+        outputUIDText = cfstring_to_ns(outputUID);
     }
-    NSString *outputUIDText = cfstring_to_ns(outputUID);
     NSString *aggregateUID = [NSUUID UUID].UUIDString;
     NSDictionary *aggregate = @{
         key_string(kAudioAggregateDeviceNameKey) : @"eiviz audio tap",
@@ -255,7 +267,12 @@ static AudioObjectID translate_pid_to_object(pid_t pid) {
 }
 
 - (void)handleInput:(const AudioBufferList *)input {
-    if (!input || !self.callback || input->mNumberBuffers == 0) {
+    // Take the callback and its context once: `stop` clears them on the control
+    // thread, and reading the property twice could turn the second read into a
+    // NULL call while this block is already running.
+    EivizAudioTapCallback callback = self.callback;
+    void *callbackCtx = self.callbackCtx;
+    if (!input || !callback || input->mNumberBuffers == 0) {
         return;
     }
     uint32_t channels = self.format.mChannelsPerFrame;
@@ -316,7 +333,7 @@ static AudioObjectID translate_pid_to_object(pid_t pid) {
             }
         }
     }
-    self.callback(self.callbackCtx, self.scratch, frames, channels, self.format.mSampleRate);
+    callback(callbackCtx, self.scratch, frames, channels, self.format.mSampleRate);
 }
 
 @end
@@ -331,7 +348,6 @@ EivizAudioTap *eiviz_audio_tap_start(
     char *err,
     size_t err_cap) {
     @autoreleasepool {
-        (void)device_id;
         EivizAudioTapObj *tap = [[EivizAudioTapObj alloc] init];
         NSString *exe = process_exe ? [NSString stringWithUTF8String:process_exe] : @"";
         NSString *aumid = process_aumid ? [NSString stringWithUTF8String:process_aumid] : @"";

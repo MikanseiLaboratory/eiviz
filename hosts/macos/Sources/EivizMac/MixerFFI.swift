@@ -247,20 +247,29 @@ enum MixerFFI {
     static func replayCapacity(path: String, width: UInt32, height: UInt32) -> (ReplayCapacity?, String) {
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         var written = 0
-        let code: Int32 = path.withCString { text in
-            buffer.withUnsafeMutableBufferPointer { ptr in
-                mixer_bench_capacity(
-                    UnsafeRawPointer(text).assumingMemoryBound(to: UInt8.self),
-                    path.utf8.count,
-                    width,
-                    height,
-                    ptr.baseAddress,
-                    ptr.count,
-                    &written
-                )
+        func measure() -> Int32 {
+            path.withCString { text in
+                buffer.withUnsafeMutableBufferPointer { ptr in
+                    mixer_bench_capacity(
+                        UnsafeRawPointer(text).assumingMemoryBound(to: UInt8.self),
+                        path.utf8.count,
+                        width,
+                        height,
+                        ptr.baseAddress,
+                        ptr.count,
+                        &written
+                    )
+                }
             }
         }
-        guard code == 0, written > 0 else {
+        var code = measure()
+        // The mixer reports the size it needs; grow once instead of failing on a
+        // capacity document that happens to exceed the starting buffer.
+        if code == EIVIZ_ERR_BUFFER_TOO_SMALL, written > buffer.count {
+            buffer = [UInt8](repeating: 0, count: written)
+            code = measure()
+        }
+        guard code == 0, written > 0, written <= buffer.count else {
             let detail = lastErrorText()
             return (nil, detail.isEmpty ? "Capacity measurement failed" : detail)
         }

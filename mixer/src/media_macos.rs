@@ -706,7 +706,9 @@ fn push_live_gpu(uploads: &Mutex<UploadStore>, source_id: u64, frame: GpuVideoFr
         CpuFormat::GpuRgba,
         depth,
     );
-    let _ = store.push_gpu(source_id, frame);
+    // The frame buffer is part of the input contract on every other capture path;
+    // a zero-copy AVFoundation frame must queue behind it the same way.
+    let _ = store.push_playout_gpu(source_id, frame);
 }
 
 fn push_file_gpu(uploads: &Mutex<UploadStore>, source_id: u64, frame: GpuVideoFrame) {
@@ -718,7 +720,7 @@ fn push_file_gpu(uploads: &Mutex<UploadStore>, source_id: u64, frame: GpuVideoFr
         CpuFormat::GpuRgba,
         1,
     );
-    let _ = store.push_gpu(source_id, frame);
+    let _ = store.push_playout_gpu(source_id, frame);
 }
 
 fn push_file_cpu(uploads: &Mutex<UploadStore>, source_id: u64, frame: &CpuFrame) {

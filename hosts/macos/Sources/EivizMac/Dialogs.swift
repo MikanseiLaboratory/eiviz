@@ -659,8 +659,7 @@ struct SettingsView: View {
                 ))
                 Button("Apply") { mixer.addOutput(output.wrappedValue) }
                 Button("−") {
-                    _ = mixer_output_remove(output.wrappedValue.id)
-                    mixer.session.outputs.removeAll { $0.id == output.wrappedValue.id }
+                    mixer.removeOutput(output.wrappedValue)
                 }
             }
             if output.wrappedValue.transport == .omt {

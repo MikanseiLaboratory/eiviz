@@ -4901,13 +4901,11 @@ pub unsafe extern "C" fn mixer_bench_capacity(
         match crate::bench::run(path, width, height) {
             Ok(capacity) => {
                 let json = capacity.to_json();
-                let result = write_bytes(out, cap, json.as_bytes());
-                if result >= 0 {
-                    *written = result as usize;
-                    OK
-                } else {
-                    result
-                }
+                // `written` is the size the caller needs even when the buffer was too
+                // small: the header promises a retry with that size, and returning the
+                // error without it left the host guessing.
+                *written = json.len();
+                write_bytes(out, cap, json.as_bytes())
             }
             Err(error) => {
                 crate::diag::error(&format!("capacity bench failed: {error}"));

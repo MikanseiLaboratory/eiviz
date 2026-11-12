@@ -43,8 +43,7 @@ The mixer suite runs on the host:
 cargo test -p eiviz_mixer --locked --release --features pro-test-key -- --test-threads=1
 ```
 
-The Swift replay checks are an executable target from the replay work branch once
-it is merged:
+The Swift replay checks are an executable target in this package:
 
 ```bash
 cd hosts/macos
@@ -90,7 +89,10 @@ below.
   installation run `xattr -dr com.apple.quarantine /Applications/eiviz.app`.
 - Crash logs: `~/Library/Logs/DiagnosticReports` contains `.ips` files. Keep the
   dSYM for the app, mixer dylib, and Pro module to symbolicate them.
-- Xcode 30 beta fails to link the app with `ld: mis-aligned LINKEDIT string
-  pool` for `libeiviz_mixer.dylib`. This is a linker bug in that toolchain, not
-  the mixer; CI uses the `macos-26` runner and links normally. Build with a
-  macOS 26 / Xcode 26 toolchain when the local linker hits it.
+- `ld: mis-aligned LINKEDIT string pool`: Xcode 27's `ld` emits dylibs it then
+  cannot read back when a 14.0 deployment target is combined with the release
+  profile's `-Wl,-S` (Cargo's `strip = "debuginfo"` default). The workspace sets
+  `strip = "none"` for release builds, so `cargo build` and `build.sh` are not
+  affected. If an override reintroduces it, rebuild the two libraries with
+  `cargo rustc -p eiviz_mixer --release -- -C strip=none` (and the same for
+  `eiviz_remote`) instead of dropping to an older Xcode.

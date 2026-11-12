@@ -148,6 +148,7 @@ export default defineConfig({
 						'introduction/plans',
 						'introduction/settings',
 						'introduction/architecture',
+						'introduction/macos-parity',
 					],
 				},
 				{

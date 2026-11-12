@@ -85,6 +85,20 @@ document.sortClips(playlistId: playlist)
 let sorted = document.clips(playlistId: playlist)
 check("clips sort by timecode", sorted.first?.inFrame == 40 && sorted.last?.inFrame == 300)
 
+// MARK: - Deleting a playlist repairs the channels that named it
+
+var repointDoc = ReplayDocument.empty(format: format)
+let firstList = repointDoc.ensurePlaylist()
+let secondList = repointDoc.addPlaylist(name: "second")
+repointDoc.setChannelPlaylist(channelIndex: 0, playlistId: firstList)
+repointDoc.setChannelPlaylist(channelIndex: 1, playlistId: firstList)
+_ = repointDoc.removePlaylist(firstList)
+check("removed playlist is gone", !repointDoc.playlists.contains { $0.id == firstList })
+check("channels still name the removed playlist before repair", repointDoc.channelsUsingPlaylist(firstList) == 2)
+repointDoc.repointChannels(from: firstList, to: secondList)
+check("channels follow the deleted playlist", repointDoc.channelsUsingPlaylist(secondList) == 2)
+check("channels no longer name the deleted playlist", repointDoc.channelsUsingPlaylist(firstList) == 0)
+
 
 // MARK: - Auto add honours clip order
 
@@ -644,6 +658,21 @@ if let source = try? String(contentsOf: l10nPath, encoding: .utf8),
         placeholders(englishValues[$0] ?? "") != placeholders(japaneseValues[$0] ?? "")
     }
     check("l10n placeholders match", mismatched.isEmpty)
+    // L10n.format only replaces {0}, {1}, ...: a printf placeholder is shown verbatim.
+    let printfStyle = englishKeys.filter {
+        (englishValues[$0] ?? "").contains("%@") || (japaneseValues[$0] ?? "").contains("%@")
+    }
+    check("l10n uses {0} placeholders", printfStyle.isEmpty)
+    if !printfStyle.isEmpty { print("printf placeholders: \(printfStyle)") }
+    // These action names are built at the call site, so the source scan cannot see them.
+    for key in [
+        "action.Replace session",
+        "action.Mutate session",
+        "action.Start stream encoder",
+        "action.Start RTMP destination",
+    ] {
+        check("dynamic action key \(key)", L10n.t(key) != key)
+    }
 } else {
     check("l10n source readable", false)
 }

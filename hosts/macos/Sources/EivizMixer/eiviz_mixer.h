@@ -642,8 +642,8 @@ int32_t mixer_audio_device_io_channels(uint32_t kind, const char *device_id, int
 int32_t mixer_audio_process_list(uint8_t *out, size_t cap);
 
 // Measures the replay encoder and the target drive, and writes the capacity as
-// JSON. A negative return is the output buffer being too small; the caller retries
-// with the size written to `written`.
+// JSON. Returns EIVIZ_ERR_BUFFER_TOO_SMALL when `cap` is too small; `written` still
+// receives the size the caller needs, so it can retry with that buffer.
 int32_t mixer_bench_capacity(
     const uint8_t *path,
     size_t path_len,

@@ -241,10 +241,12 @@ final class MixerController: ObservableObject {
               let root = try? JSONDecoder().decode(JSONValue.self, from: data),
               case .object(let object) = root
         else { return }
-        syncedSessionRevision = revision
         guard let decoded = try? JSONDecoder().decode(MixerSessionData.self, from: data) else {
             return
         }
+        // Only after both decodes succeeded: a revision marked as synced on a failed
+        // decode would never be retried, and the deck would stop adopting remote edits.
+        syncedSessionRevision = revision
         var changed = false
         // Inputs are shared with the native API too: a Replay channel added by eivizctl has
         // to appear in the input list, or the deck cannot be opened for it.
@@ -649,6 +651,8 @@ final class MixerController: ObservableObject {
         endActivity()
         remoteDiscoverTask?.cancel()
         remoteDiscoverTask = nil
+        sessionSyncTimer?.invalidate()
+        sessionSyncTimer = nil
         mixTimer?.invalidate()
         mixTimer = nil
         meterTimer?.invalidate()

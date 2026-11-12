@@ -599,6 +599,24 @@ struct ReplayDocument {
         array("channels").filter { ($0.objectValue?["playlistId"]?.uint64Value ?? 0) == playlistId }.count
     }
 
+    /// Points every channel that named `old` at `new`.
+    ///
+    /// A channel may reach a playlist without its own entry (the deck falls back to the
+    /// first one), so deleting a playlist has to repair the channels that named it
+    /// explicitly instead of leaving them pointing at an id nothing owns.
+    mutating func repointChannels(from old: UInt64, to new: UInt64) {
+        guard old != new else { return }
+        var channels = array("channels")
+        for index in channels.indices {
+            guard var entry = channels[index].objectValue,
+                  entry["playlistId"]?.uint64Value == old
+            else { continue }
+            entry["playlistId"] = .number(Double(new))
+            channels[index] = .object(entry)
+        }
+        raw["channels"] = .array(channels)
+    }
+
     /// Removes a playlist and its clips.
     mutating func removePlaylist(_ playlistId: UInt64) -> Bool {
         var playlists = array("playlists")
