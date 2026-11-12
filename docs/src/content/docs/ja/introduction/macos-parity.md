@@ -75,4 +75,4 @@ TCCのマイク許可とWindowServerが必要なためCIでは実行しない。
 
 ## 性能パリティ
 
-この表は機能の対応であり、性能の同一性ではない。M3 MacBook Air（ファンレス）とWindows NVIDIA dGPUではGPU性能・メモリ帯域・冷却が異なる。M3の実測は4 Unit＋Multiview＋スチルで`render_ms=1.1–1.3ms`（予算16.68ms）、ファイル＋カメラで約31% CPU。同一条件のNVIDIA実機がこの環境にないため、100%同一かのA/B比較はしていない。
+この表は機能の対応であり、性能の同一性ではない。M3 MacBook Air（ファンレス）とWindows NVIDIA dGPUではGPU性能・メモリ帯域・冷却が異なる。M3の実測は4 Unit＋Multiview＋スチルで`render_ms=1.1–1.3ms`（予算16.68ms）、ファイル＋カメラで約31% CPU。2分連続の4 Unit＋Multiview＋スチル実行では`render_ms=1.24–1.63ms`、`surface_lost=0`だった。同一条件のNVIDIA実機がこの環境にないため、100%同一かのA/B比較はしていない。
