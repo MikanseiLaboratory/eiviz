@@ -246,6 +246,25 @@ struct SettingsView: View {
                 ForEach([UInt32(1), 2, 3, 4, 6, 8], id: \.self) { Text("\($0)").tag($0) }
             }
             .frame(width: 220)
+            Text(L10n.t("settings.defaultUnitSize"))
+            Picker("", selection: Binding(
+                get: { "\(mixer.session.settings.defaultWidth)x\(mixer.session.settings.defaultHeight)" },
+                set: { value in
+                    let parts = value.split(separator: "x").compactMap { UInt32($0) }
+                    if parts.count == 2 {
+                        mixer.session.settings.defaultWidth = parts[0]
+                        mixer.session.settings.defaultHeight = parts[1]
+                    }
+                }
+            )) {
+                Text("1920x1080").tag("1920x1080")
+                Text("1280x720").tag("1280x720")
+                Text("3840x2160").tag("3840x2160")
+            }
+            .frame(width: 220)
+            Text(L10n.t("settings.defaultUnitSizeHelp"))
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
             Text("Master frame rate clocks the render thread. Restart the mixer after changing it.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
