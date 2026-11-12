@@ -1088,6 +1088,31 @@ pub(crate) fn replace_session_bytes(bytes: &[u8], expected_revision: u64) -> i32
 /// The mutation goes through the same path a Remote client uses, so a local edit and a
 /// remote one obey one set of rules: the same validation, the same Replay quota check,
 /// and the same conflict handling.
+/// Registers an input the host already started, without reconciling (and thus
+/// restarting) its source. Used by the macOS host after it opened a capture device.
+pub(crate) fn register_input_bytes(bytes: &[u8]) -> i32 {
+    let input = match serde_json::from_slice::<eiviz_control::session::InputDto>(bytes) {
+        Ok(input) => input,
+        Err(error) => {
+            let message = format!("registered input is not valid JSON: {error}");
+            crate::diag::error(&message);
+            report_session_error(&message);
+            return -ERR_INVALID_ARGUMENT;
+        }
+    };
+    match control().lock() {
+        Ok(mut svc) => match svc.register_input(input) {
+            Ok(_) => OK,
+            Err(error) => {
+                crate::diag::error(error.message());
+                report_session_error(error.message());
+                -error.to_abi()
+            }
+        },
+        Err(_) => -ERR_INVALID_ARGUMENT,
+    }
+}
+
 pub(crate) fn mutate_session_bytes(bytes: &[u8]) -> i32 {
     let mutation = match serde_json::from_slice::<eiviz_control::command::SessionMutation>(bytes) {
         Ok(mutation) => mutation,

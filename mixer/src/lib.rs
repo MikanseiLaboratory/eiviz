@@ -6112,6 +6112,19 @@ unsafe fn mixer_session_mutate_ffi(json: *const u8, len: usize) -> i32 {
     crate::runtime::mutate_session_bytes(bytes)
 }
 
+/// Adds an input whose source the caller already started. The document is updated
+/// and published; no reconcile runs, so a UVC/video source is not restarted.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_register_input(json: *const u8, len: usize) -> i32 {
+    ffi_guard("mixer_session_register_input", ERR_DEVICE, || unsafe {
+        if json.is_null() || len == 0 {
+            return ERR_INVALID_ARGUMENT;
+        }
+        let bytes = std::slice::from_raw_parts(json, len);
+        crate::runtime::register_input_bytes(bytes)
+    })
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_poll_events(after: u64, out: *mut u8, cap: usize) -> i32 {
     ffi_guard("mixer_poll_events", -1, || unsafe {

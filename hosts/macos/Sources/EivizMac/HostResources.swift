@@ -44,8 +44,9 @@ enum HostResources {
             lastStamp = now
         }
         guard lastStamp != .distantPast, elapsed > 0.05 else { return 0 }
-        let cores = max(1, Double(ProcessInfo.processInfo.activeProcessorCount))
-        return Float(min(100, max(0, (cpu - lastCpu) / elapsed / cores * 100)))
+        // Report the process against one core, the way Activity Monitor does. Dividing
+        // by the core count made a pegged app look like 10% on an 8-core Mac.
+        return Float(max(0, (cpu - lastCpu) / elapsed * 100))
     }
 
     private static func sampleRam() -> Float {

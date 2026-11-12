@@ -783,6 +783,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_mutate")]
     internal static unsafe partial int SessionMutate(byte* json, nuint length);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_register_input")]
+    internal static unsafe partial int SessionRegisterInput(byte* json, nuint length);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_poll_events")]
     internal static unsafe partial int PollEvents(ulong after, byte* buffer, nuint capacity);
 

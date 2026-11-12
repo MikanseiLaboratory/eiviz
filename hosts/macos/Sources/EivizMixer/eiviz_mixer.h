@@ -617,6 +617,9 @@ int32_t mixer_session_replace(const uint8_t *json, size_t len, uint64_t expected
 /* Applies one session mutation (`{"kind": "..."}`). The core applies it to the live
    document, so an edit another window made in the meantime is kept. */
 int32_t mixer_session_mutate(const uint8_t *json, size_t len);
+/* Adds an input whose source the host already started. The document is updated and
+   published without reconciling, so capture devices are not restarted. */
+int32_t mixer_session_register_input(const uint8_t *json, size_t len);
 int32_t mixer_poll_events(uint64_t after, uint8_t *out, size_t cap);
 int32_t mixer_api_configure(uint32_t enabled, uint32_t port, const char *user, const char *pass);
 int32_t mixer_api_listen_owner(uint8_t *out, size_t cap);

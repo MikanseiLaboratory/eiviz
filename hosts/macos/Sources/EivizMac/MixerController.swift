@@ -88,6 +88,8 @@ final class MixerController: ObservableObject {
     /// below must keep them: the document is not the only writer, and adopting its
     /// input list wholesale used to drop every input added from the GUI.
     var pendingInputAdds: Set<UInt64> = []
+    /// Counts 50 ms ticks; the HUD (and its IOKit GPU sample) updates every fifth.
+    var hudTicks = 0
     /// Coalesces overlay edits (drags fire at frame rate) into one document write.
     var overlayPersistTask: Task<Void, Never>?
     /// Same coalescing for audio gain/mute drags, per input id.

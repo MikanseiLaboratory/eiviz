@@ -1164,15 +1164,30 @@ extension MixerController {
             for peak in buffer.prefix(Int(n)) {
                 next[peak.source_id] = (peak.left, peak.right)
             }
-            peaks = next
+            // A steady tone keeps the same peaks; publishing an identical dictionary
+            // still re-evaluates every view that reads it, 20 times a second.
+            let changed = next.count != peaks.count || next.contains { id, value in
+                guard let old = peaks[id] else { return true }
+                return abs(old.0 - value.0) > 0.01 || abs(old.1 - value.1) > 0.01
+            }
+            if changed {
+                peaks = next
+            }
         }
         var stats = MixerFFI.zeroed() as EivizMixerStats
         _ = mixer_copy_stats(&stats)
         FlipBudget.observeLost(stats.surface_lost)
-        if stats.frame_budget_ms > 0 {
+        // The HUD is text: four updates a second is enough, and the IOKit GPU
+        // sample behind it is not free at 20 Hz.
+        hudTicks += 1
+        if stats.frame_budget_ms > 0, hudTicks % 5 == 0 {
             let hud = HostResources.hud(renderMs: stats.render_ms, budgetMs: stats.frame_budget_ms)
-            resourceText = hud.text
-            warnText = hud.warn
+            if resourceText != hud.text {
+                resourceText = hud.text
+            }
+            if warnText != hud.warn {
+                warnText = hud.warn
+            }
         }
         if let id = fileVideoId, let info = copyVideoInfo(id) {
             videoPlaying = info.playing != 0
@@ -1181,7 +1196,8 @@ extension MixerController {
                 videoFraction = Double(info.position_hns) / Double(info.duration_hns)
             }
         }
-        syncAllUnitBuses()
+        // The 60 Hz timer already syncs the buses; doing it here too doubled the
+        // FFI traffic without a visible change.
         updateStatus()
     }
 
@@ -1257,7 +1273,10 @@ extension MixerController {
             return
         }
         let unit = selectedUnit
-        status = "\(unit.width)x\(unit.height) \(unit.fpsLabel)   \(unit.name)"
+        let next = "\(unit.width)x\(unit.height) \(unit.fpsLabel)   \(unit.name)"
+        if status != next {
+            status = next
+        }
     }
 
     func refreshRemoteWarn() {

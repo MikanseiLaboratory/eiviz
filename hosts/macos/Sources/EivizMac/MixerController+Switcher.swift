@@ -286,6 +286,7 @@ extension MixerController {
             return
         }
         var entry = input
+        var isNew = false
         if let id = replacing, let index = session.inputs.firstIndex(where: { $0.id == id }) {
             if !session.inputs[index].isBuiltin {
                 _ = mixer_destroy_source(id)
@@ -296,6 +297,7 @@ extension MixerController {
             }
             session.inputs[index] = entry
         } else {
+            isNew = true
             // A Replay channel owns a reserved id and brings the replay document
             // with it; it never takes a normal input id.
             if entry.kind == .replay {
@@ -316,14 +318,20 @@ extension MixerController {
         // adding the input publishes straight away instead of at the first edit.
         if entry.kind == .replay {
             publishSession()
-        } else {
-            // The control document (and with it the vMix API and every other client)
-            // used to stay unaware of an input added here until a whole-session
-            // replace happened. Send this one input instead, and stop tracking it as
-            // local-only once the document accepted it.
-            if mutateLocal(MixerRemote.upsertInput(entry)) {
+        } else if isNew {
+            // The host just started the source (capture device, decoder, generator).
+            // Registering the input updates the document without reconciling it,
+            // because a reconcile would start the same source again and restart UVC.
+            if MixerFFI.registerInput(entry) == EIVIZ_OK {
+                pendingInputAdds.remove(entry.id)
+            } else if mutateLocal(MixerRemote.upsertInput(entry)) {
+                // The document was not ready for a direct registration; fall back to
+                // the reconciling path (it restarts the source, but stays correct).
                 pendingInputAdds.remove(entry.id)
             }
+        } else if mutateLocal(MixerRemote.upsertInput(entry)) {
+            // An edit changed the source config, so it has to be applied again.
+            pendingInputAdds.remove(entry.id)
         }
         objectWillChange.send()
     }

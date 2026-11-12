@@ -12,6 +12,7 @@ use crate::live::ResourceStatus;
 use crate::port::{AutoApply, MixerPort, OverlayAutoApply};
 use crate::query::{Query, Snapshot};
 use crate::session::Document;
+use crate::session::InputDto;
 use crate::session::InputKind;
 use crate::session::mutate;
 use crate::session::reconcile::{plan, reinforce_streams, repair_live};
@@ -532,6 +533,48 @@ impl ControlService {
             self.hub.publish(Event::Resource { meta, status });
         }
         self.tick_video(request_id);
+        Ok(CommandOutcome {
+            revision,
+            sequence: self.hub.next_sequence(),
+            ..Default::default()
+        })
+    }
+
+    /// Adds an input whose source the caller already started.
+    ///
+    /// The macOS host attaches generators and capture devices itself (it owns the
+    /// permission prompts and the preview windows), then has to tell the document.
+    /// Going through `mutate_session` would reconcile the new input and start it a
+    /// second time, restarting UVC/video capture. This path only commits and
+    /// publishes the document; the caller guarantees the source is running.
+    pub fn register_input(&mut self, input: InputDto) -> ControlResult<CommandOutcome> {
+        if input.kind == InputKind::Replay {
+            return Err(ControlError::invalid(
+                "Replay channels are added through the session",
+            ));
+        }
+        let mut document = self
+            .store
+            .document_cloned()
+            .ok_or_else(|| ControlError::unavailable("session not published"))?;
+        crate::session::mutate::apply(
+            &mut document,
+            SessionMutation::UpsertInput {
+                input: Box::new(input),
+            },
+        )?;
+        let committed = document.canonicalize();
+        let (committed, revision, _previous) = self.store.replace(committed, None, false)?;
+        self.port.publish_session(&committed)?;
+        let meta = self.meta("c-abi");
+        self.hub.publish(Event::SessionChanged {
+            meta: meta.clone(),
+            document: Box::new(committed.clone()),
+        });
+        self.hub.publish(Event::CommandApplied {
+            meta,
+            command: "RegisterInput".into(),
+        });
         Ok(CommandOutcome {
             revision,
             sequence: self.hub.next_sequence(),
@@ -1565,6 +1608,41 @@ mod tests {
             .unwrap();
             svc.replace_session(doc, None, "1")
                 .expect("empty DeckLink/RTMP config must not abort replace");
+        });
+    }
+
+    #[test]
+    fn register_input_updates_the_document_without_reconciling() {
+        on_big_stack(|| {
+            let fake = FakeMixer::default();
+            let probe = fake.clone();
+            let mut svc = ControlService::new(fake);
+            svc.replace_session(bars_doc(), None, "1").unwrap();
+            let before = probe.ops().len();
+            let input: crate::session::InputDto = serde_json::from_str(
+                r#"{"id": 9, "name": "Camera", "kind": "UVC", "pathOrAddress": "camera-uid"}"#,
+            )
+            .expect("UVC input");
+            svc.register_input(input).expect("register");
+            let document = svc.document().expect("document");
+            assert!(document.inputs.iter().any(|item| item.id == 9));
+            assert!(
+                probe.ops()[before..].is_empty(),
+                "registering must not start the source again: {:?}",
+                &probe.ops()[before..]
+            );
+        });
+    }
+
+    #[test]
+    fn register_input_refuses_replay_channels() {
+        on_big_stack(|| {
+            let mut svc = ControlService::new(FakeMixer::default());
+            svc.replace_session(bars_doc(), None, "1").unwrap();
+            let input: crate::session::InputDto =
+                serde_json::from_str(r#"{"id": 524289, "name": "Replay A", "kind": "Replay"}"#)
+                    .expect("replay input");
+            assert!(svc.register_input(input).is_err());
         });
     }
 

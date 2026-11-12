@@ -125,6 +125,15 @@ enum MixerFFI {
         mixer_session_revision()
     }
 
+    /// Adds an input the host already attached. Used instead of a mutation for new
+    /// inputs so the core does not start the same capture device a second time.
+    static func registerInput(_ input: InputEntry) -> Int32 {
+        guard let data = try? JSONEncoder().encode(input) else { return -1 }
+        return data.withUnsafeBytes { ptr in
+            mixer_session_register_input(ptr.bindMemory(to: UInt8.self).baseAddress, data.count)
+        }
+    }
+
     static func sessionJSON() -> Data? {
         let (n, bytes) = copyUtf8(startCap: 1 << 20) { mixer_session_copy_json($0, $1) }
         guard n >= 0 else { return nil }
