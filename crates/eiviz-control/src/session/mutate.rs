@@ -460,12 +460,19 @@ fn upsert_multiview(document: &mut Document, layout: MultiviewDto) -> ControlRes
     Ok(())
 }
 
-fn upsert_output(document: &mut Document, mut output: crate::session::OutputDto) -> ControlResult<()> {
+fn upsert_output(
+    document: &mut Document,
+    mut output: crate::session::OutputDto,
+) -> ControlResult<()> {
     if output.id == 0 {
         output.id = document.next_output_id.max(1);
     }
     document.next_output_id = document.next_output_id.max(output.id.saturating_add(1));
-    if let Some(existing) = document.outputs.iter_mut().find(|item| item.id == output.id) {
+    if let Some(existing) = document
+        .outputs
+        .iter_mut()
+        .find(|item| item.id == output.id)
+    {
         *existing = output;
     } else {
         document.outputs.push(output);
@@ -656,14 +663,12 @@ mod tests {
     #[test]
     fn set_overlays_replaces_the_list_and_clears_on_air_slots() {
         let mut doc = bars();
-        let first: crate::session::OverlaySlot = serde_json::from_str(
-            r#"{"id": 1, "sourceKind": 0, "sceneGpuId": 65537, "x": 0.1}"#,
-        )
-        .expect("overlay slot");
-        let second: crate::session::OverlaySlot = serde_json::from_str(
-            r#"{"id": 2, "sourceKind": 0, "sceneGpuId": 65537, "x": 0.2}"#,
-        )
-        .expect("overlay slot");
+        let first: crate::session::OverlaySlot =
+            serde_json::from_str(r#"{"id": 1, "sourceKind": 0, "sceneGpuId": 65537, "x": 0.1}"#)
+                .expect("overlay slot");
+        let second: crate::session::OverlaySlot =
+            serde_json::from_str(r#"{"id": 2, "sourceKind": 0, "sceneGpuId": 65537, "x": 0.2}"#)
+                .expect("overlay slot");
         apply(
             &mut doc,
             SessionMutation::SetOverlays {
@@ -677,7 +682,10 @@ mod tests {
         apply(
             &mut doc,
             SessionMutation::SetOverlays {
-                slots: vec![serde_json::from_str(r#"{"id": 2, "sourceKind": 0, "sceneGpuId": 65537}"#).unwrap()],
+                slots: vec![
+                    serde_json::from_str(r#"{"id": 2, "sourceKind": 0, "sceneGpuId": 65537}"#)
+                        .unwrap(),
+                ],
             },
         )
         .unwrap();
