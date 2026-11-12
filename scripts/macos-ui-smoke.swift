@@ -75,7 +75,9 @@ if let pressIndex = args.firstIndex(of: "--press"), pressIndex + 1 < args.count 
     exit(error == .success ? 0 : 5)
 }
 
-let outputDir = args.count >= 3 ? URL(fileURLWithPath: args[2], isDirectory: true) : URL(fileURLWithPath: "target/ui-smoke", isDirectory: true)
+let noScreenshots = args.contains("--no-screenshots")
+let outputArg = args.dropFirst(2).first { !$0.hasPrefix("--") }
+let outputDir = outputArg.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? URL(fileURLWithPath: "target/ui-smoke", isDirectory: true)
     .appendingPathComponent(ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-"), isDirectory: true)
 try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
@@ -93,12 +95,14 @@ if let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[St
     }
 }
 try windows.joined(separator: "\n").write(to: outputDir.appendingPathComponent("windows.txt"), atomically: true, encoding: .utf8)
+if !noScreenshots {
 for (number, name) in screenshots {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
     process.arguments = ["-x", "-l", "\(number)", outputDir.appendingPathComponent(name).path]
     try? process.run()
     process.waitUntilExit()
+}
 }
 
 var lines: [String] = []
