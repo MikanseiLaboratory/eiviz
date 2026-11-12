@@ -55,9 +55,15 @@ enum InputKind: String, Codable, CaseIterable {
     static let tabKinds: [InputKind] = [.color, .still, .video, .omt, .ndi, .uvc, .deckLink, .mix, .audio, .replay]
 
     static func deckLinkInputAllowed() -> Bool {
+        #if os(macOS)
+        // The Pro module can report DeckLink support, but the macOS build has no
+        // DeckLink backend. Never offer a category that cannot capture here.
+        return false
+        #else
         var caps = EivizCapabilities()
         guard mixer_capabilities(&caps) == 0 else { return false }
         return caps.decklink_linked != 0 && caps.decklink_input_limit != 0
+        #endif
     }
 
     /// Instant Replay needs a Professional license and the Pro module.

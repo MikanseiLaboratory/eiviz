@@ -592,9 +592,14 @@ struct SettingsView: View {
     }
 
     private static func deckLinkOutputAllowed() -> Bool {
+        #if os(macOS)
+        // No DeckLink output backend ships in the macOS build.
+        return false
+        #else
         var caps = EivizCapabilities()
         guard mixer_capabilities(&caps) == 0 else { return false }
         return caps.decklink_linked != 0 && caps.decklink_output_limit != 0
+        #endif
     }
 
     private static func rtmpAllowed() -> Bool {
