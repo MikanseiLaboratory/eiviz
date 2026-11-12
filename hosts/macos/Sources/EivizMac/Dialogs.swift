@@ -1388,6 +1388,18 @@ struct AddInputView: View {
                     Text(audioProcesses.first { $0.exe == audioProcessExe }?.name ?? audioProcessExe)
                         .foregroundStyle(EivizTheme.dim)
                 }
+                if audioMode == .mic,
+                   AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
+                {
+                    Text(L10n.t("audio.permissionNeeded"))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button(L10n.t("audio.openPrivacySettings")) {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                }
             } else {
                 Button(L10n.t("audio.refreshDevices")) { refreshAudioDevices() }
                 Picker(L10n.t("audio.device"), selection: $audioDeviceId) {
