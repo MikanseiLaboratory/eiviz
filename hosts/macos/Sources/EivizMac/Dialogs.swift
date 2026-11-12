@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Darwin
 import EivizMixer
 import SwiftUI
@@ -1159,6 +1160,24 @@ struct AddInputView: View {
                 HStack {
                     Spacer()
                     Button("OK") {
+                        if category == "Audio",
+                           audioMode == .mic,
+                           AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
+                        {
+                            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                                DispatchQueue.main.async {
+                                    if granted {
+                                        if commit() { dismiss() }
+                                    } else {
+                                        mixer.presentError(
+                                            L10n.t("msg.microphonePermission"),
+                                            title: L10n.t("msg.addInput")
+                                        )
+                                    }
+                                }
+                            }
+                            return
+                        }
                         if commit() { dismiss() }
                     }
                     Button("Cancel") { dismiss() }
