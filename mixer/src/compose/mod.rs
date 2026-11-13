@@ -793,7 +793,16 @@ impl Composer {
         // The pass needs a target that is neither input: the source texture is that
         // target, and the compositor samples it as usual.
         let recreate = self.sources.get(&id).is_none_or(|gpu| {
-            gpu.width != tex_w || gpu.height != height || gpu.packed != packed || gpu.bgra != bgra
+            gpu.width != tex_w
+                || gpu.height != height
+                || gpu.packed != packed
+                || gpu.bgra != bgra
+                // A source uploaded for sampling has no render attachment; the
+                // transition pass needs one. Rebuild it for this frame.
+                || !gpu
+                    .texture
+                    .usage()
+                    .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
         });
         if recreate {
             self.blit_groups.remove(&id);
