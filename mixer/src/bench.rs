@@ -69,10 +69,22 @@ pub fn run(path: &str, width: u32, height: u32) -> Result<Capacity, String> {
         .get()
         .cloned()
         .ok_or_else(|| "the mixer has not started its GPU yet".to_owned())?;
-    let encode_fps = measure_encode(&device, &queue, width, height)?;
+    // The GPU encoder is a vmx compute path. A backend that cannot run it must not
+    // make "measure this PC" fail outright: fall back to the CPU encoder the replay
+    // recorder also uses, and report that throughput.
+    let gpu_encode = measure_encode(&device, &queue, width, height);
     // A shorter run for the CPU encoder: it is an order of magnitude slower, and the
     // operator is waiting.
     let encode_fps_cpu = measure_encode_cpu(width, height, 12)?;
+    let encode_fps = match gpu_encode {
+        Ok(fps) => fps,
+        Err(error) => {
+            crate::diag::warn(&format!(
+                "capacity bench: GPU encoder unavailable ({error}); measuring the CPU encoder"
+            ));
+            encode_fps_cpu
+        }
+    };
     // How fast a rendered frame can come back to the CPU at all. CPU encoding needs one
     // readback per angle per frame, so this is what decides how many angles it can carry.
     let readback_mb_s = measure_readback(&device, &queue, width, height)?;
@@ -386,5 +398,16 @@ mod tests {
         assert_eq!(capacity.angles_at_60, 7);
         let json = capacity.to_json();
         assert!(json.contains("\"anglesAt60\":7"), "{json}");
+    }
+    /// Manual probe for the Replay Setup button. Ignored in normal runs because it
+    /// encodes ninety frames and writes the disk measurement file.
+    #[test]
+    #[ignore = "measures this machine; run with --ignored"]
+    fn capacity_probe() {
+        let gpu = crate::device::GpuDevice::with_backend(crate::device::BackendRequest::Auto)
+            .expect("gpu");
+        remember(&gpu.device, &gpu.queue);
+        let capacity = run("/tmp", 1920, 1080).expect("capacity");
+        println!("{}", capacity.to_json());
     }
 }

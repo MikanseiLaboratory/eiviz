@@ -537,10 +537,9 @@ struct ReplaySettingsView: View {
     /// Free space for one drive, from the same mixer model the recorder uses. The
     /// settings table is where an operator sees a full drive before pressing Apply.
     private func runCapacity() {
-        guard let path = storages.map(\.path).first(where: { !$0.isEmpty }) else {
-            capacityText = L10n.t("replay.capacityNoStorage")
-            return
-        }
+        let path = storages.map(\.path).first(where: { !$0.isEmpty })
+            ?? ReplayDocument.defaultStoragePath()
+        try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
         let format = document?.formatValues
             ?? mixer.replayDocument?.formatValues
             ?? ReplayFormatValues(

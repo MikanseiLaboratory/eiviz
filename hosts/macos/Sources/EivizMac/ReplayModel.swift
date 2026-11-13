@@ -304,13 +304,32 @@ struct ReplayDocument {
         self.raw = raw
     }
 
+    /// Where a new Replay project records when the operator has not chosen a drive.
+    /// Without a drive the capacity button cannot measure anything, so a fresh Replay
+    /// input should still be usable.
+    static func defaultStoragePath() -> String {
+        let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Movies")
+        return movies.appendingPathComponent("eiviz-replay").path
+    }
+
     /// The document a project gets when its first Replay input is added. Replay
     /// never appears in a session without this, and it carries a recording format
     /// so the project can record without the operator opening Replay Setup first.
     static func empty(format: ReplayFormatValues) -> ReplayDocument {
-        ReplayDocument(raw: [
+        let storage = defaultStoragePath()
+        try? FileManager.default.createDirectory(
+            atPath: storage,
+            withIntermediateDirectories: true
+        )
+        return ReplayDocument(raw: [
             "enabled": .bool(false),
-            "storage": .array([]),
+            "storage": .array([
+                .object([
+                    "path": .string(storage),
+                    "angleIds": .array([]),
+                ]),
+            ]),
             "format": .object([
                 "width": .number(Double(format.width)),
                 "height": .number(Double(format.height)),

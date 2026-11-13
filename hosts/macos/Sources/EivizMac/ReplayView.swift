@@ -192,10 +192,11 @@ struct ReplayView: View {
     }
 
     private func runCapacity() {
-        guard let path = mixer.replayDocument?.storages.map(\.path).first(where: { !$0.isEmpty }) else {
-            capacityText = L10n.t("replay.capacityNoStorage")
-            return
-        }
+        // A fresh Replay project has no drive yet. Measure into the default
+        // recording folder instead of making the operator add one first.
+        let path = mixer.replayDocument?.storages.map(\.path).first(where: { !$0.isEmpty })
+            ?? ReplayDocument.defaultStoragePath()
+        try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
         let format = mixer.replayDocument?.formatValues
             ?? ReplayFormatValues(
                 width: mixer.session.settings.defaultWidth,
