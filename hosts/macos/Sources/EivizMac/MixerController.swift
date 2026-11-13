@@ -94,6 +94,8 @@ final class MixerController: ObservableObject {
     var overlayPersistTask: Task<Void, Never>?
     /// Same coalescing for audio gain/mute drags, per input id.
     var inputPersistTasks: [UInt64: Task<Void, Never>] = [:]
+    /// Coalescing for Mixing Unit bus gain/mute drags.
+    var unitPersistTasks: [UInt64: Task<Void, Never>] = [:]
     @Published var previewByUnit: [UInt64: UInt64] = [:]
     @Published var programByUnit: [UInt64: UInt64] = [:]
     var inputPreviewWindows: [UInt64: NSWindow] = [:]
@@ -338,6 +340,19 @@ final class MixerController: ObservableObject {
             if self.mutateLocal(MixerRemote.upsertInput(current)) {
                 self.pendingInputAdds.remove(current.id)
             }
+        }
+    }
+
+    func scheduleUnitPersist(_ unit: MixingUnitEntry) {
+        guard !isRemote else { return }
+        unitPersistTasks[unit.id]?.cancel()
+        unitPersistTasks[unit.id] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self,
+                  let current = self.session.units.first(where: { $0.id == unit.id })
+            else { return }
+            self.unitPersistTasks[current.id] = nil
+            _ = self.mutateLocal(MixerRemote.upsertUnit(current))
         }
     }
 
@@ -726,6 +741,10 @@ final class MixerController: ObservableObject {
             task.cancel()
         }
         inputPersistTasks.removeAll()
+        for task in unitPersistTasks.values {
+            task.cancel()
+        }
+        unitPersistTasks.removeAll()
         mixTimer?.invalidate()
         mixTimer = nil
         meterTimer?.invalidate()
@@ -999,6 +1018,25 @@ final class MixerController: ObservableObject {
         }
         if changed, let updated = session.scenes.first(where: { $0.id == scene.id }) {
             pushScene(updated)
+        }
+    }
+
+    /// Applies a Mixing Unit bus level. `persist` is false while a fader is dragged;
+    /// the document is written once the drag ends.
+    func applyUnitBusAudio(unitId: UInt64, gain: Float, mute: Bool, persist: Bool) {
+        guard let index = session.units.firstIndex(where: { $0.id == unitId }) else { return }
+        session.units[index].audio.gain = max(0, gain)
+        session.units[index].audio.mute = mute
+        let unit = session.units[index]
+        if isRemote {
+            if persist {
+                _ = mutateRemote(MixerRemote.upsertUnit(unit))
+            }
+            return
+        }
+        _ = mixer_audio_set_bus_gain(unit.id, max(0, unit.audio.gain), unit.audio.mute ? 1 : 0)
+        if persist {
+            scheduleUnitPersist(unit)
         }
     }
 

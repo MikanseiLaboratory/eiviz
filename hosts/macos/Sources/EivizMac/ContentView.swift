@@ -662,6 +662,7 @@ struct ContentView: View {
     private func meter(title: String, unitId: UInt64) -> some View {
         let peak = mixer.peaks[EIVIZ_AUDIO_BUS_PEAK_BASE | unitId] ?? (0, 0)
         let listening = mixer.session.headphoneListenKind == 1 && mixer.session.headphoneListenId == unitId
+        let unit = mixer.session.units.first { $0.id == unitId }
         return VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.system(size: 10))
             HStack(spacing: 2) {
@@ -672,7 +673,57 @@ struct ContentView: View {
             listenButton(on: listening) {
                 mixer.toggleHeadphoneListen(kind: 1, id: unitId)
             }
+            gainSlider(
+                gain: { mixer.session.units.first { $0.id == unitId }?.audio.gain ?? 1 },
+                set: { value in
+                    mixer.applyUnitBusAudio(
+                        unitId: unitId,
+                        gain: value,
+                        mute: mixer.session.units.first { $0.id == unitId }?.audio.mute ?? false,
+                        persist: false
+                    )
+                },
+                end: {
+                    mixer.applyUnitBusAudio(
+                        unitId: unitId,
+                        gain: mixer.session.units.first { $0.id == unitId }?.audio.gain ?? 1,
+                        mute: mixer.session.units.first { $0.id == unitId }?.audio.mute ?? false,
+                        persist: true
+                    )
+                }
+            )
+            Button("M") {
+                let muted = mixer.session.units.first { $0.id == unitId }?.audio.mute ?? false
+                mixer.applyUnitBusAudio(
+                    unitId: unitId,
+                    gain: mixer.session.units.first { $0.id == unitId }?.audio.gain ?? 1,
+                    mute: !muted,
+                    persist: true
+                )
+            }
+            .buttonStyle(OnOffButtonStyle(on: unit?.audio.mute == true, compact: true))
+            .help(L10n.t("audio.mute"))
         }
+    }
+
+    private func gainSlider(
+        gain: @escaping () -> Float,
+        set: @escaping (Float) -> Void,
+        end: @escaping () -> Void
+    ) -> some View {
+        Slider(
+            value: Binding(
+                get: { AudioMeter.slider(fromGain: gain()) },
+                set: { set(AudioMeter.gain(fromSlider: $0)) }
+            ),
+            in: 0 ... 1,
+            onEditingChanged: { editing in
+                if !editing { end() }
+            }
+        )
+        .frame(width: 64)
+        .controlSize(.mini)
+        .help(L10n.t("audio.gain"))
     }
 
     private func inputMeter(_ input: InputEntry) -> some View {
@@ -700,6 +751,24 @@ struct ContentView: View {
             listenButton(on: mixer.session.headphoneListenKind == 2 && mixer.session.headphoneListenId == input.id) {
                 mixer.toggleHeadphoneListen(kind: 2, id: input.id)
             }
+            gainSlider(
+                gain: { mixer.session.inputs.first { $0.id == input.id }?.gain ?? input.gain },
+                set: { value in
+                    mixer.applyInputAudio(id: input.id, units: input.audioUnits, gain: value, mute: input.mute)
+                },
+                end: {}
+            )
+            Button("M") {
+                let current = mixer.session.inputs.first { $0.id == input.id }
+                mixer.applyInputAudio(
+                    id: input.id,
+                    units: current?.audioUnits ?? input.audioUnits,
+                    gain: current?.gain ?? input.gain,
+                    mute: !(current?.mute ?? input.mute)
+                )
+            }
+            .buttonStyle(OnOffButtonStyle(on: input.mute, compact: true))
+            .help(L10n.t("audio.mute"))
             if input.kind != .mix {
                 ForEach(mixer.session.units) { unit in
                     let on = input.audioUnits.contains(unit.id) || mixer.inputFollows(input.id, unit: unit)

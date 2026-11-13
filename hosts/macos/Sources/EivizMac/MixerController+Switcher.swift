@@ -591,6 +591,7 @@ extension MixerController {
             )
         }
         fail(mixer_audio_set_unit_link(unit.id, unit.audioLink.rawUInt), "Audio link")
+        _ = mixer_audio_set_bus_gain(unit.id, max(0, unit.audio.gain), unit.audio.mute ? 1 : 0)
         selectedUnitId = unit.id
         if let window = switcherWindows[unit.id] {
             window.title = unit.name

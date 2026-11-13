@@ -66,6 +66,23 @@ struct AudioInputSettingsView: View {
                             Text("Audio")
                         }
                         .toggleStyle(OnOffToggleStyle())
+                        Button {
+                            mixer.toggleHeadphoneListen(kind: 2, id: input.id)
+                        } label: {
+                            Label(
+                                L10n.t(
+                                    mixer.session.headphoneListenKind == 2
+                                        && mixer.session.headphoneListenId == input.id
+                                        ? "audio.listening"
+                                        : "audio.listen"
+                                ),
+                                systemImage: "headphones"
+                            )
+                        }
+                        .buttonStyle(OnOffButtonStyle(
+                            on: mixer.session.headphoneListenKind == 2
+                                && mixer.session.headphoneListenId == input.id
+                        ))
                     }
                 }
                 if input.kind != .mix {
