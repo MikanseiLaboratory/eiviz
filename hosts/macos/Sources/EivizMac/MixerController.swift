@@ -168,13 +168,12 @@ final class MixerController: ObservableObject {
             bootRemote()
             return
         }
-        guard fail(mixer_create_with_backend(AppPrefs.shared.renderer.createAbi, 0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
+        guard fail(mixer_create_with_backend(GpuRenderer.metal.createAbi, 0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
             return
         }
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
         fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
         fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
-        GpuPresentStore.load()
         FlipBudget.configure(session.settings.flipSwapchainLimit)
         applyBusColors()
         applySession()
@@ -385,12 +384,11 @@ final class MixerController: ObservableObject {
     }
 
     private func bootRemote() {
-        guard fail(mixer_create_with_backend(AppPrefs.shared.renderer.createAbi, 0, 60, 1), "Metal mixer initialization") else {
+        guard fail(mixer_create_with_backend(GpuRenderer.metal.createAbi, 0, 60, 1), "Metal mixer initialization") else {
             return
         }
         _ = mixer_define_generator(EIVIZ_SRC_BLACK, EIVIZ_GEN_SOLID, 0, 0, 0, 1, 0)
         FlipBudget.configure(0)
-        GpuPresentStore.load()
         startRemoteDiscover()
         startTimers()
         booted = true

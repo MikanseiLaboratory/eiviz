@@ -139,7 +139,6 @@ struct SettingsView: View {
                 Text("Multiview").tag(3)
                 Text("Headphone").tag(4)
                 Text(L10n.t("settings.webApi")).tag(5)
-                Text(L10n.t("settings.advanced")).tag(6)
                 Text(L10n.t("settings.license")).tag(7)
             }
             .frame(width: 200)
@@ -152,7 +151,6 @@ struct SettingsView: View {
                     else if category == 3 { multiview }
                     else if category == 4 { audio }
                     else if category == 5 { webApi }
-                    else if category == 6 { advanced }
                     else { license }
                 }
                 Spacer()
@@ -289,24 +287,6 @@ struct SettingsView: View {
                 set: { mixer.session.settings.ndiGpuUpload = $0 }
             ))
             Text("NDI upload on the ingest thread writes each frame to the GPU before the mixer samples it. Turn it off to go back to CPU frames on the render thread. On Apple Silicon, Unified Memory writes live CPU inputs into MTLStorageModeShared textures and samples them directly. Turn that off to use the default Metal upload path.")
-                .foregroundStyle(EivizTheme.dim)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var advanced: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(L10n.t("settings.flipBudget"))
-            Text(L10n.format("settings.flipBudgetUsage", "\(FlipBudget.used)", "\(FlipBudget.limit)"))
-            Picker("", selection: $mixer.session.settings.flipSwapchainLimit) {
-                Text(L10n.t("settings.flipBudgetAuto")).tag(UInt32(0))
-                ForEach([UInt32(4), 6, 8, 10, 12, 16], id: \.self) { value in
-                    Text("\(value)").tag(value)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 280, alignment: .leading)
-            Text(L10n.t("settings.flipBudgetHelp"))
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -978,8 +958,6 @@ struct PreferencesView: View {
     @ObservedObject private var prefs = AppPrefs.shared
     @State private var originalLanguage = AppPrefs.shared.language
     @State private var originalTheme = AppPrefs.shared.theme
-    @State private var originalRenderer = AppPrefs.shared.renderer
-    @State private var renderer = AppPrefs.shared.renderer
     @State private var originalRemoteOmtUseGpu = AppPrefs.shared.remoteOmtUseGpu
     @State private var remoteOmtUseGpu = AppPrefs.shared.remoteOmtUseGpu
     @State private var listenToken = KeychainStore.load(account: "listen")
@@ -1000,15 +978,6 @@ struct PreferencesView: View {
                 Text(L10n.t("prefs.themeSystem")).tag(AppThemeMode.system)
             }
             .frame(width: 220)
-            Text(L10n.t("prefs.renderer"))
-            Picker("", selection: $renderer) {
-                Text(L10n.t("prefs.rendererAuto")).tag(GpuRenderer.auto)
-                Text("Metal").tag(GpuRenderer.metal)
-            }
-            .frame(width: 220)
-            Text(L10n.t("prefs.rendererHelp"))
-                .foregroundStyle(EivizTheme.dim)
-                .fixedSize(horizontal: false, vertical: true)
             if mixer.isRemote {
                 Text(L10n.t("prefs.remoteOmtDecode"))
                 Picker("", selection: $remoteOmtUseGpu) {
@@ -1048,15 +1017,12 @@ struct PreferencesView: View {
             HStack {
                 Spacer()
                 Button(L10n.t("dialog.ok")) {
-                    prefs.renderer = renderer
                     prefs.remoteOmtUseGpu = remoteOmtUseGpu
                     prefs.mediaDirectory = prefs.resolvedMediaDirectory
                     KeychainStore.save(account: "listen", token: listenToken)
                     prefs.save()
                     prefs.localeRevision += 1
-                    if renderer != originalRenderer {
-                        mixer.recreateMixer()
-                    } else if mixer.isRemote, remoteOmtUseGpu != originalRemoteOmtUseGpu {
+                    if mixer.isRemote, remoteOmtUseGpu != originalRemoteOmtUseGpu {
                         mixer.reconnectRemoteVideo()
                     }
                     dismiss()
@@ -1078,8 +1044,6 @@ struct PreferencesView: View {
         .onAppear {
             originalLanguage = prefs.language
             originalTheme = prefs.theme
-            originalRenderer = prefs.renderer
-            renderer = prefs.renderer
             originalRemoteOmtUseGpu = prefs.remoteOmtUseGpu
             remoteOmtUseGpu = prefs.remoteOmtUseGpu
             listenToken = KeychainStore.load(account: "listen")

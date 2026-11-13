@@ -502,7 +502,7 @@ extension MixerController {
         mix = 0
         inputFilter = .all
         sceneFilter = .all
-        guard fail(mixer_create_with_backend(AppPrefs.shared.renderer.createAbi, 0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
+        guard fail(mixer_create_with_backend(GpuRenderer.metal.createAbi, 0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
             return
         }
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
