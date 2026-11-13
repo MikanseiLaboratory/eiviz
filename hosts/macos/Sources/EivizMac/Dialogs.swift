@@ -1520,7 +1520,7 @@ struct AddInputView: View {
                 }
                 Button(L10n.t("audio.refreshDevices")) { refreshAudioDevices() }
                 Picker(L10n.t("audio.device"), selection: $audioDeviceId) {
-                    Text("System default").tag("")
+                    Text(L10n.t("audio.followDefault")).tag("")
                     ForEach(audioDevices) { device in
                         Text("\(device.name)  (\(device.channels)ch)").tag(device.id)
                     }

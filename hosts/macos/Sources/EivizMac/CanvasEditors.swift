@@ -37,6 +37,7 @@ struct SceneEditorView: View {
                                 toggleLayer(layer.id, \.audioFollow)
                             }
                             .buttonStyle(OnOffButtonStyle(on: layer.audioFollow, compact: true))
+                            .help(L10n.t("audio.follow"))
                             Button(layer.locked ? "🔒" : "🔓") {
                                 toggleLayer(layer.id, \.locked)
                             }
