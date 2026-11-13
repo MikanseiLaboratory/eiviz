@@ -1437,6 +1437,9 @@ struct AddInputView: View {
             List(uvcList, id: \.id, selection: $selectedUvc) { device in
                 Text(device.name).tag(device.id)
             }
+            // The Add form sits in a ScrollView; a List with no height collapses to
+            // zero rows, so the devices were enumerated but invisible.
+            .frame(height: 140)
             .onChange(of: selectedUvc) { _, _ in refreshUvcModes() }
             if uvcList.isEmpty {
                 Text(L10n.t("video.noDevices"))
