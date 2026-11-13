@@ -46,7 +46,7 @@ struct AvCaptureInfo {
 }
 
 unsafe extern "C" {
-    fn eiviz_av_open_file(path: *const c_char, start_hns: i64) -> *mut AvPump;
+    fn eiviz_av_open_file(path: *const c_char, start_hns: i64, mode: i32) -> *mut AvPump;
     fn eiviz_av_open_capture(
         device_id: *const c_char,
         width: u32,
@@ -63,7 +63,7 @@ unsafe extern "C" {
     fn eiviz_av_close(pump: *mut AvPump);
     fn eiviz_av_duration_hns(pump: *const AvPump) -> i64;
     fn eiviz_av_next(pump: *mut AvPump, out: *mut AvSample) -> i32;
-    fn eiviz_av_has_audio(pump: *mut AvPump) -> i32;
+    fn eiviz_av_next_audio(pump: *mut AvPump, out: *mut AvSample) -> i32;
     fn eiviz_av_set_metal(pump: *mut AvPump, device: *mut std::ffi::c_void);
     fn CFRelease(value: *const std::ffi::c_void);
 }
@@ -120,9 +120,9 @@ struct NativePump {
 unsafe impl Send for NativePump {}
 
 impl NativePump {
-    fn open_file(path: &str, start_hns: i64) -> Result<Self, String> {
+    fn open_file(path: &str, start_hns: i64, mode: i32) -> Result<Self, String> {
         let c_path = CString::new(path).map_err(|_| "invalid video path".to_string())?;
-        let ptr = unsafe { eiviz_av_open_file(c_path.as_ptr(), start_hns) };
+        let ptr = unsafe { eiviz_av_open_file(c_path.as_ptr(), start_hns, mode) };
         if ptr.is_null() {
             return Err(format!("could not open video file: {path}"));
         }
@@ -156,8 +156,28 @@ impl NativePump {
         }
     }
 
-    fn has_audio(&self) -> bool {
-        unsafe { eiviz_av_has_audio(self.ptr) != 0 }
+    fn next_audio(&mut self) -> Result<Option<AvSample>, bool> {
+        let mut sample = AvSample {
+            kind: 0,
+            width: 0,
+            height: 0,
+            stride: 0,
+            sample_rate: 0,
+            channels: 0,
+            frames: 0,
+            pts_hns: 0,
+            data: std::ptr::null(),
+            bytes: 0,
+            texture: std::ptr::null_mut(),
+            pixel_buffer: std::ptr::null_mut(),
+        };
+        let code = unsafe { eiviz_av_next_audio(self.ptr, &mut sample) };
+        match code {
+            NEXT_OK => Ok(Some(sample)),
+            NEXT_RETRY => Ok(None),
+            NEXT_EOF => Err(true),
+            _ => Err(false),
+        }
     }
 
     fn next(&mut self) -> Result<Option<AvSample>, bool> {
@@ -201,8 +221,10 @@ pub struct VideoPump {
     seek_hns: Arc<AtomicI64>,
     position_hns: Arc<AtomicI64>,
     duration_hns: Arc<AtomicI64>,
+    audio_seek_hns: Arc<AtomicI64>,
     is_file: bool,
     join: Option<JoinHandle<()>>,
+    audio_join: Option<JoinHandle<()>>,
 }
 
 impl VideoPump {
@@ -235,6 +257,8 @@ impl VideoPump {
         let dur_t = Arc::clone(&duration_hns);
         let depth = frame_buffer_frames.clamp(1, 8);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let audio_path = path.clone();
+        let audio_uploads = Arc::clone(&uploads);
         let join = thread::Builder::new()
             .name(format!("eiviz-av-{source_id}"))
             .spawn(move || {
@@ -248,16 +272,43 @@ impl VideoPump {
             })
             .map_err(|error| error.to_string())?;
         match wait_ready(ready_rx) {
-            Ok(()) => Ok(Self {
-                stop,
-                playing,
-                looping,
-                seek_hns,
-                position_hns,
-                duration_hns,
-                is_file: !capture,
-                join: Some(join),
-            }),
+            Ok(()) => {
+                let audio_seek = Arc::new(AtomicI64::new(-1));
+                let audio_join = if capture {
+                    None
+                } else {
+                    let audio_stop = Arc::clone(&stop);
+                    let audio_playing = Arc::clone(&playing);
+                    let audio_looping = Arc::clone(&looping);
+                    let audio_seek_t = Arc::clone(&audio_seek);
+                    thread::Builder::new()
+                        .name(format!("eiviz-av-audio-{source_id}"))
+                        .spawn(move || {
+                            run_audio_loop(
+                                audio_path,
+                                source_id,
+                                audio_uploads,
+                                audio_stop,
+                                audio_playing,
+                                audio_looping,
+                                audio_seek_t,
+                            );
+                        })
+                        .ok()
+                };
+                Ok(Self {
+                    stop,
+                    playing,
+                    looping,
+                    seek_hns,
+                    position_hns,
+                    duration_hns,
+                    audio_seek_hns: audio_seek,
+                    is_file: !capture,
+                    join: Some(join),
+                    audio_join,
+                })
+            }
             Err(error) => {
                 stop.store(true, Ordering::Relaxed);
                 let _ = join.join();
@@ -276,6 +327,7 @@ impl VideoPump {
 
     pub fn seek(&self, hns: i64) {
         self.seek_hns.store(hns.max(0), Ordering::Relaxed);
+        self.audio_seek_hns.store(hns.max(0), Ordering::Relaxed);
         self.position_hns.store(hns.max(0), Ordering::Relaxed);
     }
 
@@ -306,6 +358,9 @@ impl Drop for VideoPump {
         self.playing.store(true, Ordering::Relaxed);
         if let Some(join) = self.join.take() {
             crate::diag::join_timeout(join, Duration::from_secs(2), "av-video");
+        }
+        if let Some(join) = self.audio_join.take() {
+            crate::diag::join_timeout(join, Duration::from_secs(2), "av-audio");
         }
     }
 }
@@ -338,7 +393,7 @@ fn run_loop(
         let opened = if capture {
             NativePump::open_capture(&path, width, height, fps_num, fps_den)
         } else {
-            NativePump::open_file(&path, 0)
+            NativePump::open_file(&path, 0, 1)
         };
         let mut native = match opened {
             Ok(pump) => pump,
@@ -366,7 +421,7 @@ fn run_loop(
             }
             let seek = seek_hns.swap(-1, Ordering::Relaxed);
             if seek >= 0 && !capture {
-                native = match NativePump::open_file(&path, seek) {
+                native = match NativePump::open_file(&path, seek, 1) {
                     Ok(pump) => pump,
                     Err(error) => return Err(error),
                 };
@@ -413,11 +468,7 @@ fn run_loop(
                 thread::sleep(Duration::from_millis(16));
                 continue;
             }
-            // A file with audio is throttled by the audio FIFO (40 ms) inside
-            // ingest_audio_clocked. Stopping at the video prefetch depth would leave
-            // the AAC packets behind the buffered frames and the FIFO would underrun.
-            let prefetch_limit = file_prefetch;
-            if !capture && !native.has_audio() && prefetch.len() >= prefetch_limit && !need_frame {
+            if !capture && prefetch.len() >= file_prefetch && !need_frame {
                 if let Some(front) = prefetch.front() {
                     let wait = pts_wait(front.pts(), clock_pts, clock_start);
                     if wait > Duration::ZERO && wait < Duration::from_secs(2) {
@@ -449,23 +500,6 @@ fn run_loop(
                 Err(false) => continue,
             };
             match sample.kind {
-                KIND_AUDIO => {
-                    if is_playing {
-                        if let Some(packet) = audio_packet(&sample) {
-                            if capture {
-                                ingest_audio_live(&uploads, source_id, packet);
-                            } else {
-                                // AVAssetReader may hand back one large LPCM buffer
-                                // (170 ms seen for this AAC file). The input FIFO is
-                                // 40 ms, so pushing it whole drops most of it; split it
-                                // into mixer-sized chunks and let the FIFO wait pace it.
-                                for chunk in split_audio_packet(packet, 960) {
-                                    ingest_audio_clocked(&uploads, source_id, chunk);
-                                }
-                            }
-                        }
-                    }
-                }
                 KIND_VIDEO => {
                     let preview = need_frame;
                     let pts = sample.pts_hns;
@@ -528,6 +562,67 @@ fn run_loop(
 fn send_ready(ready: &mut Option<mpsc::SyncSender<Result<(), String>>>, value: Result<(), String>) {
     if let Some(tx) = ready.take() {
         let _ = tx.send(value);
+    }
+}
+
+fn run_audio_loop(
+    path: String,
+    source_id: u64,
+    uploads: Arc<Mutex<UploadStore>>,
+    stop: Arc<AtomicBool>,
+    playing: Arc<AtomicBool>,
+    looping: Arc<AtomicBool>,
+    seek_hns: Arc<AtomicI64>,
+) {
+    let mut native = match NativePump::open_file(&path, 0, 2) {
+        Ok(pump) => pump,
+        Err(_) => return,
+    };
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let seek = seek_hns.swap(-1, Ordering::Relaxed);
+        if seek >= 0 {
+            match NativePump::open_file(&path, seek, 2) {
+                Ok(pump) => {
+                    native = pump;
+                    uploads.lock_or_recover().flush_audio(source_id);
+                }
+                Err(_) => {
+                    thread::sleep(Duration::from_millis(16));
+                    continue;
+                }
+            }
+        }
+        if !playing.load(Ordering::Relaxed) {
+            thread::sleep(Duration::from_millis(16));
+            continue;
+        }
+        match native.next_audio() {
+            Ok(Some(sample)) => {
+                if let Some(packet) = audio_packet(&sample) {
+                    for chunk in split_audio_packet(packet, 960) {
+                        ingest_audio_clocked(&uploads, source_id, chunk);
+                    }
+                }
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(2)),
+            Err(true) => {
+                if looping.load(Ordering::Relaxed) {
+                    match NativePump::open_file(&path, 0, 2) {
+                        Ok(pump) => {
+                            native = pump;
+                            uploads.lock_or_recover().flush_audio(source_id);
+                        }
+                        Err(_) => return,
+                    }
+                } else {
+                    thread::sleep(Duration::from_millis(16));
+                }
+            }
+            Err(false) => thread::sleep(Duration::from_millis(16)),
+        }
     }
 }
 
@@ -786,7 +881,7 @@ mod tests {
                 format!("{}/tests/fixtures/av_metal.mp4", env!("CARGO_MANIFEST_DIR"))
             });
         let gpu = GpuDevice::with_backend(BackendRequest::Metal).expect("Metal device");
-        let mut pump = NativePump::open_file(&path, 0).expect("video pump");
+        let mut pump = NativePump::open_file(&path, 0, 1).expect("video pump");
         pump.set_metal(&gpu.device);
         for _ in 0..60 {
             match pump.next() {

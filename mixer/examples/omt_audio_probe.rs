@@ -36,12 +36,18 @@ fn main() {
     let mut silent_runs: Vec<(u64, u64)> = Vec::new();
     let mut run_start: Option<u64> = None;
     let mut video_count = 0u64;
+    let mut video_new = 0u64;
     let mut last_video_ts: Option<i64> = None;
+    let mut last_video_ts_seen: Option<i64> = None;
     let mut offsets: Vec<f64> = Vec::new();
     let mut peak_all = 0.0f32;
     while Instant::now() < deadline {
         while let Some(video) = session.try_recv_video() {
             video_count += 1;
+            if last_video_ts_seen != Some(video.timestamp) {
+                last_video_ts_seen = Some(video.timestamp);
+                video_new += 1;
+            }
             last_video_ts = Some(video.timestamp);
         }
         match session.try_recv_audio() {
@@ -100,9 +106,9 @@ fn main() {
         let max = offsets.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let last = offsets.last().copied().unwrap_or(0.0);
         println!(
-            "video frames={video_count} av_offset_ms avg={avg:.1} min={min:.1} max={max:.1} last={last:.1}"
+            "video frames={video_count} unique={video_new} av_offset_ms avg={avg:.1} min={min:.1} max={max:.1} last={last:.1}"
         );
     } else {
-        println!("video frames={video_count} (no audio/video pair)");
+        println!("video frames={video_count} unique={video_new} (no audio/video pair)");
     }
 }

@@ -497,7 +497,7 @@ static AVAssetTrack *first_track(AVAsset *asset, AVMediaType mediaType) {
 #pragma clang diagnostic pop
 }
 
-EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns) {
+EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns, int mode) {
     if (!path || path[0] == 0) {
         return NULL;
     }
@@ -514,8 +514,10 @@ EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns) {
     if ([asset statusOfValueForKey:@"tracks" error:&error] != AVKeyValueStatusLoaded) {
         return NULL;
     }
-    AVAssetTrack *video = first_track(asset, AVMediaTypeVideo);
-    if (!video) {
+    BOOL want_video = (mode & 1) != 0;
+    BOOL want_audio = (mode & 2) != 0;
+    AVAssetTrack *video = want_video ? first_track(asset, AVMediaTypeVideo) : nil;
+    if (want_video && !video) {
         return NULL;
     }
     AVAssetReader *reader = [AVAssetReader assetReaderWithAsset:asset error:&error];
@@ -526,15 +528,17 @@ EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns) {
         reader.timeRange = CMTimeRangeMake(CMTimeMake(start_hns, 10000000), kCMTimePositiveInfinity);
     }
     EivizAvPumpObj *pump = [[EivizAvPumpObj alloc] init];
-    AVAssetReaderTrackOutput *video_out =
-        [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:video outputSettings:video_attrs(pump.useNV12)];
-    video_out.alwaysCopiesSampleData = NO;
-    if (![reader canAddOutput:video_out]) {
-        return NULL;
+    AVAssetReaderTrackOutput *video_out = nil;
+    if (want_video) {
+        video_out = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:video outputSettings:video_attrs(pump.useNV12)];
+        video_out.alwaysCopiesSampleData = NO;
+        if (![reader canAddOutput:video_out]) {
+            return NULL;
+        }
+        [reader addOutput:video_out];
     }
-    [reader addOutput:video_out];
     AVAssetReaderTrackOutput *audio_out = nil;
-    AVAssetTrack *audio = first_track(asset, AVMediaTypeAudio);
+    AVAssetTrack *audio = want_audio ? first_track(asset, AVMediaTypeAudio) : nil;
     if (audio) {
         audio_out = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:audio outputSettings:audio_attrs()];
         audio_out.alwaysCopiesSampleData = NO;
@@ -792,12 +796,32 @@ int eiviz_av_enum_captures(EivizAvCaptureInfo *out, uint32_t cap) {
     return (int)n;
 }
 
-int eiviz_av_has_audio(EivizAvPump *pump) {
-    if (!pump) {
-        return 0;
+int eiviz_av_next_audio(EivizAvPump *pump, EivizAvSample *out) {
+    if (!pump || !out) {
+        return EIVIZ_AV_ERR;
     }
+    memset(out, 0, sizeof(*out));
     EivizAvPumpObj *owned = (__bridge EivizAvPumpObj *)pump;
-    return owned.audioOut != nil ? 1 : 0;
+    if (owned.stopped || owned.capture || !owned.audioOut) {
+        return EIVIZ_AV_RETRY;
+    }
+    @try {
+        CMSampleBufferRef sample = [owned.audioOut copyNextSampleBuffer];
+        if (!sample) {
+            if (owned.reader.status == AVAssetReaderStatusCompleted ||
+                owned.reader.status == AVAssetReaderStatusFailed ||
+                owned.reader.status == AVAssetReaderStatusCancelled) {
+                return EIVIZ_AV_EOF;
+            }
+            return EIVIZ_AV_RETRY;
+        }
+        BOOL ok = [owned fillAudio:sample out:out];
+        CFRelease(sample);
+        return ok ? EIVIZ_AV_OK : EIVIZ_AV_RETRY;
+    } @catch (NSException *ex) {
+        NSLog(@"eiviz av: next_audio aborted: %@", ex);
+        return EIVIZ_AV_ERR;
+    }
 }
 
 int eiviz_av_next(EivizAvPump *pump, EivizAvSample *out) {
