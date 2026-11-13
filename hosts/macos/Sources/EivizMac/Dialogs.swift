@@ -129,6 +129,7 @@ struct SettingsView: View {
     @State private var decklinkDevices: [DeckLinkDeviceInfo] = []
     @State private var decklinkModes: [String: [DeckLinkModeInfo]] = [:]
     @State private var decklinkError = ""
+    @State private var audioRefresh = 0
 
     var body: some View {
         HStack(spacing: 0) {
@@ -653,7 +654,55 @@ struct SettingsView: View {
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 80)
                             Text("ms")
+                            Text(L10n.t("settings.keyframeInterval"))
+                            TextField(
+                                "",
+                                value: $mixer.session.streamEncoders[index].keyint,
+                                format: .number
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 64)
+                            Text(L10n.t("settings.encoderThreads"))
+                            TextField(
+                                "",
+                                value: $mixer.session.streamEncoders[index].encoderThreads,
+                                format: .number
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 48)
                         }
+                        HStack(spacing: 8) {
+                            Text(L10n.t("settings.sendBuffer"))
+                            TextField(
+                                "",
+                                value: $mixer.session.streamEncoders[index].bufferMs,
+                                format: .number
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 64)
+                            Text("ms")
+                            Picker(L10n.t("settings.complexity"), selection: $mixer.session.streamEncoders[index].complexity) {
+                                Text(L10n.t("settings.complexityLow")).tag(UInt32(0))
+                                Text(L10n.t("settings.complexityMedium")).tag(UInt32(1))
+                                Text(L10n.t("settings.complexityHigh")).tag(UInt32(2))
+                            }
+                            .frame(width: 150)
+                            Picker(L10n.t("settings.refFrames"), selection: $mixer.session.streamEncoders[index].refFrames) {
+                                ForEach(1 ... 4, id: \.self) { count in
+                                    Text("\(count)").tag(UInt32(count))
+                                }
+                            }
+                            .frame(width: 110)
+                        }
+                        HStack(spacing: 12) {
+                            Toggle(L10n.t("settings.cabac"), isOn: $mixer.session.streamEncoders[index].cabac)
+                            Toggle(L10n.t("settings.videoOnly"), isOn: $mixer.session.streamEncoders[index].videoOnly)
+                            Toggle(L10n.t("settings.deblock"), isOn: $mixer.session.streamEncoders[index].deblock)
+                            Toggle(L10n.t("settings.backgroundDetect"), isOn: $mixer.session.streamEncoders[index].backgroundDetection)
+                            Toggle(L10n.t("settings.adaptiveQuant"), isOn: $mixer.session.streamEncoders[index].adaptiveQuant)
+                            Toggle(L10n.t("settings.sceneChange"), isOn: $mixer.session.streamEncoders[index].sceneChange)
+                        }
+                        .toggleStyle(.checkbox)
                     }
                 }
                 if output.wrappedValue.transport == .deckLink {
@@ -914,7 +963,11 @@ struct SettingsView: View {
     private var audio: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                Text(L10n.t("settings.headphone")).fontWeight(.bold)
+                HStack {
+                    Text(L10n.t("settings.headphone")).fontWeight(.bold)
+                    Button(L10n.t("audio.refreshDevices")) { audioRefresh += 1 }
+                        .controlSize(.small)
+                }
                 Text("Choose the headphone output device. Click the headphone icon on a Mixing Unit or Input meter to listen to it. None keeps the mix off the device.")
                     .foregroundStyle(EivizTheme.dim)
                     .fixedSize(horizontal: false, vertical: true)
@@ -926,6 +979,7 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .id(audioRefresh)
     }
 
     private func unitBusRow(_ index: Int) -> some View {
