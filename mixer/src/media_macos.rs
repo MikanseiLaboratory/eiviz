@@ -455,7 +455,13 @@ fn run_loop(
                             if capture {
                                 ingest_audio_live(&uploads, source_id, packet);
                             } else {
-                                ingest_audio_clocked(&uploads, source_id, packet);
+                                // AVAssetReader may hand back one large LPCM buffer
+                                // (170 ms seen for this AAC file). The input FIFO is
+                                // 40 ms, so pushing it whole drops most of it; split it
+                                // into mixer-sized chunks and let the FIFO wait pace it.
+                                for chunk in split_audio_packet(packet, 960) {
+                                    ingest_audio_clocked(&uploads, source_id, chunk);
+                                }
                             }
                         }
                     }
@@ -546,6 +552,35 @@ fn audio_packet(sample: &AvSample) -> Option<AudioPacket> {
         samples_per_channel: sample.frames,
         pcm_planar_f32: pcm,
     })
+}
+
+fn split_audio_packet(packet: AudioPacket, max_frames: usize) -> Vec<AudioPacket> {
+    let frames = packet.samples_per_channel.max(0) as usize;
+    let channels = packet.channels.max(1) as usize;
+    let max_frames = max_frames.max(1);
+    if frames <= max_frames || packet.sample_rate <= 0 {
+        return vec![packet];
+    }
+    let hns_per_frame = 10_000_000i64 / i64::from(packet.sample_rate.max(1));
+    let mut out = Vec::with_capacity(frames.div_ceil(max_frames));
+    let mut start = 0usize;
+    while start < frames {
+        let count = max_frames.min(frames - start);
+        let mut pcm = Vec::with_capacity(count * channels);
+        for channel in 0..channels {
+            let base = channel * frames + start;
+            pcm.extend_from_slice(&packet.pcm_planar_f32[base..base + count]);
+        }
+        out.push(AudioPacket {
+            timestamp: packet.timestamp + start as i64 * hns_per_frame,
+            sample_rate: packet.sample_rate,
+            channels: packet.channels,
+            samples_per_channel: count as i32,
+            pcm_planar_f32: pcm,
+        });
+        start += count;
+    }
+    out
 }
 
 enum DecodedFrame {
