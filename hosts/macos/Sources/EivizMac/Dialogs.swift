@@ -646,40 +646,30 @@ struct SettingsView: View {
                         }
                         HStack(spacing: 8) {
                             Text(L10n.t("settings.audioDelay"))
-                            TextField(
-                                "",
+                            DraggableUIntField(
                                 value: $mixer.session.streamEncoders[index].audioDelayMs,
-                                format: .number
+                                step: 10
                             )
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 80)
+                            .frame(width: 92)
                             Text("ms")
                             Text(L10n.t("settings.keyframeInterval"))
-                            TextField(
-                                "",
-                                value: $mixer.session.streamEncoders[index].keyint,
-                                format: .number
+                            DraggableUIntField(
+                                value: $mixer.session.streamEncoders[index].keyint
                             )
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 64)
+                            .frame(width: 76)
                             Text(L10n.t("settings.encoderThreads"))
-                            TextField(
-                                "",
-                                value: $mixer.session.streamEncoders[index].encoderThreads,
-                                format: .number
+                            DraggableUIntField(
+                                value: $mixer.session.streamEncoders[index].encoderThreads
                             )
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 48)
+                            .frame(width: 64)
                         }
                         HStack(spacing: 8) {
                             Text(L10n.t("settings.sendBuffer"))
-                            TextField(
-                                "",
+                            DraggableUIntField(
                                 value: $mixer.session.streamEncoders[index].bufferMs,
-                                format: .number
+                                step: 10
                             )
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 64)
+                            .frame(width: 76)
                             Text("ms")
                             Picker(L10n.t("settings.complexity"), selection: $mixer.session.streamEncoders[index].complexity) {
                                 Text(L10n.t("settings.complexityLow")).tag(UInt32(0))
@@ -968,7 +958,7 @@ struct SettingsView: View {
                     Button(L10n.t("audio.refreshDevices")) { audioRefresh += 1 }
                         .controlSize(.small)
                 }
-                Text("Choose the headphone output device. Click the headphone icon on a Mixing Unit or Input meter to listen to it. None keeps the mix off the device.")
+                Text(L10n.t("settings.headphoneHelp"))
                     .foregroundStyle(EivizTheme.dim)
                     .fixedSize(horizontal: false, vertical: true)
                 headphoneRow
@@ -979,7 +969,7 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .id(audioRefresh)
+        .id("\(audioRefresh)-\(mixer.audioDevicesRevision)")
     }
 
     private func unitBusRow(_ index: Int) -> some View {
@@ -1331,6 +1321,9 @@ struct AddInputView: View {
             let channels = Int(audioDevices.first { $0.id == audioDeviceId }?.channels ?? 1)
             audioMapLeft = min(audioMapLeft, Int32(max(0, channels - 1)))
             audioMapRight = min(audioMapRight, Int32(max(0, channels - 1)))
+        }
+        .onChange(of: mixer.audioDevicesRevision) { _, _ in
+            refreshAudioDevices()
         }
         .onAppear {
             loadEditing()
@@ -1920,8 +1913,8 @@ struct MixingUnitView: View {
             labeled("Name") {
                 mixerTextField($unit.name, placeholder: "Name")
             }
-            labeled("Width") { mixerUintField($unit.width) }
-            labeled("Height") { mixerUintField($unit.height) }
+            labeled("Width") { DraggableUIntField(value: $unit.width, minimum: 16) }
+            labeled("Height") { DraggableUIntField(value: $unit.height, minimum: 16) }
             labeled("Frame rate") {
                 Picker("", selection: Binding(
                     get: { "\(unit.fpsNum)/\(unit.fpsDen)" },

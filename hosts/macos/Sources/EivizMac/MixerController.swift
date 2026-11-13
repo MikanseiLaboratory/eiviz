@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import CoreAudio
 import Combine
 import Darwin
 import EivizMixer
@@ -44,6 +45,8 @@ final class MixerController: ObservableObject {
     @Published var warnText = ""
     @Published var resourceText = ""
     @Published var peaks: [UInt64: (Float, Float)] = [:]
+    /// Bumped by the CoreAudio device listener so device pickers re-enumerate.
+    @Published var audioDevicesRevision = 0
     @Published var overlayOn: [UInt64: Bool] = [:]
     @Published var videoFraction: Double = 0
     @Published var videoPlaying = false
@@ -157,6 +160,46 @@ final class MixerController: ObservableObject {
         }
     }
 
+    private var audioDeviceAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDevices,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain
+    )
+    nonisolated(unsafe) private var audioDeviceListener: AudioObjectPropertyListenerBlock?
+
+    /// Re-enumerates audio devices when CoreAudio reports a hot-plug. The pickers
+    /// read `audioDevicesRevision`, so they refresh without reopening the sheet.
+    func startAudioDeviceMonitor() {
+        guard audioDeviceListener == nil else { return }
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.audioDevicesRevision &+= 1
+            }
+        }
+        let status = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &audioDeviceAddress,
+            DispatchQueue.main,
+            block
+        )
+        if status == noErr {
+            audioDeviceListener = block
+        } else {
+            HostLog.write("WARN", "audio device listener failed: \(status)")
+        }
+    }
+
+    func stopAudioDeviceMonitor() {
+        guard let block = audioDeviceListener else { return }
+        AudioObjectRemovePropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &audioDeviceAddress,
+            DispatchQueue.main,
+            block
+        )
+        audioDeviceListener = nil
+    }
+
     func boot() {
         guard !booted else { return }
         beginActivity()
@@ -181,6 +224,7 @@ final class MixerController: ObservableObject {
         applySession()
         bumpSurfaceEpoch()
         startTimers()
+        startAudioDeviceMonitor()
         booted = true
         applyVmixApi()
         publishSession()
@@ -735,6 +779,7 @@ final class MixerController: ObservableObject {
         remoteDiscoverTask = nil
         sessionSyncTimer?.invalidate()
         sessionSyncTimer = nil
+        stopAudioDeviceMonitor()
         overlayPersistTask?.cancel()
         overlayPersistTask = nil
         for task in inputPersistTasks.values {

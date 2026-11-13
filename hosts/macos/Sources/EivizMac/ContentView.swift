@@ -481,19 +481,35 @@ struct ContentView: View {
                     CatalogTabBar(input: true)
                     List(selection: $mixer.selectedInputId) {
                         ForEach(mixer.session.inputs.filter { mixer.inputFilter.matchesInput($0) }) { input in
-                            Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote))
-                                .tag(input.id)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
-                                .onTapGesture { mixer.selectedInputId = input.id }
-                                .contextMenu {
+                            HStack(spacing: 2) {
+                                Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Button {
+                                    mixer.moveInput(id: input.id, delta: -1)
+                                } label: {
+                                    Image(systemName: "chevron.up")
+                                        .font(.system(size: 9))
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(mixer.inputFilter != .all)
+                                .accessibilityLabel(L10n.t("input.moveUp"))
+                                Button {
+                                    mixer.moveInput(id: input.id, delta: 1)
+                                } label: {
+                                    Image(systemName: "chevron.down")
+                                        .font(.system(size: 9))
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(mixer.inputFilter != .all)
+                                .accessibilityLabel(L10n.t("input.moveDown"))
+                            }
+                            .tag(input.id)
+                            .contentShape(Rectangle())
+                            .contextMenu {
                                     Button(L10n.t("input.relinkFolder")) { mixer.relinkMedia() }
                                     Button(L10n.t("input.relinkFile")) { mixer.relinkInputFile(input) }
                                     Button(L10n.t("input.showInExplorer")) { mixer.showInputInFinder(input) }
                                 }
-                        }
-                        .onMove { offsets, destination in
-                            mixer.moveInputs(from: offsets, to: destination)
                         }
                     }
                     .scrollContentBackground(.hidden)

@@ -380,13 +380,18 @@ extension MixerController {
         }
     }
 
-    func moveInputs(from offsets: IndexSet, to destination: Int) {
-        guard inputFilter == .all else { return }
+    /// Moves one input by `delta` positions (the list's arrow controls). The drag
+    /// version could not reorder a macOS SwiftUI List without edit mode, so the
+    /// controls are explicit and keep the keyboard/automation path reliable.
+    func moveInput(id: UInt64, delta: Int) {
+        guard inputFilter == .all,
+              let index = session.inputs.firstIndex(where: { $0.id == id })
+        else { return }
+        let target = index + delta
+        guard session.inputs.indices.contains(target) else { return }
         let previous = session.inputs
-        var next = previous
-        next.move(fromOffsets: offsets, toOffset: destination)
-        session.inputs = next
-        let ids = next.map(\.id)
+        session.inputs.swapAt(index, target)
+        let ids = session.inputs.map(\.id)
         let applied = isRemote
             ? mutateRemote(MixerRemote.setInputOrder(ids))
             : mutateLocal(MixerRemote.setInputOrder(ids))
