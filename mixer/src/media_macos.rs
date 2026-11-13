@@ -63,6 +63,7 @@ unsafe extern "C" {
     fn eiviz_av_close(pump: *mut AvPump);
     fn eiviz_av_duration_hns(pump: *const AvPump) -> i64;
     fn eiviz_av_next(pump: *mut AvPump, out: *mut AvSample) -> i32;
+    fn eiviz_av_has_audio(pump: *mut AvPump) -> i32;
     fn eiviz_av_set_metal(pump: *mut AvPump, device: *mut std::ffi::c_void);
     fn CFRelease(value: *const std::ffi::c_void);
 }
@@ -153,6 +154,10 @@ impl NativePump {
             let pointer = objc2::rc::Retained::as_ptr(raw) as *mut std::ffi::c_void;
             unsafe { eiviz_av_set_metal(self.ptr, pointer) };
         }
+    }
+
+    fn has_audio(&self) -> bool {
+        unsafe { eiviz_av_has_audio(self.ptr) != 0 }
     }
 
     fn next(&mut self) -> Result<Option<AvSample>, bool> {
@@ -408,7 +413,11 @@ fn run_loop(
                 thread::sleep(Duration::from_millis(16));
                 continue;
             }
-            if !capture && prefetch.len() >= file_prefetch && !need_frame {
+            // A file with audio is throttled by the audio FIFO (40 ms) inside
+            // ingest_audio_clocked. Stopping at the video prefetch depth would leave
+            // the AAC packets behind the buffered frames and the FIFO would underrun.
+            let prefetch_limit = file_prefetch;
+            if !capture && !native.has_audio() && prefetch.len() >= prefetch_limit && !need_frame {
                 if let Some(front) = prefetch.front() {
                     let wait = pts_wait(front.pts(), clock_pts, clock_start);
                     if wait > Duration::ZERO && wait < Duration::from_secs(2) {

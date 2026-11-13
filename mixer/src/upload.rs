@@ -15,7 +15,7 @@ pub const AUDIO_RATE: i32 = 48_000;
 pub const AUDIO_FIFO_FRAMES: usize = AUDIO_RATE as usize / 12;
 const AUDIO_FIFO_HIGH_FRAMES: usize = AUDIO_FIFO_FRAMES * 4 / 5;
 /// Target source latency (~40 ms). File pumps must not ingest past this.
-pub const AUDIO_LIVE_FRAMES: usize = AUDIO_RATE as usize / 25;
+pub const AUDIO_LIVE_FRAMES: usize = AUDIO_RATE as usize / 16;
 const AUDIO_PRIME_FRAMES: usize = AUDIO_RATE as usize / 50;
 
 fn fifo_cond() -> &'static Condvar {

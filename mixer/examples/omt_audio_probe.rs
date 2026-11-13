@@ -62,6 +62,9 @@ fn main() {
                     if rms < 1e-5 {
                         silent += 1;
                     }
+                    if count < 40 {
+                        println!("frame {count} rms={rms:.6}");
+                    }
                 }
             }
             None => thread::sleep(Duration::from_millis(2)),

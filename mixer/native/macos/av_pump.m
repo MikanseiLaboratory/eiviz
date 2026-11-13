@@ -792,6 +792,14 @@ int eiviz_av_enum_captures(EivizAvCaptureInfo *out, uint32_t cap) {
     return (int)n;
 }
 
+int eiviz_av_has_audio(EivizAvPump *pump) {
+    if (!pump) {
+        return 0;
+    }
+    EivizAvPumpObj *owned = (__bridge EivizAvPumpObj *)pump;
+    return owned.audioOut != nil ? 1 : 0;
+}
+
 int eiviz_av_next(EivizAvPump *pump, EivizAvSample *out) {
     if (!pump || !out) {
         return EIVIZ_AV_ERR;
