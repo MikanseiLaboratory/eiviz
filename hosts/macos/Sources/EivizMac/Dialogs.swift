@@ -1315,6 +1315,15 @@ struct AddInputView: View {
                 refreshAudioDevices()
                 refreshAudioProcesses()
             }
+            if value == "UVC" {
+                // Cameras can appear after the sheet opened (USB plug, permission
+                // prompt). Reload when the operator switches to the category instead
+                // of showing the list captured at onAppear.
+                refreshUvc()
+            }
+            if value == "NDI®" {
+                refreshNdi()
+            }
         }
         .onChange(of: audioMode) { _, _ in
             refreshAudioDevices()

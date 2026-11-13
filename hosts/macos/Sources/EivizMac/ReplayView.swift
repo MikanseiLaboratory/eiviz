@@ -458,21 +458,20 @@ struct ReplayView: View {
             }
             HStack(spacing: 8) {
                 controlGroup {
+                    // One button, like the Windows deck: press to start, press again
+                    // (or while recording) to stop. A separate Stop next to it made
+                    // the same action need two different buttons.
                     Button {
-                        record(true)
+                        record(!isRecording)
                     } label: {
                         HStack(spacing: 7) {
                             Circle()
                                 .fill(isRecording ? Color.red : Color(red: 0.88, green: 0.32, blue: 0.32))
                                 .frame(width: 11, height: 11)
-                            Text(isRecording ? "REC" : L10n.t("replay.record"))
+                            Text(isRecording ? L10n.t("replay.stop") : L10n.t("replay.record"))
                         }
                     }
-                    .disabled(isRecording)
                     .frame(minWidth: 88, minHeight: 44)
-                    Button(L10n.t("replay.stop")) { record(false) }
-                        .disabled(!isRecording)
-                        .frame(minWidth: 66, minHeight: 44)
                     Button(L10n.t("replay.live")) { live() }
                         .keyboardShortcut("l", modifiers: [])
                         .frame(minWidth: 74, minHeight: 44)
@@ -1130,6 +1129,9 @@ struct ReplayView: View {
         if let latest = mixer.replayDocument, latest.json != loadedJson {
             document = latest
             loadedJson = latest.json
+            // A newly added angle needs its own monitor now; waiting for the next
+            // tick left the multiview tile black until the deck was reopened.
+            ensureAngleMonitors()
         }
         if channels.isEmpty {
             load()

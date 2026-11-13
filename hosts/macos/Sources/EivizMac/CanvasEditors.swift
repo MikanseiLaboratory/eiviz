@@ -306,6 +306,15 @@ struct SceneEditorView: View {
     }
 
     private func layerSourceId() -> UInt64 {
+        // Add Layer duplicates the source of the layer the operator selected, like
+        // the Windows editor. Falling back to the global input selection made every
+        // added layer use whatever input happened to be selected in the main window.
+        if let selectedLayer,
+           let layer = layers.first(where: { $0.id == selectedLayer }),
+           let input = mixer.session.inputs.first(where: { $0.id == layer.inputId }),
+           input.kind != .audio, input.kind != .replay {
+            return layer.inputId
+        }
         if let id = mixer.selectedInputId,
            let input = mixer.session.inputs.first(where: { $0.id == id }),
            input.kind != .audio, input.kind != .replay {

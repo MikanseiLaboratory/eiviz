@@ -29,6 +29,9 @@ struct ReplaySettingsView: View {
     @State private var capacityRunning = false
     /// Deck refresh interval, edited here but kept out of the live session until Apply.
     @State private var deckRefresh: UInt32 = 0
+    /// The document as last loaded/applied, so an external angle edit can be adopted
+    /// without reloading over the operator's unsaved fields on every tick.
+    @State private var loadedJson = ""
 
     var body: some View {
         // The settings are taller than the smallest window the view allows, so they scroll
@@ -266,6 +269,10 @@ struct ReplaySettingsView: View {
         }
         .frame(minWidth: 620, maxWidth: .infinity, minHeight: 520, maxHeight: .infinity)
         .onAppear { load() }
+        .onChange(of: mixer.replayDocument?.json) { _, latest in
+            guard let latest, latest != loadedJson else { return }
+            load()
+        }
     }
 
     private func numberField(_ key: String, _ value: Binding<String>, width: CGFloat) -> some View {
@@ -303,6 +310,7 @@ struct ReplaySettingsView: View {
             return
         }
         document = current
+        loadedJson = current.json
         storages = current.storages
         profile = current.profile
         segmentFrames = "\(current.segmentFrames)"
