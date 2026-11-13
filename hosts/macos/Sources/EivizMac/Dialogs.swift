@@ -1423,6 +1423,16 @@ struct AddInputView: View {
             Text("NDI is received on the CPU and uploaded for compose.")
                 .foregroundStyle(EivizTheme.dim)
         case "UVC":
+            if AVCaptureDevice.authorizationStatus(for: .video) != .authorized {
+                Text(L10n.t("video.permissionNeeded"))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button(L10n.t("video.openPrivacySettings")) {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
             Button("Refresh devices") { refreshUvc() }
             List(uvcList, id: \.id, selection: $selectedUvc) { device in
                 Text(device.name).tag(device.id)
