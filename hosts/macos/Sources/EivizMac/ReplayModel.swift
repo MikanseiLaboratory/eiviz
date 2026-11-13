@@ -152,7 +152,9 @@ struct ReplayAngleInfo: Identifiable, Hashable {
     var sceneId: UInt64
     /// Input this angle records when `source` is `Input`.
     var inputId: UInt64 = 0
-    /// Mixing unit whose program mix feeds this angle. Zero means silent.
+    /// `Silent`, `Unit`, or `Source` (the recorded source's own audio follows it).
+    var audio: String = "Silent"
+    /// Mixing unit whose program mix feeds this angle when `audio` is `Unit`.
     var audioUnitId: UInt64
     /// `Gpu` encodes from the scene texture; `Cpu` reads it back first.
     var encoder: String = "Gpu"
@@ -445,7 +447,8 @@ struct ReplayDocument {
                 source: object["source"]?.stringValue ?? "Scene",
                 sceneId: object["sceneId"]?.uint64Value ?? 0,
                 inputId: object["inputId"]?.uint64Value ?? 0,
-                        // Silence is the only other source, so an explicit unit id is what
+                audio: object["audio"]?.stringValue ?? "Silent",
+                // Silence is the only other source, so an explicit unit id is what
                 // matters.
                 audioUnitId: (object["audio"]?.stringValue ?? "Silent").caseInsensitiveCompare("Unit") == .orderedSame
                     ? (object["audioUnitId"]?.uint64Value ?? 0)
@@ -1155,8 +1158,12 @@ struct ReplayDocument {
                 "source": .string(angle.source),
                 "sceneId": .number(Double(sceneId)),
                 "inputId": .number(Double(inputId)),
-                "audio": .string(angle.audioUnitId == 0 ? "Silent" : "Unit"),
-                "audioUnitId": .number(Double(angle.audioUnitId)),
+                "audio": .string(
+                    angle.audio == "Unit" && angle.audioUnitId != 0
+                        ? "Unit"
+                        : angle.audio == "Source" ? "Source" : "Silent"
+                ),
+                "audioUnitId": .number(Double(angle.audio == "Unit" ? angle.audioUnitId : 0)),
                     "encoder": .string(angle.encoder),
             ])
         })

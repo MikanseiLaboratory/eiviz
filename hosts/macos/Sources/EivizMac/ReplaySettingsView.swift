@@ -192,10 +192,11 @@ struct ReplaySettingsView: View {
                                 }
                                 .width(110)
                                 TableColumn(L10n.t("replay.audio")) { $angle in
-                                    Picker("", selection: $angle.audioUnitId) {
-                                        Text(L10n.t("replay.audioSilent")).tag(UInt64(0))
+                                    Picker("", selection: audioChoice($angle)) {
+                                        Text(L10n.t("replay.audioSilent")).tag("Silent")
+                                        Text(L10n.t("replay.audioSource")).tag("Source")
                                         ForEach(mixer.session.units) { unit in
-                                            Text(unit.name).tag(unit.id)
+                                            Text(unit.name).tag("Unit:\(unit.id)")
                                         }
                                     }
                                     .labelsHidden()
@@ -302,6 +303,27 @@ struct ReplaySettingsView: View {
     private func sceneName(_ sceneId: UInt64) -> String {
         mixer.session.scenes.first { $0.id == sceneId }?.name
             ?? L10n.format("replay.sceneMissing", "\(sceneId)")
+    }
+
+    /// One picker drives both fields: `Source` leaves the unit id zero so the
+    /// recorder takes the angle source's own audio instead of a Mixing Unit bus.
+    private func audioChoice(_ angle: Binding<ReplayAngleInfo>) -> Binding<String> {
+        Binding(
+            get: {
+                angle.wrappedValue.audio == "Unit"
+                    ? "Unit:\(angle.wrappedValue.audioUnitId)"
+                    : (angle.wrappedValue.audio == "Source" ? "Source" : "Silent")
+            },
+            set: { value in
+                if value.hasPrefix("Unit:"), let id = UInt64(value.dropFirst(5)) {
+                    angle.wrappedValue.audio = "Unit"
+                    angle.wrappedValue.audioUnitId = id
+                } else {
+                    angle.wrappedValue.audio = value
+                    angle.wrappedValue.audioUnitId = 0
+                }
+            }
+        )
     }
 
     private func load() {
