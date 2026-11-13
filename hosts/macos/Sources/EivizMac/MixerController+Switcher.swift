@@ -380,6 +380,21 @@ extension MixerController {
         }
     }
 
+    func moveInputs(from offsets: IndexSet, to destination: Int) {
+        guard inputFilter == .all else { return }
+        let previous = session.inputs
+        var next = previous
+        next.move(fromOffsets: offsets, toOffset: destination)
+        session.inputs = next
+        let ids = next.map(\.id)
+        let applied = isRemote
+            ? mutateRemote(MixerRemote.setInputOrder(ids))
+            : mutateLocal(MixerRemote.setInputOrder(ids))
+        if !applied {
+            session.inputs = previous
+        }
+    }
+
     func addScene() {
         if isRemote {
             let scene = SceneEntry(id: session.nextSceneId, name: "Scene \(session.nextSceneId)")

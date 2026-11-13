@@ -479,17 +479,22 @@ struct ContentView: View {
                 VStack(alignment: .leading) {
                     Text("Inputs").fontWeight(.bold)
                     CatalogTabBar(input: true)
-                    List(mixer.session.inputs.filter { mixer.inputFilter.matchesInput($0) }, selection: $mixer.selectedInputId) { input in
-                        Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote))
-                            .tag(input.id)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                            .onTapGesture { mixer.selectedInputId = input.id }
-                            .contextMenu {
-                                Button(L10n.t("input.relinkFolder")) { mixer.relinkMedia() }
-                                Button(L10n.t("input.relinkFile")) { mixer.relinkInputFile(input) }
-                                Button(L10n.t("input.showInExplorer")) { mixer.showInputInFinder(input) }
-                            }
+                    List(selection: $mixer.selectedInputId) {
+                        ForEach(mixer.session.inputs.filter { mixer.inputFilter.matchesInput($0) }) { input in
+                            Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote))
+                                .tag(input.id)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                                .onTapGesture { mixer.selectedInputId = input.id }
+                                .contextMenu {
+                                    Button(L10n.t("input.relinkFolder")) { mixer.relinkMedia() }
+                                    Button(L10n.t("input.relinkFile")) { mixer.relinkInputFile(input) }
+                                    Button(L10n.t("input.showInExplorer")) { mixer.showInputInFinder(input) }
+                                }
+                        }
+                        .onMove { offsets, destination in
+                            mixer.moveInputs(from: offsets, to: destination)
+                        }
                     }
                     .scrollContentBackground(.hidden)
                     .background(EivizTheme.list)

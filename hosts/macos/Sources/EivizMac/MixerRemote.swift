@@ -157,6 +157,10 @@ enum MixerRemote {
         return encode(["kind": "upsertInput", "input": object])
     }
 
+    static func setInputOrder(_ ids: [UInt64]) -> String {
+        encode(["kind": "setInputOrder", "ids": ids.map { NSNumber(value: $0) }])
+    }
+
     static func deleteInput(_ id: UInt64) -> String {
         encode(["kind": "deleteInput", "id": NSNumber(value: id)])
     }

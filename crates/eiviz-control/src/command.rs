@@ -248,6 +248,11 @@ pub enum SessionMutation {
     DeleteInput {
         id: u64,
     },
+    /// Reorders the input list. `ids` must name every input exactly once; vMix
+    /// numbers and the host list follow this order.
+    SetInputOrder {
+        ids: Vec<u64>,
+    },
     UpsertScene {
         scene: Box<SceneDto>,
     },
@@ -390,6 +395,7 @@ impl SessionMutation {
         match self {
             Self::UpsertInput { .. } => "UpsertInput",
             Self::DeleteInput { .. } => "DeleteInput",
+            Self::SetInputOrder { .. } => "SetInputOrder",
             Self::UpsertScene { .. } => "UpsertScene",
             Self::DeleteScene { .. } => "DeleteScene",
             Self::SetSceneLayers { .. } => "SetSceneLayers",

@@ -43,6 +43,7 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             remove_input(document, id);
             Ok(())
         }
+        SessionMutation::SetInputOrder { ids } => set_input_order(document, ids),
         SessionMutation::UpsertScene { scene } => upsert_scene(document, *scene),
         SessionMutation::DeleteScene { id } => {
             if !document.scenes.iter().any(|item| item.id == id) {
@@ -504,6 +505,31 @@ fn delete_output(document: &mut Document, id: u64) -> ControlResult<()> {
     Ok(())
 }
 
+fn set_input_order(document: &mut Document, ids: Vec<u64>) -> ControlResult<()> {
+    if ids.len() != document.inputs.len() {
+        return Err(ControlError::invalid(
+            "input order must list every input exactly once",
+        ));
+    }
+    let mut by_id: std::collections::HashMap<u64, InputDto> = document
+        .inputs
+        .drain(..)
+        .map(|input| (input.id, input))
+        .collect();
+    let mut ordered = Vec::with_capacity(ids.len());
+    for id in ids {
+        let input = by_id
+            .remove(&id)
+            .ok_or_else(|| ControlError::invalid(format!("unknown or duplicate input {id}")))?;
+        ordered.push(input);
+    }
+    if !by_id.is_empty() {
+        return Err(ControlError::invalid("input order is missing an input"));
+    }
+    document.inputs = ordered;
+    Ok(())
+}
+
 /// Drops an input and every scene layer that referenced it.
 fn remove_input(document: &mut Document, id: u64) {
     document.inputs.retain(|item| item.id != id);
@@ -619,6 +645,45 @@ mod tests {
         );
         assert_eq!(added.switcher_scene_ids, vec![1]);
         assert_eq!(doc.next_unit_id, 3);
+    }
+
+    #[test]
+    fn set_input_order_reorders_and_rejects_bad_lists() {
+        let mut doc = bars();
+        let ids: Vec<u64> = doc.inputs.iter().map(|input| input.id).collect();
+        let mut reversed = ids.clone();
+        reversed.reverse();
+        apply(
+            &mut doc,
+            SessionMutation::SetInputOrder {
+                ids: reversed.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            doc.inputs.iter().map(|input| input.id).collect::<Vec<_>>(),
+            reversed
+        );
+        assert!(matches!(
+            apply(
+                &mut doc,
+                SessionMutation::SetInputOrder {
+                    ids: vec![ids[0], ids[0]]
+                }
+            )
+            .unwrap_err(),
+            ControlError::InvalidArgument { .. }
+        ));
+        assert!(matches!(
+            apply(
+                &mut doc,
+                SessionMutation::SetInputOrder {
+                    ids: vec![ids[0] + 999]
+                }
+            )
+            .unwrap_err(),
+            ControlError::InvalidArgument { .. }
+        ));
     }
 
     #[test]

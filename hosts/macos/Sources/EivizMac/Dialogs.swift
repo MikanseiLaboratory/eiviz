@@ -614,6 +614,47 @@ struct SettingsView: View {
                 if output.wrappedValue.transport == .rtmp {
                     mixerTextField(output.rtmpUrl, placeholder: L10n.t("settings.rtmpUrl"))
                     RtmpKeyEditor(output: output)
+                    if let index = mixer.session.streamEncoders.firstIndex(
+                        where: { $0.id == output.wrappedValue.streamEncoderId }
+                    ) {
+                        HStack(spacing: 8) {
+                            Text(L10n.t("settings.videoBitrate"))
+                            TextField(
+                                "",
+                                value: Binding(
+                                    get: { mixer.session.streamEncoders[index].videoBitrate / 1000 },
+                                    set: { mixer.session.streamEncoders[index].videoBitrate = max(100, $0) * 1000 }
+                                ),
+                                format: .number
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 80)
+                            Text("kbps")
+                            Text(L10n.t("settings.audioBitrate"))
+                            TextField(
+                                "",
+                                value: Binding(
+                                    get: { mixer.session.streamEncoders[index].audioBitrate / 1000 },
+                                    set: { mixer.session.streamEncoders[index].audioBitrate = max(32, $0) * 1000 }
+                                ),
+                                format: .number
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 64)
+                            Text("kbps")
+                        }
+                        HStack(spacing: 8) {
+                            Text(L10n.t("settings.audioDelay"))
+                            TextField(
+                                "",
+                                value: $mixer.session.streamEncoders[index].audioDelayMs,
+                                format: .number
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 80)
+                            Text("ms")
+                        }
+                    }
                 }
                 if output.wrappedValue.transport == .deckLink {
                     deckLinkOutputFields(output)
