@@ -100,6 +100,9 @@ extension MixerController {
         window.title = L10n.t("replay.windowTitle")
         window.identifier = NSUserInterfaceItemIdentifier("replay")
         window.contentViewController = host
+        // This is a deck, not another tab of the main window. macOS otherwise groups
+        // same-process windows into a tab bar.
+        window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
         window.appearance = NSApp.appearance
         window.backgroundColor = EivizTheme.nsBackground
@@ -149,6 +152,9 @@ extension MixerController {
         window.title = L10n.t("replay.setupTitle")
         window.identifier = NSUserInterfaceItemIdentifier("replay-setup")
         window.contentViewController = host
+        // This is a deck, not another tab of the main window. macOS otherwise groups
+        // same-process windows into a tab bar.
+        window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
         window.appearance = NSApp.appearance
         window.backgroundColor = EivizTheme.nsBackground

@@ -30,8 +30,6 @@ struct ReplayView: View {
     /// is taken, so this, not `inFrame`, decides whether Mark Out may run.
     @State private var markOpen = false
     @State private var stats: EivizReplayStats?
-    @State private var capacityText = ""
-    @State private var capacityRunning = false
     @State private var selectedEvent: UInt64?
     @State private var selectedClip: String?
     @State private var kind = "Cut"
@@ -124,14 +122,6 @@ struct ReplayView: View {
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(isRecording ? Color.red : EivizTheme.text)
             Spacer(minLength: 8)
-            Text(capacityLine)
-                .font(.system(size: 11))
-                .foregroundStyle(Color(white: 0.54))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: 200)
-                .layoutPriority(0)
-            Spacer(minLength: 8)
             HStack(spacing: 6) {
                 Text(L10n.t("replay.recordTc"))
                     .font(.system(size: 11))
@@ -148,13 +138,6 @@ struct ReplayView: View {
             Text(String(format: "%.2f fps", ReplayTime.rate(fps)))
                 .font(.system(size: 11))
                 .foregroundStyle(Color(white: 0.54))
-            Button(capacityRunning ? L10n.t("replay.capacityRunning") : L10n.t("replay.capacityRun")) {
-                runCapacity()
-            }
-            .disabled(capacityRunning)
-            .frame(minWidth: 130, minHeight: 30)
-            .help(capacityText.isEmpty ? L10n.t("replay.capacityIdle") : capacityText)
-            .layoutPriority(2)
             Button(L10n.t("replay.openSetup")) { mixer.openReplaySettings() }
                 .frame(minWidth: 130, minHeight: 30)
                 .layoutPriority(2)
@@ -189,51 +172,6 @@ struct ReplayView: View {
 
     private var displayPlayhead: UInt64 {
         scrubFrame.map { UInt64(max(0, $0.rounded())) } ?? playheadFrame
-    }
-
-    private func runCapacity() {
-        // A fresh Replay project has no drive yet. Measure into the default
-        // recording folder instead of making the operator add one first.
-        let path = mixer.replayDocument?.storages.map(\.path).first(where: { !$0.isEmpty })
-            ?? ReplayDocument.defaultStoragePath()
-        try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
-        let format = mixer.replayDocument?.formatValues
-            ?? ReplayFormatValues(
-                width: mixer.session.settings.defaultWidth,
-                height: mixer.session.settings.defaultHeight,
-                fpsNum: mixer.session.settings.masterFpsNum,
-                fpsDen: mixer.session.settings.masterFpsDen
-            )
-        capacityRunning = true
-        capacityText = L10n.t("replay.capacityRunning")
-        DispatchQueue.global(qos: .userInitiated).async {
-            let (capacity, error) = MixerFFI.replayCapacity(
-                path: path,
-                width: format.width,
-                height: format.height
-            )
-            DispatchQueue.main.async {
-                capacityRunning = false
-                guard let capacity else {
-                    capacityText = error.isEmpty ? L10n.t("replay.capacityFailed") : error
-                    return
-                }
-                capacityText = L10n.format(
-                    "replay.capacityResult",
-                    "\(capacity.anglesAt60)",
-                    "\(Int(capacity.encodeFps.rounded()))",
-                    "\(Int(capacity.diskWriteMbS.rounded()))"
-                )
-            }
-        }
-    }
-
-    private var capacityLine: String {
-        guard let snapshot = stats else { return "" }
-        let free = ByteCountFormatter.string(
-            fromByteCount: Int64(snapshot.free_bytes), countStyle: .file)
-        if snapshot.remaining_secs == UInt32.max { return free }
-        return "\(free) / \(ReplayTime.clock(snapshot.remaining_secs))"
     }
 
     private var deckPictures: some View {
@@ -436,7 +374,6 @@ struct ReplayView: View {
                 .accessibilityElement()
                 .accessibilityLabel(L10n.t("replay.waveformSeek"))
             HStack(spacing: 12) {
-                Spacer()
                 transportReadout(
                     L10n.t("replay.playhead"),
                     ReplayTime.timecode(displayPlayhead, fps),
@@ -456,6 +393,7 @@ struct ReplayView: View {
                 )
                 transportReadout(L10n.t("replay.duration"), markDuration)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 8) {
                 controlGroup {
                     // One button, like the Windows deck: press to start, press again
@@ -472,9 +410,21 @@ struct ReplayView: View {
                         }
                     }
                     .frame(minWidth: 88, minHeight: 44)
-                    Button(L10n.t("replay.live")) { live() }
-                        .keyboardShortcut("l", modifiers: [])
-                        .frame(minWidth: 74, minHeight: 44)
+                    Button { live() } label: {
+                        Text(L10n.t("replay.live"))
+                            .font(.system(size: 11, weight: transport.live ? .bold : .regular))
+                            .foregroundStyle(transport.live ? Color.white : Color(white: 0.65))
+                            .frame(width: 52, height: 52)
+                            .background(
+                                Circle().fill(transport.live
+                                    ? Color(red: 0.18, green: 0.49, blue: 0.20)
+                                    : Color(white: 0.16))
+                            )
+                            .overlay(Circle().stroke(Color(white: 0.35), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut("l", modifiers: [])
+                    .help(L10n.t("replay.jumpLiveHint"))
                     Button(L10n.t(transport.playing ? "replay.pause" : "replay.play")) { togglePlay() }
                         .keyboardShortcut(.space, modifiers: [])
                         .frame(minWidth: 84, minHeight: 44)
@@ -509,7 +459,6 @@ struct ReplayView: View {
                         .help(L10n.t("replay.markLastHint"))
                         .disabled(!isRecording)
                 }
-                Spacer(minLength: 8)
                 controlGroup {
                     Button("25%") { setSpeed(250) }.frame(width: 54, height: 44)
                     Button("50%") { setSpeed(500) }.frame(width: 54, height: 44)
@@ -1763,7 +1712,14 @@ struct ReplayView: View {
     }
 
     private func cue(_ clip: ReplayClipInfo) {
-        if !mixer.replayCue(channel: channel, clip: clip) {
+        if mixer.replayCue(channel: channel, clip: clip) {
+            // Cue once and stop on the first frame: the next Play starts the clip
+            // without another seek. This is the operator's "ready to play" state.
+            transport = .held
+            playingClipUid = clip.uid
+            settleUntil = Date().addingTimeInterval(1.0)
+            status = L10n.t("replay.cued")
+        } else {
             let detail = MixerFFI.lastErrorText()
             status = detail.isEmpty ? L10n.t("replay.cueRefused") : detail
         }

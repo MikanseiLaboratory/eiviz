@@ -270,9 +270,16 @@ struct ReplaySettingsView: View {
         }
         .frame(minWidth: 620, maxWidth: .infinity, minHeight: 520, maxHeight: .infinity)
         .onAppear { load() }
-        .onChange(of: mixer.replayDocument?.json) { _, latest in
-            guard let latest, latest != loadedJson else { return }
-            load()
+        .onChange(of: mixer.replayDocument?.json) {
+            guard let latest = mixer.replayDocument, latest.json != loadedJson else { return }
+            // Adopt a new/removed angle from the deck, but do not reload over a
+            // picker the operator is changing: a unit audio choice was reverting to
+            // Silent on the next document tick.
+            let remoteIds = Set(latest.angles.map(\.id))
+            let localIds = Set(angles.map(\.id))
+            if remoteIds != localIds {
+                load()
+            }
         }
     }
 

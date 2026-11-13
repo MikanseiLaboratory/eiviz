@@ -143,20 +143,59 @@ fn measure_encode(
     width: u32,
     height: u32,
 ) -> Result<f64, String> {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("eiviz-capacity-bench"),
-        size: wgpu::Extent3d {
-            width: width.max(16),
-            height: height.max(16),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
+    let w = width.max(16);
+    let h = height.max(16);
+    // A single still picture lets the codec predict almost everything away and
+    // reported 200+ fps for 1080p. The recorder sees motion, so measure a ring of
+    // different pictures instead: the setup uploads are outside the timed loop.
+    let bytes = w as usize * h as usize * 4;
+    let mut textures = Vec::with_capacity(8);
+    for index in 0..8u32 {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("eiviz-capacity-bench"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let mut data = vec![0u8; bytes];
+        let mut state = 0x9E37_79B9u32 ^ index.wrapping_mul(2_654_435_761);
+        for byte in data.iter_mut() {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            *byte = (state >> 24) as u8;
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w as u32 * 4),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        textures.push(texture);
+    }
     let mut codec = Codec::new(Config {
         width: width.max(16) as i32,
         height: height.max(16) as i32,
@@ -167,13 +206,13 @@ fn measure_encode(
     let mut packet = vec![0u8; 1024 * 1024];
     // One warm-up frame, so the first-frame cost does not drag the average down.
     codec
-        .encode_from_texture_opaque(device, queue, &texture)
+        .encode_from_texture_opaque(device, queue, &textures[0])
         .map_err(|error| format!("the encoder failed: {error}"))?;
     let _ = codec.save_to(&mut packet);
     let started = Instant::now();
-    for _ in 0..ENCODE_FRAMES {
+    for frame in 0..ENCODE_FRAMES {
         codec
-            .encode_from_texture_opaque(device, queue, &texture)
+            .encode_from_texture_opaque(device, queue, &textures[frame as usize % textures.len()])
             .map_err(|error| format!("the encoder failed: {error}"))?;
         loop {
             match codec.save_to(&mut packet) {

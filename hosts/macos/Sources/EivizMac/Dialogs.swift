@@ -1438,6 +1438,11 @@ struct AddInputView: View {
                 Text(device.name).tag(device.id)
             }
             .onChange(of: selectedUvc) { _, _ in refreshUvcModes() }
+            if uvcList.isEmpty {
+                Text(L10n.t("video.noDevices"))
+                    .foregroundStyle(EivizTheme.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text("Mode")
             Picker("", selection: $selectedMode) {
                 Text("Select mode").tag(Optional<CaptureMode>.none)
