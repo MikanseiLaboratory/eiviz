@@ -137,7 +137,7 @@ struct SettingsView: View {
                 Text("Performance").tag(1)
                 Text("Outputs").tag(2)
                 Text("Multiview").tag(3)
-                Text("Headphone").tag(4)
+                Text(L10n.t("settings.audio")).tag(4)
                 Text(L10n.t("settings.webApi")).tag(5)
                 Text(L10n.t("settings.license")).tag(7)
             }
@@ -912,12 +912,54 @@ struct SettingsView: View {
     }
 
     private var audio: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Choose the headphone output device. Click the headphone icon on a Mixing Unit or Input meter to listen to it. None keeps the mix off the device. Core Audio sends it to a device.")
-                .foregroundStyle(EivizTheme.dim)
-                .fixedSize(horizontal: false, vertical: true)
-            headphoneRow
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(L10n.t("settings.headphone")).fontWeight(.bold)
+                Text("Choose the headphone output device. Click the headphone icon on a Mixing Unit or Input meter to listen to it. None keeps the mix off the device.")
+                    .foregroundStyle(EivizTheme.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+                headphoneRow
+                Text(L10n.t("settings.audioBuses")).fontWeight(.bold).padding(.top, 8)
+                ForEach(mixer.session.units.indices, id: \.self) { index in
+                    unitBusRow(index)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func unitBusRow(_ index: Int) -> some View {
+        let unit = mixer.session.units[index]
+        let kind = unit.audio.deviceKind
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("MU \(unit.id)  \(unit.name)")
+                .font(.system(size: 12, weight: .semibold))
+            HStack(spacing: 6) {
+                Picker("", selection: $mixer.session.units[index].audio.deviceKind) {
+                    Text("None").tag(AudioDeviceKind.none)
+                    Text("Core Audio").tag(AudioDeviceKind.coreAudio)
+                }
+                .frame(width: 130)
+                if kind != .none {
+                    Picker("", selection: $mixer.session.units[index].audio.deviceId) {
+                        Text("Default").tag("")
+                        ForEach(devices(for: kind)) { device in
+                            Text("\(device.name)  (\(device.channels)ch)").tag(device.id)
+                        }
+                    }
+                    Text("L ch")
+                    mixerInt32Field($mixer.session.units[index].audio.mapLeft).frame(width: 44)
+                    Text("R ch")
+                    mixerInt32Field($mixer.session.units[index].audio.mapRight).frame(width: 44)
+                } else {
+                    Text(L10n.t("settings.audioBusNone"))
+                        .font(.system(size: 11))
+                        .foregroundStyle(EivizTheme.dim)
+                }
+            }
+        }
+        .padding(8)
+        .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
     }
 
     private var headphoneRow: some View {
