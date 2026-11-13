@@ -1269,8 +1269,13 @@ struct AddInputView: View {
                         .foregroundStyle(EivizTheme.dim)
                 }
                 TagCheckView(input: true, selected: $selectedTags)
-                form
-                Spacer()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        form
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(minHeight: 140)
                 HStack {
                     Spacer()
                     Button("OK") {
@@ -1298,7 +1303,7 @@ struct AddInputView: View {
                 }
             }
             .padding(16)
-            .frame(minWidth: 520, minHeight: 480)
+            .frame(minWidth: 520, minHeight: 480, maxHeight: 640)
         }
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
@@ -1575,10 +1580,21 @@ struct AddInputView: View {
     private func recentList(_ paths: [String], choose: @escaping (String) -> Void) -> some View {
         if !paths.isEmpty {
             Text(L10n.t("chrome.openRecent"))
-            List(paths, id: \.self) { path in
-                Button(URL(fileURLWithPath: path).lastPathComponent) { choose(path) }
+            // A List inside the form's ScrollView fights the outer scroll wheel.
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(paths, id: \.self) { path in
+                        Button(URL(fileURLWithPath: path).lastPathComponent) { choose(path) }
+                            .buttonStyle(.plain)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 2)
+                    }
+                }
             }
             .frame(height: 120)
+            .padding(4)
+            .background(EivizTheme.list)
+            .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
         }
     }
 
