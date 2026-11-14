@@ -186,7 +186,7 @@ pub fn lock_held<T>(name: &str, start: Instant, result: T) -> T {
 
 fn write(level: &str, message: &str) {
     let line = format!("{} {level} {message}\n", timestamp());
-    eprint!("{line}");
+    write_stderr(&line);
     let Ok(mut slot) = LOG.lock() else {
         return;
     };
@@ -197,6 +197,21 @@ fn write(level: &str, message: &str) {
         let _ = file.write_all(line.as_bytes());
         let _ = file.flush();
     }
+}
+
+/// Writes a diagnostic line to stderr without letting a closed or broken stream
+/// abort the mixer. `eprint!` panics when the write fails, and the panic hook logs
+/// through this same path: when the host launched the app with stderr redirected
+/// to a file it could not write (or the reader went away), the first `diag init`
+/// line panicked, the hook panicked again inside `write`, and the process aborted
+/// before it could boot.
+fn write_stderr(line: &str) {
+    write_stderr_to(std::io::stderr().lock(), line);
+}
+
+fn write_stderr_to(mut sink: impl Write, line: &str) {
+    let _ = sink.write_all(line.as_bytes());
+    let _ = sink.flush();
 }
 
 fn timestamp() -> u64 {
@@ -362,4 +377,27 @@ pub fn take_fatal() -> Option<String> {
         .ok()
         .map(|slot| slot.clone())
         .filter(|msg| !msg.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stderr whose reader has gone away: every write fails.
+    struct BrokenStderr;
+
+    impl Write for BrokenStderr {
+        fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"))
+        }
+    }
+
+    #[test]
+    fn a_broken_stderr_does_not_panic() {
+        write_stderr_to(BrokenStderr, "diag init\n");
+    }
 }
