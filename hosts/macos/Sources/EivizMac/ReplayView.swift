@@ -171,18 +171,47 @@ struct ReplayView: View {
         return max(1, min(8, interval))
     }
 
+    /// The whole recording, never the clip or event that happens to be on air: the bar
+    /// is the timeline the operator seeks on, so its scale must not shrink while the
+    /// channel is playing something shorter than the recording.
     private var seekRange: ClosedRange<Double> {
         if let angle = activeAngle,
            let range = mixer.replayAngleRange(angle.id),
            range.last > range.first {
-            let upper = max(range.last, playheadFrame, recordingHead)
-            return Double(range.first)...Double(max(1, upper))
+            let upper = ReplayDeckMath.seekUpper(
+                last: range.last,
+                playhead: playheadFrame,
+                recordingHead: recordingHead)
+            return Double(range.first)...Double(upper)
         }
-        return 0...Double(max(1, stats?.last_frame ?? 1, playheadFrame))
+        let upper = ReplayDeckMath.seekUpper(
+            last: stats?.last_frame ?? 1,
+            playhead: playheadFrame,
+            recordingHead: recordingHead)
+        return 0...Double(upper)
+    }
+
+    private var seekTotalFrame: UInt64 {
+        UInt64(max(0, seekRange.upperBound.rounded()))
     }
 
     private var displayPlayhead: UInt64 {
         scrubFrame.map { UInt64(max(0, $0.rounded())) } ?? playheadFrame
+    }
+
+    /// The bar follows the channel's own position, including while a clip or an event
+    /// plays. A seek holds the bar only until the engine reports that frame; after that
+    /// playback moves it at once instead of waiting out a timer.
+    private func syncPlayhead(reported: UInt64) {
+        guard let target = scrubFrame else {
+            playheadFrame = reported
+            return
+        }
+        guard !sliderEditing,
+              ReplayDeckMath.seekLanded(reported: reported, target: target)
+        else { return }
+        scrubFrame = nil
+        playheadFrame = reported
     }
 
     private var deckPictures: some View {
@@ -357,6 +386,9 @@ struct ReplayView: View {
                     // the engine's position own the bar again.
                     seekWhole(to: frame)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                        // A held thumb has not stopped being dragged just because it
+                        // stopped moving for a moment.
+                        guard !sliderEditing else { return }
                         if let current = scrubFrame, abs(current - target) < 0.5 {
                             scrubFrame = nil
                         }
@@ -371,11 +403,26 @@ struct ReplayView: View {
                     playheadFrame = frame
                     seekWhole(to: frame)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                        guard !sliderEditing else { return }
                         if let current = scrubFrame, abs(current - value) < 0.5 {
                             scrubFrame = nil
                         }
                     }
                 }
+                // The bar's two numbers: where the picture is now, and how long the
+                // whole recording is. Both stay the recording's scale while a shorter
+                // clip is on air.
+                HStack(spacing: 0) {
+                    Text(ReplayTime.timecode(displayPlayhead, fps))
+                        .foregroundStyle(Color(red: 0.49, green: 0.82, blue: 0.29))
+                    Text(" / ")
+                        .foregroundStyle(Color(white: 0.54))
+                    Text(ReplayTime.timecode(seekTotalFrame, fps))
+                        .foregroundStyle(Color(white: 0.69))
+                }
+                .font(.system(size: 11, design: .monospaced))
+                .fixedSize()
+                .help(L10n.t("replay.seekWholeHint"))
                 Button(L10n.t("replay.jumpLive")) { live() }
                     .frame(minWidth: 130, minHeight: 26)
                     .help(L10n.t("replay.jumpLiveHint"))
@@ -1123,25 +1170,26 @@ struct ReplayView: View {
         // A channel the deck has just started is left alone for a moment: the mixer takes a
         // frame or two to report the change, and reading it too soon put the button back to
         // "Play" over a feed that was already running, so the next press paused it.
-        if let settleUntil, Date() < settleUntil {
-            // Inside the grace period after Live or Play: the deck's own answer stands.
-        } else {
-            settleUntil = nil
-            if !mixer.isRemote,
-               let state = MixerFFI.replayChannels().first(where: { $0.channel_index == channel }) {
+        //
+        // Only the play state waits. The position is not a transport answer: freezing it
+        // for the grace period made the bar and its timecode sit still after every Play,
+        // then jump to where the picture already was, and the same during a clip.
+        if !mixer.isRemote,
+           let state = MixerFFI.replayChannels().first(where: { $0.channel_index == channel }) {
+            if let settleUntil, Date() < settleUntil {
+                // Inside the grace period after Live or Play: the deck's own answer stands.
+            } else {
+                settleUntil = nil
                 transport = ReplayTransportRules.adopt(transport, mixerPlaying: state.playing != 0)
-                if state.speed_milli > 0 {
-                    speedMilli = state.speed_milli
-                }
-                playingClipUid = clips.first {
-                    ReplayDeckMath.clipUidHash($0.uid) == state.clip_uid_hash
-                }?.uid
-                // Only the engine's own answer may move the bar once a drag is over.
-                if scrubFrame == nil {
-                    playheadFrame = state.position_frame
-                }
-                channelOutFrame = state.out_frame
             }
+            if state.speed_milli > 0 {
+                speedMilli = state.speed_milli
+            }
+            playingClipUid = clips.first {
+                ReplayDeckMath.clipUidHash($0.uid) == state.clip_uid_hash
+            }?.uid
+            channelOutFrame = state.out_frame
+            syncPlayhead(reported: state.position_frame)
         }
         refreshExport()
         // The peaks live with the recording, so a Remote has no waveform to draw.
@@ -1202,7 +1250,7 @@ struct ReplayView: View {
             let marks: [(UInt64?, Color, CGFloat)] = [
                 (inFrame, .yellow, 1),
                 (outFrame, .yellow, 1),
-                (playheadFrame, .red, 2),
+                (displayPlayhead, .red, 2),
             ]
             for (frame, color, width) in marks {
                 guard let frame, frame != 0, last > first else { continue }

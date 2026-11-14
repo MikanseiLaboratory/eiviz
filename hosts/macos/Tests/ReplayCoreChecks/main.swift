@@ -1,3 +1,4 @@
+import EivizMixer
 @testable import EivizMac
 import Foundation
 
@@ -106,6 +107,21 @@ let documentDeleted = MixerController.mergedInputs(
     document: [documentInputs[0]], local: [documentInputs[0], documentInputs[1]], pending: [])
 check("an input removed by the document is dropped", documentDeleted.inputs.map(\.id) == [1])
 
+// MARK: - Scene Editor Add Layer follows the Input picker
+
+let sceneEditorInputs = [
+    InputEntry(id: 1, name: "Camera", kind: .video),
+    InputEntry(id: 2, name: "Bars", kind: .bars),
+    InputEntry(id: 3, name: "Audio", kind: .audio),
+    InputEntry(id: 4, name: "Replay", kind: .replay),
+]
+check("add layer uses the picked input", SceneEditorView.layerSource(picked: 1, inputs: sceneEditorInputs) == 1)
+check("add layer accepts a replay input", SceneEditorView.layerSource(picked: 4, inputs: sceneEditorInputs) == 4)
+check("add layer rejects an audio pick", SceneEditorView.layerSource(picked: 3, inputs: sceneEditorInputs) == EIVIZ_SRC_BARS)
+check("add layer drops a stale pick", SceneEditorView.layerSource(picked: 99, inputs: sceneEditorInputs) == EIVIZ_SRC_BARS)
+check("add layer shows bars with no pick", SceneEditorView.layerSource(picked: nil, inputs: sceneEditorInputs) == EIVIZ_SRC_BARS)
+check("add layer falls back to bars with no inputs", SceneEditorView.layerSource(picked: nil, inputs: []) == EIVIZ_SRC_BARS)
+
 // MARK: - Deleting a playlist repairs the channels that named it
 
 var repointDoc = ReplayDocument.empty(format: format)
@@ -145,6 +161,17 @@ check("waveform end", ReplayDeckMath.waveformFrame(ratio: 1, bucketRate: 60, buc
 check("waveform dropped offset", ReplayDeckMath.waveformFrame(ratio: 0, bucketRate: 60, buckets: 60, dropped: 10, fps: 60) == 10)
 check("waveform clamps left", ReplayDeckMath.waveformFrame(ratio: -1, bucketRate: 60, buckets: 60, dropped: 0, fps: 60) == 0)
 check("waveform clamps right", ReplayDeckMath.waveformFrame(ratio: 2, bucketRate: 60, buckets: 60, dropped: 0, fps: 60) == 60)
+
+// MARK: - The seek bar spans the whole recording, and a seek owns it until it lands
+
+check("seek bar spans the whole recording", ReplayDeckMath.seekUpper(last: 200, playhead: 150, recordingHead: 0) == 200)
+check("seek bar grows with the recorder", ReplayDeckMath.seekUpper(last: 200, playhead: 150, recordingHead: 300) == 300)
+check("seek bar includes a clip past the last frame", ReplayDeckMath.seekUpper(last: 200, playhead: 250, recordingHead: 0) == 250)
+check("seek bar is never zero", ReplayDeckMath.seekUpper(last: 0, playhead: 0, recordingHead: 0) == 1)
+
+check("seek lands on the target", ReplayDeckMath.seekLanded(reported: 100, target: 100))
+check("seek lands within a frame", ReplayDeckMath.seekLanded(reported: 101, target: 100.4))
+check("seek has not landed", !ReplayDeckMath.seekLanded(reported: 110, target: 100))
 
 
 // MARK: - Export planning and JSON

@@ -81,7 +81,7 @@ struct SceneEditorView: View {
                 }
                 Button("Save preset") { savePreset() }
                 Picker("Input", selection: Binding(
-                    get: { mixer.selectedInputId ?? EIVIZ_SRC_BARS },
+                    get: { layerInput },
                     set: { mixer.selectedInputId = $0 }
                 )) {
                     ForEach(mixer.session.inputs.filter(\.kind.hasVideo)) { input in
@@ -294,7 +294,7 @@ struct SceneEditorView: View {
         // A selected id can outlive the session that contained it (New/Load, or a
         // failed add). A layer pointing at such an id draws nothing, so fall back to
         // an input that has a picture instead of recording a dead source.
-        let source = layerSourceId()
+        let source = layerInput
         mutate { scene in
             scene.assignLayerIds()
             let next = (scene.layers.map(\.layerId).max() ?? 0) + 1
@@ -306,25 +306,33 @@ struct SceneEditorView: View {
         push()
     }
 
-    private func layerSourceId() -> UInt64 {
-        // Add Layer duplicates the source of the layer the operator selected, like
-        // the Windows editor. Falling back to the global input selection made every
-        // added layer use whatever input happened to be selected in the main window.
-        if let selectedLayer,
-           let layer = layers.first(where: { $0.id == selectedLayer }),
-           let input = mixer.session.inputs.first(where: { $0.id == layer.inputId }),
-           input.kind != .audio, input.kind != .replay {
-            return layer.inputId
+    /// Source of the layer Add Layer creates.
+    ///
+    /// The Input picker above the button is the explicit choice, matching the
+    /// Windows editor's InputPick. The layer list selection only chooses the layer
+    /// to edit: preferring that layer's input made Add Layer ignore the picker and
+    /// duplicate whatever was already selected.
+    ///
+    /// A pick can outlive the session that contained it (New/Load, or a failed
+    /// add). A layer pointing at such an id draws nothing, so only ids that still
+    /// name a video input are accepted.
+    static func layerSource(picked: UInt64?, inputs: [InputEntry]) -> UInt64 {
+        if let picked, inputs.contains(where: { $0.id == picked && $0.kind.hasVideo }) {
+            return picked
         }
-        if let id = mixer.selectedInputId,
-           let input = mixer.session.inputs.first(where: { $0.id == id }),
-           input.kind != .audio, input.kind != .replay {
-            return id
+        // With nothing picked the editor shows bars, so Add Layer adds bars too.
+        if inputs.contains(where: { $0.id == EIVIZ_SRC_BARS && $0.kind.hasVideo }) {
+            return EIVIZ_SRC_BARS
         }
-        if let first = mixer.session.inputs.first(where: { $0.kind != .audio && $0.kind != .replay }) {
+        if let first = inputs.first(where: { $0.kind.hasVideo }) {
             return first.id
         }
         return EIVIZ_SRC_BARS
+    }
+
+    /// What the Input picker shows and what Add Layer adds.
+    private var layerInput: UInt64 {
+        Self.layerSource(picked: mixer.selectedInputId, inputs: mixer.session.inputs)
     }
 
     private func deleteLayer() {
