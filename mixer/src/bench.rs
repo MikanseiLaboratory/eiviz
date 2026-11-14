@@ -268,7 +268,16 @@ mod tests {
     #[test]
     #[ignore = "measures this machine; run with --ignored"]
     fn capacity_probe() {
-        let capacity = run("/tmp", 1920, 1080).expect("capacity");
+        let path = std::env::var("EIVIZ_CAPACITY_PATH").unwrap_or_else(|_| "/tmp".into());
+        let width = std::env::var("EIVIZ_CAPACITY_WIDTH")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1920);
+        let height = std::env::var("EIVIZ_CAPACITY_HEIGHT")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1080);
+        let capacity = run(&path, width, height).expect("capacity");
         println!("{}", capacity.to_json());
     }
 }
