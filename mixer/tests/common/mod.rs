@@ -36,6 +36,7 @@ pub fn adapter_is_software() -> bool {
     let software = name.contains("basic render")
         || name.contains("llvmpipe")
         || name.contains("swiftshader")
+        || name.contains("paravirtual")
         || matches!(info.device_type, wgpu::DeviceType::Cpu);
     software
 }
