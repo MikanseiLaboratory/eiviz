@@ -78,6 +78,10 @@ struct ReplayView: View {
     /// While the operator drags the bar the engine has not moved yet, so the drag value
     /// owns the bar until the seek lands.
     @State private var scrubFrame: Double?
+    /// When the current drag/keyboard seek started. A seek that the engine never
+    /// reports back (a clamped target, a dropped transport command) must not pin the
+    /// thumb forever; after this grace the engine's own position owns the bar again.
+    @State private var scrubSince: Date?
     @State private var sliderEditing = false
     /// The deck opens on the first recorded frame when the channel is idle. Set once
     /// per channel so a later tick does not undo an operator's seek.
@@ -100,6 +104,7 @@ struct ReplayView: View {
             // A different channel has its own playhead; carrying the last one over made
             // the slider and the readouts describe a channel that is no longer selected.
             scrubFrame = nil
+            scrubSince = nil
             playheadFrame = 0
             channelOutFrame = 0
             playingClipUid = nil
@@ -227,8 +232,10 @@ struct ReplayView: View {
         if let target = scrubFrame {
             let landed = ReplayDeckMath.seekLanded(reported: reported, target: target)
             let passed = Double(reported) > target + 1
-            guard landed || passed else { return }
+            let expired = scrubSince.map { Date().timeIntervalSince($0) > 0.8 } ?? true
+            guard landed || passed || expired else { return }
             scrubFrame = nil
+            scrubSince = nil
         }
         playheadFrame = reported
     }
@@ -393,7 +400,10 @@ struct ReplayView: View {
                 Slider(
                     value: Binding(
                         get: { scrubFrame ?? Double(playheadFrame) },
-                        set: { scrubFrame = $0 }
+                        set: {
+                            scrubFrame = $0
+                            scrubSince = Date()
+                        }
                     ),
                     in: seekRange
                 ) { editing in
@@ -419,6 +429,7 @@ struct ReplayView: View {
                 // end-of-drag callback never runs. Commit those changes here.
                 .onChange(of: scrubFrame) { _, value in
                     guard !sliderEditing, let value else { return }
+                    scrubSince = Date()
                     let frame = UInt64(max(0, value.rounded()))
                     playheadFrame = frame
                     seekWhole(to: frame, keepPlaying: transport.playing)
@@ -1391,6 +1402,7 @@ struct ReplayView: View {
             let detail = MixerFFI.lastErrorText()
             status = detail.isEmpty ? L10n.t("replay.seekRefused") : detail
             scrubFrame = nil
+            scrubSince = nil
         }
     }
 
@@ -1850,6 +1862,7 @@ struct ReplayView: View {
             // The mixer reports the same frame on the next tick; setting it here makes
             // the bar follow the click even before that tick arrives.
             scrubFrame = nil
+            scrubSince = nil
             playheadFrame = clip.inFrame
             settleUntil = Date().addingTimeInterval(1.0)
             status = L10n.t("replay.cued")
