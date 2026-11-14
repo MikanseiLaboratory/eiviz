@@ -5806,14 +5806,13 @@ unsafe fn mixer_session_import_ffi(
         report_session_error("import needs a session path and a media directory");
         return -ERR_INVALID_ARGUMENT;
     }
-    let document =
-        match session::import_exported_session(&export_path, &session_dest, &media_dir) {
-            Ok(document) => document,
-            Err(error) => {
-                report_session_error(error);
-                return -ERR_INVALID_ARGUMENT;
-            }
-        };
+    let document = match session::import_exported_session(&export_path, &session_dest, &media_dir) {
+        Ok(document) => document,
+        Err(error) => {
+            report_session_error(error);
+            return -ERR_INVALID_ARGUMENT;
+        }
+    };
     if let Err(problem) = crate::session_plan::check(&document) {
         report_session_error(problem);
         return -ERR_NOT_SUPPORTED_PLAN;
