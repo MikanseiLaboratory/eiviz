@@ -437,6 +437,11 @@ enum MixerFFI {
         mixer_replay_hold_last(channel, on ? 1 : 0)
     }
 
+    /// Keeps a scratch playback following the recording while it is still being written.
+    static func replayChase(channel: UInt32, on: Bool) -> Int32 {
+        mixer_replay_chase(channel, on ? 1 : 0)
+    }
+
     /// Per-channel live state, so the deck shows what the mixer is doing. Empty when the
     /// mixer reports nothing.
     static func replayChannels() -> [EivizReplayChannelState] {

@@ -429,6 +429,12 @@ extension MixerController {
         return MixerFFI.replayHoldLast(channel: channel, on: on) == 0
     }
 
+    /// Keeps a scratch playback following the recording as it is written.
+    func replayChase(channel: UInt32, on: Bool) -> Bool {
+        if isRemote { return false }
+        return MixerFFI.replayChase(channel: channel, on: on) == 0
+    }
+
     func replayStats() -> EivizReplayStats? {
         isRemote ? nil : MixerFFI.replayStats()
     }

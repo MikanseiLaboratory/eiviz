@@ -5052,6 +5052,22 @@ pub unsafe extern "C" fn mixer_replay_hold_last(channel: u32, on: u32) -> i32 {
     )
 }
 
+/// Keeps a scratch playback following the recording as it grows.
+///
+/// # Safety
+/// A plain C call: no pointers cross the boundary.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_chase(channel: u32, on: u32) -> i32 {
+    ffi_guard(
+        "mixer_replay_chase",
+        ERR_INVALID_ARGUMENT,
+        || match crate::replay::engine().set_chasing(channel, on != 0) {
+            Ok(()) => OK,
+            Err(code) => code,
+        },
+    )
+}
+
 /// Turns looping on or off for a replay channel's playlist.
 ///
 /// # Safety

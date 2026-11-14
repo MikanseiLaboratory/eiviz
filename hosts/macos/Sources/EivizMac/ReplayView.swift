@@ -23,6 +23,8 @@ struct ReplayView: View {
     @State private var looping = false
     /// Whether the last clip keeps running past its out point. Also the mixer's; mirrored.
     @State private var holdLast = false
+    /// A scratch playback is following the recording edge while the recorder runs.
+    @State private var chasing = false
     @State private var inFrame: UInt64?
     /// Marked out point. Kept so the operator can read back what was marked.
     @State private var outFrame: UInt64?
@@ -111,6 +113,7 @@ struct ReplayView: View {
             selectedClip = nil
             selectedEvent = nil
             didInitialSeek = false
+            chasing = false
             transport = .atEdge
         }
         // Clicking an event previews its first frame. The seek bar and the playhead
@@ -737,6 +740,17 @@ struct ReplayView: View {
 
     private var isRecording: Bool { stats?.state == 1 }
 
+    /// Turns chase playback on or off. Only a scratch playback from the seek bar
+    /// follows the recording; a playlist clip keeps its cut point. The mode is
+    /// meaningless once the recorder stops.
+    private func setChase(_ on: Bool) {
+        let want = on && isRecording
+        guard want != chasing else { return }
+        if mixer.replayChase(channel: channel, on: want) {
+            chasing = want
+        }
+    }
+
     /// Length of the mark, or a placeholder while it is incomplete.
     private var markDuration: String {
         guard let start = inFrame, let end = outFrame, end > start else { return "--:--:--:--" }
@@ -1233,6 +1247,11 @@ struct ReplayView: View {
                 }
             }
         }
+        // Chase only means something while the recorder is writing. When it stops,
+        // the scratch clip is left at the last written frame like any other clip.
+        if !isRecording, chasing {
+            setChase(false)
+        }
         refreshExport()
         // The peaks live with the recording, so a Remote has no waveform to draw.
         if !mixer.isRemote, let document, let angleId = watchAngle(document) {
@@ -1397,6 +1416,7 @@ struct ReplayView: View {
                 ? ReplayTransportState(live: false, playing: true)
                 : .held
             playheadFrame = frame
+            setChase(keepPlaying)
             settleUntil = Date().addingTimeInterval(0.4)
         } else {
             let detail = MixerFFI.lastErrorText()
@@ -1427,9 +1447,15 @@ struct ReplayView: View {
               let range = mixer.replayAngleRange(angle.id),
               range.last > range.first
         else { return }
+        // During recording the store and the range belong to the recording being
+        // written, not to the newest recording in the saved document. Naming the
+        // document's older recording made the cue fail and left the channel live.
+        let liveRecording = mixer.replayRecordingUuid()
         let recorded = document?.raw["recordings"]?.arrayValue?.last?
             .objectValue?["uuid"]?.stringValue ?? ""
-        let recording = recorded.isEmpty ? mixer.replayRecordingUuid() : recorded
+        let recording = isRecording && !liveRecording.isEmpty
+            ? liveRecording
+            : (recorded.isEmpty ? liveRecording : recorded)
         guard !recording.isEmpty else { return }
         let clip = ReplayClipInfo(
             uid: "seek-scrub",
@@ -1858,6 +1884,7 @@ struct ReplayView: View {
             // without another seek. This is the operator's "ready to play" state.
             transport = .held
             playingClipUid = clip.uid
+            setChase(false)
             channelOutFrame = clip.outFrame
             // The mixer reports the same frame on the next tick; setting it here makes
             // the bar follow the click even before that tick arrives.
@@ -1938,6 +1965,7 @@ struct ReplayView: View {
 
     private func live() {
         scrubFrame = nil
+        setChase(false)
         guard mixer.replayJumpToNow(channel: channel) else {
             status = L10n.t("replay.commandRefused")
             return
@@ -1985,6 +2013,7 @@ struct ReplayView: View {
     }
 
     private func pausePlaylist() {
+        setChase(false)
         if transport.live {
             seekHolding(to: ReplayDeckMath.liveHoldTarget(playhead: displayPlayhead, recordingHead: recordingHead), keepPlaying: false)
             return
@@ -2008,6 +2037,7 @@ struct ReplayView: View {
         // Pausing a live channel has to leave the edge; a live channel with playing=false
         // still follows the write head, so the picture would keep moving.
         if !action.playing && transport.live {
+            setChase(false)
             seekHolding(to: ReplayDeckMath.liveHoldTarget(playhead: displayPlayhead, recordingHead: recordingHead), keepPlaying: false)
             return
         }
@@ -2015,6 +2045,7 @@ struct ReplayView: View {
             channel: channel, playing: action.playing, speedMilli: speedMilli, seekFrame: -1)
         {
             transport = action.next
+            setChase(action.playing && !action.next.live && playingClipUid == nil)
             settleUntil = Date().addingTimeInterval(1.0)
         } else {
             // The channel never started, so the button must not say "Pause".
@@ -2047,6 +2078,7 @@ struct ReplayView: View {
 
     /// Leaves live follow when needed, seeks, and either holds or keeps playing.
     private func seekHolding(to frame: UInt64, keepPlaying: Bool) {
+        setChase(false)
         let target = ReplayDeckMath.clampedFrame(
             frame,
             range: UInt64(seekRange.lowerBound)...UInt64(seekRange.upperBound))

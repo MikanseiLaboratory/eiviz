@@ -546,6 +546,9 @@ int32_t mixer_replay_loop(uint32_t channel, uint32_t on);
 /* Keeps the last clip running into the recording past its out point, instead of stopping
    there. Not looping: the last clip is held and the timecode climbs through what followed. */
 int32_t mixer_replay_hold_last(uint32_t channel, uint32_t on);
+/* Keeps a scratch/whole-recording playback following newly recorded frames instead of
+   stopping at the out point it was cued with. Playlist clips keep their cut point. */
+int32_t mixer_replay_chase(uint32_t channel, uint32_t on);
 /* Per-channel live state, so a host shows what the mixer is doing rather than what it
    last asked for. Returns how many entries were written. */
 int32_t mixer_replay_copy_channels(EivizReplayChannelState *out, uint32_t cap);

@@ -1999,6 +1999,20 @@ impl ReplayEngine {
         Ok(())
     }
 
+    /// Keeps a scratch playback following the recording as it grows. Used by the
+    /// deck when playback starts from the seek bar while the recorder is still
+    /// writing; a playlist clip keeps its own cut point.
+    pub fn set_chasing(&self, channel: u32, on: bool) -> Result<(), i32> {
+        let mut inner = self.lock();
+        let slot = inner
+            .channels
+            .iter_mut()
+            .find(|slot| slot.index == channel)
+            .ok_or(ERR_INVALID_ARGUMENT)?;
+        slot.transport.set_chasing(on);
+        Ok(())
+    }
+
     /// Turns looping on or off for a channel's playlist.
     pub fn set_looping(&self, channel: u32, looping: bool) -> Result<(), i32> {
         let mut inner = self.lock();
