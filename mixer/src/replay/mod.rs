@@ -1988,7 +1988,13 @@ impl ReplayEngine {
         }
         if seek_frame >= 0 {
             let target = seek_frame as u64;
-            if slot.transport.source_frame() != target {
+            // An explicit seek leaves the edge even when the target happens to be the
+            // live frame: the operator moved the bar, so LIVE must not reclaim it on
+            // the next poll.
+            if slot.transport.source_frame() != target
+                || slot.transport.is_live()
+                || slot.transport.is_chasing()
+            {
                 slot.transport.seek_source(target);
                 changed = true;
             }
