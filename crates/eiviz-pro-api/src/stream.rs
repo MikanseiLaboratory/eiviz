@@ -4,6 +4,8 @@ use crate::media::{MediaOutput, OutputStats};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VideoEncoderKind {
     OpenH264,
+    /// Apple VideoToolbox. Only macOS builds can create this encoder.
+    VideoToolbox,
 }
 
 #[derive(Clone, Debug)]

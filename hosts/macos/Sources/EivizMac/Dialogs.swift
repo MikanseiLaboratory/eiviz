@@ -645,6 +645,16 @@ struct SettingsView: View {
                             Text("kbps")
                         }
                         HStack(spacing: 8) {
+                            Picker(L10n.t("settings.encoder"), selection: $mixer.session.streamEncoders[index].encoder) {
+                                Text("OpenH264").tag("OpenH264")
+                                Text("VideoToolbox").tag("VideoToolbox")
+                            }
+                            .frame(width: 190)
+                            Text(L10n.t("settings.encoderHelp"))
+                                .font(.caption)
+                                .foregroundStyle(EivizTheme.dim)
+                        }
+                        HStack(spacing: 8) {
                             Text(L10n.t("settings.audioDelay"))
                             DraggableUIntField(
                                 value: $mixer.session.streamEncoders[index].audioDelayMs,

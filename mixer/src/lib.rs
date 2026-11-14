@@ -4429,12 +4429,16 @@ fn stream_encoder_add_ffi(
         let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
         return ERR_IO;
     };
-    if encoder != 0 {
-        let message = "video encoder is not available";
-        crate::diag::error(&format!("stream encoder id={encoder_id}: {message}"));
-        let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
-        return ERR_INVALID_ARGUMENT;
-    }
+    let encoder_kind = match encoder {
+        0 => eiviz_pro_api::VideoEncoderKind::OpenH264,
+        1 => eiviz_pro_api::VideoEncoderKind::VideoToolbox,
+        _ => {
+            let message = "video encoder is not available";
+            crate::diag::error(&format!("stream encoder id={encoder_id}: {message}"));
+            let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
+            return ERR_INVALID_ARGUMENT;
+        }
+    };
     let started = backend.start_stream(&eiviz_pro_api::StreamEncodeConfig {
         video_bitrate: if video_bitrate == 0 {
             4_500_000
@@ -4446,7 +4450,7 @@ fn stream_encoder_add_ffi(
         height,
         fps_num,
         fps_den,
-        encoder: eiviz_pro_api::VideoEncoderKind::OpenH264,
+        encoder: encoder_kind,
         encoder_threads,
         buffer_ms,
         complexity,

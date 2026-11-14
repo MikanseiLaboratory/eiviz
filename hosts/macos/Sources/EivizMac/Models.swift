@@ -1240,7 +1240,7 @@ struct StreamEncoderEntry: Identifiable {
     var encoderThreads: UInt32 = 0
     /// Milliseconds to hold before the first send. Zero sends immediately.
     var bufferMs: UInt32 = 0
-    var encoder: String = "OpenH264"
+    var encoder: String = "VideoToolbox"
     var complexity: UInt32 = 0
     var refFrames: UInt32 = 1
     var cabac: Bool = false
