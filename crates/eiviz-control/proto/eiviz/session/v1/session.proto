@@ -659,6 +659,8 @@ message ReplayChannel {
   uint64 playlist_id = 2;
   bool has_playlist = 3;
   uint64 input_id = 4;
+  // 0 Auto, 1 GPU, 2 CPU.
+  uint32 decode_backend = 5;
 }
 
 enum MixSource {

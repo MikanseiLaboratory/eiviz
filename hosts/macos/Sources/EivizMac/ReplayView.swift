@@ -117,6 +117,17 @@ struct ReplayView: View {
             }
             .labelsHidden()
             .frame(width: 110, height: 30)
+            Picker("", selection: Binding(
+                get: { channelInfo?.decodeBackend ?? "Auto" },
+                set: { setDecodeBackend($0) }
+            )) {
+                Text(L10n.t("replay.decodeAuto")).tag("Auto")
+                Text(L10n.t("replay.decodeGpu")).tag("Gpu")
+                Text(L10n.t("replay.decodeCpu")).tag("Cpu")
+            }
+            .labelsHidden()
+            .frame(width: 92, height: 30)
+            .help(L10n.t("replay.decodeBackendHelp"))
             Divider().frame(height: 24)
             Text(stateText)
                 .font(.system(size: 14, weight: .bold))
@@ -570,6 +581,9 @@ struct ReplayView: View {
     }
 
     private var channels: [ReplayChannelInfo] { document?.channels ?? [] }
+    private var channelInfo: ReplayChannelInfo? {
+        channels.first(where: { $0.index == channel })
+    }
     private var angles: [ReplayAngleInfo] { document?.angles ?? [] }
     /// The playlist the selected channel plays. A project can hold several, and the
     /// channel is what points at one.
@@ -1618,6 +1632,12 @@ struct ReplayView: View {
     // MARK: - Playlist edits
 
     /// Points the channel at another playlist: that is what "which playlist" means.
+    private func setDecodeBackend(_ backend: String) {
+        guard var current = document else { return }
+        current.setChannelDecodeBackend(channelIndex: channel, backend: backend)
+        save(current)
+    }
+
     private func selectPlaylist(_ id: UInt64) {
         guard var current = document, id != 0 else { return }
         current.setChannelPlaylist(channelIndex: channel, playlistId: id)

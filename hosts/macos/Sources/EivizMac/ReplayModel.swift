@@ -97,6 +97,8 @@ struct ReplayChannelInfo: Identifiable, Hashable {
     let inputId: UInt64
     /// Playlist this channel plays, when it selects one.
     var playlistId: UInt64? = nil
+    /// Auto / Gpu / Cpu decoder choice for this channel.
+    var decodeBackend: String = "Auto"
 
     var id: UInt32 { index }
 
@@ -432,7 +434,8 @@ struct ReplayDocument {
                 return ReplayChannelInfo(
                     index: object["index"]?.uint32Value ?? 0,
                     inputId: object["inputId"]?.uint64Value ?? 0,
-                    playlistId: object["playlistId"]?.uint64Value
+                    playlistId: object["playlistId"]?.uint64Value,
+                    decodeBackend: object["decodeBackend"]?.stringValue ?? "Auto"
                 )
             }
             .sorted { $0.index < $1.index }
@@ -681,6 +684,21 @@ struct ReplayDocument {
             return angle.label
         }
         return angleId == 0 ? "-" : "\(angleId)"
+    }
+
+    /// Per-channel decoder choice. The mixer reads this when the channel decodes;
+    /// Auto falls back to the CPU path when the GPU decoder is unavailable.
+    mutating func setChannelDecodeBackend(channelIndex: UInt32, backend: String) {
+        var channels = array("channels")
+        for index in channels.indices {
+            guard var entry = channels[index].objectValue,
+                  (entry["index"]?.uint32Value ?? 0) == channelIndex
+            else { continue }
+            entry["decodeBackend"] = .string(backend)
+            channels[index] = .object(entry)
+            raw["channels"] = .array(channels)
+            return
+        }
     }
 
     mutating func setActiveAngle(_ id: UInt32) {

@@ -3418,7 +3418,15 @@ impl ChannelPlayout {
         // The cue tables come along with the transport: the cue that belongs to this tick's
         // source frame is decided in the same moment, and reading them separately meant
         // taking the same lock twice per channel per frame.
-        let (mut transport, transport_revision, revision, last_frame, playback_generation, cues) = {
+        let (
+            mut transport,
+            transport_revision,
+            revision,
+            last_frame,
+            playback_generation,
+            cues,
+            decode_backend,
+        ) = {
             let inner = engine.lock();
             let Some(slot) = inner.channels.iter().find(|slot| slot.index == index) else {
                 return;
@@ -3433,6 +3441,13 @@ impl ChannelPlayout {
                     inner.config.timeline_cues.clone(),
                     inner.config.playlists.clone(),
                 ),
+                inner
+                    .config
+                    .channels
+                    .iter()
+                    .find(|item| item.index == index)
+                    .map(|item| item.decode_backend)
+                    .unwrap_or_default(),
             )
         };
         let gpu = engine.gpu_device();
@@ -3510,10 +3525,14 @@ impl ChannelPlayout {
         // transition pass blends the two textures, where the CPU path would have
         // copied both frames back for a blend and an upload.
         let transitioning = wants_secondary(&plan);
-        if let Some((device, queue)) = gpu
-            .as_ref()
-            .filter(|_| engine.gpu_decode.load(Ordering::Relaxed))
-        {
+        let use_gpu = match decode_backend {
+            eiviz_control::session::replay::DecodeBackend::Gpu => true,
+            eiviz_control::session::replay::DecodeBackend::Cpu => false,
+            eiviz_control::session::replay::DecodeBackend::Auto => {
+                engine.gpu_decode.load(Ordering::Relaxed)
+            }
+        };
+        if let Some((device, queue)) = gpu.as_ref().filter(|_| use_gpu) {
             let decoder = &mut self.decoder;
             let ready = if decoder.has_codec() {
                 true
