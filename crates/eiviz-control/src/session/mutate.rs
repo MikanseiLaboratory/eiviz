@@ -43,6 +43,7 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             remove_input(document, id);
             Ok(())
         }
+        SessionMutation::SetInputOrder { ids } => set_input_order(document, ids),
         SessionMutation::UpsertScene { scene } => upsert_scene(document, *scene),
         SessionMutation::DeleteScene { id } => {
             if !document.scenes.iter().any(|item| item.id == id) {
@@ -102,6 +103,17 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             Ok(())
         }
         SessionMutation::UpsertOverlay { slot } => upsert_overlay(document, *slot),
+        SessionMutation::SetOverlays { slots } => {
+            let keep: std::collections::HashSet<u64> = slots.iter().map(|slot| slot.id).collect();
+            document.overlays = slots;
+            if let Some(max) = document.overlays.iter().map(|slot| slot.id).max() {
+                document.next_overlay_id = document.next_overlay_id.max(max.saturating_add(1));
+            }
+            for unit in &mut document.units {
+                unit.overlays_on_air.retain(|id| keep.contains(id));
+            }
+            Ok(())
+        }
         SessionMutation::DeleteOverlay { id } => {
             if !document.overlays.iter().any(|item| item.id == id) {
                 return Err(ControlError::not_found(format!("overlay {id}")));
@@ -181,6 +193,8 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
             Ok(())
         }
         SessionMutation::UpsertMultiview { layout } => upsert_multiview(document, *layout),
+        SessionMutation::UpsertOutput { output } => upsert_output(document, *output),
+        SessionMutation::DeleteOutput { id } => delete_output(document, id),
         SessionMutation::DeleteMultiview { id } => {
             if !document.multiviews.iter().any(|item| item.id == id) {
                 return Err(ControlError::not_found(format!("multiview {id}")));
@@ -447,6 +461,75 @@ fn upsert_multiview(document: &mut Document, layout: MultiviewDto) -> ControlRes
     Ok(())
 }
 
+fn upsert_output(
+    document: &mut Document,
+    mut output: crate::session::OutputDto,
+) -> ControlResult<()> {
+    if output.id == 0 {
+        output.id = document.next_output_id.max(1);
+    }
+    document.next_output_id = document.next_output_id.max(output.id.saturating_add(1));
+    if let Some(existing) = document
+        .outputs
+        .iter_mut()
+        .find(|item| item.id == output.id)
+    {
+        *existing = output;
+    } else {
+        document.outputs.push(output);
+    }
+    Ok(())
+}
+
+/// Removes an output and, when it was the last destination of a stream encoder,
+/// the encoder too: an encoder with no destination can never start and would keep
+/// a dead entry in every session file.
+fn delete_output(document: &mut Document, id: u64) -> ControlResult<()> {
+    let removed = document
+        .outputs
+        .iter()
+        .find(|item| item.id == id)
+        .cloned()
+        .ok_or_else(|| ControlError::not_found(format!("output {id}")))?;
+    document.outputs.retain(|item| item.id != id);
+    if removed.stream_encoder_id != 0
+        && !document
+            .outputs
+            .iter()
+            .any(|item| item.stream_encoder_id == removed.stream_encoder_id)
+    {
+        document
+            .stream_encoders
+            .retain(|encoder| encoder.id != removed.stream_encoder_id);
+    }
+    Ok(())
+}
+
+fn set_input_order(document: &mut Document, ids: Vec<u64>) -> ControlResult<()> {
+    if ids.len() != document.inputs.len() {
+        return Err(ControlError::invalid(
+            "input order must list every input exactly once",
+        ));
+    }
+    let mut by_id: std::collections::HashMap<u64, InputDto> = document
+        .inputs
+        .drain(..)
+        .map(|input| (input.id, input))
+        .collect();
+    let mut ordered = Vec::with_capacity(ids.len());
+    for id in ids {
+        let input = by_id
+            .remove(&id)
+            .ok_or_else(|| ControlError::invalid(format!("unknown or duplicate input {id}")))?;
+        ordered.push(input);
+    }
+    if !by_id.is_empty() {
+        return Err(ControlError::invalid("input order is missing an input"));
+    }
+    document.inputs = ordered;
+    Ok(())
+}
+
 /// Drops an input and every scene layer that referenced it.
 fn remove_input(document: &mut Document, id: u64) {
     document.inputs.retain(|item| item.id != id);
@@ -565,6 +648,45 @@ mod tests {
     }
 
     #[test]
+    fn set_input_order_reorders_and_rejects_bad_lists() {
+        let mut doc = bars();
+        let ids: Vec<u64> = doc.inputs.iter().map(|input| input.id).collect();
+        let mut reversed = ids.clone();
+        reversed.reverse();
+        apply(
+            &mut doc,
+            SessionMutation::SetInputOrder {
+                ids: reversed.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            doc.inputs.iter().map(|input| input.id).collect::<Vec<_>>(),
+            reversed
+        );
+        assert!(matches!(
+            apply(
+                &mut doc,
+                SessionMutation::SetInputOrder {
+                    ids: vec![ids[0], ids[0]]
+                }
+            )
+            .unwrap_err(),
+            ControlError::InvalidArgument { .. }
+        ));
+        assert!(matches!(
+            apply(
+                &mut doc,
+                SessionMutation::SetInputOrder {
+                    ids: vec![ids[0] + 999]
+                }
+            )
+            .unwrap_err(),
+            ControlError::InvalidArgument { .. }
+        ));
+    }
+
+    #[test]
     fn delete_missing_input_is_not_found() {
         let mut doc = bars();
         let err = apply(&mut doc, SessionMutation::DeleteInput { id: 99 }).unwrap_err();
@@ -601,6 +723,105 @@ mod tests {
         assert_eq!(doc.multiviews[0].name, "MV 1");
         apply(&mut doc, SessionMutation::DeleteMultiview { id: 1 }).unwrap();
         assert!(doc.multiviews.is_empty());
+    }
+
+    #[test]
+    fn set_overlays_replaces_the_list_and_clears_on_air_slots() {
+        let mut doc = bars();
+        let first: crate::session::OverlaySlot =
+            serde_json::from_str(r#"{"id": 1, "sourceKind": 0, "sceneGpuId": 65537, "x": 0.1}"#)
+                .expect("overlay slot");
+        let second: crate::session::OverlaySlot =
+            serde_json::from_str(r#"{"id": 2, "sourceKind": 0, "sceneGpuId": 65537, "x": 0.2}"#)
+                .expect("overlay slot");
+        apply(
+            &mut doc,
+            SessionMutation::SetOverlays {
+                slots: vec![first, second],
+            },
+        )
+        .unwrap();
+        assert_eq!(doc.overlays.len(), 2);
+        assert_eq!(doc.next_overlay_id, 3);
+        doc.units[0].overlays_on_air = vec![1, 2, 9];
+        apply(
+            &mut doc,
+            SessionMutation::SetOverlays {
+                slots: vec![
+                    serde_json::from_str(r#"{"id": 2, "sourceKind": 0, "sceneGpuId": 65537}"#)
+                        .unwrap(),
+                ],
+            },
+        )
+        .unwrap();
+        assert_eq!(doc.overlays.len(), 1);
+        assert_eq!(doc.units[0].overlays_on_air, vec![2]);
+    }
+
+    #[test]
+    fn upsert_output_adds_and_delete_removes() {
+        let mut doc = bars();
+        let mutation: SessionMutation = serde_json::from_str(
+            r#"{
+                "kind": "upsertOutput",
+                "output": {
+                    "id": 0,
+                    "name": "PGM 2",
+                    "transport": "Omt",
+                    "sourceKind": "MuProgram",
+                    "unitId": 1,
+                    "enabled": true
+                }
+            }"#,
+        )
+        .expect("upsertOutput JSON");
+        apply(&mut doc, mutation).unwrap();
+        let added = doc.outputs.last().expect("output");
+        assert_eq!(added.name, "PGM 2");
+        assert!(added.id > 0);
+        assert_eq!(doc.next_output_id, added.id + 1);
+        let id = added.id;
+        let replace: SessionMutation = serde_json::from_str(&format!(
+            r#"{{"kind":"upsertOutput","output":{{"id":{id},"name":"Renamed","transport":"Omt","unitId":1}}}}"#
+        ))
+        .expect("replace JSON");
+        apply(&mut doc, replace).unwrap();
+        assert_eq!(
+            doc.outputs.iter().find(|item| item.id == id).unwrap().name,
+            "Renamed"
+        );
+        apply(&mut doc, SessionMutation::DeleteOutput { id }).unwrap();
+        assert!(!doc.outputs.iter().any(|item| item.id == id));
+        assert!(matches!(
+            apply(&mut doc, SessionMutation::DeleteOutput { id }).unwrap_err(),
+            ControlError::NotFound { .. }
+        ));
+    }
+
+    #[test]
+    fn deleting_the_last_destination_drops_its_encoder() {
+        let mut doc = bars();
+        doc.stream_encoders
+            .push(serde_json::from_str(r#"{"id": 5}"#).expect("encoder"));
+        let mutation: SessionMutation = serde_json::from_str(
+            r#"{
+                "kind": "upsertOutput",
+                "output": {
+                    "id": 200,
+                    "name": "Stream",
+                    "transport": "Rtmp",
+                    "sourceKind": "MuProgram",
+                    "unitId": 1,
+                    "enabled": true,
+                    "streamEncoderId": 5
+                }
+            }"#,
+        )
+        .expect("rtmp output JSON");
+        apply(&mut doc, mutation).unwrap();
+        assert!(doc.stream_encoders.iter().any(|item| item.id == 5));
+        apply(&mut doc, SessionMutation::DeleteOutput { id: 200 }).unwrap();
+        assert!(!doc.stream_encoders.iter().any(|item| item.id == 5));
     }
 
     #[test]

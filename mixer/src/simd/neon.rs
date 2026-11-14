@@ -14,7 +14,169 @@ pub fn yuv422_to_bgra(
     uyvy: bool,
     dst: &mut [u8],
 ) {
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        yuv422_to_bgra_neon(src, width, height, stride, uyvy, dst);
+        return;
+    }
+    #[cfg(not(target_arch = "aarch64"))]
     scalar::yuv422_to_bgra(src, width, height, stride, uyvy, dst);
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn yuv422_to_bgra_neon(
+    src: &[u8],
+    width: u32,
+    height: u32,
+    stride: usize,
+    uyvy: bool,
+    dst: &mut [u8],
+) {
+    let w = (width as usize) & !1;
+    let h = height as usize;
+    let dst_stride = w * 4;
+    if w == 0
+        || h == 0
+        || src.len() < (h - 1) * stride + w * 2
+        || dst.len() < (h - 1) * dst_stride + w * 4
+    {
+        return;
+    }
+    for y in 0..h {
+        let s = y * stride;
+        let d = y * dst_stride;
+        let mut x = 0usize;
+        while x + 16 <= w && s + x * 2 + 32 <= src.len() && d + x * 4 + 64 <= dst.len() {
+            let p = vld4_u8(src.as_ptr().add(s + x * 2));
+            let (y0, cb, cr) = if uyvy {
+                (p.1, p.0, p.2)
+            } else {
+                (p.0, p.1, p.3)
+            };
+            let (y1, _, _) = if uyvy {
+                (p.3, p.0, p.2)
+            } else {
+                (p.2, p.1, p.3)
+            };
+            vst4_u8(
+                dst.as_mut_ptr().add(d + x * 4),
+                yuv8_to_bgra(y0, y1, cb, cr),
+            );
+
+            let (y0, cb, cr) = if uyvy {
+                (
+                    vext_u8::<4>(p.1, p.1),
+                    vext_u8::<4>(p.0, p.0),
+                    vext_u8::<4>(p.2, p.2),
+                )
+            } else {
+                (
+                    vext_u8::<4>(p.0, p.0),
+                    vext_u8::<4>(p.1, p.1),
+                    vext_u8::<4>(p.3, p.3),
+                )
+            };
+            let (y1, _, _) = if uyvy {
+                (
+                    vext_u8::<4>(p.3, p.3),
+                    vext_u8::<4>(p.0, p.0),
+                    vext_u8::<4>(p.2, p.2),
+                )
+            } else {
+                (
+                    vext_u8::<4>(p.2, p.2),
+                    vext_u8::<4>(p.1, p.1),
+                    vext_u8::<4>(p.3, p.3),
+                )
+            };
+            vst4_u8(
+                dst.as_mut_ptr().add(d + x * 4 + 32),
+                yuv8_to_bgra(y0, y1, cb, cr),
+            );
+            x += 16;
+        }
+        if x < w {
+            scalar::yuv422_to_bgra(
+                &src[s + x * 2..],
+                (w - x) as u32,
+                1,
+                (w - x) * 2,
+                uyvy,
+                &mut dst[d + x * 4..],
+            );
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline]
+unsafe fn yuv8_to_bgra(y0: uint8x8_t, y1: uint8x8_t, cb: uint8x8_t, cr: uint8x8_t) -> uint8x8x4_t {
+    let (b0, g0, r0) = yuv4_to_bgra(y0, cb, cr);
+    let (b1, g1, r1) = yuv4_to_bgra(y1, cb, cr);
+    uint8x8x4_t(
+        vzip1_u8(b0, b1),
+        vzip1_u8(g0, g1),
+        vzip1_u8(r0, r1),
+        vdup_n_u8(255),
+    )
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline]
+unsafe fn yuv4_to_bgra(
+    y: uint8x8_t,
+    cb: uint8x8_t,
+    cr: uint8x8_t,
+) -> (uint8x8_t, uint8x8_t, uint8x8_t) {
+    let zero = vdupq_n_f32(0.0);
+    let max = vdupq_n_f32(255.0);
+    let yv = vmulq_n_f32(
+        vsubq_f32(
+            vcvtq_f32_u32(vmovl_u16(vget_low_u16(vmovl_u8(y)))),
+            vdupq_n_f32(16.0),
+        ),
+        255.0 / 219.0,
+    );
+    let u = vmulq_n_f32(
+        vsubq_f32(
+            vcvtq_f32_u32(vmovl_u16(vget_low_u16(vmovl_u8(cb)))),
+            vdupq_n_f32(128.0),
+        ),
+        255.0 / 224.0,
+    );
+    let v = vmulq_n_f32(
+        vsubq_f32(
+            vcvtq_f32_u32(vmovl_u16(vget_low_u16(vmovl_u8(cr)))),
+            vdupq_n_f32(128.0),
+        ),
+        255.0 / 224.0,
+    );
+    let b = vminq_f32(vmaxq_f32(vaddq_f32(yv, vmulq_n_f32(u, 1.8556)), zero), max);
+    let g = vminq_f32(
+        vmaxq_f32(
+            vsubq_f32(
+                vsubq_f32(yv, vmulq_n_f32(u, 0.187324)),
+                vmulq_n_f32(v, 0.468124),
+            ),
+            zero,
+        ),
+        max,
+    );
+    let r = vminq_f32(vmaxq_f32(vaddq_f32(yv, vmulq_n_f32(v, 1.5748)), zero), max);
+    (
+        vmovn_u16(vcombine_u16(
+            vmovn_u32(vcvtq_u32_f32(b)),
+            vmovn_u32(vcvtq_u32_f32(b)),
+        )),
+        vmovn_u16(vcombine_u16(
+            vmovn_u32(vcvtq_u32_f32(g)),
+            vmovn_u32(vcvtq_u32_f32(g)),
+        )),
+        vmovn_u16(vcombine_u16(
+            vmovn_u32(vcvtq_u32_f32(r)),
+            vmovn_u32(vcvtq_u32_f32(r)),
+        )),
+    )
 }
 
 pub fn yuy2_to_uyvy(src: &[u8], width: u32, height: u32, stride: usize, dst: &mut [u8]) {

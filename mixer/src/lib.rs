@@ -35,6 +35,7 @@ mod native_ws;
 #[cfg(any(windows, target_os = "macos"))]
 mod ndi;
 mod omt;
+mod platform;
 mod pool;
 mod present;
 mod pro;
@@ -58,7 +59,7 @@ mod thumb;
 mod upload;
 #[cfg(any(windows, target_os = "linux"))]
 mod vk_upload;
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 mod vk_video;
 mod vmix_api;
 mod vmix_tcp;
@@ -1154,6 +1155,7 @@ pub(crate) fn start_mixer(
     let render = thread::Builder::new()
         .name("eiviz-render".into())
         .spawn(move || {
+            crate::platform::set_thread_qos(crate::platform::QOS_USER_INTERACTIVE);
             let panic_telemetry = Arc::clone(&render_telemetry);
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 render_loop(
@@ -3430,6 +3432,10 @@ unsafe fn mixer_video_start_ffi(
             Ok(uploads) => uploads,
             Err(code) => return code,
         };
+        let gpu_device = match with_mixer(|mixer| mixer.surface_gpu.device.clone()) {
+            Ok(device) => device,
+            Err(code) => return code,
+        };
         return match VideoPump::start(
             id,
             path,
@@ -3440,6 +3446,7 @@ unsafe fn mixer_video_start_ffi(
             fps_den,
             uploads,
             depth,
+            Some(gpu_device),
         ) {
             Ok(pump) => insert_video(id, pump),
             Err(error) => report_io(error),
@@ -4894,13 +4901,11 @@ pub unsafe extern "C" fn mixer_bench_capacity(
         match crate::bench::run(path, width, height) {
             Ok(capacity) => {
                 let json = capacity.to_json();
-                let result = write_bytes(out, cap, json.as_bytes());
-                if result >= 0 {
-                    *written = result as usize;
-                    OK
-                } else {
-                    result
-                }
+                // `written` is the size the caller needs even when the buffer was too
+                // small: the header promises a retry with that size, and returning the
+                // error without it left the host guessing.
+                *written = json.len();
+                write_bytes(out, cap, json.as_bytes())
             }
             Err(error) => {
                 crate::diag::error(&format!("capacity bench failed: {error}"));
@@ -5800,6 +5805,43 @@ unsafe fn mixer_session_import_ffi(
     }
 }
 
+/// Revision of the session the control API (vMix HTTP, eivizctl) mutates.
+///
+/// The host keeps its own copy of the document for the UI. Without a revision the host
+/// cannot tell an external edit from its own, so marks and clips made through the API never
+/// reached the deck.
+#[unsafe(no_mangle)]
+pub extern "C" fn mixer_session_revision() -> u64 {
+    crate::control_service()
+        .lock()
+        .map(|svc| svc.revision())
+        .unwrap_or(0)
+}
+
+/// Copies the control session's canonical document as JSON. The caller retries with a
+/// larger buffer when the return value is negative.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_copy_json(out: *mut u8, cap: usize) -> i32 {
+    ffi_guard("mixer_session_copy_json", -1, || unsafe {
+        mixer_session_copy_json_ffi(out, cap)
+    })
+}
+
+unsafe fn mixer_session_copy_json_ffi(out: *mut u8, cap: usize) -> i32 {
+    if out.is_null() || cap == 0 {
+        return -ERR_INVALID_ARGUMENT;
+    }
+    let json = crate::control_service()
+        .lock()
+        .ok()
+        .and_then(|svc| {
+            svc.document()
+                .and_then(|document| serde_json::to_string(document).ok())
+        })
+        .unwrap_or_default();
+    copy_bytes(json.as_bytes(), out, cap)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_session_current_path(out: *mut u8, cap: usize) -> i32 {
     ffi_guard("mixer_session_current_path", -1, || unsafe {
@@ -6068,6 +6110,19 @@ unsafe fn mixer_session_mutate_ffi(json: *const u8, len: usize) -> i32 {
     }
     let bytes = unsafe { std::slice::from_raw_parts(json, len) };
     crate::runtime::mutate_session_bytes(bytes)
+}
+
+/// Adds an input whose source the caller already started. The document is updated
+/// and published; no reconcile runs, so a UVC/video source is not restarted.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_register_input(json: *const u8, len: usize) -> i32 {
+    ffi_guard("mixer_session_register_input", ERR_DEVICE, || unsafe {
+        if json.is_null() || len == 0 {
+            return ERR_INVALID_ARGUMENT;
+        }
+        let bytes = std::slice::from_raw_parts(json, len);
+        crate::runtime::register_input_bytes(bytes)
+    })
 }
 
 #[unsafe(no_mangle)]

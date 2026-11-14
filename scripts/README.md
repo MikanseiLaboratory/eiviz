@@ -58,11 +58,17 @@ B で再生して独立していることを確かめる。
 .\scripts\replay-export-mode.ps1 -ModeIndex 1 -Path "D:\replay\test1\export.mp4"
 ```
 
-## check-rustfmt.py / check-session-dto.py
+## check-rustfmt.py / check-session-dto.py / check-abi.py
 
 CI と同じ検査を手元で回す。
 
 ```powershell
 python scripts/check-rustfmt.py
 python scripts/check-session-dto.py
+python scripts/check-abi.py
 ```
+
+`check-abi.py` は Rust の export、macOS の `eiviz_mixer.h`、Windows の
+`MixerNative.cs` を突き合わせる。macOS ヘッダーにない export は
+`MACOS_UNUSED` に理由付きで載せてあり、新しい export を足したときに
+ヘッダー更新を忘れると CI が落ちる。

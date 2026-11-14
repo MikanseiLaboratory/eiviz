@@ -598,6 +598,13 @@ int32_t mixer_take_fatal(uint8_t *out, size_t cap);
 int32_t mixer_session_load(const char *path, uint8_t *out, size_t cap);
 int32_t mixer_session_has_assets(const char *path);
 int32_t mixer_session_import(const char *export_path, const char *session_dest, const char *media_dir, uint8_t *out, size_t cap);
+/// Revision of the control session, so the host can notice external edits.
+uint64_t mixer_session_revision(void);
+
+/// Copies the control session document as JSON. Returns the byte count, or -1 when
+/// the buffer is too small.
+int32_t mixer_session_copy_json(uint8_t *out, size_t cap);
+
 int32_t mixer_session_current_path(uint8_t *out, size_t cap);
 int32_t mixer_session_save(const char *path, const uint8_t *json, size_t len);
 int32_t mixer_session_export(const char *path, const uint8_t *json, size_t len);
@@ -610,6 +617,9 @@ int32_t mixer_session_replace(const uint8_t *json, size_t len, uint64_t expected
 /* Applies one session mutation (`{"kind": "..."}`). The core applies it to the live
    document, so an edit another window made in the meantime is kept. */
 int32_t mixer_session_mutate(const uint8_t *json, size_t len);
+/* Adds an input whose source the host already started. The document is updated and
+   published without reconciling, so capture devices are not restarted. */
+int32_t mixer_session_register_input(const uint8_t *json, size_t len);
 int32_t mixer_poll_events(uint64_t after, uint8_t *out, size_t cap);
 int32_t mixer_api_configure(uint32_t enabled, uint32_t port, const char *user, const char *pass);
 int32_t mixer_api_listen_owner(uint8_t *out, size_t cap);
@@ -633,6 +643,37 @@ int32_t mixer_audio_enum_devices(uint32_t kind, EivizAudioDeviceInfo *out, uint3
 int32_t mixer_audio_device_channels(uint32_t kind, const char *device_id);
 int32_t mixer_audio_device_io_channels(uint32_t kind, const char *device_id, int32_t *inputs, int32_t *outputs);
 int32_t mixer_audio_process_list(uint8_t *out, size_t cap);
+
+// Measures the replay encoder and the target drive, and writes the capacity as
+// JSON. Returns EIVIZ_ERR_BUFFER_TOO_SMALL when `cap` is too small; `written` still
+// receives the size the caller needs, so it can retry with that buffer.
+int32_t mixer_bench_capacity(
+    const uint8_t *path,
+    size_t path_len,
+    uint32_t width,
+    uint32_t height,
+    uint8_t *out,
+    size_t cap,
+    size_t *written);
+// Stream encoder API. RTMP is not an Output; it is an encoder plus destinations.
+int32_t mixer_stream_encoder_add(
+    uint64_t encoder_id, uint32_t source_kind, uint64_t source_id, uint64_t unit_id,
+    uint64_t audio_unit_id, uint32_t width, uint32_t height, uint32_t fps_num,
+    uint32_t fps_den, uint32_t video_bitrate, uint32_t audio_bitrate, uint32_t keyint,
+    uint32_t video_only, uint32_t encoder_threads, uint32_t buffer_ms, uint32_t encoder,
+    uint32_t complexity, uint32_t ref_frames, uint32_t cabac, uint32_t deblock,
+    uint32_t background_detection, uint32_t adaptive_quant, uint32_t scene_change,
+    uint32_t audio_delay_ms);
+int32_t mixer_stream_encoder_remove(uint64_t encoder_id);
+int32_t mixer_stream_destination_add(
+    uint64_t encoder_id, uint64_t destination_id, const char *url, const char *secret_ref);
+int32_t mixer_stream_destination_remove(uint64_t encoder_id, uint64_t destination_id);
+int32_t mixer_stream_destination_stats(
+    uint64_t encoder_id, uint64_t destination_id, uint32_t *connected,
+    uint64_t *video_frames, uint64_t *dropped, uint32_t *bitrate,
+    uint32_t *encoder_threads, uint32_t *media_lag_ms, uint32_t *sent_fps_milli,
+    uint8_t *message, size_t message_cap);
+
 int32_t mixer_audio_capture_start(uint64_t id, uint32_t kind, const char *device_id, uint32_t mode, int32_t map_left, int32_t map_right, const char *process_exe, const char *process_aumid);
 int32_t mixer_audio_capture_stop(uint64_t id);
 

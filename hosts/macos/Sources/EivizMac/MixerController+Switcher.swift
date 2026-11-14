@@ -16,6 +16,14 @@ extension MixerController {
         updateStatus()
     }
 
+    /// Cut/Fade changes the unit's program/preview scene but the control document
+    /// keeps the buses it had. Send the unit so eivizctl/remote and the saved
+    /// document see the same picture the operator just took.
+    private func persistLiveBuses(_ unitId: UInt64) {
+        guard !isRemote, let unit = session.units.first(where: { $0.id == unitId }) else { return }
+        _ = mutateLocal(MixerRemote.upsertUnit(unit))
+    }
+
     private func fireAuto(_ preset: TransitionPreset, unit: MixingUnitEntry, reason: String) {
         var curve = EivizCurve(
             kind: preset.easing,
@@ -86,6 +94,7 @@ extension MixerController {
         }
         fail(mixer_unit_cut(unit.id, preset.swap ? 1 : 0, EIVIZ_INCOMING_PREVIEW), "CUT")
         syncUnitBuses(unit.id)
+        persistLiveBuses(unit.id)
     }
 
     func auto() {
@@ -97,6 +106,7 @@ extension MixerController {
         fireAuto(preset, unit: selectedUnit, reason: "AUTO")
         tbarLocked = false
         syncUnitBuses(selectedUnit.id)
+        persistLiveBuses(selectedUnit.id)
     }
 
     func firePreset(_ preset: TransitionPreset, index: Int) {
@@ -118,6 +128,7 @@ extension MixerController {
         }
         if !isRemote {
             syncUnitBuses(unit.id)
+            persistLiveBuses(unit.id)
         }
     }
 
@@ -275,6 +286,7 @@ extension MixerController {
             return
         }
         var entry = input
+        var isNew = false
         if let id = replacing, let index = session.inputs.firstIndex(where: { $0.id == id }) {
             if !session.inputs[index].isBuiltin {
                 _ = mixer_destroy_source(id)
@@ -285,6 +297,7 @@ extension MixerController {
             }
             session.inputs[index] = entry
         } else {
+            isNew = true
             // A Replay channel owns a reserved id and brings the replay document
             // with it; it never takes a normal input id.
             if entry.kind == .replay {
@@ -297,6 +310,7 @@ extension MixerController {
                 session.nextInputId += 1
             }
             session.inputs.append(entry)
+            pendingInputAdds.insert(entry.id)
         }
         attach(entry)
         selectedInputId = entry.id
@@ -304,6 +318,20 @@ extension MixerController {
         // adding the input publishes straight away instead of at the first edit.
         if entry.kind == .replay {
             publishSession()
+        } else if isNew {
+            // The host just started the source (capture device, decoder, generator).
+            // Registering the input updates the document without reconciling it,
+            // because a reconcile would start the same source again and restart UVC.
+            if MixerFFI.registerInput(entry) == EIVIZ_OK {
+                pendingInputAdds.remove(entry.id)
+            } else if mutateLocal(MixerRemote.upsertInput(entry)) {
+                // The document was not ready for a direct registration; fall back to
+                // the reconciling path (it restarts the source, but stays correct).
+                pendingInputAdds.remove(entry.id)
+            }
+        } else if mutateLocal(MixerRemote.upsertInput(entry)) {
+            // An edit changed the source config, so it has to be applied again.
+            pendingInputAdds.remove(entry.id)
         }
         objectWillChange.send()
     }
@@ -322,6 +350,9 @@ extension MixerController {
             }
             return
         }
+        let kind = session.inputs[index].kind
+        let lastReplay = kind == .replay && isLastReplayChannel(inputId: id)
+        let wasPending = pendingInputAdds.remove(id) != nil
         closeInputPreview(id)
         closeAudioInput(id)
         videoRoles.removeValue(forKey: id)
@@ -336,6 +367,37 @@ extension MixerController {
         }
         selectedInputId = nil
         pushOverlays()
+        // Same rule as adding: the document has to learn about the removal, or a
+        // client reading it still sees an input the mixer no longer owns. An input
+        // the document never accepted (still pending) has nothing to remove, and the
+        // last Replay channel has to go through DeleteReplay or the core refuses.
+        if !wasPending {
+            if kind == .replay {
+                _ = mutateLocal(lastReplay ? MixerRemote.deleteReplay() : MixerRemote.deleteInput(id))
+            } else {
+                _ = mutateLocal(MixerRemote.deleteInput(id))
+            }
+        }
+    }
+
+    /// Moves one input by `delta` positions (the list's arrow controls). The drag
+    /// version could not reorder a macOS SwiftUI List without edit mode, so the
+    /// controls are explicit and keep the keyboard/automation path reliable.
+    func moveInput(id: UInt64, delta: Int) {
+        guard inputFilter == .all,
+              let index = session.inputs.firstIndex(where: { $0.id == id })
+        else { return }
+        let target = index + delta
+        guard session.inputs.indices.contains(target) else { return }
+        let previous = session.inputs
+        session.inputs.swapAt(index, target)
+        let ids = session.inputs.map(\.id)
+        let applied = isRemote
+            ? mutateRemote(MixerRemote.setInputOrder(ids))
+            : mutateLocal(MixerRemote.setInputOrder(ids))
+        if !applied {
+            session.inputs = previous
+        }
     }
 
     func addScene() {
@@ -347,6 +409,7 @@ extension MixerController {
         let scene = session.addScene(name: "Scene \(session.nextSceneId)", input: nil)
         pushScene(scene)
         previewScene(scene)
+        _ = mutateLocal(MixerRemote.upsertScene(scene))
     }
 
     func removeScene() {
@@ -384,6 +447,7 @@ extension MixerController {
         if let next = session.scenes.first {
             previewScene(next)
         }
+        _ = mutateLocal(MixerRemote.deleteScene(scene.id))
     }
 
     func cutScene(_ scene: SceneEntry) {
@@ -401,6 +465,7 @@ extension MixerController {
         } else {
             _ = mixer_video_set_loop(video.id, session.inputs[index].videoLoop ? 1 : 0)
         }
+        scheduleInputPersist(session.inputs[index])
         objectWillChange.send()
     }
 
@@ -425,6 +490,7 @@ extension MixerController {
             session.inputs[index].mute = mute
             let input = session.inputs[index]
             pushInputAudio(input)
+            scheduleInputPersist(input)
         }
         objectWillChange.send()
     }
@@ -495,6 +561,7 @@ extension MixerController {
         session.units.append(entry)
         selectedUnitId = entry.id
         updateStatus()
+        _ = mutateLocal(MixerRemote.upsertUnit(entry))
     }
 
     func deleteUnit() {
@@ -517,6 +584,7 @@ extension MixerController {
         _ = mixer_destroy_unit(id)
         session.units.removeAll { $0.id == id }
         selectedUnitId = session.units[0].id
+        _ = mutateLocal(MixerRemote.deleteUnit(id))
     }
 
     func saveUnit(_ unit: MixingUnitEntry) {
@@ -543,12 +611,14 @@ extension MixerController {
             )
         }
         fail(mixer_audio_set_unit_link(unit.id, unit.audioLink.rawUInt), "Audio link")
+        _ = mixer_audio_set_bus_gain(unit.id, max(0, unit.audio.gain), unit.audio.mute ? 1 : 0)
         selectedUnitId = unit.id
         if let window = switcherWindows[unit.id] {
             window.title = unit.name
             window.level = unit.alwaysOnTop ? .floating : .normal
         }
         updateStatus()
+        _ = mutateLocal(MixerRemote.upsertUnit(unit))
     }
 
     func setSwitcherAlwaysOnTop(_ unitId: UInt64, _ on: Bool) {
@@ -595,6 +665,29 @@ extension MixerController {
         setOverlayEnabled(slot.id, enabled: enabled)
     }
 
+    /// Removes an output row and stops whatever it started.
+    ///
+    /// RTMP is not an Output in the mixer: a row is an encoder plus a destination and
+    /// `mixer_output_remove` knows neither. Deleting the row alone left the encoder
+    /// publishing to the URL with no UI left to stop it.
+    func removeOutput(_ output: OutputEntry) {
+        if isRemote { return }
+        if output.transport == .rtmp, output.streamEncoderId != 0 {
+            _ = MixerFFI.streamEncoderRemove(output.streamEncoderId)
+            session.streamEncoders.removeAll { $0.id == output.streamEncoderId }
+        }
+        if output.transport == .rtmp, !output.rtmpSecretRef.isEmpty {
+            // The key belongs to the row: leaving it in the Keychain after the row is
+            // gone keeps a live credential around with nothing that uses it.
+            KeychainStore.save(account: "rtmp/" + output.rtmpSecretRef, token: "")
+        }
+        _ = mixer_output_remove(output.id)
+        session.outputs.removeAll { $0.id == output.id }
+        if output.transport != .rtmp {
+            _ = mutateLocal(MixerRemote.deleteOutput(output.id))
+        }
+    }
+
     func addOutput(_ output: OutputEntry) {
         if isRemote { return }
         var entry = output
@@ -606,23 +699,86 @@ extension MixerController {
         } else if entry.sourceKind == .scene, entry.sourceId != 0, entry.sourceId < EIVIZ_SCENE_BASE {
             entry.sourceId = EIVIZ_SCENE_BASE | entry.sourceId
         }
+        if entry.transport == .rtmp, entry.rtmpSecretRef.isEmpty {
+            entry.rtmpSecretRef = "stream-\(entry.id)"
+        }
+        // The encoder this row is already running (the row is bound to the session,
+        // so `streamEncoderId` is the one to stop), but stop it only once the new
+        // request is known to be startable: a missing key used to tear down a live
+        // stream and then refuse to start its replacement.
+        let previousEncoder = session.outputs.first { $0.id == entry.id }?.streamEncoderId ?? 0
+        var rtmpKey = ""
+        if entry.transport == .rtmp, entry.enabled {
+            guard !entry.rtmpSecretRef.isEmpty else {
+                presentInputError(L10n.t("settings.streamKeyMissing"), editing: false)
+                return
+            }
+            rtmpKey = KeychainStore.load(account: "rtmp/" + entry.rtmpSecretRef)
+            guard !rtmpKey.isEmpty else {
+                presentInputError(L10n.t("settings.streamKeyMissing"), editing: false)
+                return
+            }
+        }
         if let index = session.outputs.firstIndex(where: { $0.id == entry.id }) {
             session.outputs[index] = entry
+        } else {
+            session.outputs.append(entry)
         }
         if entry.transport == .rtmp {
-            return
-        }
-        _ = mixer_output_remove(entry.id)
-        guard entry.enabled else { return }
-        if entry.transport == .rtmp, !entry.rtmpSecretRef.isEmpty {
-            let key = KeychainStore.load(account: "rtmp/" + entry.rtmpSecretRef)
-            if !key.isEmpty {
+            if previousEncoder != 0 {
+                _ = MixerFFI.streamEncoderRemove(previousEncoder)
+            }
+            guard entry.enabled else { return }
+            let key = rtmpKey
+            var encoder = session.streamEncoders.first { $0.id == entry.streamEncoderId }
+                ?? StreamEncoderEntry(id: entry.streamEncoderId == 0 ? session.nextStreamEncoderId : entry.streamEncoderId)
+            if encoder.id == session.nextStreamEncoderId {
+                session.nextStreamEncoderId = max(session.nextStreamEncoderId + 1, encoder.id + 1)
+            }
+            encoder.sourceKind = entry.sourceKind
+            encoder.sourceId = entry.sourceId
+            encoder.unitId = entry.unitId
+            encoder.audioUnitId = entry.audioUnitId
+            encoder.width = entry.width == 0 ? 1920 : entry.width
+            encoder.height = entry.height == 0 ? 1080 : entry.height
+            encoder.fpsNum = entry.fpsNum == 0 ? session.settings.masterFpsNum : entry.fpsNum
+            encoder.fpsDen = entry.fpsDen == 0 ? session.settings.masterFpsDen : entry.fpsDen
+            encoder.name = entry.name.isEmpty ? "Stream" : entry.name
+            let sourceId = entry.sourceId
+            entry.streamEncoderId = encoder.id
+            if let index = session.streamEncoders.firstIndex(where: { $0.id == encoder.id }) {
+                session.streamEncoders[index] = encoder
+            } else {
+                session.streamEncoders.append(encoder)
+            }
+            if let index = session.outputs.firstIndex(where: { $0.id == entry.id }) {
+                session.outputs[index] = entry
+            }
+            let code = MixerFFI.streamEncoderAdd(encoder, sourceKind: entry.sourceKind.rawValueU32, sourceId: sourceId)
+            guard code == 0 else {
+                _ = fail(code, "Start stream encoder")
+                return
+            }
             MixerFFI.withCString(entry.rtmpSecretRef) { name in
                 MixerFFI.withCString(key) { value in
                     _ = mixer_secret_set(name, value)
                 }
             }
-            }
+            let destination = MixerFFI.streamDestinationAdd(
+                encoderId: encoder.id,
+                destinationId: entry.id,
+                url: entry.rtmpUrl,
+                secretRef: entry.rtmpSecretRef
+            )
+            _ = fail(destination, "Start RTMP destination")
+            return
+        }
+        _ = mixer_output_remove(entry.id)
+        guard entry.enabled else {
+            // Keep the disabled row in the document so another client sees the same
+            // list; its outputs are what the core reconciles against.
+            _ = mutateLocal(MixerRemote.upsertOutput(entry))
+            return
         }
         let config = outputConfigJSON(entry)
         let id = entry.id
@@ -638,6 +794,7 @@ extension MixerController {
         let height = entry.height
         let fpsNum = entry.fpsNum
         let fpsDen = entry.fpsDen
+        let settledEntry = entry
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             MixerFFI.withCString(name) { cName in
                 MixerFFI.withCString(config) { cConfig in
@@ -657,9 +814,11 @@ extension MixerController {
                     fpsDen,
                     cConfig
                 )
-                if code != 0 {
-                    DispatchQueue.main.async {
+                DispatchQueue.main.async {
+                    if code != 0 {
                         _ = self?.fail(code, "Add output")
+                    } else {
+                        _ = self?.mutateLocal(MixerRemote.upsertOutput(settledEntry))
                     }
                 }
                 }

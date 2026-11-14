@@ -10,15 +10,20 @@ import Combine
 ///
 /// It is an `ObservableObject` like `MixerController`, so the view watches it the same way
 /// it watches everything else in this host.
+/// The three mixer calls the export runner needs. Keeping them behind a protocol lets the
+/// runner's busy/status/queue behaviour be exercised without a live mixer or Pro module.
+@MainActor
+protocol ReplayExportMachine: AnyObject {
+    func startReplayExport(_ json: String) -> Bool
+    func cancelReplayExport()
+    func replayExportProgress() -> ReplayExportProgress?
+}
+
+extension MixerController: ReplayExportMachine {}
+
 @MainActor
 final class ReplayExportRunner: ObservableObject {
-    /// One file to write: the request, and the name to show for it.
-    private struct Job {
-        let json: String
-        let label: String
-    }
-
-    private var queue: [Job] = []
+    private var queue = ReplayExportQueue()
 
     /// True while a file is being written, so the deck disables the button.
     @Published private(set) var busy = false
@@ -37,8 +42,8 @@ final class ReplayExportRunner: ObservableObject {
     /// that queued several files (one per angle) should stop adding them, and a caller that
     /// queued one should see the refusal rather than a queue it silently discarded.
     @discardableResult
-    func start(json: String, label: String, mixer: MixerController) -> Bool {
-        queue.append(Job(json: json, label: label))
+    func start(json: String, label: String, mixer: any ReplayExportMachine) -> Bool {
+        queue.enqueue(ReplayExportJob(json: json, label: label))
         guard !busy else { return true }
         return startNext(mixer: mixer)
     }
@@ -50,13 +55,13 @@ final class ReplayExportRunner: ObservableObject {
     /// let the operator start a second export while the first was still running, and the
     /// later `done` of the first one was then read as the second one finishing — which
     /// skipped the next queued file.
-    func cancel(mixer: MixerController) {
-        queue = []
+    func cancel(mixer: any ReplayExportMachine) {
+        queue.removeAll()
         mixer.cancelReplayExport()
     }
 
     /// Follows the running export. Called from the deck's poll; does nothing while idle.
-    func poll(mixer: MixerController) {
+    func poll(mixer: any ReplayExportMachine) {
         guard busy, let progress = mixer.replayExportProgress() else { return }
         switch progress.state {
         case .running:
@@ -86,16 +91,17 @@ final class ReplayExportRunner: ObservableObject {
 
     /// Starts the next queued file, or stops when the queue is empty.
     @discardableResult
-    private func startNext(mixer: MixerController) -> Bool {
-        guard !queue.isEmpty else {
+    private func startNext(mixer: any ReplayExportMachine) -> Bool {
+        guard let job = queue.next() else {
             busy = false
             return true
         }
-        let job = queue.removeFirst()
         guard mixer.startReplayExport(job.json) else {
             // A refusal is the mixer saying this file cannot be written at all. Stop
             // rather than working through the rest of the queue, which would fail the
-            // same way; the caller sees false and can tell the operator.
+            // same way. The queue has to be emptied too: leaving it behind made the next
+            // export start with the refused job instead of the one just requested.
+            queue.removeAll()
             busy = false
             status = L10n.t("replay.exportFailed")
             return false
@@ -112,7 +118,34 @@ final class ReplayExportRunner: ObservableObject {
     /// next file would hit the same one.
     private func stop(reporting sentence: String) {
         busy = false
-        queue = []
+        queue.removeAll()
         status = sentence
+    }
+}
+
+/// One file to write: the request, and the name to show for it.
+struct ReplayExportJob: Equatable {
+    let json: String
+    let label: String
+}
+
+/// FIFO of files waiting for the exporter. Kept apart from the runner so the order and
+/// the discard rules can be checked without a mixer.
+struct ReplayExportQueue {
+    private(set) var jobs: [ReplayExportJob] = []
+
+    var isEmpty: Bool { jobs.isEmpty }
+
+    mutating func enqueue(_ job: ReplayExportJob) {
+        jobs.append(job)
+    }
+
+    mutating func next() -> ReplayExportJob? {
+        guard !jobs.isEmpty else { return nil }
+        return jobs.removeFirst()
+    }
+
+    mutating func removeAll() {
+        jobs.removeAll()
     }
 }

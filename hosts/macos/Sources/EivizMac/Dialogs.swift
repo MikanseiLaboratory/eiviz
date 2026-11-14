@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Darwin
 import EivizMixer
 import SwiftUI
@@ -128,6 +129,7 @@ struct SettingsView: View {
     @State private var decklinkDevices: [DeckLinkDeviceInfo] = []
     @State private var decklinkModes: [String: [DeckLinkModeInfo]] = [:]
     @State private var decklinkError = ""
+    @State private var audioRefresh = 0
 
     var body: some View {
         HStack(spacing: 0) {
@@ -136,9 +138,8 @@ struct SettingsView: View {
                 Text("Performance").tag(1)
                 Text("Outputs").tag(2)
                 Text("Multiview").tag(3)
-                Text("Headphone").tag(4)
+                Text(L10n.t("settings.audio")).tag(4)
                 Text(L10n.t("settings.webApi")).tag(5)
-                Text(L10n.t("settings.advanced")).tag(6)
                 Text(L10n.t("settings.license")).tag(7)
             }
             .frame(width: 200)
@@ -151,7 +152,6 @@ struct SettingsView: View {
                     else if category == 3 { multiview }
                     else if category == 4 { audio }
                     else if category == 5 { webApi }
-                    else if category == 6 { advanced }
                     else { license }
                 }
                 Spacer()
@@ -245,6 +245,25 @@ struct SettingsView: View {
                 ForEach([UInt32(1), 2, 3, 4, 6, 8], id: \.self) { Text("\($0)").tag($0) }
             }
             .frame(width: 220)
+            Text(L10n.t("settings.defaultUnitSize"))
+            Picker("", selection: Binding(
+                get: { "\(mixer.session.settings.defaultWidth)x\(mixer.session.settings.defaultHeight)" },
+                set: { value in
+                    let parts = value.split(separator: "x").compactMap { UInt32($0) }
+                    if parts.count == 2 {
+                        mixer.session.settings.defaultWidth = parts[0]
+                        mixer.session.settings.defaultHeight = parts[1]
+                    }
+                }
+            )) {
+                Text("1920x1080").tag("1920x1080")
+                Text("1280x720").tag("1280x720")
+                Text("3840x2160").tag("3840x2160")
+            }
+            .frame(width: 220)
+            Text(L10n.t("settings.defaultUnitSizeHelp"))
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
             Text("Master frame rate clocks the render thread. Restart the mixer after changing it.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
@@ -269,24 +288,6 @@ struct SettingsView: View {
                 set: { mixer.session.settings.ndiGpuUpload = $0 }
             ))
             Text("NDI upload on the ingest thread writes each frame to the GPU before the mixer samples it. Turn it off to go back to CPU frames on the render thread. On Apple Silicon, Unified Memory writes live CPU inputs into MTLStorageModeShared textures and samples them directly. Turn that off to use the default Metal upload path.")
-                .foregroundStyle(EivizTheme.dim)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var advanced: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(L10n.t("settings.flipBudget"))
-            Text(L10n.format("settings.flipBudgetUsage", "\(FlipBudget.used)", "\(FlipBudget.limit)"))
-            Picker("", selection: $mixer.session.settings.flipSwapchainLimit) {
-                Text(L10n.t("settings.flipBudgetAuto")).tag(UInt32(0))
-                ForEach([UInt32(4), 6, 8, 10, 12, 16], id: \.self) { value in
-                    Text("\(value)").tag(value)
-                }
-            }
-            .labelsHidden()
-            .frame(width: 280, alignment: .leading)
-            Text(L10n.t("settings.flipBudgetHelp"))
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -572,9 +573,14 @@ struct SettingsView: View {
     }
 
     private static func deckLinkOutputAllowed() -> Bool {
+        #if os(macOS)
+        // No DeckLink output backend ships in the macOS build.
+        return false
+        #else
         var caps = EivizCapabilities()
         guard mixer_capabilities(&caps) == 0 else { return false }
         return caps.decklink_linked != 0 && caps.decklink_output_limit != 0
+        #endif
     }
 
     private static func rtmpAllowed() -> Bool {
@@ -608,6 +614,86 @@ struct SettingsView: View {
                 }
                 if output.wrappedValue.transport == .rtmp {
                     mixerTextField(output.rtmpUrl, placeholder: L10n.t("settings.rtmpUrl"))
+                    RtmpKeyEditor(output: output)
+                    if let index = mixer.session.streamEncoders.firstIndex(
+                        where: { $0.id == output.wrappedValue.streamEncoderId }
+                    ) {
+                        HStack(spacing: 8) {
+                            Text(L10n.t("settings.videoBitrate"))
+                            TextField(
+                                "",
+                                value: Binding(
+                                    get: { mixer.session.streamEncoders[index].videoBitrate / 1000 },
+                                    set: { mixer.session.streamEncoders[index].videoBitrate = max(100, $0) * 1000 }
+                                ),
+                                format: .number
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 80)
+                            Text("kbps")
+                            Text(L10n.t("settings.audioBitrate"))
+                            TextField(
+                                "",
+                                value: Binding(
+                                    get: { mixer.session.streamEncoders[index].audioBitrate / 1000 },
+                                    set: { mixer.session.streamEncoders[index].audioBitrate = max(32, $0) * 1000 }
+                                ),
+                                format: .number
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 64)
+                            Text("kbps")
+                        }
+                        HStack(spacing: 8) {
+                            Text(L10n.t("settings.audioDelay"))
+                            DraggableUIntField(
+                                value: $mixer.session.streamEncoders[index].audioDelayMs,
+                                step: 10
+                            )
+                            .frame(width: 92)
+                            Text("ms")
+                            Text(L10n.t("settings.keyframeInterval"))
+                            DraggableUIntField(
+                                value: $mixer.session.streamEncoders[index].keyint
+                            )
+                            .frame(width: 76)
+                            Text(L10n.t("settings.encoderThreads"))
+                            DraggableUIntField(
+                                value: $mixer.session.streamEncoders[index].encoderThreads
+                            )
+                            .frame(width: 64)
+                        }
+                        HStack(spacing: 8) {
+                            Text(L10n.t("settings.sendBuffer"))
+                            DraggableUIntField(
+                                value: $mixer.session.streamEncoders[index].bufferMs,
+                                step: 10
+                            )
+                            .frame(width: 76)
+                            Text("ms")
+                            Picker(L10n.t("settings.complexity"), selection: $mixer.session.streamEncoders[index].complexity) {
+                                Text(L10n.t("settings.complexityLow")).tag(UInt32(0))
+                                Text(L10n.t("settings.complexityMedium")).tag(UInt32(1))
+                                Text(L10n.t("settings.complexityHigh")).tag(UInt32(2))
+                            }
+                            .frame(width: 150)
+                            Picker(L10n.t("settings.refFrames"), selection: $mixer.session.streamEncoders[index].refFrames) {
+                                ForEach(1 ... 4, id: \.self) { count in
+                                    Text("\(count)").tag(UInt32(count))
+                                }
+                            }
+                            .frame(width: 110)
+                        }
+                        HStack(spacing: 12) {
+                            Toggle(L10n.t("settings.cabac"), isOn: $mixer.session.streamEncoders[index].cabac)
+                            Toggle(L10n.t("settings.videoOnly"), isOn: $mixer.session.streamEncoders[index].videoOnly)
+                            Toggle(L10n.t("settings.deblock"), isOn: $mixer.session.streamEncoders[index].deblock)
+                            Toggle(L10n.t("settings.backgroundDetect"), isOn: $mixer.session.streamEncoders[index].backgroundDetection)
+                            Toggle(L10n.t("settings.adaptiveQuant"), isOn: $mixer.session.streamEncoders[index].adaptiveQuant)
+                            Toggle(L10n.t("settings.sceneChange"), isOn: $mixer.session.streamEncoders[index].sceneChange)
+                        }
+                        .toggleStyle(.checkbox)
+                    }
                 }
                 if output.wrappedValue.transport == .deckLink {
                     deckLinkOutputFields(output)
@@ -633,8 +719,7 @@ struct SettingsView: View {
                 ))
                 Button("Apply") { mixer.addOutput(output.wrappedValue) }
                 Button("−") {
-                    _ = mixer_output_remove(output.wrappedValue.id)
-                    mixer.session.outputs.removeAll { $0.id == output.wrappedValue.id }
+                    mixer.removeOutput(output.wrappedValue)
                 }
             }
             if output.wrappedValue.transport == .omt {
@@ -866,12 +951,59 @@ struct SettingsView: View {
     }
 
     private var audio: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Choose the headphone output device. Click the headphone icon on a Mixing Unit or Input meter to listen to it. None keeps the mix off the device. Core Audio sends it to a device.")
-                .foregroundStyle(EivizTheme.dim)
-                .fixedSize(horizontal: false, vertical: true)
-            headphoneRow
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(L10n.t("settings.headphone")).fontWeight(.bold)
+                    Button(L10n.t("audio.refreshDevices")) { audioRefresh += 1 }
+                        .controlSize(.small)
+                }
+                Text(L10n.t("settings.headphoneHelp"))
+                    .foregroundStyle(EivizTheme.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+                headphoneRow
+                Text(L10n.t("settings.audioBuses")).fontWeight(.bold).padding(.top, 8)
+                ForEach(mixer.session.units.indices, id: \.self) { index in
+                    unitBusRow(index)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .id("\(audioRefresh)-\(mixer.audioDevicesRevision)")
+    }
+
+    private func unitBusRow(_ index: Int) -> some View {
+        let unit = mixer.session.units[index]
+        let kind = unit.audio.deviceKind
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("MU \(unit.id)  \(unit.name)")
+                .font(.system(size: 12, weight: .semibold))
+            HStack(spacing: 6) {
+                Picker("", selection: $mixer.session.units[index].audio.deviceKind) {
+                    Text("None").tag(AudioDeviceKind.none)
+                    Text("Core Audio").tag(AudioDeviceKind.coreAudio)
+                }
+                .frame(width: 130)
+                if kind != .none {
+                    Picker("", selection: $mixer.session.units[index].audio.deviceId) {
+                        Text("Default").tag("")
+                        ForEach(devices(for: kind)) { device in
+                            Text("\(device.name)  (\(device.channels)ch)").tag(device.id)
+                        }
+                    }
+                    Text("L ch")
+                    mixerInt32Field($mixer.session.units[index].audio.mapLeft).frame(width: 44)
+                    Text("R ch")
+                    mixerInt32Field($mixer.session.units[index].audio.mapRight).frame(width: 44)
+                } else {
+                    Text(L10n.t("settings.audioBusNone"))
+                        .font(.system(size: 11))
+                        .foregroundStyle(EivizTheme.dim)
+                }
+            }
+        }
+        .padding(8)
+        .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
     }
 
     private var headphoneRow: some View {
@@ -906,7 +1038,7 @@ struct SettingsView: View {
     }
 
     private func devices(for kind: AudioDeviceKind) -> [AudioDevice] {
-        MixerFFI.audioDevices().filter {
+        MixerFFI.audioDevices(direction: 0).filter {
             $0.kind == kind.rawUInt
                 || (kind == .coreAudio && $0.kind == AudioDeviceKind.wasapi.rawUInt)
         }
@@ -953,8 +1085,6 @@ struct PreferencesView: View {
     @ObservedObject private var prefs = AppPrefs.shared
     @State private var originalLanguage = AppPrefs.shared.language
     @State private var originalTheme = AppPrefs.shared.theme
-    @State private var originalRenderer = AppPrefs.shared.renderer
-    @State private var renderer = AppPrefs.shared.renderer
     @State private var originalRemoteOmtUseGpu = AppPrefs.shared.remoteOmtUseGpu
     @State private var remoteOmtUseGpu = AppPrefs.shared.remoteOmtUseGpu
     @State private var listenToken = KeychainStore.load(account: "listen")
@@ -975,15 +1105,6 @@ struct PreferencesView: View {
                 Text(L10n.t("prefs.themeSystem")).tag(AppThemeMode.system)
             }
             .frame(width: 220)
-            Text(L10n.t("prefs.renderer"))
-            Picker("", selection: $renderer) {
-                Text(L10n.t("prefs.rendererAuto")).tag(GpuRenderer.auto)
-                Text("Metal").tag(GpuRenderer.metal)
-            }
-            .frame(width: 220)
-            Text(L10n.t("prefs.rendererHelp"))
-                .foregroundStyle(EivizTheme.dim)
-                .fixedSize(horizontal: false, vertical: true)
             if mixer.isRemote {
                 Text(L10n.t("prefs.remoteOmtDecode"))
                 Picker("", selection: $remoteOmtUseGpu) {
@@ -1023,15 +1144,12 @@ struct PreferencesView: View {
             HStack {
                 Spacer()
                 Button(L10n.t("dialog.ok")) {
-                    prefs.renderer = renderer
                     prefs.remoteOmtUseGpu = remoteOmtUseGpu
                     prefs.mediaDirectory = prefs.resolvedMediaDirectory
                     KeychainStore.save(account: "listen", token: listenToken)
                     prefs.save()
                     prefs.localeRevision += 1
-                    if renderer != originalRenderer {
-                        mixer.recreateMixer()
-                    } else if mixer.isRemote, remoteOmtUseGpu != originalRemoteOmtUseGpu {
+                    if mixer.isRemote, remoteOmtUseGpu != originalRemoteOmtUseGpu {
                         mixer.reconnectRemoteVideo()
                     }
                     dismiss()
@@ -1053,8 +1171,6 @@ struct PreferencesView: View {
         .onAppear {
             originalLanguage = prefs.language
             originalTheme = prefs.theme
-            originalRenderer = prefs.renderer
-            renderer = prefs.renderer
             originalRemoteOmtUseGpu = prefs.remoteOmtUseGpu
             remoteOmtUseGpu = prefs.remoteOmtUseGpu
             listenToken = KeychainStore.load(account: "listen")
@@ -1115,9 +1231,17 @@ struct AddInputView: View {
     @State private var selectedDeckLinkMode = ""
     @State private var decklinkError = ""
     @State private var decklinkBuffer: UInt32 = 1
+    @State private var audioMode: AudioCaptureMode = .mic
+    @State private var audioDeviceId = ""
+    @State private var audioDevices: [AudioDevice] = []
+    @State private var audioMapLeft: Int32 = 0
+    @State private var audioMapRight: Int32 = 1
+    @State private var audioProcesses: [AudioProcess] = []
+    @State private var audioProcessExe = ""
+    @State private var audioProcessAumid = ""
 
     private var inputCategories: [String] {
-        var items = ["Colours", "Still", "Video", "OMT", "NDI®", "UVC"]
+        var items = ["Colours", "Still", "Video", "OMT", "NDI®", "UVC", "Audio"]
         if InputKind.deckLinkInputAllowed() || editing?.kind == .deckLink {
             items.append("DeckLink")
         }
@@ -1145,18 +1269,41 @@ struct AddInputView: View {
                         .foregroundStyle(EivizTheme.dim)
                 }
                 TagCheckView(input: true, selected: $selectedTags)
-                form
-                Spacer()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        form
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(minHeight: 140)
                 HStack {
                     Spacer()
                     Button("OK") {
+                        if category == "Audio",
+                           audioMode == .mic,
+                           AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
+                        {
+                            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                                DispatchQueue.main.async {
+                                    if granted {
+                                        if commit() { dismiss() }
+                                    } else {
+                                        mixer.presentError(
+                                            L10n.t("msg.microphonePermission"),
+                                            title: L10n.t("msg.addInput")
+                                        )
+                                    }
+                                }
+                            }
+                            return
+                        }
                         if commit() { dismiss() }
                     }
                     Button("Cancel") { dismiss() }
                 }
             }
             .padding(16)
-            .frame(minWidth: 520, minHeight: 480)
+            .frame(minWidth: 520, minHeight: 480, maxHeight: 640)
         }
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
@@ -1164,6 +1311,33 @@ struct AddInputView: View {
             if value == "DeckLink" {
                 refreshDeckLink()
             }
+            if value == "Audio" {
+                refreshAudioDevices()
+                refreshAudioProcesses()
+            }
+            if value == "UVC" {
+                // Cameras can appear after the sheet opened (USB plug, permission
+                // prompt). Reload when the operator switches to the category instead
+                // of showing the list captured at onAppear.
+                refreshUvc()
+            }
+            if value == "NDI®" {
+                refreshNdi()
+            }
+        }
+        .onChange(of: audioMode) { _, _ in
+            refreshAudioDevices()
+            if audioMode == .processLoopback {
+                refreshAudioProcesses()
+            }
+        }
+        .onChange(of: audioDeviceId) { _, _ in
+            let channels = Int(audioDevices.first { $0.id == audioDeviceId }?.channels ?? 1)
+            audioMapLeft = min(audioMapLeft, Int32(max(0, channels - 1)))
+            audioMapRight = min(audioMapRight, Int32(max(0, channels - 1)))
+        }
+        .onChange(of: mixer.audioDevicesRevision) { _, _ in
+            refreshAudioDevices()
         }
         .onAppear {
             loadEditing()
@@ -1249,11 +1423,29 @@ struct AddInputView: View {
             Text("NDI is received on the CPU and uploaded for compose.")
                 .foregroundStyle(EivizTheme.dim)
         case "UVC":
+            if AVCaptureDevice.authorizationStatus(for: .video) != .authorized {
+                Text(L10n.t("video.permissionNeeded"))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button(L10n.t("video.openPrivacySettings")) {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
             Button("Refresh devices") { refreshUvc() }
             List(uvcList, id: \.id, selection: $selectedUvc) { device in
                 Text(device.name).tag(device.id)
             }
+            // The Add form sits in a ScrollView; a List with no height collapses to
+            // zero rows, so the devices were enumerated but invisible.
+            .frame(height: 140)
             .onChange(of: selectedUvc) { _, _ in refreshUvcModes() }
+            if uvcList.isEmpty {
+                Text(L10n.t("video.noDevices"))
+                    .foregroundStyle(EivizTheme.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text("Mode")
             Picker("", selection: $selectedMode) {
                 Text("Select mode").tag(Optional<CaptureMode>.none)
@@ -1297,6 +1489,69 @@ struct AddInputView: View {
             }
             frameBufferPicker($decklinkBuffer)
             Text(L10n.t("settings.decklinkInputHelp"))
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
+        case "Audio":
+            Picker(L10n.t("audio.capture"), selection: $audioMode) {
+                Text(L10n.t("audio.mic")).tag(AudioCaptureMode.mic)
+                Text(L10n.t("audio.loopback")).tag(AudioCaptureMode.endpointLoopback)
+                Text(L10n.t("audio.process")).tag(AudioCaptureMode.processLoopback)
+            }
+            if audioMode == .processLoopback {
+                Button(L10n.t("audio.refreshApps")) { refreshAudioProcesses() }
+                List(audioProcesses, id: \.exe) { process in
+                    Button(process.name) {
+                        audioProcessExe = process.exe
+                        audioProcessAumid = process.aumid
+                    }
+                }
+                .frame(height: 120)
+                if audioProcessExe.isEmpty {
+                    Text(L10n.t("audio.chooseApp"))
+                        .foregroundStyle(EivizTheme.dim)
+                } else {
+                    Text(audioProcesses.first { $0.exe == audioProcessExe }?.name ?? audioProcessExe)
+                        .foregroundStyle(EivizTheme.dim)
+                }
+            } else {
+                if audioMode == .mic,
+                   AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
+                {
+                    Text(L10n.t("audio.permissionNeeded"))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button(L10n.t("audio.openPrivacySettings")) {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                }
+                Button(L10n.t("audio.refreshDevices")) { refreshAudioDevices() }
+                Picker(L10n.t("audio.device"), selection: $audioDeviceId) {
+                    Text(L10n.t("audio.followDefault")).tag("")
+                    ForEach(audioDevices) { device in
+                        Text("\(device.name)  (\(device.channels)ch)").tag(device.id)
+                    }
+                }
+                let channels = audioDevices.first { $0.id == audioDeviceId }?.channels ?? 2
+                HStack {
+                    Text(L10n.t("audio.left"))
+                    Picker("", selection: $audioMapLeft) {
+                        ForEach(0..<Int(max(1, min(channels, 32))), id: \.self) {
+                            Text("\($0 + 1)").tag(Int32($0))
+                        }
+                    }
+                    .frame(width: 72)
+                    Text(L10n.t("audio.right"))
+                    Picker("", selection: $audioMapRight) {
+                        ForEach(0..<Int(max(1, min(channels, 32))), id: \.self) {
+                            Text("\($0 + 1)").tag(Int32($0))
+                        }
+                    }
+                    .frame(width: 72)
+                }
+            }
+            Text(L10n.t("audio.help"))
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         default:
@@ -1352,10 +1607,21 @@ struct AddInputView: View {
     private func recentList(_ paths: [String], choose: @escaping (String) -> Void) -> some View {
         if !paths.isEmpty {
             Text(L10n.t("chrome.openRecent"))
-            List(paths, id: \.self) { path in
-                Button(URL(fileURLWithPath: path).lastPathComponent) { choose(path) }
+            // A List inside the form's ScrollView fights the outer scroll wheel.
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(paths, id: \.self) { path in
+                        Button(URL(fileURLWithPath: path).lastPathComponent) { choose(path) }
+                            .buttonStyle(.plain)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 2)
+                    }
+                }
             }
             .frame(height: 120)
+            .padding(4)
+            .background(EivizTheme.list)
+            .overlay(Rectangle().stroke(EivizTheme.stroke, lineWidth: 1))
         }
     }
 
@@ -1366,6 +1632,21 @@ struct AddInputView: View {
         if panel.runModal() == .OK, let url = panel.url {
             dest.wrappedValue = url.path
             if name.isEmpty { name = url.deletingPathExtension().lastPathComponent }
+        }
+    }
+
+    private func refreshAudioDevices() {
+        audioDevices = MixerFFI.audioDevices(direction: audioMode == .mic ? 1 : 0)
+        if !audioDevices.contains(where: { $0.id == audioDeviceId }) {
+            audioDeviceId = ""
+        }
+    }
+
+    private func refreshAudioProcesses() {
+        audioProcesses = MixerFFI.audioProcesses()
+        if !audioProcesses.contains(where: { $0.exe == audioProcessExe }) {
+            audioProcessExe = ""
+            audioProcessAumid = ""
         }
     }
 
@@ -1491,6 +1772,16 @@ struct AddInputView: View {
         mixIsMultiview = mixer.session.multiviews.contains { $0.gpuId == editing.mixTargetId }
         mixPreview = editing.mixSource == .muPreview
         mixBuffer = max(1, min(8, editing.frameBufferFrames == 0 ? 1 : editing.frameBufferFrames))
+        audioMode = editing.audioCaptureMode
+        audioDeviceId = editing.audioDeviceId
+        audioMapLeft = editing.audioMapLeft
+        audioMapRight = editing.audioMapRight
+        audioProcessExe = editing.audioProcessExe
+        audioProcessAumid = editing.audioProcessAumid
+        if category == "Audio" {
+            refreshAudioDevices()
+            refreshAudioProcesses()
+        }
         selectedTags = editing.tags
     }
 
@@ -1511,6 +1802,11 @@ struct AddInputView: View {
             return ndiAddress
         case "DeckLink":
             return decklinkDevices.first { $0.id == selectedDeckLink }?.label ?? "DeckLink"
+        case "Audio":
+            if audioMode == .processLoopback {
+                return audioProcesses.first { $0.exe == audioProcessExe }?.name ?? "Application Audio"
+            }
+            return audioDevices.first { $0.id == audioDeviceId }?.name ?? "Audio"
         case "Replay":
             return "Replay"
         case "Mix":
@@ -1604,6 +1900,17 @@ struct AddInputView: View {
             input.mixSource = mixIsMultiview ? .sessionMultiview : (mixPreview ? .muPreview : .muProgram)
             input.audioUnits = []
             input.frameBufferFrames = max(1, min(8, mixBuffer))
+        case "Audio":
+            input.kind = .audio
+            input.audioCaptureMode = audioMode
+            input.audioDeviceKind = .coreAudio
+            input.audioDeviceId = audioDeviceId
+            input.audioMapLeft = audioMapLeft
+            input.audioMapRight = audioMapRight
+            input.audioProcessExe = audioProcessExe
+            input.audioProcessAumid = audioProcessAumid
+            input.audioUnits = []
+            input.frameBufferFrames = 1
         case "Replay":
             // The reserved channel id, the input band and the replay document all
             // follow from adding a Replay input; the Replay windows own the rest.
@@ -1649,8 +1956,8 @@ struct MixingUnitView: View {
             labeled("Name") {
                 mixerTextField($unit.name, placeholder: "Name")
             }
-            labeled("Width") { mixerUintField($unit.width) }
-            labeled("Height") { mixerUintField($unit.height) }
+            labeled("Width") { DraggableUIntField(value: $unit.width, minimum: 16) }
+            labeled("Height") { DraggableUIntField(value: $unit.height, minimum: 16) }
             labeled("Frame rate") {
                 Picker("", selection: Binding(
                     get: { "\(unit.fpsNum)/\(unit.fpsDen)" },
@@ -1725,10 +2032,30 @@ struct MixingUnitView: View {
     }
 
     private func muDevices(_ kind: AudioDeviceKind) -> [AudioDevice] {
-        MixerFFI.audioDevices().filter {
+        MixerFFI.audioDevices(direction: 0).filter {
             $0.kind == kind.rawUInt
                 || (kind == .coreAudio && $0.kind == AudioDeviceKind.wasapi.rawUInt)
         }
+    }
+}
+
+private struct RtmpKeyEditor: View {
+    @Binding var output: OutputEntry
+    @State private var key = ""
+
+    var body: some View {
+        SecureField(L10n.t("settings.streamKey"), text: $key)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 180)
+            .onAppear {
+                if output.rtmpSecretRef.isEmpty {
+                    output.rtmpSecretRef = "stream-\(output.id)"
+                }
+                key = KeychainStore.load(account: "rtmp/" + output.rtmpSecretRef)
+            }
+            .onChange(of: key) { _, value in
+                KeychainStore.save(account: "rtmp/" + output.rtmpSecretRef, token: value)
+            }
     }
 }
 
@@ -1761,6 +2088,19 @@ struct MultiviewView: View {
                             mixer.applyMultiviewWindowLevel(mixer.session.multiviews[index])
                         }
                     ))
+                    Picker(L10n.t("mv.previewRefresh"), selection: Binding(
+                        get: { mixer.session.multiviews[index].presentInterval },
+                        set: {
+                            mixer.session.multiviews[index].presentInterval = $0
+                            mixer.pushMultiview(mixer.session.multiviews[index])
+                        }
+                    )) {
+                        Text(L10n.t("mv.previewRefreshFollow")).tag(UInt32(0))
+                        ForEach(Array(1...8), id: \.self) { value in
+                            Text("\(value)").tag(UInt32(value))
+                        }
+                    }
+                    .frame(width: 110)
                     Picker(L10n.t("settings.labelPosition"), selection: Binding(
                         get: { mixer.session.multiviews[index].labelAnchor ?? mixer.session.settings.multiviewLabelAnchor },
                         set: { mixer.session.multiviews[index].labelAnchor = $0; mixer.applyBusColors() }

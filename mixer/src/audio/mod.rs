@@ -3,6 +3,8 @@ mod asio;
 mod capture;
 #[cfg(target_os = "macos")]
 mod coreaudio;
+#[cfg(target_os = "macos")]
+mod coreaudio_tap;
 #[cfg(any(windows, target_os = "macos"))]
 mod cpal_io;
 #[cfg(windows)]
@@ -490,12 +492,14 @@ pub fn device_io_channels(kind: u32, device_id: &str) -> (i32, i32) {
     }
     #[cfg(target_os = "macos")]
     {
-        let n = if kind == DEVICE_ASIO {
-            0
+        if kind == DEVICE_ASIO {
+            (0, 0)
         } else {
-            coreaudio::channel_count(device_id)
-        };
-        (n, n)
+            (
+                coreaudio::input_channel_count(device_id),
+                coreaudio::channel_count(device_id),
+            )
+        }
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {

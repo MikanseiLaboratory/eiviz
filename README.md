@@ -11,7 +11,7 @@ A cross-platform vision mixer with unlimited M/E. eiviz / 映像(eizou) + visual
 | --- | --- | --- |
 | Windows x64 | Direct3D 12 or Vulkan | Supported |
 | Windows Arm | Direct3D 12 or Vulkan | Under Development |
-| macOS | Metal | Supported (untested) |
+| macOS | Metal | Supported (Apple Silicon; verified on M3) |
 | Linux | Vulkan | CLI Only |
 
 [Documentation](https://mikanseilaboratory.github.io/eiviz/en/) · [日本語](README.ja.md)
@@ -27,6 +27,14 @@ Run `eiviz-*-win-x64-setup.exe`.
 ### macOS Apple Silicon (`macos-arm64`)
 
 Run `eiviz-*-macos-arm64.pkg`.
+
+macOS 14 or later on Apple Silicon is the supported target. The package is ad-hoc
+signed until notarization credentials are wired into the release; if Gatekeeper
+blocks it, right-click the package and choose Open, or run
+`xattr -dr com.apple.quarantine /Applications/eiviz.app` after installing.
+
+macOS DeckLink I/O is not supported; use Windows for DeckLink hardware. The
+macOS Pro module still provides RTMP, Replay, and licensing.
 
 ### macOS Intel (`macos-x64`)
 

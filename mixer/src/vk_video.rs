@@ -199,3 +199,63 @@ mod tests {
         assert!(annexb_from_avc_config(&[9, 9, 9]).is_err());
     }
 }
+
+/// v0.5 delivers decoded frames through a callback. This keeps the rest of the
+/// decoder paths synchronous by parking the frames in a small channel.
+pub struct H264Decoder {
+    decoder: gpu_video::WgpuTexturesDecoderH264,
+    frames: std::sync::mpsc::Receiver<gpu_video::OutputFrame<gpu_video::VideoTexture>>,
+}
+
+impl H264Decoder {
+    pub fn new(device: &VideoDevice, queue: &wgpu::Queue) -> Result<Self, String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let decoder = device
+            .create_wgpu_textures_decoder_h264(
+                queue,
+                gpu_video::parameters::DecoderParameters::default(),
+                move |frame| {
+                    let _ = tx.send(frame);
+                },
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            decoder,
+            frames: rx,
+        })
+    }
+
+    fn drain(&mut self) -> Vec<gpu_video::OutputFrame<gpu_video::VideoTexture>> {
+        let mut out = Vec::new();
+        while let Ok(frame) = self.frames.try_recv() {
+            out.push(frame);
+        }
+        out
+    }
+
+    pub fn decode(
+        &mut self,
+        chunk: gpu_video::EncodedInputChunk<'_>,
+    ) -> Result<Vec<gpu_video::OutputFrame<gpu_video::VideoTexture>>, String> {
+        self.decoder
+            .decode(chunk)
+            .map_err(|error| error.to_string())?;
+        // VideoToolbox may deliver on its callback thread just after decode
+        // returns. Give the first frame a moment so the caller can show it in the
+        // same iteration; later frames are drained on the next call.
+        let first = self
+            .frames
+            .recv_timeout(std::time::Duration::from_millis(5))
+            .ok();
+        let mut out = first.into_iter().collect::<Vec<_>>();
+        out.extend(self.drain());
+        Ok(out)
+    }
+
+    pub fn flush(
+        &mut self,
+    ) -> Result<Vec<gpu_video::OutputFrame<gpu_video::VideoTexture>>, String> {
+        self.decoder.flush().map_err(|error| error.to_string())?;
+        Ok(self.drain())
+    }
+}

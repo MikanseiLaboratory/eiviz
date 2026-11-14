@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import CoreAudio
 import Combine
 import Darwin
 import EivizMixer
@@ -44,6 +45,8 @@ final class MixerController: ObservableObject {
     @Published var warnText = ""
     @Published var resourceText = ""
     @Published var peaks: [UInt64: (Float, Float)] = [:]
+    /// Bumped by the CoreAudio device listener so device pickers re-enumerate.
+    @Published var audioDevicesRevision = 0
     @Published var overlayOn: [UInt64: Bool] = [:]
     @Published var videoFraction: Double = 0
     @Published var videoPlaying = false
@@ -81,6 +84,21 @@ final class MixerController: ObservableObject {
     var tbarLatching = false
     var meterTimer: Timer?
     var mixTimer: Timer?
+    var sessionSyncTimer: Timer?
+    /// Revision of the control session whose Replay document the host has already adopted.
+    var syncedSessionRevision: UInt64 = 0
+    /// Inputs created locally that the control document has not seen yet. The sync
+    /// below must keep them: the document is not the only writer, and adopting its
+    /// input list wholesale used to drop every input added from the GUI.
+    var pendingInputAdds: Set<UInt64> = []
+    /// Counts 50 ms ticks; the HUD (and its IOKit GPU sample) updates every fifth.
+    var hudTicks = 0
+    /// Coalesces overlay edits (drags fire at frame rate) into one document write.
+    var overlayPersistTask: Task<Void, Never>?
+    /// Same coalescing for audio gain/mute drags, per input id.
+    var inputPersistTasks: [UInt64: Task<Void, Never>] = [:]
+    /// Coalescing for Mixing Unit bus gain/mute drags.
+    var unitPersistTasks: [UInt64: Task<Void, Never>] = [:]
     @Published var previewByUnit: [UInt64: UInt64] = [:]
     @Published var programByUnit: [UInt64: UInt64] = [:]
     var inputPreviewWindows: [UInt64: NSWindow] = [:]
@@ -125,8 +143,66 @@ final class MixerController: ObservableObject {
         session.units.first { $0.id == selectedUnitId } ?? session.units[0]
     }
 
+    private var activity: NSObjectProtocol?
+
+    private func beginActivity() {
+        guard activity == nil else { return }
+        activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .idleSystemSleepDisabled],
+            reason: "eiviz is running a live video mixer"
+        )
+    }
+
+    private func endActivity() {
+        if let activity {
+            ProcessInfo.processInfo.endActivity(activity)
+            self.activity = nil
+        }
+    }
+
+    private var audioDeviceAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDevices,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain
+    )
+    nonisolated(unsafe) private var audioDeviceListener: AudioObjectPropertyListenerBlock?
+
+    /// Re-enumerates audio devices when CoreAudio reports a hot-plug. The pickers
+    /// read `audioDevicesRevision`, so they refresh without reopening the sheet.
+    func startAudioDeviceMonitor() {
+        guard audioDeviceListener == nil else { return }
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            DispatchQueue.main.async {
+                self?.audioDevicesRevision &+= 1
+            }
+        }
+        let status = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &audioDeviceAddress,
+            DispatchQueue.main,
+            block
+        )
+        if status == noErr {
+            audioDeviceListener = block
+        } else {
+            HostLog.write("WARN", "audio device listener failed: \(status)")
+        }
+    }
+
+    func stopAudioDeviceMonitor() {
+        guard let block = audioDeviceListener else { return }
+        AudioObjectRemovePropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &audioDeviceAddress,
+            DispatchQueue.main,
+            block
+        )
+        audioDeviceListener = nil
+    }
+
     func boot() {
         guard !booted else { return }
+        beginActivity()
         isRemote = HostRole.isRemote
         guard mixer_ping() == 0x4549_5649 else {
             presentError(L10n.t("error.abiMismatch"), title: L10n.t("action.Metal mixer initialization"))
@@ -137,21 +213,24 @@ final class MixerController: ObservableObject {
             bootRemote()
             return
         }
-        guard fail(mixer_create_with_backend(AppPrefs.shared.renderer.createAbi, 0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
+        guard fail(mixer_create_with_backend(GpuRenderer.metal.createAbi, 0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
             return
         }
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
         fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
         fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
-        GpuPresentStore.load()
         FlipBudget.configure(session.settings.flipSwapchainLimit)
         applyBusColors()
         applySession()
         bumpSurfaceEpoch()
         startTimers()
+        startAudioDeviceMonitor()
         booted = true
         applyVmixApi()
         publishSession()
+        // Everything the control API changes bumps this revision; start from the state the
+        // host just published so the first poll does not adopt its own document.
+        syncedSessionRevision = MixerFFI.sessionRevision()
         updateStatus()
         openPendingSession()
     }
@@ -186,6 +265,12 @@ final class MixerController: ObservableObject {
     }
 
     private func startTimers() {
+        // The vMix API and eivizctl edit the mixer's session, not this host's copy. Poll the
+        // revision and adopt the Replay document so marks and clips made from a Stream Deck
+        // appear in the deck.
+        sessionSyncTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.syncReplayFromMixer() }
+        }
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -198,6 +283,120 @@ final class MixerController: ObservableObject {
                     self?.syncAllUnitBuses()
                 }
             }
+        }
+    }
+
+    /// Adopts the Replay document the control session currently holds. Only Replay is
+    /// adopted: the rest of the host's session is what the operator is editing, while Replay
+    /// marks and playlists are routinely written by the vMix API and eivizctl.
+    private func syncReplayFromMixer() {
+        let revision = MixerFFI.sessionRevision()
+        guard revision != syncedSessionRevision else { return }
+        guard let data = MixerFFI.sessionJSON() else { return }
+        // One decode: the session struct already carries the Replay JSON value.
+        guard let decoded = try? JSONDecoder().decode(MixerSessionData.self, from: data) else {
+            return
+        }
+        // Only after both decodes succeeded: a revision marked as synced on a failed
+        // decode would never be retried, and the deck would stop adopting remote edits.
+        syncedSessionRevision = revision
+        var changed = false
+        // Inputs are shared with the native API too: a Replay channel added by eivizctl has
+        // to appear in the input list, or the deck cannot be opened for it. Inputs the
+        // host added and has not published yet are merged back in instead of being
+        // dropped: the document does not know about them.
+        if decoded.inputs != session.inputs {
+            let merged = Self.mergedInputs(
+                document: decoded.inputs,
+                local: session.inputs,
+                pending: pendingInputAdds
+            )
+            pendingInputAdds = merged.pending
+            if merged.inputs != session.inputs {
+                session.inputs = merged.inputs
+                changed = true
+            }
+        }
+        if decoded.nextInputId > session.nextInputId {
+            session.nextInputId = decoded.nextInputId
+            changed = true
+        }
+        if let id = selectedInputId, !session.inputs.contains(where: { $0.id == id }) {
+            selectedInputId = session.inputs.first { !$0.isBuiltin }?.id
+            changed = true
+        }
+        let replay: JSONValue? = decoded.replay
+        if replay != session.replay {
+            session.replay = replay
+            changed = true
+        }
+        if changed {
+            objectWillChange.send()
+        }
+    }
+
+    /// Inputs to show after the control document is adopted.
+    ///
+    /// The document is not the only writer: an input added from this host is not in
+    /// it until the host sends the mutation. Adopting the document's list wholesale
+    /// used to drop every such input, which also left scene layers pointing at ids
+    /// the session no longer contained. Local-only additions are kept (and stay
+    /// pending) until the document contains them.
+    nonisolated static func mergedInputs(
+        document: [InputEntry],
+        local: [InputEntry],
+        pending: Set<UInt64>
+    ) -> (inputs: [InputEntry], pending: Set<UInt64>) {
+        let documentIds = Set(document.map(\.id))
+        let localIds = Set(local.map(\.id))
+        var inputs = document
+        for entry in local where pending.contains(entry.id) && !documentIds.contains(entry.id) {
+            inputs.append(entry)
+        }
+        inputs.sort { $0.id < $1.id }
+        let remaining = pending.intersection(localIds).subtracting(documentIds)
+        return (inputs, remaining)
+    }
+
+    /// Writes the overlay list after an edit settles. The editor changes geometry
+    /// while dragging; sending every frame would replace the document far more often
+    /// than it changes in practice.
+    func scheduleOverlayPersist() {
+        guard !isRemote else { return }
+        overlayPersistTask?.cancel()
+        overlayPersistTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.overlayPersistTask = nil
+            _ = self.mutateLocal(MixerRemote.setOverlays(self.session.overlays))
+        }
+    }
+
+    func scheduleInputPersist(_ input: InputEntry) {
+        guard !isRemote else { return }
+        inputPersistTasks[input.id]?.cancel()
+        inputPersistTasks[input.id] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self,
+                  let current = self.session.inputs.first(where: { $0.id == input.id })
+            else { return }
+            self.inputPersistTasks[current.id] = nil
+            if self.mutateLocal(MixerRemote.upsertInput(current)) {
+                self.pendingInputAdds.remove(current.id)
+            }
+        }
+    }
+
+    func scheduleUnitPersist(_ unit: MixingUnitEntry) {
+        guard !isRemote else { return }
+        unitPersistTasks[unit.id]?.cancel()
+        unitPersistTasks[unit.id] = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self,
+                  let current = self.session.units.first(where: { $0.id == unit.id })
+            else { return }
+            self.unitPersistTasks[current.id] = nil
+            _ = self.mutateLocal(MixerRemote.upsertUnit(current))
         }
     }
 
@@ -244,12 +443,11 @@ final class MixerController: ObservableObject {
     }
 
     private func bootRemote() {
-        guard fail(mixer_create_with_backend(AppPrefs.shared.renderer.createAbi, 0, 60, 1), "Metal mixer initialization") else {
+        guard fail(mixer_create_with_backend(GpuRenderer.metal.createAbi, 0, 60, 1), "Metal mixer initialization") else {
             return
         }
         _ = mixer_define_generator(EIVIZ_SRC_BLACK, EIVIZ_GEN_SOLID, 0, 0, 0, 1, 0)
         FlipBudget.configure(0)
-        GpuPresentStore.load()
         startRemoteDiscover()
         startTimers()
         booted = true
@@ -576,8 +774,22 @@ final class MixerController: ObservableObject {
     }
 
     func shutdown() {
+        endActivity()
         remoteDiscoverTask?.cancel()
         remoteDiscoverTask = nil
+        sessionSyncTimer?.invalidate()
+        sessionSyncTimer = nil
+        stopAudioDeviceMonitor()
+        overlayPersistTask?.cancel()
+        overlayPersistTask = nil
+        for task in inputPersistTasks.values {
+            task.cancel()
+        }
+        inputPersistTasks.removeAll()
+        for task in unitPersistTasks.values {
+            task.cancel()
+        }
+        unitPersistTasks.removeAll()
         mixTimer?.invalidate()
         mixTimer = nil
         meterTimer?.invalidate()
@@ -777,6 +989,7 @@ final class MixerController: ObservableObject {
         session.inputs[index].mute = mute
         let input = session.inputs[index]
         pushInputAudio(input)
+        scheduleInputPersist(input)
         if let window = audioInputWindows[id] {
             window.title = L10n.format("audio.inputTitle", input.listLabel(in: session, localFiles: !isRemote))
         }
@@ -850,6 +1063,25 @@ final class MixerController: ObservableObject {
         }
         if changed, let updated = session.scenes.first(where: { $0.id == scene.id }) {
             pushScene(updated)
+        }
+    }
+
+    /// Applies a Mixing Unit bus level. `persist` is false while a fader is dragged;
+    /// the document is written once the drag ends.
+    func applyUnitBusAudio(unitId: UInt64, gain: Float, mute: Bool, persist: Bool) {
+        guard let index = session.units.firstIndex(where: { $0.id == unitId }) else { return }
+        session.units[index].audio.gain = max(0, gain)
+        session.units[index].audio.mute = mute
+        let unit = session.units[index]
+        if isRemote {
+            if persist {
+                _ = mutateRemote(MixerRemote.upsertUnit(unit))
+            }
+            return
+        }
+        _ = mixer_audio_set_bus_gain(unit.id, max(0, unit.audio.gain), unit.audio.mute ? 1 : 0)
+        if persist {
+            scheduleUnitPersist(unit)
         }
     }
 

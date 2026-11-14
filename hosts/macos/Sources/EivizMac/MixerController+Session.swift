@@ -488,11 +488,21 @@ extension MixerController {
         FlipBudget.reset()
         mixer_destroy()
         session = loaded
+        pendingInputAdds.removeAll()
         selectedUnitId = loaded.selectedUnitId == 0 ? 1 : loaded.selectedUnitId
+        // A selection is an id into the previous session. Keeping it after New/Load
+        // leaves the editor pointing at an input or scene that no longer exists, and
+        // a scene layer added from that selection records an unusable source id.
+        if let id = selectedInputId, !session.inputs.contains(where: { $0.id == id }) {
+            selectedInputId = session.inputs.first { !$0.isBuiltin }?.id
+        }
+        if let id = selectedSceneId, !session.scenes.contains(where: { $0.id == id }) {
+            selectedSceneId = session.scenes.first?.id
+        }
         mix = 0
         inputFilter = .all
         sceneFilter = .all
-        guard fail(mixer_create_with_backend(AppPrefs.shared.renderer.createAbi, 0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
+        guard fail(mixer_create_with_backend(GpuRenderer.metal.createAbi, 0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
             return
         }
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
@@ -1081,11 +1091,13 @@ extension MixerController {
         let count = UInt32(descs.count)
         if count == 0 {
             fail(mixer_unit_set_overlays(unit.id, nil, 0), "Overlays")
+            scheduleOverlayPersist()
             return
         }
         descs.withUnsafeMutableBufferPointer { ptr in
             fail(mixer_unit_set_overlays(unit.id, ptr.baseAddress, count), "Overlays")
         }
+        scheduleOverlayPersist()
     }
 
     func pushState(unitId: UInt64, program: UInt64, preview: UInt64, mix: Float, kind: UInt32) {
@@ -1152,15 +1164,30 @@ extension MixerController {
             for peak in buffer.prefix(Int(n)) {
                 next[peak.source_id] = (peak.left, peak.right)
             }
-            peaks = next
+            // A steady tone keeps the same peaks; publishing an identical dictionary
+            // still re-evaluates every view that reads it, 20 times a second.
+            let changed = next.count != peaks.count || next.contains { id, value in
+                guard let old = peaks[id] else { return true }
+                return abs(old.0 - value.0) > 0.01 || abs(old.1 - value.1) > 0.01
+            }
+            if changed {
+                peaks = next
+            }
         }
         var stats = MixerFFI.zeroed() as EivizMixerStats
         _ = mixer_copy_stats(&stats)
         FlipBudget.observeLost(stats.surface_lost)
-        if stats.frame_budget_ms > 0 {
+        // The HUD is text: four updates a second is enough, and the IOKit GPU
+        // sample behind it is not free at 20 Hz.
+        hudTicks += 1
+        if stats.frame_budget_ms > 0, hudTicks % 5 == 0 {
             let hud = HostResources.hud(renderMs: stats.render_ms, budgetMs: stats.frame_budget_ms)
-            resourceText = hud.text
-            warnText = hud.warn
+            if resourceText != hud.text {
+                resourceText = hud.text
+            }
+            if warnText != hud.warn {
+                warnText = hud.warn
+            }
         }
         if let id = fileVideoId, let info = copyVideoInfo(id) {
             videoPlaying = info.playing != 0
@@ -1169,7 +1196,8 @@ extension MixerController {
                 videoFraction = Double(info.position_hns) / Double(info.duration_hns)
             }
         }
-        syncAllUnitBuses()
+        // The 60 Hz timer already syncs the buses; doing it here too doubled the
+        // FFI traffic without a visible change.
         updateStatus()
     }
 
@@ -1209,10 +1237,15 @@ extension MixerController {
             programByUnit = nextProgram
         }
         if let index = session.units.firstIndex(where: { $0.id == unitId }) {
-            if let scene = session.scenes.first(where: { $0.gpuId == preview }) {
+            // This runs every master frame. Assigning the same id still mutates the
+            // @Published session, and SwiftUI then re-evaluates the whole window at
+            // 60 Hz (the single largest CPU cost in the host). Only write on change.
+            if let scene = session.scenes.first(where: { $0.gpuId == preview }),
+               session.units[index].previewSceneId != scene.id {
                 session.units[index].previewSceneId = scene.id
             }
-            if let scene = session.scenes.first(where: { $0.gpuId == program }) {
+            if let scene = session.scenes.first(where: { $0.gpuId == program }),
+               session.units[index].programSceneId != scene.id {
                 session.units[index].programSceneId = scene.id
             }
         }
@@ -1240,7 +1273,10 @@ extension MixerController {
             return
         }
         let unit = selectedUnit
-        status = "\(unit.width)x\(unit.height) \(unit.fpsLabel)   \(unit.name)"
+        let next = "\(unit.width)x\(unit.height) \(unit.fpsLabel)   \(unit.name)"
+        if status != next {
+            status = next
+        }
     }
 
     func refreshRemoteWarn() {

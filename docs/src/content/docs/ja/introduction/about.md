@@ -39,7 +39,7 @@ Windows向けUIホストはWPFで実装されています。GPUへの映像フ�
 macOS向けUIホストはSwiftUIで実装され、描画にはMetalを使用します。Apple SiliconのUnified Memoryアーキテクチャを活用し、メモリコピーのオーバーヘッドを削減しています。
 
 :::note
-現在、実機検証はIntel世代のMacBookを中心に行っており、Apple Silicon環境での動作確認を進めています。ディスクリートGPU搭載Macのサポートは予定していません。
+Apple M3 MacBook Air / macOS 27で検証しています。Apple SiliconのUnified Memoryを前提とした転送経路を対象とし、ディスクリートGPU搭載Macはサポートしません。
 :::
 
 ### Linux（実験的）: Rust/GTK 4/Vulkan

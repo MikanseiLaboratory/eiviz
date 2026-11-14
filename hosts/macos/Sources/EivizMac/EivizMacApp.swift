@@ -35,11 +35,15 @@ public enum EivizLaunch {
 }
 
 struct EivizMacApp: App {
+    @NSApplicationDelegateAdaptor(EivizAppDelegate.self) private var appDelegate
     @StateObject private var mixer = MixerController()
 
     init() {
         HostLog.install()
-        EivizTheme.applyAppAppearance()
+        // Never touch NSApplication from `App.init()` on macOS 27: even when `NSApp` looks
+        // non-nil, asking for the shared application this early can abort inside AppKit
+        // ("Dictionary literal contains duplicate keys"). The appearance is applied from
+        // the scene's `.onAppear`, once the application is fully up.
     }
 
     var body: some Scene {
@@ -67,5 +71,13 @@ struct EivizMacApp: App {
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1680, height: 980)
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button(L10n.t("chrome.preferences")) {
+                    mixer.showPreferences = true
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+        }
     }
 }

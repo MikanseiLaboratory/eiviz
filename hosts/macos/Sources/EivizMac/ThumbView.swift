@@ -5,6 +5,10 @@ import SwiftUI
 final class ThumbImageView: NSView {
     var autoSizeFromBounds = false
 
+    /// The image fills the host view. If this view took the click, the host's
+    /// `mouseUp` (which previews the scene) never ran; let the hit fall through.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
     private let imageView = NSImageView()
     private var sourceId: UInt64 = 0
     private var width: UInt32 = 176

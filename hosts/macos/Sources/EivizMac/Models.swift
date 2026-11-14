@@ -55,9 +55,15 @@ enum InputKind: String, Codable, CaseIterable {
     static let tabKinds: [InputKind] = [.color, .still, .video, .omt, .ndi, .uvc, .deckLink, .mix, .audio, .replay]
 
     static func deckLinkInputAllowed() -> Bool {
+        #if os(macOS)
+        // The Pro module can report DeckLink support, but the macOS build has no
+        // DeckLink backend. Never offer a category that cannot capture here.
+        return false
+        #else
         var caps = EivizCapabilities()
         guard mixer_capabilities(&caps) == 0 else { return false }
         return caps.decklink_linked != 0 && caps.decklink_input_limit != 0
+        #endif
     }
 
     /// Instant Replay needs a Professional license and the Pro module.
@@ -1692,6 +1698,9 @@ struct SessionSettings: Codable {
     var defaultMultiviewUnitId: UInt64 = 1
     var frameBufferFrames: UInt32 = 3
     var defaultPresentInterval: UInt32 = 3
+    /// Presentation interval for the replay deck's monitors. Zero follows
+    /// `defaultPresentInterval`, the same rule the Windows settings window uses.
+    var replayPresentInterval: UInt32 = 0
     var flipSwapchainLimit: UInt32 = 0
     var internalColorFormat: InternalColorFormat = .uyvy
     var rebarOptimization: Bool?
@@ -1736,6 +1745,7 @@ struct SessionSettings: Codable {
         defaultMultiviewUnitId = try container.decodeIfPresent(UInt64.self, forKey: .defaultMultiviewUnitId) ?? 1
         frameBufferFrames = try container.decodeIfPresent(UInt32.self, forKey: .frameBufferFrames) ?? 3
         defaultPresentInterval = try container.decodeIfPresent(UInt32.self, forKey: .defaultPresentInterval) ?? 3
+        replayPresentInterval = try container.decodeIfPresent(UInt32.self, forKey: .replayPresentInterval) ?? 0
         let flip = try container.decodeIfPresent(UInt32.self, forKey: .flipSwapchainLimit) ?? 0
         flipSwapchainLimit = [0, 4, 6, 8, 10, 12, 16].contains(flip) ? flip : 0
         internalColorFormat = try container.decodeIfPresent(InternalColorFormat.self, forKey: .internalColorFormat) ?? .uyvy
@@ -1763,7 +1773,7 @@ struct SessionSettings: Codable {
     }
 }
 
-enum JSONValue: Codable {
+enum JSONValue: Codable, Equatable {
     case object([String: JSONValue])
     case array([JSONValue])
     case string(String)
@@ -2011,6 +2021,15 @@ struct AudioDevice: Identifiable, Hashable {
     var channels: UInt32
     var id: String
     var name: String
+    /// 0 render, 1 capture, 2 both. Matches AUDIO_DIR_* in the mixer.
+    var direction: UInt32 = 0
+}
+
+struct AudioProcess: Decodable, Identifiable, Hashable {
+    var name: String
+    var exe: String
+    var aumid: String = ""
+    var id: String { exe + "|" + aumid }
 }
 
 struct VideoCaptureDevice: Identifiable, Hashable {

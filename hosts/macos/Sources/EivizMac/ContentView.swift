@@ -12,6 +12,7 @@ struct ContentView: View {
     @EnvironmentObject private var mixer: MixerController
     @ObservedObject private var prefs = AppPrefs.shared
     @State private var customWgslEdit: CustomWgslEdit?
+    @State private var onAirLock = OnAirLock.active
 
     var body: some View {
         VStack(spacing: 0) {
@@ -128,6 +129,11 @@ struct ContentView: View {
             if !mixer.isRemote {
                 Button(L10n.t("chrome.screenshot")) { mixer.snapshotProgram() }
             }
+            Button(onAirLock ? L10n.t("chrome.onAirLockOn") : L10n.t("chrome.onAirLock")) {
+                onAirLock.toggle()
+                OnAirLock.set(onAirLock)
+            }
+            .help(L10n.t("msg.onAirLock"))
             Button(L10n.t("chrome.logs")) { mixer.showLogs = true }
             Button(L10n.t("chrome.settings")) { mixer.showSettings = true }
                 .disabled(mixer.isRemote && !mixer.remoteConnected)
@@ -473,17 +479,38 @@ struct ContentView: View {
                 VStack(alignment: .leading) {
                     Text("Inputs").fontWeight(.bold)
                     CatalogTabBar(input: true)
-                    List(mixer.session.inputs.filter { mixer.inputFilter.matchesInput($0) }, selection: $mixer.selectedInputId) { input in
-                        Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote))
-                            .tag(input.id)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                            .onTapGesture { mixer.selectedInputId = input.id }
-                            .contextMenu {
-                                Button(L10n.t("input.relinkFolder")) { mixer.relinkMedia() }
-                                Button(L10n.t("input.relinkFile")) { mixer.relinkInputFile(input) }
-                                Button(L10n.t("input.showInExplorer")) { mixer.showInputInFinder(input) }
+                    List(selection: $mixer.selectedInputId) {
+                        ForEach(mixer.session.inputs.filter { mixer.inputFilter.matchesInput($0) }) { input in
+                            HStack(spacing: 2) {
+                                Text(input.listLabel(in: mixer.session, localFiles: !mixer.isRemote))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Button {
+                                    mixer.moveInput(id: input.id, delta: -1)
+                                } label: {
+                                    Image(systemName: "chevron.up")
+                                        .font(.system(size: 9))
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(mixer.inputFilter != .all)
+                                .accessibilityLabel(L10n.t("input.moveUp"))
+                                Button {
+                                    mixer.moveInput(id: input.id, delta: 1)
+                                } label: {
+                                    Image(systemName: "chevron.down")
+                                        .font(.system(size: 9))
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(mixer.inputFilter != .all)
+                                .accessibilityLabel(L10n.t("input.moveDown"))
                             }
+                            .tag(input.id)
+                            .contentShape(Rectangle())
+                            .contextMenu {
+                                    Button(L10n.t("input.relinkFolder")) { mixer.relinkMedia() }
+                                    Button(L10n.t("input.relinkFile")) { mixer.relinkInputFile(input) }
+                                    Button(L10n.t("input.showInExplorer")) { mixer.showInputInFinder(input) }
+                                }
+                        }
                     }
                     .scrollContentBackground(.hidden)
                     .background(EivizTheme.list)
@@ -656,6 +683,7 @@ struct ContentView: View {
     private func meter(title: String, unitId: UInt64) -> some View {
         let peak = mixer.peaks[EIVIZ_AUDIO_BUS_PEAK_BASE | unitId] ?? (0, 0)
         let listening = mixer.session.headphoneListenKind == 1 && mixer.session.headphoneListenId == unitId
+        let unit = mixer.session.units.first { $0.id == unitId }
         return VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.system(size: 10))
             HStack(spacing: 2) {
@@ -666,7 +694,57 @@ struct ContentView: View {
             listenButton(on: listening) {
                 mixer.toggleHeadphoneListen(kind: 1, id: unitId)
             }
+            gainSlider(
+                gain: { mixer.session.units.first { $0.id == unitId }?.audio.gain ?? 1 },
+                set: { value in
+                    mixer.applyUnitBusAudio(
+                        unitId: unitId,
+                        gain: value,
+                        mute: mixer.session.units.first { $0.id == unitId }?.audio.mute ?? false,
+                        persist: false
+                    )
+                },
+                end: {
+                    mixer.applyUnitBusAudio(
+                        unitId: unitId,
+                        gain: mixer.session.units.first { $0.id == unitId }?.audio.gain ?? 1,
+                        mute: mixer.session.units.first { $0.id == unitId }?.audio.mute ?? false,
+                        persist: true
+                    )
+                }
+            )
+            Button("M") {
+                let muted = mixer.session.units.first { $0.id == unitId }?.audio.mute ?? false
+                mixer.applyUnitBusAudio(
+                    unitId: unitId,
+                    gain: mixer.session.units.first { $0.id == unitId }?.audio.gain ?? 1,
+                    mute: !muted,
+                    persist: true
+                )
+            }
+            .buttonStyle(OnOffButtonStyle(on: unit?.audio.mute == true, compact: true))
+            .help(L10n.t("audio.mute"))
         }
+    }
+
+    private func gainSlider(
+        gain: @escaping () -> Float,
+        set: @escaping (Float) -> Void,
+        end: @escaping () -> Void
+    ) -> some View {
+        Slider(
+            value: Binding(
+                get: { AudioMeter.slider(fromGain: gain()) },
+                set: { set(AudioMeter.gain(fromSlider: $0)) }
+            ),
+            in: 0 ... 1,
+            onEditingChanged: { editing in
+                if !editing { end() }
+            }
+        )
+        .frame(width: 64)
+        .controlSize(.mini)
+        .help(L10n.t("audio.gain"))
     }
 
     private func inputMeter(_ input: InputEntry) -> some View {
@@ -694,6 +772,24 @@ struct ContentView: View {
             listenButton(on: mixer.session.headphoneListenKind == 2 && mixer.session.headphoneListenId == input.id) {
                 mixer.toggleHeadphoneListen(kind: 2, id: input.id)
             }
+            gainSlider(
+                gain: { mixer.session.inputs.first { $0.id == input.id }?.gain ?? input.gain },
+                set: { value in
+                    mixer.applyInputAudio(id: input.id, units: input.audioUnits, gain: value, mute: input.mute)
+                },
+                end: {}
+            )
+            Button("M") {
+                let current = mixer.session.inputs.first { $0.id == input.id }
+                mixer.applyInputAudio(
+                    id: input.id,
+                    units: current?.audioUnits ?? input.audioUnits,
+                    gain: current?.gain ?? input.gain,
+                    mute: !(current?.mute ?? input.mute)
+                )
+            }
+            .buttonStyle(OnOffButtonStyle(on: input.mute, compact: true))
+            .help(L10n.t("audio.mute"))
             if input.kind != .mix {
                 ForEach(mixer.session.units) { unit in
                     let on = input.audioUnits.contains(unit.id) || mixer.inputFollows(input.id, unit: unit)

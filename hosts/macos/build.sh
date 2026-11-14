@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# The Swift package targets macOS 14. Keep the Rust dylibs from drifting above it.
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}"
 ARCH="${EIVIZ_MAC_ARCH:-}"
 SWIFT_ARGS=(-c release)
 if [ -n "$ARCH" ]; then
@@ -34,15 +36,28 @@ else
 fi
 DYLIB="$EIVIZ_MIXER_LIBDIR/libeiviz_mixer.dylib"
 REMOTE="$EIVIZ_MIXER_LIBDIR/libeiviz_remote.dylib"
-install_name_tool -id "@rpath/libeiviz_mixer.dylib" "$DYLIB"
-install_name_tool -id "@rpath/libeiviz_remote.dylib" "$REMOTE"
-if [ -f "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_mixer.dylib" ]; then
-  install_name_tool -id "@rpath/libeiviz_mixer.dylib" "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_mixer.dylib"
-fi
-if [ -f "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_remote.dylib" ]; then
-  install_name_tool -id "@rpath/libeiviz_remote.dylib" "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_remote.dylib"
-fi
+# Cargo hardlinks the deps copy when the top-level dylib is (re)linked. Rewriting the
+# install name of two hardlinked paths applies the patch twice to one inode, and the
+# second rewrite corrupts the LC_ID string pool on current toolchains; dyld then
+# refuses the library. Patch one path when the two are the same file.
+patch_install_name() {
+  local file="$1" id="$2" twin="$3"
+  [ -f "$file" ] || return 0
+  if [ -f "$twin" ] && [ "$file" -ef "$twin" ]; then
+    return 0
+  fi
+  install_name_tool -id "$id" "$file"
+}
+patch_install_name "$DYLIB" "@rpath/libeiviz_mixer.dylib" "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_mixer.dylib"
+patch_install_name "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_mixer.dylib" "@rpath/libeiviz_mixer.dylib" "$DYLIB"
+patch_install_name "$REMOTE" "@rpath/libeiviz_remote.dylib" "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_remote.dylib"
+patch_install_name "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_remote.dylib" "@rpath/libeiviz_remote.dylib" "$REMOTE"
 cd "$ROOT/hosts/macos"
+# SwiftPM searches the products directory before the Rust target directory. A dylib
+# copied there by an earlier build would then be linked instead of the one just built,
+# so clear the stale copies before linking.
+BIN="$(swift build "${SWIFT_ARGS[@]}" --show-bin-path)"
+rm -f "$BIN/libeiviz_mixer.dylib" "$BIN/libeiviz_remote.dylib" "$BIN"/libndi*.dylib
 swift build "${SWIFT_ARGS[@]}"
 BIN="$(swift build "${SWIFT_ARGS[@]}" --show-bin-path)"
 cp -f "$DYLIB" "$BIN/"

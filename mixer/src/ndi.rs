@@ -153,7 +153,7 @@ impl NdiReceiver {
                     );
                 }
                 let mut gpu_ring = GpuUploadRing::new();
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "macos"))]
                 let mut ingest_ring: Option<crate::rebar::FrameIngestRing> = None;
                 let mut gpu_warned = false;
                 let mut last_error = String::new();
@@ -163,7 +163,7 @@ impl NdiReceiver {
                             &uploads,
                             gpu.as_ref(),
                             &mut gpu_ring,
-                            #[cfg(windows)]
+                            #[cfg(any(windows, target_os = "macos"))]
                             &mut ingest_ring,
                             &mut gpu_warned,
                             &mut last_error,
@@ -528,7 +528,9 @@ fn ingest_video(
     uploads: &Mutex<UploadStore>,
     gpu: Option<&GpuIngest>,
     gpu_ring: &mut GpuUploadRing,
-    #[cfg(windows)] ingest_ring: &mut Option<crate::rebar::FrameIngestRing>,
+    #[cfg(any(windows, target_os = "macos"))] ingest_ring: &mut Option<
+        crate::rebar::FrameIngestRing,
+    >,
     gpu_warned: &mut bool,
     last_error: &mut String,
     source_id: u64,
@@ -554,7 +556,7 @@ fn ingest_video(
     if let Some(gpu) = gpu.filter(|gpu| gpu.ndi_gpu.load(Ordering::Relaxed)) {
         // With GPU ingest enabled a failed upload drops the frame: silently switching to the
         // CPU path would change latency and load behind the operator's back.
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         if gpu.use_rebar.load(Ordering::Relaxed) && gpu.rebar_available {
             if ingest_ring.is_none() {
                 *ingest_ring = crate::rebar::FrameIngestRing::new(&gpu.device, &gpu.queue);

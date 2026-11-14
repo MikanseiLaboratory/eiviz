@@ -397,6 +397,9 @@ pub struct ReplayEngine {
     /// The render device, shared with the playout decoder. Set once when the
     /// renderer starts; the channel worker can then decode packets on the GPU.
     gpu: OnceLock<(wgpu::Device, wgpu::Queue)>,
+    /// Whether playout may decode on the GPU. Encoding still uses `gpu` on macOS;
+    /// only vmx's Metal decoder is disabled there.
+    gpu_decode: AtomicBool,
     /// Decoders whose GPU pipelines were built before playback needed them. The
     /// first vmx decode builds shader pipelines and can take a second on a debug
     /// build; doing that in front of the first clip would freeze playout.
@@ -495,6 +498,7 @@ impl ReplayEngine {
             stop_workers: Arc::new(AtomicBool::new(false)),
             workers: Mutex::new(Vec::new()),
             gpu: OnceLock::new(),
+            gpu_decode: AtomicBool::new(!cfg!(target_os = "macos")),
             prepared: Mutex::new(HashMap::new()),
             warming: AtomicBool::new(false),
         };
@@ -524,7 +528,14 @@ impl ReplayEngine {
     /// Called once, when the render loop starts.
     pub fn set_gpu(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let _ = self.gpu.set((device.clone(), queue.clone()));
-        self.warm_decoders();
+        if self.gpu_decode.load(Ordering::Relaxed) {
+            self.warm_decoders();
+        } else {
+            // vmx's Metal decoder builds texture views the renderer cannot resolve
+            // (wgpu TextureViewId mismatch) and panics as soon as a clip plays. Keep
+            // recording on the GPU, but decode Replay on the CPU on macOS.
+            crate::diag::info("replay GPU decode disabled on macOS; using the CPU decoder");
+        }
     }
 
     fn gpu_device(&self) -> Option<(wgpu::Device, wgpu::Queue)> {
@@ -3464,7 +3475,10 @@ impl ChannelPlayout {
         // transition pass blends the two textures, where the CPU path would have
         // copied both frames back for a blend and an upload.
         let transitioning = wants_secondary(&plan);
-        if let Some((device, queue)) = gpu.as_ref() {
+        if let Some((device, queue)) = gpu
+            .as_ref()
+            .filter(|_| engine.gpu_decode.load(Ordering::Relaxed))
+        {
             let decoder = &mut self.decoder;
             let ready = if decoder.has_codec() {
                 true

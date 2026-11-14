@@ -129,6 +129,20 @@ struct ReplayFormatValues {
     var fpsDen: UInt32
 }
 
+struct ReplayCapacity: Decodable {
+    var encodeFps: Double = 0
+    var encodeFpsCpu: Double = 0
+    var diskWriteMbS: Double = 0
+    var diskReadMbS: Double = 0
+    var bitrateMbps: Double = 0
+    var readbackMbS: Double = 0
+    var anglesByReadback: UInt32 = 0
+    var anglesAt60Cpu: UInt32 = 0
+    var anglesAt60: UInt32 = 0
+    var anglesByDisk: UInt32 = 0
+    var totalFps: Double = 0
+}
+
 struct ReplayAngleInfo: Identifiable, Hashable {
     let id: UInt32
     /// Name the operator sees and edits.
@@ -139,7 +153,9 @@ struct ReplayAngleInfo: Identifiable, Hashable {
     var sceneId: UInt64
     /// Input this angle records when `source` is `Input`.
     var inputId: UInt64 = 0
-    /// Mixing unit whose program mix feeds this angle. Zero means silent.
+    /// `Silent`, `Unit`, or `Source` (the recorded source's own audio follows it).
+    var audio: String = "Silent"
+    /// Mixing unit whose program mix feeds this angle when `audio` is `Unit`.
     var audioUnitId: UInt64
     /// `Gpu` encodes from the scene texture; `Cpu` reads it back first.
     var encoder: String = "Gpu"
@@ -268,7 +284,9 @@ struct ReplayExportProgress {
         else {
             return nil
         }
-        state = ReplayExportState(rawValue: object["state"]?.uint32Value ?? 0) ?? .idle
+        // An unknown state comes from a newer mixer than this host. Treating it as idle
+        // left the runner busy forever; failing it at least ends the export and says so.
+        state = ReplayExportState(rawValue: object["state"]?.uint32Value ?? 0) ?? .failed
         done = object["done"]?.uint64Value ?? 0
         total = object["total"]?.uint64Value ?? 0
         skipped = object["skipped"]?.uint64Value ?? 0
@@ -289,13 +307,32 @@ struct ReplayDocument {
         self.raw = raw
     }
 
+    /// Where a new Replay project records when the operator has not chosen a drive.
+    /// Without a drive the capacity button cannot measure anything, so a fresh Replay
+    /// input should still be usable.
+    static func defaultStoragePath() -> String {
+        let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Movies")
+        return movies.appendingPathComponent("eiviz-replay").path
+    }
+
     /// The document a project gets when its first Replay input is added. Replay
     /// never appears in a session without this, and it carries a recording format
     /// so the project can record without the operator opening Replay Setup first.
     static func empty(format: ReplayFormatValues) -> ReplayDocument {
-        ReplayDocument(raw: [
+        let storage = defaultStoragePath()
+        try? FileManager.default.createDirectory(
+            atPath: storage,
+            withIntermediateDirectories: true
+        )
+        return ReplayDocument(raw: [
             "enabled": .bool(false),
-            "storage": .array([]),
+            "storage": .array([
+                .object([
+                    "path": .string(storage),
+                    "angleIds": .array([]),
+                ]),
+            ]),
             "format": .object([
                 "width": .number(Double(format.width)),
                 "height": .number(Double(format.height)),
@@ -411,7 +448,8 @@ struct ReplayDocument {
                 source: object["source"]?.stringValue ?? "Scene",
                 sceneId: object["sceneId"]?.uint64Value ?? 0,
                 inputId: object["inputId"]?.uint64Value ?? 0,
-                        // Silence is the only other source, so an explicit unit id is what
+                audio: object["audio"]?.stringValue ?? "Silent",
+                // Silence is the only other source, so an explicit unit id is what
                 // matters.
                 audioUnitId: (object["audio"]?.stringValue ?? "Silent").caseInsensitiveCompare("Unit") == .orderedSame
                     ? (object["audioUnitId"]?.uint64Value ?? 0)
@@ -584,6 +622,24 @@ struct ReplayDocument {
         array("channels").filter { ($0.objectValue?["playlistId"]?.uint64Value ?? 0) == playlistId }.count
     }
 
+    /// Points every channel that named `old` at `new`.
+    ///
+    /// A channel may reach a playlist without its own entry (the deck falls back to the
+    /// first one), so deleting a playlist has to repair the channels that named it
+    /// explicitly instead of leaving them pointing at an id nothing owns.
+    mutating func repointChannels(from old: UInt64, to new: UInt64) {
+        guard old != new else { return }
+        var channels = array("channels")
+        for index in channels.indices {
+            guard var entry = channels[index].objectValue,
+                  entry["playlistId"]?.uint64Value == old
+            else { continue }
+            entry["playlistId"] = .number(Double(new))
+            channels[index] = .object(entry)
+        }
+        raw["channels"] = .array(channels)
+    }
+
     /// Removes a playlist and its clips.
     mutating func removePlaylist(_ playlistId: UInt64) -> Bool {
         var playlists = array("playlists")
@@ -631,6 +687,19 @@ struct ReplayDocument {
         raw["activeAngleId"] = .number(Double(id))
     }
 
+    /// Allocates the next angle id and advances the document's counter. The settings
+    /// window used to take max(existing)+1 without touching nextAngleId, so another host
+    /// could hand out the same id.
+    mutating func reserveAngleId() -> UInt32 {
+        var highest: UInt32 = 0
+        for item in array("angles") {
+            highest = max(highest, item.objectValue?["id"]?.uint32Value ?? 0)
+        }
+        let next = max(raw["nextAngleId"]?.uint32Value ?? 1, highest + 1)
+        raw["nextAngleId"] = .number(Double(next + 1))
+        return next
+    }
+
     mutating func reserveEventId() -> UInt64 {
         var highest: UInt64 = 0
         for item in array("events") {
@@ -651,9 +720,14 @@ struct ReplayDocument {
         return next
     }
 
-    /// Creates the first playlist when the project has none yet.
-    mutating func ensurePlaylist() -> UInt64 {
-        if let existing = array("playlists").first?.objectValue?["id"]?.uint64Value {
+    /// The playlist an event should join: the one the channel selected when it exists,
+    /// otherwise the first one, creating it when the project has none.
+    mutating func ensurePlaylist(preferred: UInt64 = 0) -> UInt64 {
+        let ids = array("playlists").compactMap { $0.objectValue?["id"]?.uint64Value }
+        if preferred != 0, ids.contains(preferred) {
+            return preferred
+        }
+        if let existing = ids.first {
             return existing
         }
         let id = reservePlaylistId()
@@ -685,6 +759,55 @@ struct ReplayDocument {
         return id
     }
 
+    /// Adds the clip for an event the deck just made, honouring the clip-order setting.
+    /// Every event path (mark out, mark last, direct create) goes through this, so none of
+    /// them can quietly append while the operator asked for timecode order.
+    @discardableResult
+    mutating func addEventClip(
+        eventId: UInt64,
+        angleId: UInt32,
+        playlistId preferred: UInt64 = 0,
+        sortByTimecode: Bool
+    ) -> Bool {
+        guard let event = events.first(where: { $0.id == eventId }) else { return false }
+        let target = ensurePlaylist(preferred: preferred)
+        guard appendClip(playlistId: target, event: event, angleId: angleId) else {
+            return false
+        }
+        if sortByTimecode {
+            sortClips(playlistId: target)
+        }
+        return true
+    }
+
+    /// Puts a playlist's clips in timecode order, for the clip-order setting that inserts
+    /// a late highlight where it happened instead of at the end.
+    mutating func sortClips(playlistId: UInt64) {
+        var playlists = array("playlists")
+        guard let index = playlists.firstIndex(where: {
+            ($0.objectValue?["id"]?.uint64Value ?? 0) == playlistId
+        }), var playlist = playlists[index].objectValue else { return }
+        var clips = playlist["clips"]?.arrayValue ?? []
+        clips.sort {
+            ($0.objectValue?["inFrame"]?.uint64Value ?? 0)
+                < ($1.objectValue?["inFrame"]?.uint64Value ?? 0)
+        }
+        playlist["clips"] = .array(clips)
+        playlists[index] = .object(playlist)
+        raw["playlists"] = .array(playlists)
+    }
+
+    mutating func setEventRange(_ id: UInt64, inFrame: UInt64, outFrame: UInt64) {
+        var events = array("events")
+        guard let index = events.firstIndex(where: {
+            ($0.objectValue?["id"]?.uint64Value ?? 0) == id
+        }), var event = events[index].objectValue else { return }
+        event["inFrame"] = .number(Double(inFrame))
+        event["outFrame"] = .number(Double(outFrame))
+        events[index] = .object(event)
+        raw["events"] = .array(events)
+    }
+
     mutating func setEventProtected(_ id: UInt64, _ value: Bool) {
         var events = array("events")
         for index in events.indices {
@@ -695,6 +818,17 @@ struct ReplayDocument {
             events[index] = .object(object)
         }
         raw["events"] = .array(events)
+    }
+
+    /// Removes an event unless it is protected. Protected is the operator saying the
+    /// recording must not be overwritten; a delete button or key must not override it.
+    @discardableResult
+    mutating func removeEventIfUnprotected(_ id: UInt64) -> Bool {
+        guard let event = events.first(where: { $0.id == id }), !event.protected else {
+            return false
+        }
+        removeEvent(id)
+        return true
     }
 
     mutating func removeEvent(_ id: UInt64) {
@@ -919,10 +1053,9 @@ struct ReplayDocument {
 
     mutating func setStorages(_ specs: [StorageSpec]) {
         let clean = specs.filter { !$0.path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        // A drive and an angle are a recording setup, so the flag says so. The
-        // control layer refuses the other combinations, and a host that wrote them
-        // would leave a project that can never record.
-        raw["enabled"] = .bool(!clean.isEmpty && !angles.isEmpty)
+        // The flag is refreshed after both the drives and the angles are written: reading
+        // the old angle list here left a first-time setup disabled even though the new
+        // angle and drive were both valid.
         raw["storage"] = .array(clean.map { spec in
             .object([
                 "path": .string(spec.path.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -931,16 +1064,107 @@ struct ReplayDocument {
         })
     }
 
+    /// A project records only when it has both a drive and an angle. Called after the
+    /// drives and angles have both been written, so the flag never describes the old setup.
+    mutating func refreshEnabled() {
+        raw["enabled"] = .bool(!storages.isEmpty && !angles.isEmpty)
+    }
+
+    /// The format the document records at, so a recording can be linked without
+    /// reading the unit that happened to be selected.
+    var formatValues: ReplayFormatValues {
+        let format = raw["format"]?.objectValue
+        return ReplayFormatValues(
+            width: UInt32(format?["width"]?.numberValue ?? 0),
+            height: UInt32(format?["height"]?.numberValue ?? 0),
+            fpsNum: UInt32(format?["fpsNum"]?.numberValue ?? 0),
+            fpsDen: UInt32(format?["fpsDen"]?.numberValue ?? 0)
+        )
+    }
+
+    /// Adds the recording a local record button started. The control API links its own
+    /// recordings; a deck that records through the mixer ABI has to do the same or the
+    /// session keeps no way to find the files.
+    mutating func linkRecording(
+        uuid: String,
+        storage: String,
+        angles: [UInt32],
+        format: ReplayFormatValues,
+        createdMs: UInt64
+    ) {
+        var list = array("recordings")
+        list.removeAll { $0.objectValue?["uuid"]?.stringValue == uuid }
+        list.append(.object([
+            "uuid": .string(uuid),
+            "storage": .string(storage),
+            "angles": .array(angles.map { .number(Double($0)) }),
+            "width": .number(Double(format.width)),
+            "height": .number(Double(format.height)),
+            "fpsNum": .number(Double(format.fpsNum)),
+            "fpsDen": .number(Double(format.fpsDen)),
+            "firstFrame": .number(0),
+            "lastFrame": .number(0),
+            "createdMs": .number(Double(createdMs)),
+        ]))
+        raw["recordings"] = .array(list)
+    }
+
+    /// Writes the final frame range after the recorder stops.
+    mutating func setRecordingRange(uuid: String, first: UInt64, last: UInt64) {
+        var list = array("recordings")
+        guard let index = list.firstIndex(where: {
+            $0.objectValue?["uuid"]?.stringValue == uuid
+        }), var entry = list[index].objectValue else { return }
+        entry["firstFrame"] = .number(Double(first))
+        entry["lastFrame"] = .number(Double(last))
+        list[index] = .object(entry)
+        raw["recordings"] = .array(list)
+    }
+
+    /// Repairs angles saved before source switching cleared the other side. Returns true
+    /// when the document changed, so the deck can publish the repaired copy.
+    @discardableResult
+    mutating func normalizeAngleSources() -> Bool {
+        var items = array("angles")
+        var changed = false
+        for index in items.indices {
+            guard var angle = items[index].objectValue,
+                  let source = angle["source"]?.stringValue
+            else { continue }
+            if source == "Input" {
+                if (angle["sceneId"]?.uint64Value ?? 0) != 0 {
+                    angle["sceneId"] = .number(0)
+                    changed = true
+                }
+            } else if (angle["inputId"]?.uint64Value ?? 0) != 0 {
+                angle["inputId"] = .number(0)
+                changed = true
+            }
+            items[index] = .object(angle)
+        }
+        if changed { raw["angles"] = .array(items) }
+        return changed
+    }
+
     mutating func setAngles(_ angles: [ReplayAngleInfo]) {
         raw["angles"] = .array(angles.map { angle in
-            .object([
+            // A source is one or the other. A scene id left behind on an input angle is
+            // exactly what the core refuses with "records an input, so it cannot name
+            // scene N", so the unused side is written as zero rather than carried over.
+            let sceneId = angle.source == "Scene" ? angle.sceneId : 0
+            let inputId = angle.source == "Input" ? angle.inputId : 0
+            return .object([
                 "id": .number(Double(angle.id)),
                 "name": .string(angle.name),
                 "source": .string(angle.source),
-                "sceneId": .number(Double(angle.sceneId)),
-                "inputId": .number(Double(angle.inputId)),
-                "audio": .string(angle.audioUnitId == 0 ? "Silent" : "Unit"),
-                "audioUnitId": .number(Double(angle.audioUnitId)),
+                "sceneId": .number(Double(sceneId)),
+                "inputId": .number(Double(inputId)),
+                "audio": .string(
+                    angle.audio == "Unit" && angle.audioUnitId != 0
+                        ? "Unit"
+                        : angle.audio == "Source" ? "Source" : "Silent"
+                ),
+                "audioUnitId": .number(Double(angle.audio == "Unit" ? angle.audioUnitId : 0)),
                     "encoder": .string(angle.encoder),
             ])
         })

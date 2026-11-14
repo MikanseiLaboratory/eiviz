@@ -12,6 +12,7 @@ const LEGACY_BAR_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_STAGING_SLOTS: usize = 6;
 #[cfg(target_os = "macos")]
 const UMA_SLOTS: usize = 3;
+const UMA_INGEST_MAX_SLOTS: usize = 6;
 
 #[derive(Clone, Copy, Debug)]
 pub struct RebarSnapshot {
@@ -767,6 +768,7 @@ fn write_mapped_strided(
 #[cfg(target_os = "macos")]
 pub struct UmaUploader {
     mtl: objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>>,
+    device: wgpu::Device,
     rings: std::collections::HashMap<u64, UmaRing>,
 }
 
@@ -784,19 +786,24 @@ struct UmaSlot {
     width: u32,
     height: u32,
     format: wgpu::TextureFormat,
+    lease: crate::upload::FrameLease,
 }
 
 #[cfg(target_os = "macos")]
 impl UmaUploader {
     pub fn new(device: &GpuDevice) -> Option<Self> {
+        Self::from_device(&device.device)
+    }
+
+    pub fn from_device(device: &wgpu::Device) -> Option<Self> {
         let mtl = unsafe {
             device
-                .device
                 .as_hal::<wgpu::hal::api::Metal>()
                 .map(|hal| hal.raw_device().clone())
         }?;
         Some(Self {
             mtl,
+            device: device.clone(),
             rings: std::collections::HashMap::new(),
         })
     }
@@ -811,22 +818,41 @@ impl UmaUploader {
 
     pub fn upload_direct(
         &mut self,
-        device: &GpuDevice,
+        device: &wgpu::Device,
         source_id: u64,
         data: &[u8],
         row_bytes: u32,
         height: u32,
         tex_width: u32,
         format: wgpu::TextureFormat,
-    ) -> Result<(wgpu::Texture, wgpu::TextureView), String> {
-        let slot_i = self.ensure_slot(device, source_id, tex_width, height, format)?;
+    ) -> Result<(wgpu::Texture, wgpu::TextureView, crate::upload::FrameLease), String> {
+        self.upload_direct_strided(
+            device, source_id, data, row_bytes, row_bytes, height, tex_width, format,
+        )
+    }
+
+    /// [`Self::upload_direct`] for a source whose rows are padded: `source_stride`
+    /// is the distance between rows in `data`, `row_bytes` the bytes a row holds.
+    #[allow(clippy::too_many_arguments)]
+    fn upload_direct_strided(
+        &mut self,
+        device: &wgpu::Device,
+        source_id: u64,
+        data: &[u8],
+        row_bytes: u32,
+        source_stride: u32,
+        height: u32,
+        tex_width: u32,
+        format: wgpu::TextureFormat,
+    ) -> Result<(wgpu::Texture, wgpu::TextureView, crate::upload::FrameLease), String> {
+        let (slot_i, lease) = self.ensure_slot(device, source_id, tex_width, height, format)?;
         let raw = self
             .rings
             .get(&source_id)
             .and_then(|ring| ring.slots.get(slot_i))
             .map(|slot| slot.raw.clone())
             .ok_or("uma ring")?;
-        write_shared(&raw, data, row_bytes, height, tex_width)?;
+        write_shared(&raw, data, row_bytes, height, tex_width, source_stride)?;
         let (texture, view) = {
             let slot = self
                 .rings
@@ -836,42 +862,66 @@ impl UmaUploader {
             (slot.imported.clone(), slot.view.clone())
         };
         if let Some(ring) = self.rings.get_mut(&source_id) {
-            ring.next = (slot_i + 1) % UMA_SLOTS;
+            ring.next = (slot_i + 1) % ring.slots.len().max(1);
         }
-        Ok((texture, view))
+        Ok((texture, view, lease))
     }
 
     fn ensure_slot(
         &mut self,
-        device: &GpuDevice,
+        device: &wgpu::Device,
         source_id: u64,
         width: u32,
         height: u32,
         format: wgpu::TextureFormat,
-    ) -> Result<usize, String> {
-        let reuse = self.rings.get(&source_id).is_some_and(|ring| {
-            ring.slots.get(ring.next).is_some_and(|slot| {
+    ) -> Result<(usize, crate::upload::FrameLease), String> {
+        let matching = self.rings.get(&source_id).is_some_and(|ring| {
+            ring.slots.first().is_some_and(|slot| {
                 slot.width == width && slot.height == height && slot.format == format
             })
         });
-        if reuse {
-            return Ok(self.rings[&source_id].next);
+        if matching {
+            let ring = self.rings.get_mut(&source_id).ok_or("uma ring")?;
+            let len = ring.slots.len();
+            for offset in 0..len {
+                let index = (ring.next + offset) % len;
+                if std::sync::Arc::strong_count(&ring.slots[index].lease) == 1 {
+                    ring.next = (index + 1) % len;
+                    return Ok((index, std::sync::Arc::clone(&ring.slots[index].lease)));
+                }
+            }
+            if ring.slots.len() >= UMA_INGEST_MAX_SLOTS {
+                return Err("unified-memory ingest ring exhausted".into());
+            }
+        } else {
+            self.rings.remove(&source_id);
         }
-        let mut ring = UmaRing {
-            slots: Vec::new(),
-            next: 0,
-        };
-        while ring.slots.len() < UMA_SLOTS {
-            ring.slots
-                .push(self.create_slot(device, width, height, format)?);
+        if matching {
+            let slot = self.create_slot(device, width, height, format)?;
+            let lease = std::sync::Arc::clone(&slot.lease);
+            let ring = self.rings.get_mut(&source_id).ok_or("uma ring")?;
+            ring.slots.push(slot);
+            let index = ring.slots.len() - 1;
+            ring.next = 0;
+            Ok((index, lease))
+        } else {
+            let mut ring = UmaRing {
+                slots: Vec::new(),
+                next: 0,
+            };
+            while ring.slots.len() < UMA_SLOTS {
+                ring.slots
+                    .push(self.create_slot(device, width, height, format)?);
+            }
+            let lease = std::sync::Arc::clone(&ring.slots[0].lease);
+            self.rings.insert(source_id, ring);
+            Ok((0, lease))
         }
-        self.rings.insert(source_id, ring);
-        Ok(0)
     }
 
     fn create_slot(
         &self,
-        device: &GpuDevice,
+        device: &wgpu::Device,
         width: u32,
         height: u32,
         format: wgpu::TextureFormat,
@@ -920,22 +970,20 @@ impl UmaUploader {
             )
         };
         let imported = unsafe {
-            device
-                .device
-                .create_texture_from_hal::<wgpu::hal::api::Metal>(
-                    hal,
-                    &wgpu::TextureDescriptor {
-                        label: Some("eiviz uma shared"),
-                        size: extent,
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-                        view_formats: &[],
-                    },
-                    wgpu::TextureUses::RESOURCE | wgpu::TextureUses::COPY_SRC,
-                )
+            device.create_texture_from_hal::<wgpu::hal::api::Metal>(
+                hal,
+                &wgpu::TextureDescriptor {
+                    label: Some("eiviz uma shared"),
+                    size: extent,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                },
+                wgpu::TextureUses::RESOURCE | wgpu::TextureUses::COPY_SRC,
+            )
         };
         let view = imported.create_view(&Default::default());
         Ok(UmaSlot {
@@ -945,6 +993,58 @@ impl UmaUploader {
             width,
             height,
             format,
+            lease: std::sync::Arc::new(()),
+        })
+    }
+
+    pub fn vram_bytes(&self) -> u64 {
+        self.rings
+            .values()
+            .flat_map(|ring| ring.slots.iter())
+            .map(|slot| crate::upload::texture_bytes(&slot.imported))
+            .sum()
+    }
+
+    pub fn upload_ingest(
+        &mut self,
+        data: &[u8],
+        stride: usize,
+        row_bytes: usize,
+        width: u32,
+        height: u32,
+        packed: bool,
+        bgra: bool,
+        format: wgpu::TextureFormat,
+        pts: i64,
+    ) -> Result<crate::upload::GpuVideoFrame, String> {
+        let tex_width = if packed {
+            (width / 2).max(1)
+        } else {
+            width.max(1)
+        };
+        let device = self.device.clone();
+        // NDI may hand us a padded line stride. replaceRegion takes the *source*
+        // pitch, so the stride belongs there; using the packed row size would skew
+        // every row by the padding.
+        let (texture, view, lease) = self.upload_direct_strided(
+            &device,
+            0,
+            data,
+            row_bytes as u32,
+            stride as u32,
+            height,
+            tex_width,
+            format,
+        )?;
+        Ok(crate::upload::GpuVideoFrame {
+            pts,
+            width,
+            height,
+            packed,
+            bgra,
+            texture,
+            view,
+            lease: Some(lease),
         })
     }
 }
@@ -956,6 +1056,7 @@ fn write_shared(
     row_bytes: u32,
     height: u32,
     tex_width: u32,
+    source_stride: u32,
 ) -> Result<(), String> {
     use objc2_metal::{MTLOrigin, MTLRegion, MTLSize, MTLTexture};
 
@@ -971,7 +1072,8 @@ fn write_shared(
         },
     };
     unsafe {
-        texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(region, 0, ptr, row_bytes as _);
+        let pitch = source_stride.max(row_bytes);
+        texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(region, 0, ptr, pitch as _);
     }
     Ok(())
 }
@@ -1069,11 +1171,17 @@ impl FrameUploader {
         height: u32,
         tex_width: u32,
         format: wgpu::TextureFormat,
-    ) -> Option<Result<(wgpu::Texture, wgpu::TextureView), String>> {
+    ) -> Option<Result<(wgpu::Texture, wgpu::TextureView, crate::upload::FrameLease), String>> {
         #[cfg(target_os = "macos")]
         if let Self::Uma(uploader) = self {
             return Some(uploader.upload_direct(
-                device, source_id, data, row_bytes, height, tex_width, format,
+                &device.device,
+                source_id,
+                data,
+                row_bytes,
+                height,
+                tex_width,
+                format,
             ));
         }
         #[cfg(not(target_os = "macos"))]
@@ -1084,33 +1192,59 @@ impl FrameUploader {
     }
 }
 
-/// NDI ingest-thread host-visible ring. DX12 ReBAR or Vulkan; never calls the other HAL.
-#[cfg(windows)]
+/// NDI ingest-thread host-visible ring. DX12 ReBAR, Metal UMA, or Vulkan.
+#[cfg(any(windows, target_os = "macos"))]
 pub enum FrameIngestRing {
+    #[cfg(windows)]
     Rebar(RebarIngestRing),
+    #[cfg(windows)]
     Vulkan(crate::vk_upload::VulkanIngestRing),
+    #[cfg(target_os = "macos")]
+    Uma(UmaUploader),
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 impl FrameIngestRing {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
-        if let Some(ring) = RebarIngestRing::new(device, queue) {
-            return Some(Self::Rebar(ring));
+        #[cfg(windows)]
+        {
+            if let Some(ring) = RebarIngestRing::new(device, queue) {
+                return Some(Self::Rebar(ring));
+            }
+            if let Some(ring) = crate::vk_upload::VulkanIngestRing::new(device, queue) {
+                return Some(Self::Vulkan(ring));
+            }
         }
-        crate::vk_upload::VulkanIngestRing::new(device, queue).map(Self::Vulkan)
+        #[cfg(target_os = "macos")]
+        {
+            let _ = queue;
+            return UmaUploader::from_device(device).map(Self::Uma);
+        }
+        #[cfg(windows)]
+        {
+            None
+        }
     }
 
     pub fn is_live(&self) -> bool {
         match self {
+            #[cfg(windows)]
             Self::Rebar(ring) => ring.is_live(),
+            #[cfg(windows)]
             Self::Vulkan(ring) => ring.is_live(),
+            #[cfg(target_os = "macos")]
+            Self::Uma(_) => true,
         }
     }
 
     pub fn vram_bytes(&self) -> u64 {
         match self {
+            #[cfg(windows)]
             Self::Rebar(ring) => ring.vram_bytes(),
+            #[cfg(windows)]
             Self::Vulkan(ring) => ring.vram_bytes(),
+            #[cfg(target_os = "macos")]
+            Self::Uma(ring) => ring.vram_bytes(),
         }
     }
 
@@ -1127,12 +1261,116 @@ impl FrameIngestRing {
         pts: i64,
     ) -> Result<crate::upload::GpuVideoFrame, String> {
         match self {
+            #[cfg(windows)]
             Self::Rebar(ring) => ring.upload(
                 data, stride, row_bytes, width, height, packed, bgra, format, pts,
             ),
+            #[cfg(windows)]
             Self::Vulkan(ring) => ring.upload(
                 data, stride, row_bytes, width, height, packed, bgra, format, pts,
             ),
+            #[cfg(target_os = "macos")]
+            Self::Uma(ring) => ring.upload_ingest(
+                data, stride, row_bytes, width, height, packed, bgra, format, pts,
+            ),
         }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+    use crate::device::{BackendRequest, GpuDevice};
+
+    #[test]
+    fn uma_ingest_honours_a_padded_line_stride() {
+        use objc2_metal::{MTLOrigin, MTLRegion, MTLSize, MTLTexture};
+        let gpu = GpuDevice::with_backend(BackendRequest::Metal).expect("Metal device");
+        let mut uploader = UmaUploader::from_device(&gpu.device).expect("UMA uploader");
+        let width = 8u32;
+        let height = 4u32;
+        let row_bytes = width as usize * 4;
+        // A sender is allowed to pad its rows; replaceRegion takes the source pitch,
+        // so a padded source must not be read as if it were packed.
+        let stride = row_bytes + 12;
+        let mut data = vec![0xA5u8; stride * height as usize];
+        for y in 0..height as usize {
+            for x in 0..row_bytes {
+                data[y * stride + x] = (y * 32 + x) as u8;
+            }
+        }
+        uploader
+            .upload_ingest(
+                &data,
+                stride,
+                row_bytes,
+                width,
+                height,
+                false,
+                true,
+                wgpu::TextureFormat::Bgra8Unorm,
+                0,
+            )
+            .expect("padded upload");
+        let raw = uploader
+            .rings
+            .get(&0)
+            .and_then(|ring| ring.slots.first())
+            .map(|slot| slot.raw.clone())
+            .expect("slot");
+        let mut out = vec![0u8; row_bytes * height as usize];
+        let region = MTLRegion {
+            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+            size: MTLSize {
+                width: width as usize,
+                height: height as usize,
+                depth: 1,
+            },
+        };
+        unsafe {
+            let bytes = std::ptr::NonNull::new(out.as_mut_ptr().cast::<std::ffi::c_void>())
+                .expect("output buffer");
+            raw.getBytes_bytesPerRow_fromRegion_mipmapLevel(bytes, row_bytes, region, 0);
+        }
+        for y in 0..height as usize {
+            assert_eq!(
+                &out[y * row_bytes..(y + 1) * row_bytes],
+                &data[y * stride..y * stride + row_bytes],
+                "row {y} was read without the source stride"
+            );
+        }
+    }
+
+    #[test]
+    fn uma_ingest_ring_grows_only_while_frames_are_held() {
+        let gpu = GpuDevice::with_backend(BackendRequest::Metal).expect("Metal device");
+        let mut ring = FrameIngestRing::new(&gpu.device, &gpu.queue).expect("UMA ingest ring");
+        assert!(ring.is_live());
+        let data = vec![0x40u8; 128 * 128 * 4];
+        let upload = |ring: &mut FrameIngestRing| {
+            ring.upload(
+                &data,
+                128 * 4,
+                128 * 4,
+                128,
+                128,
+                false,
+                true,
+                wgpu::TextureFormat::Bgra8Unorm,
+                0,
+            )
+        };
+        let mut held = Vec::new();
+        for index in 0..UMA_INGEST_MAX_SLOTS {
+            held.push(upload(&mut ring).unwrap_or_else(|error| {
+                panic!("upload {index} failed: {error}");
+            }));
+        }
+        assert!(
+            upload(&mut ring).is_err(),
+            "the ring must refuse to overwrite a frame still in use"
+        );
+        drop(held);
+        upload(&mut ring).expect("a released slot is reusable");
     }
 }

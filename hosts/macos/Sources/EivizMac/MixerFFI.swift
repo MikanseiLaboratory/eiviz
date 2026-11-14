@@ -119,6 +119,27 @@ enum MixerFFI {
         return String(bytes: bytes, encoding: .utf8)
     }
 
+    /// Revision of the control session. The host polls this to notice edits made by the
+    /// vMix API or eivizctl, which mutate the mixer's document and not the host's.
+    static func sessionRevision() -> UInt64 {
+        mixer_session_revision()
+    }
+
+    /// Adds an input the host already attached. Used instead of a mutation for new
+    /// inputs so the core does not start the same capture device a second time.
+    static func registerInput(_ input: InputEntry) -> Int32 {
+        guard let data = try? JSONEncoder().encode(input) else { return -1 }
+        return data.withUnsafeBytes { ptr in
+            mixer_session_register_input(ptr.bindMemory(to: UInt8.self).baseAddress, data.count)
+        }
+    }
+
+    static func sessionJSON() -> Data? {
+        let (n, bytes) = copyUtf8(startCap: 1 << 20) { mixer_session_copy_json($0, $1) }
+        guard n >= 0 else { return nil }
+        return Data(bytes)
+    }
+
     static func sessionHasAssets(_ path: String) -> Bool {
         withCString(path) { mixer_session_has_assets($0) > 0 }
     }
@@ -169,20 +190,116 @@ enum MixerFFI {
         }
     }
 
-    static func audioDevices() -> [AudioDevice] {
+    static func audioDevices(direction: UInt32? = nil) -> [AudioDevice] {
         var buffer = [EivizAudioDeviceInfo](repeating: zeroed(), count: 64)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in
             mixer_audio_enum_devices(0, ptr.baseAddress, UInt32(ptr.count))
         }
         guard n > 0 else { return [] }
-        return buffer.prefix(Int(n)).map { info in
+        let devices = buffer.prefix(Int(n)).map { info in
             AudioDevice(
                 kind: info.kind,
                 channels: info.channels,
                 id: cString(info.id),
-                name: cString(info.name)
+                name: cString(info.name),
+                direction: info.direction
             )
         }
+        guard let direction else { return devices }
+        return devices.filter { $0.direction == direction || $0.direction == 2 }
+    }
+
+    static func streamEncoderAdd(_ encoder: StreamEncoderEntry, sourceKind: UInt32, sourceId: UInt64) -> Int32 {
+        let threads = encoder.encoderThreads == 0
+            ? UInt32(max(1, min(4, ProcessInfo.processInfo.activeProcessorCount)))
+            : encoder.encoderThreads
+        return mixer_stream_encoder_add(
+            encoder.id,
+            sourceKind,
+            sourceId,
+            encoder.unitId,
+            encoder.audioUnitId,
+            encoder.width,
+            encoder.height,
+            encoder.fpsNum,
+            encoder.fpsDen,
+            encoder.videoBitrate,
+            encoder.audioBitrate,
+            encoder.keyint,
+            encoder.videoOnly ? 1 : 0,
+            threads,
+            encoder.bufferMs,
+            encoder.encoder == "OpenH264" ? 0 : 1,
+            encoder.complexity,
+            encoder.refFrames,
+            encoder.cabac ? 1 : 0,
+            encoder.deblock ? 1 : 0,
+            encoder.backgroundDetection ? 1 : 0,
+            encoder.adaptiveQuant ? 1 : 0,
+            encoder.sceneChange ? 1 : 0,
+            encoder.audioDelayMs
+        )
+    }
+
+    static func streamDestinationAdd(encoderId: UInt64, destinationId: UInt64, url: String, secretRef: String) -> Int32 {
+        url.withCString { cUrl in
+            secretRef.withCString { cSecret in
+                mixer_stream_destination_add(encoderId, destinationId, cUrl, cSecret)
+            }
+        }
+    }
+
+    static func streamEncoderRemove(_ encoderId: UInt64) -> Int32 {
+        mixer_stream_encoder_remove(encoderId)
+    }
+
+    static func replayCapacity(path: String, width: UInt32, height: UInt32) -> (ReplayCapacity?, String) {
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        var written = 0
+        func measure() -> Int32 {
+            path.withCString { text in
+                buffer.withUnsafeMutableBufferPointer { ptr in
+                    mixer_bench_capacity(
+                        UnsafeRawPointer(text).assumingMemoryBound(to: UInt8.self),
+                        path.utf8.count,
+                        width,
+                        height,
+                        ptr.baseAddress,
+                        ptr.count,
+                        &written
+                    )
+                }
+            }
+        }
+        var code = measure()
+        // The mixer reports the size it needs; grow once instead of failing on a
+        // capacity document that happens to exceed the starting buffer.
+        if code == EIVIZ_ERR_BUFFER_TOO_SMALL, written > buffer.count {
+            buffer = [UInt8](repeating: 0, count: written)
+            code = measure()
+        }
+        guard code == 0, written > 0, written <= buffer.count else {
+            let detail = lastErrorText()
+            return (nil, detail.isEmpty ? "Capacity measurement failed" : detail)
+        }
+        guard let capacity = try? JSONDecoder().decode(
+            ReplayCapacity.self,
+            from: Data(buffer.prefix(written))
+        ) else {
+            return (nil, "Capacity measurement returned invalid JSON")
+        }
+        return (capacity, "")
+    }
+
+    static func audioProcesses() -> [AudioProcess] {
+        var buffer = [UInt8](repeating: 0, count: 1 << 20)
+        let n = buffer.withUnsafeMutableBufferPointer { ptr in
+            mixer_audio_process_list(ptr.baseAddress, ptr.count)
+        }
+        guard n > 0, let data = String(bytes: buffer.prefix(Int(n)), encoding: .utf8)?.data(using: .utf8) else {
+            return []
+        }
+        return (try? JSONDecoder().decode([AudioProcess].self, from: data)) ?? []
     }
 
     private static func cString<T>(_ value: T) -> String {
@@ -207,6 +324,36 @@ enum MixerFFI {
 
     /// Live replay state. The session document says what is configured; this
     /// says what is actually playing.
+    /// Free space and the recorder's bitrate model for one storage path. The mixer works
+    /// both out itself, so the settings table can show a drive before recording starts.
+    static func replayEstimate(
+        path: String,
+        width: UInt32,
+        height: UInt32,
+        fpsNum: UInt32,
+        fpsDen: UInt32,
+        profile: UInt32,
+        angleCount: UInt32,
+        reserveBytes: UInt64
+    ) -> EivizReplayEstimateOut? {
+        guard !path.isEmpty else { return nil }
+        var input = EivizReplayEstimateIn()
+        input.width = width
+        input.height = height
+        input.fps_num = fpsNum
+        input.fps_den = fpsDen
+        input.profile = profile
+        input.angle_count = angleCount
+        input.reserve_bytes = reserveBytes
+        var output = EivizReplayEstimateOut()
+        let status = path.withCString { cString -> Int32 in
+            input.path = UnsafeRawPointer(cString).assumingMemoryBound(to: UInt8.self)
+            input.path_len = path.utf8.count
+            return mixer_replay_estimate(&input, &output)
+        }
+        return status == EIVIZ_OK ? output : nil
+    }
+
     static func replayStats() -> EivizReplayStats? {
         var stats = EivizReplayStats()
         guard mixer_replay_copy_stats(&stats, nil, 0) == EIVIZ_OK else { return nil }

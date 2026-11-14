@@ -26,10 +26,44 @@ pub fn list_processes() -> Vec<CaptureProcess> {
     {
         windows_list()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        macos_list()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         Vec::new()
     }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_list() -> Vec<CaptureProcess> {
+    unsafe extern "C" {
+        fn eiviz_audio_process_list(out: *mut u8, cap: usize) -> i32;
+    }
+    let mut buffer = vec![0u8; 1 << 20];
+    let n = unsafe { eiviz_audio_process_list(buffer.as_mut_ptr(), buffer.len()) };
+    if n <= 0 {
+        return Vec::new();
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        name: String,
+        exe: String,
+        #[serde(default)]
+        aumid: String,
+    }
+    serde_json::from_slice::<Vec<Row>>(&buffer[..n as usize])
+        .map(|rows| {
+            rows.into_iter()
+                .map(|row| CaptureProcess {
+                    name: row.name,
+                    exe: row.exe,
+                    aumid: row.aumid,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub fn exe_basename(path: &str) -> String {
