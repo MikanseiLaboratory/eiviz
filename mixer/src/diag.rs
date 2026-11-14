@@ -388,11 +388,17 @@ mod tests {
 
     impl Write for BrokenStderr {
         fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
-            Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"))
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "closed",
+            ))
         }
 
         fn flush(&mut self) -> std::io::Result<()> {
-            Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "closed"))
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "closed",
+            ))
         }
     }
 
