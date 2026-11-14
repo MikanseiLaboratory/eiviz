@@ -786,7 +786,7 @@ dependencies = [
  "tiny_http",
  "tokio",
  "vmix-core",
- "vmx 0.1.0 (git+https://github.com/MikanseiLaboratory/vmx-rs?rev=b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3)",
+ "vmx",
  "wgpu",
  "windows",
  "windows-core",
@@ -801,7 +801,7 @@ name = "eiviz_pro_test_plugin"
 version = "0.3.0"
 dependencies = [
  "eiviz-pro-api",
- "vmx 0.1.0 (git+https://github.com/MikanseiLaboratory/vmx-rs?rev=b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3)",
+ "vmx",
 ]
 
 [[package]]
@@ -1932,8 +1932,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "openmediatransport"
-version = "0.1.2"
-source = "git+https://github.com/MikanseiLaboratory/openmediatransport-rs?rev=9f88abac09d18c0e7cd56cbcfc2318c521413222#9f88abac09d18c0e7cd56cbcfc2318c521413222"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70e4dc9ba18b9ed02fcd03d7a97804a30e1326f2fc77c75fb7e27d018ad62b60"
 dependencies = [
  "bytes",
  "mdns-sd",
@@ -1941,7 +1942,7 @@ dependencies = [
  "socket2",
  "thiserror 2.0.20",
  "tracing",
- "vmx 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "vmx",
  "wgpu",
 ]
 
@@ -3121,21 +3122,9 @@ dependencies = [
 
 [[package]]
 name = "vmx"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05347c70521d66bb4ffb091d8875409a400ffb8f86f28240e1b044e8b0d84909"
-dependencies = [
- "bytemuck",
- "pollster 0.4.0",
- "rayon",
- "thiserror 2.0.20",
- "wgpu",
-]
-
-[[package]]
-name = "vmx"
-version = "0.1.0"
-source = "git+https://github.com/MikanseiLaboratory/vmx-rs?rev=b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3#b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3"
+checksum = "ceb9c52a194e6510ee4285dc358773a5e9e53bdda9deabb34e9afb3e60df331c"
 dependencies = [
  "bytemuck",
  "pollster 0.4.0",
