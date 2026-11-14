@@ -4163,7 +4163,12 @@ unsafe fn mixer_output_add_ex_ffi(
         return code;
     }
     let use_gpu = transport == OUT_OMT && use_gpu != 0;
-    let skip_idle_encode = transport == OUT_OMT && skip_idle_encode != 0;
+    // OMT/NDI have no reliable local receiver count before the first frame:
+    // gating the first frame on a subscription can leave a receiver connected
+    // but never receiving a source. Send from the first frame; the transports
+    // already drop work when their own send queues are full.
+    let _ = skip_idle_encode;
+    let skip_idle_encode = false;
     let source_id = crate::abi::resolve_output_source_id(source_kind, source_id);
     let audio_unit_id = if source_kind == SRC_KIND_MU_MULTIVIEW {
         0
