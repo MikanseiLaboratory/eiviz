@@ -425,6 +425,11 @@ struct ReplayView: View {
                     .buttonStyle(.plain)
                     .keyboardShortcut("l", modifiers: [])
                     .help(L10n.t("replay.jumpLiveHint"))
+                    Button(L10n.t("replay.cue")) { cueReady() }
+                        .keyboardShortcut("c", modifiers: [])
+                        .frame(minWidth: 68, minHeight: 44)
+                        .help(L10n.t("replay.cueHint"))
+                        .disabled(clips.isEmpty)
                     Button(L10n.t(transport.playing ? "replay.pause" : "replay.play")) { togglePlay() }
                         .keyboardShortcut(.space, modifiers: [])
                         .frame(minWidth: 84, minHeight: 44)
@@ -1709,6 +1714,18 @@ struct ReplayView: View {
             current.sortClips(playlistId: target)
         }
         save(current)
+    }
+
+    /// Cue the selected clip, or the newest clip when none is selected, and hold on
+    /// its first frame. The operator's next action is Play, not Cue + seek + Pause.
+    private func cueReady() {
+        let clip = selectedClip.flatMap { uid in clips.first { $0.uid == uid } }
+            ?? clips.last
+        guard let clip else {
+            status = L10n.t("replay.noClips")
+            return
+        }
+        cue(clip)
     }
 
     private func cue(_ clip: ReplayClipInfo) {
