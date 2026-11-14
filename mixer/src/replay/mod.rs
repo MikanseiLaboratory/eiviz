@@ -457,6 +457,15 @@ pub fn engine() -> &'static ReplayEngine {
     ENGINE.get_or_init(ReplayEngine::new)
 }
 
+fn store_range(store: &Arc<Mutex<Box<dyn ReplayStore>>>, angle_id: u32) -> Option<(u64, u64)> {
+    store
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .range(angle_id)
+        .ok()
+        .flatten()
+}
+
 impl ReplayEngine {
     fn new() -> Self {
         let engine = Self {
@@ -2143,19 +2152,40 @@ impl ReplayEngine {
         Ok((decoded.width, decoded.height, decoded.stride))
     }
 
-    /// Recorded frame range of one angle, for the export UI.
+    /// Recorded frame range of one angle, for the seek bar and the export UI.
+    ///
+    /// A loaded session opens its recordings as playback stores; the recorder's store is
+    /// only present while this process records. Reading only `record_store` therefore
+    /// answered "no range" for every recording loaded from a file, which made the deck
+    /// fall back to a one-frame bar. The recorder is preferred when it has frames, and
+    /// the attached playback stores answer otherwise.
     pub fn angle_range(&self, angle_id: u32) -> Option<(u64, u64)> {
-        let store = self
+        let record = self
             .record_store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .clone()?;
-        store
+            .clone();
+        if let Some(store) = record
+            && let Some(range) = store_range(&store, angle_id)
+            && range.1 > range.0
+        {
+            return Some(range);
+        }
+        let stores: Vec<_> = self
+            .playback_stores
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .range(angle_id)
-            .ok()
-            .flatten()
+            .values()
+            .cloned()
+            .collect();
+        for store in stores {
+            if let Some(range) = store_range(&store, angle_id)
+                && range.1 > range.0
+            {
+                return Some(range);
+            }
+        }
+        None
     }
 
     /// Installs a channel's clips without going through the session gate. Test
@@ -5371,6 +5401,60 @@ mod animation_action_tests {
         inner.channels.clear();
     }
 }
+#[cfg(test)]
+mod angle_range_tests {
+    use super::*;
+
+    /// A playback store with one angle, enough to exercise the range lookup.
+    struct RangeStore;
+
+    impl ReplayStore for RangeStore {
+        fn write_video(
+            &mut self,
+            _angle_id: u32,
+            _frame_index: u64,
+            _frame: &VideoFrame,
+        ) -> Result<WriteOutcome, eiviz_pro_api::ProError> {
+            Err(eiviz_pro_api::ProError::unavailable("test store"))
+        }
+
+        fn decode(
+            &mut self,
+            _angle_id: u32,
+            _frame_index: u64,
+            _dst: &mut [u8],
+        ) -> Result<eiviz_pro_api::DecodedFrame, eiviz_pro_api::ProError> {
+            Err(eiviz_pro_api::ProError::unavailable("test store"))
+        }
+
+        fn range(&self, angle_id: u32) -> Result<Option<(u64, u64)>, eiviz_pro_api::ProError> {
+            Ok((angle_id == 9999).then_some((0, 600)))
+        }
+
+        fn stats(&self) -> ReplayStats {
+            ReplayStats::default()
+        }
+
+        fn close(&mut self) -> Result<(), eiviz_pro_api::ProError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    #[serial_test::serial(mixer)]
+    fn a_loaded_recording_reports_its_range_without_a_record_store() {
+        let engine = engine();
+        engine.playback_stores.lock().unwrap().insert(
+            "test-range".into(),
+            Arc::new(Mutex::new(Box::new(RangeStore) as Box<dyn ReplayStore>)),
+        );
+        // The recorder's store has no angle 9999, so this must answer from the
+        // playback store opened for a session loaded from disk.
+        assert_eq!(engine.angle_range(9999), Some((0, 600)));
+        engine.playback_stores.lock().unwrap().remove("test-range");
+    }
+}
+
 #[cfg(test)]
 mod channel_audio_tests {
     use super::*;
