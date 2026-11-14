@@ -130,7 +130,7 @@ extension MixerController {
                 MixerFFI.copyUtf8 { mixer_session_history(cPath, $0, $1) }
             }
             guard historyN >= 0 else {
-                fail(historyN == 0 ? 5 : historyN, "Load session")
+                failLoadingSession(historyN == 0 ? 5 : historyN)
                 return
             }
             guard let entries = Self.parseHistory(historyBytes) else {
@@ -158,7 +158,7 @@ extension MixerController {
                 }
             }
             guard n > 0 else {
-                fail(n == 0 ? 5 : n, "Load session")
+                failLoadingSession(n == 0 ? 5 : n)
                 return
             }
             do {
@@ -179,7 +179,7 @@ extension MixerController {
             }
         }
         guard n > 0 else {
-            fail(n == 0 ? 5 : n, "Load session")
+            failLoadingSession(n == 0 ? 5 : n)
             return
         }
         do {
@@ -1946,6 +1946,22 @@ extension MixerController {
         guard let message = MixerFFI.check(code, action) else { return true }
         presentError(message, title: L10n.t("action.\(action)"))
         return false
+    }
+
+    /// Reports why a session could not be read. The core keeps the detail (which
+    /// feature the plan refuses, or what the container could not parse) in its last
+    /// error; showing only the numeric code leaves the operator with "-7" and no way
+    /// to tell a plan gate from a damaged file.
+    private func failLoadingSession(_ code: Int32) {
+        let detail = MixerFFI.lastErrorText()
+        guard !detail.isEmpty else {
+            fail(code, "Load session")
+            return
+        }
+        let message = code == -EIVIZ_ERR_NOT_SUPPORTED_PLAN
+            ? "\(L10n.t("msg.sessionPlanTitle"))\n\n\(detail)"
+            : detail
+        presentError(message, title: L10n.t("action.Load session"))
     }
 
     private struct SessionHistoryEntry: Decodable {
