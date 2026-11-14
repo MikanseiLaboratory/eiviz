@@ -79,6 +79,9 @@ struct ReplayView: View {
     /// owns the bar until the seek lands.
     @State private var scrubFrame: Double?
     @State private var sliderEditing = false
+    /// The deck opens on the first recorded frame when the channel is idle. Set once
+    /// per channel so a later tick does not undo an operator's seek.
+    @State private var didInitialSeek = false
 
     private let tick = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
@@ -101,7 +104,23 @@ struct ReplayView: View {
             channelOutFrame = 0
             playingClipUid = nil
             selectedClip = nil
+            selectedEvent = nil
+            didInitialSeek = false
             transport = .atEdge
+        }
+        // Clicking an event previews its first frame. The seek bar and the playhead
+        // readout follow the same click instead of describing the previous position.
+        .onChange(of: selectedEvent) { _, id in
+            guard let id,
+                  let event = document?.events.first(where: { $0.id == id })
+            else { return }
+            previewEvent(event)
+        }
+        // A clip row is the operator pointing at a clip: cue it so Play starts that
+        // clip, and put the bar on its first frame now.
+        .onChange(of: selectedClip) { _, uid in
+            guard let uid, let clip = clips.first(where: { $0.uid == uid }) else { return }
+            cue(clip)
         }
     }
 
@@ -200,17 +219,17 @@ struct ReplayView: View {
     }
 
     /// The bar follows the channel's own position, including while a clip or an event
-    /// plays. A seek holds the bar only until the engine reports that frame; after that
-    /// playback moves it at once instead of waiting out a timer.
+    /// plays. A seek holds the bar only until the engine reports that frame, or until
+    /// playback has moved past it; after that the engine owns the bar again. This must
+    /// not wait on the Slider's editing flag: a flag left true used to keep `scrubFrame`
+    /// forever and the whole bar stopped following the picture.
     private func syncPlayhead(reported: UInt64) {
-        guard let target = scrubFrame else {
-            playheadFrame = reported
-            return
+        if let target = scrubFrame {
+            let landed = ReplayDeckMath.seekLanded(reported: reported, target: target)
+            let passed = Double(reported) > target + 1
+            guard landed || passed else { return }
+            scrubFrame = nil
         }
-        guard !sliderEditing,
-              ReplayDeckMath.seekLanded(reported: reported, target: target)
-        else { return }
-        scrubFrame = nil
         playheadFrame = reported
     }
 
@@ -383,8 +402,9 @@ struct ReplayView: View {
                     let frame = UInt64(max(0, target.rounded()))
                     playheadFrame = frame
                     // Keep showing the drop point while the mixer catches up, then let
-                    // the engine's position own the bar again.
-                    seekWhole(to: frame)
+                    // the engine's position own the bar again. A drag while the channel
+                    // is advancing seeks without stopping it.
+                    seekWhole(to: frame, keepPlaying: transport.playing)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                         // A held thumb has not stopped being dragged just because it
                         // stopped moving for a moment.
@@ -401,7 +421,7 @@ struct ReplayView: View {
                     guard !sliderEditing, let value else { return }
                     let frame = UInt64(max(0, value.rounded()))
                     playheadFrame = frame
-                    seekWhole(to: frame)
+                    seekWhole(to: frame, keepPlaying: transport.playing)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                         guard !sliderEditing else { return }
                         if let current = scrubFrame, abs(current - value) < 0.5 {
@@ -787,6 +807,7 @@ struct ReplayView: View {
             ReplayEventTable(
                 events: document?.events ?? [],
                 fps: fps,
+                selection: $selectedEvent,
                 rename: { renameEvent($0, $1) },
                 protect: { setEventProtected($0, $1) },
                 setRange: { id, start, end in setEventRange(id, start, end) },
@@ -1190,6 +1211,16 @@ struct ReplayView: View {
             }?.uid
             channelOutFrame = state.out_frame
             syncPlayhead(reported: state.position_frame)
+            // Opening the deck on a channel parked at the live edge starts at the
+            // beginning of the recording. A channel that is already playing, or that an
+            // operator left holding a frame in the middle, is left where it is.
+            if !didInitialSeek {
+                didInitialSeek = true
+                let atEdge = state.position_frame &+ 4 >= recordingHead
+                if state.playing == 0, atEdge {
+                    parkAtRecordingStart()
+                }
+            }
         }
         refreshExport()
         // The peaks live with the recording, so a Remote has no waveform to draw.
@@ -1338,23 +1369,22 @@ struct ReplayView: View {
     /// strip draws proxies from here on. It does not start or stop anything, though: an
     /// operator who was paused stays paused, and one who was playing keeps playing from the
     /// new frame. The transport was handed that play state, and the deck keeps it.
-    /// Moves the whole-recording slider. The bar parks the channel on the chosen frame:
-    /// a slider is a place to look at a picture, and a seek that kept playing made the
-    /// thumb run away from the frame the operator just picked.
-    private func seekWhole(to frame: UInt64) {
-        // A channel that is following the recording edge has no current clip, and the
-        // engine's live flag wins over a seek. Cue a scratch clip over the recorded range
-        // first, which leaves the edge, then park on the chosen frame.
-        cueScratchForSeek(target: frame)
-        let action = ReplayTransportRules.seek()
+    /// Moves the whole-recording slider. The bar spans the recording, so the seek must
+    /// be able to leave the clip that is on air; otherwise the core clamps the target
+    /// to that clip's IN/OUT and the thumb snaps back. A drag keeps the channel's play
+    /// state: paused stays paused, playing keeps playing from the new frame.
+    private func seekWhole(to frame: UInt64, keepPlaying: Bool = false) {
+        cueScratchForSeek(target: frame, force: true)
         let accepted = mixer.replayTransport(
             channel: channel,
-            playing: false,
+            playing: keepPlaying,
             speedMilli: speedMilli,
             seekFrame: Int64(frame)
         )
         if accepted {
-            transport = action.next
+            transport = keepPlaying
+                ? ReplayTransportState(live: false, playing: true)
+                : .held
             playheadFrame = frame
             settleUntil = Date().addingTimeInterval(0.4)
         } else {
@@ -1364,9 +1394,23 @@ struct ReplayView: View {
         }
     }
 
-    /// Leaves live follow for a seek without disturbing a clip that is already on air.
-    private func cueScratchForSeek(target: UInt64) {
-        if !transport.live, playingClipUid != nil { return }
+    /// The whole-recording bar at frame zero: the first frame the store still holds.
+    private func parkAtRecordingStart() {
+        guard let angle = activeAngle,
+              let range = mixer.replayAngleRange(angle.id),
+              range.last > range.first
+        else { return }
+        scrubFrame = nil
+        seekWhole(to: range.first)
+    }
+
+    /// Cues a scratch clip over the whole recording so a seek can land anywhere.
+    ///
+    /// `force` is for the whole-recording bar: it replaces the clip on air, because the
+    /// operator asked for a frame outside it. The waveform and step paths keep the
+    /// current clip (they are looking close to where the operator already is).
+    private func cueScratchForSeek(target: UInt64, force: Bool = false) {
+        if !force, !transport.live, playingClipUid != nil { return }
         guard let angle = activeAngle,
               let range = mixer.replayAngleRange(angle.id),
               range.last > range.first
@@ -1802,12 +1846,38 @@ struct ReplayView: View {
             // without another seek. This is the operator's "ready to play" state.
             transport = .held
             playingClipUid = clip.uid
+            channelOutFrame = clip.outFrame
+            // The mixer reports the same frame on the next tick; setting it here makes
+            // the bar follow the click even before that tick arrives.
+            scrubFrame = nil
+            playheadFrame = clip.inFrame
             settleUntil = Date().addingTimeInterval(1.0)
             status = L10n.t("replay.cued")
         } else {
             let detail = MixerFFI.lastErrorText()
             status = detail.isEmpty ? L10n.t("replay.cueRefused") : detail
         }
+    }
+
+    /// Clicking an event previews its range as a one-off clip: Play starts the event,
+    /// and the bar lands on its first frame now.
+    private func previewEvent(_ event: ReplayEventInfo) {
+        guard let angle = activeAngle else { return }
+        let clip = ReplayClipInfo(
+            uid: "event-preview-\(event.id)",
+            angleId: angle.id,
+            recordingUuid: event.recordingUuid,
+            inFrame: event.inFrame,
+            outFrame: event.outFrame,
+            speed: 1,
+            gainDb: 0,
+            transition: .cut,
+            tags: [],
+            preservePitch: false,
+            audioKind: "FollowAngle",
+            audioAngleId: angle.id
+        )
+        cue(clip)
     }
 
     /// Writes the playlist default. New clips start on it, so an operator who
@@ -1869,6 +1939,11 @@ struct ReplayView: View {
             status = L10n.t("replay.cueRefused")
             return
         }
+        // The playlist starts on the first clip; put the bar there before the first
+        // poll so the operator sees the new position immediately.
+        scrubFrame = nil
+        playheadFrame = first.inFrame
+        channelOutFrame = first.outFrame
         if mixer.replayTransport(
             channel: channel, playing: true, speedMilli: speedMilli, seekFrame: -1) {
             transport = ReplayTransportState(live: false, playing: true)
@@ -1897,6 +1972,7 @@ struct ReplayView: View {
     }
 
     private func togglePlay() {
+        scrubFrame = nil
         let action = ReplayTransportRules.toggle(transport)
         // Pausing a live channel has to leave the edge; a live channel with playing=false
         // still follows the write head, so the picture would keep moving.
@@ -1970,6 +2046,7 @@ struct ReplayView: View {
 
     private func setSpeed(_ milli: Int32) {
         speedMilli = milli
+        scrubFrame = nil
         // A speed preset is a playback instruction. On a live channel there is no clip to
         // play, so leave the edge at the current frame and run that clip at the new rate.
         if transport.live, stats?.last_frame ?? 0 > 0 {
