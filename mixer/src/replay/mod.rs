@@ -36,6 +36,7 @@ use crate::abi::{
     REPLAY_RECORD_BASE, REPLAY_STATE_IDLE, REPLAY_STATE_RECORDING, REPLAY_STATE_STOPPED,
     REPLAY_STOP_FPS_CHANGED, REPLAY_STOP_NONE, REPLAY_STOP_USER,
 };
+use crate::guard::LockExt;
 use crate::upload::CpuFormat;
 
 pub use health::{HealthMemory, HealthSample, step as health_step};
@@ -394,17 +395,24 @@ pub struct ReplayEngine {
     stop_record: Arc<AtomicBool>,
     stop_workers: Arc<AtomicBool>,
     workers: Mutex<Vec<JoinHandle<()>>>,
-    /// The render device, shared with the playout decoder. Set once when the
-    /// renderer starts; the channel worker can then decode packets on the GPU.
-    gpu: OnceLock<(wgpu::Device, wgpu::Queue)>,
-    /// Whether playout may decode on the GPU. Encoding still uses `gpu` on macOS;
-    /// only vmx's Metal decoder is disabled there.
+    /// The render device, shared with the playout decoder. The binding carries
+    /// the mixer generation: New/Open creates a new wgpu::Instance, and IDs from
+    /// the previous instance cannot be resolved by the new renderer.
+    gpu: Mutex<Option<GpuBinding>>,
+    /// Whether playout may decode on the GPU. The binding is generation-checked,
+    /// so New/Open no longer needs to disable vmx's Metal decoder on macOS.
     gpu_decode: AtomicBool,
     /// Decoders whose GPU pipelines were built before playback needed them. The
     /// first vmx decode builds shader pipelines and can take a second on a debug
     /// build; doing that in front of the first clip would freeze playout.
     prepared: Mutex<HashMap<u32, PreparedDecoder>>,
     warming: AtomicBool,
+}
+
+struct GpuBinding {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    generation: u64,
 }
 
 struct PreparedDecoder {
@@ -497,8 +505,8 @@ impl ReplayEngine {
             stop_record: Arc::new(AtomicBool::new(true)),
             stop_workers: Arc::new(AtomicBool::new(false)),
             workers: Mutex::new(Vec::new()),
-            gpu: OnceLock::new(),
-            gpu_decode: AtomicBool::new(!cfg!(target_os = "macos")),
+            gpu: Mutex::new(None),
+            gpu_decode: AtomicBool::new(true),
             prepared: Mutex::new(HashMap::new()),
             warming: AtomicBool::new(false),
         };
@@ -527,19 +535,42 @@ impl ReplayEngine {
     /// Remembers the render device so a channel can decode a packet on the GPU.
     /// Called once, when the render loop starts.
     pub fn set_gpu(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let _ = self.gpu.set((device.clone(), queue.clone()));
+        let generation = crate::lifecycle::generation();
+        {
+            let mut slot = self.gpu.lock_or_recover();
+            if slot
+                .as_ref()
+                .is_some_and(|binding| binding.generation == generation)
+            {
+                return;
+            }
+            // Pipelines, decoders and encoder rings built on the old device are
+            // tied to the old wgpu::Instance. Drop them before warming again.
+            self.prepared.lock_or_recover().clear();
+            self.warming.store(false, Ordering::Release);
+            let replaced = slot.is_some();
+            *slot = Some(GpuBinding {
+                device: device.clone(),
+                queue: queue.clone(),
+                generation,
+            });
+            if replaced {
+                crate::diag::info(&format!(
+                    "replay GPU rebinding to mixer generation {generation}"
+                ));
+            }
+        }
+        crate::replay::gpu_encode::reset();
         if self.gpu_decode.load(Ordering::Relaxed) {
             self.warm_decoders();
-        } else {
-            // vmx's Metal decoder builds texture views the renderer cannot resolve
-            // (wgpu TextureViewId mismatch) and panics as soon as a clip plays. Keep
-            // recording on the GPU, but decode Replay on the CPU on macOS.
-            crate::diag::info("replay GPU decode disabled on macOS; using the CPU decoder");
         }
     }
 
     fn gpu_device(&self) -> Option<(wgpu::Device, wgpu::Queue)> {
-        self.gpu.get().cloned()
+        let generation = crate::lifecycle::generation();
+        let slot = self.gpu.lock_or_recover();
+        let binding = slot.as_ref()?;
+        (binding.generation == generation).then(|| (binding.device.clone(), binding.queue.clone()))
     }
 
     /// Builds each channel's GPU decoder before playout needs it. The first vmx
@@ -1271,6 +1302,10 @@ impl ReplayEngine {
             let _ = worker.join();
         }
         self.stop_workers.store(false, Ordering::Relaxed);
+        *self.gpu.lock_or_recover() = None;
+        self.prepared.lock_or_recover().clear();
+        self.warming.store(false, Ordering::Release);
+        crate::replay::gpu_encode::reset();
     }
 
     pub fn note_fps(&self, fps_num: u32, fps_den: u32) {

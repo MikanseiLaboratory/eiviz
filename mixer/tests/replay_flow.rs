@@ -9,7 +9,12 @@ use std::ffi::CString;
 use std::thread;
 use std::time::Duration;
 
-use common::{cstring, expect, full_layer, load_test_module, mark_in_when_ready, mark_out_after};
+use common::{cstring, expect, full_layer, mark_in_when_ready, mark_out_after};
+
+fn load_module() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| common::load_test_module("replay-flow"));
+}
 use eiviz_mixer::{
     MixerReplayChannelState, SCENE_BASE, SRC_BARS, UnitState, mixer_create, mixer_create_unit,
     mixer_define_scene, mixer_destroy, mixer_replay_channel_cue, mixer_replay_channel_transport,
@@ -23,7 +28,7 @@ fn an_operator_records_marks_and_plays_back() {
         eprintln!("skip replay_flow: the adapter is a software rasteriser");
         return;
     }
-    load_test_module("replay-flow");
+    load_module();
 
     mixer_destroy();
     expect("create", mixer_create(0, 60_000, 1_001));
@@ -112,6 +117,93 @@ fn an_operator_records_marks_and_plays_back() {
     assert!(count >= 1);
     assert_eq!(channels[0].playing, 0, "the channel should be paused");
 
+    mixer_destroy();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// New/Open destroys and recreates the mixer, which creates a new wgpu::Instance.
+/// The playout decoder must rebind to that instance; using the previous one makes
+/// the renderer fail to resolve a TextureViewId when the clip starts.
+#[test]
+fn replay_plays_after_a_mixer_recreate() {
+    if common::adapter_is_software() {
+        eprintln!("skip replay_recreate: the adapter is a software rasteriser");
+        return;
+    }
+    load_module();
+
+    let dir = std::env::temp_dir().join(format!("eiviz-replay-recreate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.display().to_string().replace('\\', "/");
+    let config = CString::new(format!(
+        r#"{{"enabled":true,"storage":[{{"path":"{path}","angleIds":[1]}}],
+"angles":[{{"id":1,"name":"A","sceneId":1,"audio":"Silent","encoder":"Gpu"}}],
+"activeAngleId":1,
+"channels":[{{"index":0,"playlistId":null,"inputId":0}}],
+"playlists":[],"events":[],
+"format":{{"width":320,"height":180,"fpsNum":60000,"fpsDen":1001,"profile":"Sq","segmentFrames":120}},
+"buffering":{{"encodeQueueFrames":6,"writeBufferMb":64,"overflowPolicy":"DropFrames","reserveMb":0}}}}"#
+    ))
+    .unwrap();
+
+    // First generation: create, configure, record briefly, then replace the session.
+    mixer_destroy();
+    expect("create 1", mixer_create(0, 60_000, 1_001));
+    expect("create unit 1", mixer_create_unit(1, 320, 180));
+    let layer = full_layer(SRC_BARS);
+    expect("define scene 1", unsafe {
+        mixer_define_scene(SCENE_BASE | 1, 320, 180, 1, &layer)
+    });
+    unsafe {
+        let state = UnitState {
+            program_source: SCENE_BASE | 1,
+            preview_source: SRC_BARS,
+            ..UnitState::default()
+        };
+        expect("unit state 1", mixer_unit_set_state(1, &state));
+    }
+    expect("configure 1", unsafe {
+        mixer_replay_configure(config.as_ptr())
+    });
+    expect("record 1", unsafe { mixer_replay_record(1) });
+    thread::sleep(Duration::from_millis(300));
+    expect("record 1 off", unsafe { mixer_replay_record(0) });
+    mixer_destroy();
+
+    // Second generation: a new wgpu::Instance. Record and play a fresh clip.
+    expect("create 2", mixer_create(0, 60_000, 1_001));
+    expect("create unit 2", mixer_create_unit(1, 320, 180));
+    expect("define scene 2", unsafe {
+        mixer_define_scene(SCENE_BASE | 1, 320, 180, 1, &layer)
+    });
+    unsafe {
+        let state = UnitState {
+            program_source: SCENE_BASE | 1,
+            preview_source: SRC_BARS,
+            ..UnitState::default()
+        };
+        expect("unit state 2", mixer_unit_set_state(1, &state));
+    }
+    expect("configure 2", unsafe {
+        mixer_replay_configure(config.as_ptr())
+    });
+    expect("record 2", unsafe { mixer_replay_record(1) });
+    thread::sleep(Duration::from_millis(1200));
+    mark_in_when_ready("replay_recreate");
+    let (uuid, in_frame, out_frame) = mark_out_after("replay_recreate", 40);
+    let uuid_c = cstring(&uuid);
+    expect("cue 2", unsafe {
+        mixer_replay_channel_cue(0, 1, in_frame, out_frame, uuid_c.as_ptr())
+    });
+    expect("play 2", unsafe {
+        mixer_replay_channel_transport(0, 1, 1000, -1)
+    });
+    thread::sleep(Duration::from_millis(400));
+    let mut channels = vec![MixerReplayChannelState::default(); 4];
+    let count = unsafe { mixer_replay_copy_channels(channels.as_mut_ptr(), 4) };
+    assert!(count >= 1);
+    assert_eq!(channels[0].playing, 1, "playback must survive a recreate");
     mixer_destroy();
     let _ = std::fs::remove_dir_all(&dir);
 }
