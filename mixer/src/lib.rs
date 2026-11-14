@@ -51,6 +51,7 @@ mod replay;
 mod runtime;
 mod save;
 mod session;
+mod session_plan;
 pub mod simd;
 mod snapshot;
 mod staging;
@@ -5805,9 +5806,19 @@ unsafe fn mixer_session_import_ffi(
         report_session_error("import needs a session path and a media directory");
         return -ERR_INVALID_ARGUMENT;
     }
-    match session::import_exported_session(&export_path, &session_dest, &media_dir)
-        .and_then(|document| session::to_vec(&document))
-    {
+    let document =
+        match session::import_exported_session(&export_path, &session_dest, &media_dir) {
+            Ok(document) => document,
+            Err(error) => {
+                report_session_error(error);
+                return -ERR_INVALID_ARGUMENT;
+            }
+        };
+    if let Err(problem) = crate::session_plan::check(&document) {
+        report_session_error(problem);
+        return -ERR_NOT_SUPPORTED_PLAN;
+    }
+    match session::to_vec(&document) {
         Ok(canonical) => {
             remember_session_path(&session_dest);
             copy_bytes(&canonical, out, cap)
@@ -5894,7 +5905,18 @@ unsafe fn mixer_session_load_ffi(path: *const c_char, out: *mut u8, cap: usize) 
         report_session_error(error.to_string());
         return -ERR_IO;
     }
-    match session::read_document(&path).and_then(|document| session::to_vec(&document)) {
+    let document = match session::read_document(&path) {
+        Ok(document) => document,
+        Err(error) => {
+            report_session_error(error);
+            return -ERR_INVALID_ARGUMENT;
+        }
+    };
+    if let Err(problem) = crate::session_plan::check(&document) {
+        report_session_error(problem);
+        return -ERR_NOT_SUPPORTED_PLAN;
+    }
+    match session::to_vec(&document) {
         Ok(canonical) => {
             remember_session_path(&path);
             copy_bytes(&canonical, out, cap)
@@ -6061,7 +6083,18 @@ unsafe fn mixer_session_load_rev_ffi(
         return -ERR_INVALID_ARGUMENT;
     }
     let path = read_cstr(path);
-    match session::extract_history(&path, index).and_then(|document| session::to_vec(&document)) {
+    let document = match session::extract_history(&path, index) {
+        Ok(document) => document,
+        Err(error) => {
+            report_session_error(error);
+            return -ERR_INVALID_ARGUMENT;
+        }
+    };
+    if let Err(problem) = crate::session_plan::check(&document) {
+        report_session_error(problem);
+        return -ERR_NOT_SUPPORTED_PLAN;
+    }
+    match session::to_vec(&document) {
         Ok(canonical) => {
             remember_session_path(&path);
             copy_bytes(&canonical, out, cap)
