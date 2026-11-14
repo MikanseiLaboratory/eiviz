@@ -656,6 +656,22 @@ int32_t mixer_bench_capacity(
     size_t cap,
     size_t *written);
 // Stream encoder API. RTMP is not an Output; it is an encoder plus destinations.
+
+// Host-owned gpu-video/VideoToolbox H.264 encoder service for the Pro RTMP
+// backend. Pro resolves these at runtime so it never creates a second wgpu
+// device. `data` is Annex-B; the caller converts it to AVCC for RTMP.
+uint64_t mixer_vt_encoder_create(
+    uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den,
+    uint32_t bitrate, uint32_t keyint);
+int32_t mixer_vt_encoder_encode(
+    uint64_t id, const uint8_t *uyvy, size_t uyvy_len, size_t stride,
+    uint32_t force_idr, uint8_t *out, size_t out_cap, size_t *out_len,
+    uint32_t *key);
+int32_t mixer_vt_encoder_headers(
+    uint64_t id, uint8_t *sps, size_t sps_cap, size_t *sps_len,
+    uint8_t *pps, size_t pps_cap, size_t *pps_len);
+void mixer_vt_encoder_destroy(uint64_t id);
+
 int32_t mixer_stream_encoder_add(
     uint64_t encoder_id, uint32_t source_kind, uint64_t source_id, uint64_t unit_id,
     uint64_t audio_unit_id, uint32_t width, uint32_t height, uint32_t fps_num,

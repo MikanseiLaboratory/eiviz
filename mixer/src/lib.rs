@@ -64,6 +64,8 @@ mod vk_video;
 mod vmix_api;
 mod vmix_tcp;
 mod vmix_xml;
+#[cfg(target_os = "macos")]
+mod vt_encode;
 
 pub use crate::audio::{AudioBusInfo, AudioDeviceInfo};
 
