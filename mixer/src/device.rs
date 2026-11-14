@@ -97,7 +97,7 @@ pub struct GpuDevice {
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
-    #[cfg(any(windows, target_os = "linux"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     pub vulkan: Option<crate::vk_video::VulkanDecode>,
 }
 
@@ -136,6 +136,13 @@ impl GpuDevice {
         if expected == wgpu::Backend::Vulkan {
             return crate::vk_video::create_vulkan_gpu_device(instance, adapter);
         }
+        #[cfg(target_os = "macos")]
+        if expected == wgpu::Backend::Metal {
+            // VideoToolbox lives behind the same gpu-video device abstraction as
+            // Vulkan Video. If the adapter has no VT support the helper falls back
+            // to a plain wgpu device.
+            return crate::vk_video::create_vulkan_gpu_device(instance, adapter);
+        }
         crate::diag::info(&format!(
             "gpu adapter backend={:?} type={:?} name={} driver={}",
             info.backend, info.device_type, info.name, info.driver
@@ -154,7 +161,7 @@ impl GpuDevice {
             adapter,
             device,
             queue,
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             vulkan: None,
         })
     }
