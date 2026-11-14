@@ -140,6 +140,7 @@ struct SettingsView: View {
                 Text("Multiview").tag(3)
                 Text(L10n.t("settings.audio")).tag(4)
                 Text(L10n.t("settings.webApi")).tag(5)
+                Text(L10n.t("settings.encoding")).tag(6)
                 Text(L10n.t("settings.license")).tag(7)
             }
             .frame(width: 200)
@@ -152,6 +153,7 @@ struct SettingsView: View {
                     else if category == 3 { multiview }
                     else if category == 4 { audio }
                     else if category == 5 { webApi }
+                    else if category == 6 { encoding }
                     else { license }
                 }
                 Spacer()
@@ -463,6 +465,94 @@ struct SettingsView: View {
     @State private var licenseFingerprint = ""
     @State private var licenseReturn = LicenseReturnServer()
 
+    private var encoding: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L10n.t("settings.encoding"))
+                .font(.headline)
+            Text(L10n.t("settings.encodingHelp"))
+                .font(.caption)
+                .foregroundStyle(EivizTheme.dim)
+            if mixer.session.streamEncoders.isEmpty {
+                Text(L10n.t("settings.encodingEmpty"))
+                    .foregroundStyle(EivizTheme.dim)
+            }
+            ForEach(mixer.session.streamEncoders.indices, id: \.self) { index in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Text(L10n.t("settings.encoder"))
+                        Picker("", selection: $mixer.session.streamEncoders[index].encoder) {
+                            Text("OpenH264").tag("OpenH264")
+                            Text("VideoToolbox").tag("VideoToolbox")
+                        }
+                        .labelsHidden()
+                        .frame(width: 190)
+                        Text(L10n.t("settings.encoderHelp"))
+                            .font(.caption)
+                            .foregroundStyle(EivizTheme.dim)
+                    }
+                    HStack(spacing: 8) {
+                        Text(L10n.t("settings.videoBitrate"))
+                        TextField("", value: Binding(
+                            get: { mixer.session.streamEncoders[index].videoBitrate / 1000 },
+                            set: { mixer.session.streamEncoders[index].videoBitrate = max(100, $0) * 1000 }
+                        ), format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 80)
+                        Text("kbps")
+                        Text(L10n.t("settings.audioBitrate"))
+                        TextField("", value: Binding(
+                            get: { mixer.session.streamEncoders[index].audioBitrate / 1000 },
+                            set: { mixer.session.streamEncoders[index].audioBitrate = max(32, $0) * 1000 }
+                        ), format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 64)
+                        Text("kbps")
+                    }
+                    HStack(spacing: 8) {
+                        Text(L10n.t("settings.audioDelay"))
+                        DraggableUIntField(value: $mixer.session.streamEncoders[index].audioDelayMs, step: 10)
+                            .frame(width: 92)
+                        Text("ms")
+                        Text(L10n.t("settings.keyframeInterval"))
+                        DraggableUIntField(value: $mixer.session.streamEncoders[index].keyint)
+                            .frame(width: 76)
+                        Text(L10n.t("settings.encoderThreads"))
+                        DraggableUIntField(value: $mixer.session.streamEncoders[index].encoderThreads)
+                            .frame(width: 64)
+                    }
+                    HStack(spacing: 8) {
+                        Text(L10n.t("settings.sendBuffer"))
+                        DraggableUIntField(value: $mixer.session.streamEncoders[index].bufferMs, step: 10)
+                            .frame(width: 76)
+                        Text("ms")
+                        Picker(L10n.t("settings.complexity"), selection: $mixer.session.streamEncoders[index].complexity) {
+                            Text(L10n.t("settings.complexityLow")).tag(UInt32(0))
+                            Text(L10n.t("settings.complexityMedium")).tag(UInt32(1))
+                            Text(L10n.t("settings.complexityHigh")).tag(UInt32(2))
+                        }
+                        .frame(width: 150)
+                        Picker(L10n.t("settings.refFrames"), selection: $mixer.session.streamEncoders[index].refFrames) {
+                            ForEach(1 ... 4, id: \.self) { count in Text("\(count)").tag(UInt32(count)) }
+                        }
+                        .frame(width: 110)
+                    }
+                    HStack(spacing: 12) {
+                        Toggle(L10n.t("settings.cabac"), isOn: $mixer.session.streamEncoders[index].cabac)
+                        Toggle(L10n.t("settings.videoOnly"), isOn: $mixer.session.streamEncoders[index].videoOnly)
+                        Toggle(L10n.t("settings.deblock"), isOn: $mixer.session.streamEncoders[index].deblock)
+                        Toggle(L10n.t("settings.backgroundDetect"), isOn: $mixer.session.streamEncoders[index].backgroundDetection)
+                        Toggle(L10n.t("settings.adaptiveQuant"), isOn: $mixer.session.streamEncoders[index].adaptiveQuant)
+                        Toggle(L10n.t("settings.sceneChange"), isOn: $mixer.session.streamEncoders[index].sceneChange)
+                    }
+                    .toggleStyle(.checkbox)
+                }
+                .padding(10)
+                .background(Color(white: 0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+        }
+    }
+
     private var license: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(L10n.t("settings.license")).fontWeight(.bold)
@@ -615,95 +705,6 @@ struct SettingsView: View {
                 if output.wrappedValue.transport == .rtmp {
                     mixerTextField(output.rtmpUrl, placeholder: L10n.t("settings.rtmpUrl"))
                     RtmpKeyEditor(output: output)
-                    if let index = mixer.session.streamEncoders.firstIndex(
-                        where: { $0.id == output.wrappedValue.streamEncoderId }
-                    ) {
-                        HStack(spacing: 8) {
-                            Text(L10n.t("settings.videoBitrate"))
-                            TextField(
-                                "",
-                                value: Binding(
-                                    get: { mixer.session.streamEncoders[index].videoBitrate / 1000 },
-                                    set: { mixer.session.streamEncoders[index].videoBitrate = max(100, $0) * 1000 }
-                                ),
-                                format: .number
-                            )
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 80)
-                            Text("kbps")
-                            Text(L10n.t("settings.audioBitrate"))
-                            TextField(
-                                "",
-                                value: Binding(
-                                    get: { mixer.session.streamEncoders[index].audioBitrate / 1000 },
-                                    set: { mixer.session.streamEncoders[index].audioBitrate = max(32, $0) * 1000 }
-                                ),
-                                format: .number
-                            )
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 64)
-                            Text("kbps")
-                        }
-                        HStack(spacing: 8) {
-                            Picker(L10n.t("settings.encoder"), selection: $mixer.session.streamEncoders[index].encoder) {
-                                Text("OpenH264").tag("OpenH264")
-                                Text("VideoToolbox").tag("VideoToolbox")
-                            }
-                            .frame(width: 190)
-                            Text(L10n.t("settings.encoderHelp"))
-                                .font(.caption)
-                                .foregroundStyle(EivizTheme.dim)
-                        }
-                        HStack(spacing: 8) {
-                            Text(L10n.t("settings.audioDelay"))
-                            DraggableUIntField(
-                                value: $mixer.session.streamEncoders[index].audioDelayMs,
-                                step: 10
-                            )
-                            .frame(width: 92)
-                            Text("ms")
-                            Text(L10n.t("settings.keyframeInterval"))
-                            DraggableUIntField(
-                                value: $mixer.session.streamEncoders[index].keyint
-                            )
-                            .frame(width: 76)
-                            Text(L10n.t("settings.encoderThreads"))
-                            DraggableUIntField(
-                                value: $mixer.session.streamEncoders[index].encoderThreads
-                            )
-                            .frame(width: 64)
-                        }
-                        HStack(spacing: 8) {
-                            Text(L10n.t("settings.sendBuffer"))
-                            DraggableUIntField(
-                                value: $mixer.session.streamEncoders[index].bufferMs,
-                                step: 10
-                            )
-                            .frame(width: 76)
-                            Text("ms")
-                            Picker(L10n.t("settings.complexity"), selection: $mixer.session.streamEncoders[index].complexity) {
-                                Text(L10n.t("settings.complexityLow")).tag(UInt32(0))
-                                Text(L10n.t("settings.complexityMedium")).tag(UInt32(1))
-                                Text(L10n.t("settings.complexityHigh")).tag(UInt32(2))
-                            }
-                            .frame(width: 150)
-                            Picker(L10n.t("settings.refFrames"), selection: $mixer.session.streamEncoders[index].refFrames) {
-                                ForEach(1 ... 4, id: \.self) { count in
-                                    Text("\(count)").tag(UInt32(count))
-                                }
-                            }
-                            .frame(width: 110)
-                        }
-                        HStack(spacing: 12) {
-                            Toggle(L10n.t("settings.cabac"), isOn: $mixer.session.streamEncoders[index].cabac)
-                            Toggle(L10n.t("settings.videoOnly"), isOn: $mixer.session.streamEncoders[index].videoOnly)
-                            Toggle(L10n.t("settings.deblock"), isOn: $mixer.session.streamEncoders[index].deblock)
-                            Toggle(L10n.t("settings.backgroundDetect"), isOn: $mixer.session.streamEncoders[index].backgroundDetection)
-                            Toggle(L10n.t("settings.adaptiveQuant"), isOn: $mixer.session.streamEncoders[index].adaptiveQuant)
-                            Toggle(L10n.t("settings.sceneChange"), isOn: $mixer.session.streamEncoders[index].sceneChange)
-                        }
-                        .toggleStyle(.checkbox)
-                    }
                 }
                 if output.wrappedValue.transport == .deckLink {
                     deckLinkOutputFields(output)
