@@ -4905,7 +4905,12 @@ pub unsafe extern "C" fn mixer_bench_capacity(
                 // small: the header promises a retry with that size, and returning the
                 // error without it left the host guessing.
                 *written = json.len();
-                write_bytes(out, cap, json.as_bytes())
+                // `write_bytes` returns the payload length; the ABI contract for this
+                // function is OK/error, and the host decodes `written` bytes itself.
+                match write_bytes(out, cap, json.as_bytes()) {
+                    length if length >= 0 => OK,
+                    error => error,
+                }
             }
             Err(error) => {
                 crate::diag::error(&format!("capacity bench failed: {error}"));
