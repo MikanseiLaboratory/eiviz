@@ -5020,7 +5020,13 @@ pub fn open_ffi_store(
     let mut handle = std::ptr::null_mut();
     let status = unsafe { open(module, &raw, &mut handle) };
     if status.code != 0 || handle.is_null() {
-        return Err(eiviz_pro_api::ProError::io("replay open failed"));
+        let detail = crate::pro_load::last_error_text(&api, module);
+        let message = if detail.is_empty() {
+            format!("replay open failed ({})", status.code)
+        } else {
+            format!("replay open failed: {detail}")
+        };
+        return Err(eiviz_pro_api::ProError::io(message));
     }
     Ok(Box::new(FfiReplayStore { api, handle }))
 }
@@ -5042,7 +5048,13 @@ pub fn attach_ffi(
     let mut handle = std::ptr::null_mut();
     let status = unsafe { attach(module, path.as_ptr(), path.len(), &mut handle) };
     if status.code != 0 || handle.is_null() {
-        return Err(eiviz_pro_api::ProError::io("replay attach failed"));
+        let detail = crate::pro_load::last_error_text(&api, module);
+        let message = if detail.is_empty() {
+            format!("replay attach failed ({})", status.code)
+        } else {
+            format!("replay attach failed: {detail}")
+        };
+        return Err(eiviz_pro_api::ProError::io(message));
     }
     Ok(Box::new(FfiReplayStore { api, handle }))
 }

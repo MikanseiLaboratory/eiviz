@@ -437,6 +437,22 @@ pub(crate) fn loaded_api() -> Option<(ProApi, *mut c_void)> {
     LOADED.get().map(|loaded| (loaded.api, loaded.module))
 }
 
+/// The message the loaded module recorded for its last failed call.
+///
+/// The Pro ABI returns a code, not a message. Replay open/attach failures used to
+/// reach the operator as "replay open failed" with no reason (a permission error and
+/// a full disk looked identical); callers that have the module pointer can ask for
+/// the text the module already keeps.
+pub(crate) fn last_error_text(api: &ProApi, module: *mut c_void) -> String {
+    let Some(copy) = api.copy_last_error else {
+        return String::new();
+    };
+    let mut buffer = [0u8; 512];
+    let mut written = 0usize;
+    let _ = unsafe { copy(module, buffer.as_mut_ptr(), buffer.len(), &mut written) };
+    String::from_utf8_lossy(&buffer[..written.min(buffer.len())]).into_owned()
+}
+
 impl LoadedPro {
     fn refresh(&self) -> ModuleSnapshot {
         let mut guard = self

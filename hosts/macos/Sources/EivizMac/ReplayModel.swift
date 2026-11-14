@@ -318,6 +318,35 @@ struct ReplayDocument {
         return movies.appendingPathComponent("eiviz-replay").path
     }
 
+    /// Why `path` cannot receive a recording, or nil when a probe write succeeds.
+    /// The Pro module reports a permission failure as a bare `Io`; checking here lets
+    /// the deck name the folder and tell the operator what to change.
+    static func storageProblem(_ path: String) -> String? {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return L10n.t("replay.storageEmpty") }
+        let manager = FileManager.default
+        var isDirectory: ObjCBool = false
+        if manager.fileExists(atPath: trimmed, isDirectory: &isDirectory) {
+            guard isDirectory.boolValue else {
+                return L10n.format("replay.storageNotFolder", trimmed)
+            }
+        } else {
+            do {
+                try manager.createDirectory(atPath: trimmed, withIntermediateDirectories: true)
+            } catch {
+                return L10n.format("replay.storageDenied", trimmed, error.localizedDescription)
+            }
+        }
+        let probe = (trimmed as NSString).appendingPathComponent(".eiviz-write-test")
+        do {
+            try Data().write(to: URL(fileURLWithPath: probe))
+            try? manager.removeItem(atPath: probe)
+        } catch {
+            return L10n.format("replay.storageDenied", trimmed, error.localizedDescription)
+        }
+        return nil
+    }
+
     /// The document a project gets when its first Replay input is added. Replay
     /// never appears in a session without this, and it carries a recording format
     /// so the project can record without the operator opening Replay Setup first.

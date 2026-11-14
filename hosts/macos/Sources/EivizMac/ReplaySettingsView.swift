@@ -686,6 +686,15 @@ struct ReplaySettingsView: View {
         if storages.count == 1 {
             storages[0].angleIds = angles.map(\.id).sorted()
         }
+        // A path that looks valid can still be denied by the OS (a TCC-protected
+        // folder, a read-only volume). Refuse here instead of letting the recorder
+        // fail later with a bare I/O error.
+        for storage in storages {
+            if let problem = ReplayDocument.storageProblem(storage.path) {
+                status = problem
+                return
+            }
+        }
         current.setStorages(storages)
         var format = current.raw["format"]?.objectValue ?? [:]
         // The whole format travels: a document that keeps a zero resolution or a zero

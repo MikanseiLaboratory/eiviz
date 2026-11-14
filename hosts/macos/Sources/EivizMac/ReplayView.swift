@@ -1913,9 +1913,27 @@ struct ReplayView: View {
             status = L10n.t("replay.needSetup")
             return
         }
-        if !mixer.replayEnableRecording(on) {
-            status = L10n.t(on ? "replay.recordRefused" : "replay.commandRefused")
+        if on, !checkStorageForRecording() {
+            return
         }
+        if let reason = mixer.replayEnableRecording(on) {
+            status = reason
+        }
+    }
+
+    /// Checks the configured drives before asking the Pro module to open one. The
+    /// Pro ABI only returns a code, so a permission error would otherwise reach the
+    /// deck as a bare "I/O" with no path; here the operator sees the folder and the
+    /// OS reason.
+    private func checkStorageForRecording() -> Bool {
+        guard let current = document else { return true }
+        for storage in current.storages {
+            if let problem = ReplayDocument.storageProblem(storage.path) {
+                status = problem
+                return false
+            }
+        }
+        return true
     }
 
     private func live() {
