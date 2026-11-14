@@ -134,6 +134,7 @@ struct ReplayCapacity: Decodable {
     var encodeFpsCpu: Double = 0
     var diskWriteMbS: Double = 0
     var diskReadMbS: Double = 0
+    var bitrateMbps: Double = 0
     var readbackMbS: Double = 0
     var anglesByReadback: UInt32 = 0
     var anglesAt60Cpu: UInt32 = 0

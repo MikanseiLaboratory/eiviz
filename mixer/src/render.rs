@@ -12,7 +12,6 @@ pub(crate) fn render_loop(
     stop: Arc<AtomicBool>,
 ) {
     // The capacity measurement needs the device, and this is where it becomes known.
-    crate::bench::remember(&device.device, &device.queue);
     // Replay playback decodes packets on this same device, so a decoded picture can
     // go straight to the compositor instead of through a CPU frame.
     crate::replay::engine().set_gpu(&device.device, &device.queue);

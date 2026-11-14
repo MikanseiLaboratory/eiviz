@@ -577,21 +577,18 @@ struct ReplaySettingsView: View {
         let path = storages.map(\.path).first(where: { !$0.isEmpty })
             ?? ReplayDocument.defaultStoragePath()
         try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
-        let format = document?.formatValues
-            ?? mixer.replayDocument?.formatValues
-            ?? ReplayFormatValues(
-                width: mixer.session.settings.defaultWidth,
-                height: mixer.session.settings.defaultHeight,
-                fpsNum: mixer.session.settings.masterFpsNum,
-                fpsDen: mixer.session.settings.masterFpsDen
-            )
+        // Measure the picture the session is actually configured for, not the
+        // separate Replay format. Moving color bars are encoded on the CPU and
+        // the drive is measured directly.
+        let width = mixer.session.settings.defaultWidth
+        let height = mixer.session.settings.defaultHeight
         capacityRunning = true
         capacityText = L10n.t("replay.capacityRunning")
         DispatchQueue.global(qos: .userInitiated).async {
             let (capacity, error) = MixerFFI.replayCapacity(
                 path: path,
-                width: format.width,
-                height: format.height
+                width: width,
+                height: height
             )
             DispatchQueue.main.async {
                 capacityRunning = false
@@ -603,7 +600,8 @@ struct ReplaySettingsView: View {
                     "replay.capacityResult",
                     "\(capacity.anglesAt60)",
                     "\(Int(capacity.encodeFps.rounded()))",
-                    "\(Int(capacity.diskWriteMbS.rounded()))"
+                    "\(Int(capacity.diskWriteMbS.rounded()))",
+                    String(format: "%.1f", capacity.bitrateMbps)
                 )
             }
         }
