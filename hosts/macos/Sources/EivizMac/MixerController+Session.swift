@@ -162,8 +162,10 @@ extension MixerController {
                 return
             }
             do {
-                replaceSession(try SessionFile.decode(Data(bytes)))
-                AppPrefs.shared.rememberSession(dest.session)
+                let loaded = try SessionFile.decode(Data(bytes))
+                if replaceSession(loaded) {
+                    AppPrefs.shared.rememberSession(dest.session)
+                }
             } catch {
                 presentError(L10n.error("Load session", 3), title: L10n.t("action.Load session"))
             }
@@ -181,8 +183,10 @@ extension MixerController {
             return
         }
         do {
-            replaceSession(try SessionFile.decode(Data(bytes)))
-            AppPrefs.shared.rememberSession(url.path)
+            let loaded = try SessionFile.decode(Data(bytes))
+            if replaceSession(loaded) {
+                AppPrefs.shared.rememberSession(url.path)
+            }
         } catch {
             presentError(L10n.error("Load session", 3), title: L10n.t("action.Load session"))
         }
@@ -480,7 +484,14 @@ extension MixerController {
         bumpSurfaceEpoch()
     }
 
-    func replaceSession(_ loaded: MixerSessionData) {
+    /// Replaces the live session. Returns false when the session was refused before the
+    /// current one was torn down, so a caller does not mark it as the last session.
+    @discardableResult
+    func replaceSession(_ loaded: MixerSessionData) -> Bool {
+        if let reason = SessionPlanGate.blockReason(for: loaded) {
+            presentError(reason, title: L10n.t("msg.sessionPlanTitle"))
+            return false
+        }
         closeAllInputPreviews()
         closeAllAudioInputs()
         closeAllSwitchers()
@@ -503,7 +514,7 @@ extension MixerController {
         inputFilter = .all
         sceneFilter = .all
         guard fail(mixer_create_with_backend(GpuRenderer.metal.createAbi, 0, session.settings.masterFpsNum, session.settings.masterFpsDen), "Metal mixer initialization") else {
-            return
+            return false
         }
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
         fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
@@ -513,6 +524,7 @@ extension MixerController {
         applySession()
         bumpSurfaceEpoch()
         promptMissingMedia()
+        return true
     }
 
     func bumpSurfaceEpoch() {

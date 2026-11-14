@@ -122,6 +122,40 @@ check("add layer drops a stale pick", SceneEditorView.layerSource(picked: 99, in
 check("add layer shows bars with no pick", SceneEditorView.layerSource(picked: nil, inputs: sceneEditorInputs) == EIVIZ_SRC_BARS)
 check("add layer falls back to bars with no inputs", SceneEditorView.layerSource(picked: nil, inputs: []) == EIVIZ_SRC_BARS)
 
+// MARK: - Session open is gated by the plan and the linked backends
+
+var communityCaps = EivizCapabilities()
+communityCaps.mixing_unit_limit = 4
+communityCaps.rtmp_max_width = 1280
+communityCaps.rtmp_max_height = 720
+communityCaps.rtmp_max_fps_num = 30
+communityCaps.rtmp_max_fps_den = 1
+communityCaps.rtmp_linked = 1
+
+let communitySession = MixerSessionData.default()
+check("plan adds a plain session", SessionPlanGate.issues(in: communitySession, caps: communityCaps).isEmpty)
+
+var replaySession = communitySession
+replaySession.inputs.append(InputEntry(id: 500, name: "Replay A", kind: .replay))
+check("plan blocks a replay input", !SessionPlanGate.issues(in: replaySession, caps: communityCaps).isEmpty)
+
+var decklinkSession = communitySession
+decklinkSession.inputs.append(InputEntry(id: 501, name: "DeckLink", kind: .deckLink))
+check("plan blocks a DeckLink input", !SessionPlanGate.issues(in: decklinkSession, caps: communityCaps).isEmpty)
+
+var rtmpSession = communitySession
+rtmpSession.outputs.append(OutputEntry(id: 900, name: "RTMP", transport: .rtmp))
+var unlinkedCaps = communityCaps
+unlinkedCaps.rtmp_linked = 0
+check("plan blocks RTMP when streaming is not linked", !SessionPlanGate.issues(in: rtmpSession, caps: unlinkedCaps).isEmpty)
+check("plan allows RTMP when streaming is linked", SessionPlanGate.issues(in: rtmpSession, caps: communityCaps).isEmpty)
+
+var unitSession = communitySession
+for id in UInt64(2)...UInt64(5) {
+    unitSession.units.append(MixingUnitEntry(id: id, name: "Mixing Unit \(id)"))
+}
+check("plan blocks more Mixing Units than the plan allows", !SessionPlanGate.issues(in: unitSession, caps: communityCaps).isEmpty)
+
 // MARK: - Deleting a playlist repairs the channels that named it
 
 var repointDoc = ReplayDocument.empty(format: format)
