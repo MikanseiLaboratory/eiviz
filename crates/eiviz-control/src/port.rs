@@ -416,7 +416,7 @@ pub struct StreamEncoderApply {
     pub encoder_threads: u32,
     /// `0` sends immediately.
     pub buffer_ms: u32,
-    /// `0` is OpenH264.
+    /// `0` is OpenH264, `1` is VideoToolbox.
     pub encoder: u32,
     pub complexity: u32,
     pub ref_frames: u32,

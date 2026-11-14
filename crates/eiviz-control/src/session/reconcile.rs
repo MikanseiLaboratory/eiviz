@@ -1420,6 +1420,7 @@ fn stream_encoder_apply(encoder: &StreamEncoderDto) -> StreamEncoderApply {
         buffer_ms: encoder.buffer_ms,
         encoder: match encoder.encoder.as_str() {
             "" | "OpenH264" => 0,
+            "VideoToolbox" => 1,
             _ => u32::MAX,
         },
         complexity: encoder.complexity,
