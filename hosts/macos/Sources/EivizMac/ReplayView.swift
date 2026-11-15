@@ -493,7 +493,6 @@ struct ReplayView: View {
                     .font(.caption)
                     .foregroundStyle(EivizTheme.dim)
                 Picker("", selection: $waveformSeconds) {
-                    Text(L10n.t("replay.waveformAll")).tag(0.0)
                     Text("10 s").tag(10.0)
                     Text("30 s").tag(30.0)
                     Text("60 s").tag(60.0)
