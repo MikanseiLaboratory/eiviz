@@ -7349,7 +7349,12 @@ pub unsafe extern "C" fn mixer_reset_metrics() -> i32 {
     ffi_guard("mixer_reset_metrics", ERR_DEVICE, || {
         crate::diag::reset_metrics();
         with_mixer(|mixer| {
-            mixer.shared.lock_or_recover().uploads.lock_or_recover().reset_dropped();
+            mixer
+                .shared
+                .lock_or_recover()
+                .uploads
+                .lock_or_recover()
+                .reset_dropped();
             OK
         })
         .unwrap_or_else(|code| code)
