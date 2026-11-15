@@ -495,6 +495,12 @@ struct ReplayDocument {
         }
     }
 
+    /// UUID of the newest recording in the session. The deck starts on this
+    /// recording's waveform when no clip/event is selected.
+    var latestRecordingUuid: String {
+        array("recordings").last?.objectValue?["uuid"]?.stringValue ?? ""
+    }
+
     var events: [ReplayEventInfo] {
         var starts: [String: UInt64] = [:]
         for item in array("recordings") {

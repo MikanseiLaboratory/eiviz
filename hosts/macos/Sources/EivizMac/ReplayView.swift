@@ -1360,7 +1360,9 @@ struct ReplayView: View {
         refreshExport()
         // The peaks live with the recording, so a Remote has no waveform to draw.
         if !mixer.isRemote, let document, let angleId = watchAngle(document) {
-            let peaks = MixerFFI.replayPeaks(angleId: angleId)
+            let peaks = MixerFFI.replayPeaks(
+                recordingUuid: waveformRecordingUuid,
+                angleId: angleId)
             if peaks.mins.count != peakMins.count {
                 peakMins = peaks.mins
                 peakMaxes = peaks.maxes
@@ -1380,6 +1382,22 @@ struct ReplayView: View {
             return active
         }
         return document.angles.first?.id
+    }
+
+    /// Recording whose waveform the deck should show: the selected clip/event,
+    /// then the clip on air, then the newest recording.
+    private var waveformRecordingUuid: String {
+        if let uid = selectedClip, let clip = clips.first(where: { $0.uid == uid }) {
+            return clip.recordingUuid
+        }
+        if let uid = playingClipUid, let clip = clips.first(where: { $0.uid == uid }) {
+            return clip.recordingUuid
+        }
+        if let id = selectedEvent,
+           let event = document?.events.first(where: { $0.id == id }) {
+            return event.recordingUuid
+        }
+        return document?.latestRecordingUuid ?? ""
     }
 
     /// Waveform strip. Each column is the min/max of the buckets it covers, which

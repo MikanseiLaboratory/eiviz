@@ -5242,6 +5242,50 @@ pub unsafe extern "C" fn mixer_replay_copy_peaks(
     })
 }
 
+/// Peak count of one angle inside a named recording. This is the waveform API
+/// for a deck that has a clip/event selected; the older count/copy pair follows
+/// whichever live or playback store happens to be first.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_peak_count_recording(
+    uuid: *const c_char,
+    angle_id: u32,
+    dropped: *mut u32,
+) -> u32 {
+    ffi_guard("mixer_replay_peak_count_recording", 0, || unsafe {
+        let Some(uuid) = crate::pro::cstr(uuid) else {
+            return 0;
+        };
+        let (count, dropped_buckets) =
+            crate::replay::engine().peak_count_recording(&uuid, angle_id);
+        if !dropped.is_null() {
+            *dropped = dropped_buckets;
+        }
+        count
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_copy_peaks_recording(
+    uuid: *const c_char,
+    angle_id: u32,
+    from: u32,
+    min_out: *mut f32,
+    max_out: *mut f32,
+    cap: u32,
+) -> i32 {
+    ffi_guard("mixer_replay_copy_peaks_recording", -1, || unsafe {
+        if min_out.is_null() || max_out.is_null() || cap == 0 {
+            return -ERR_INVALID_ARGUMENT;
+        }
+        let Some(uuid) = crate::pro::cstr(uuid) else {
+            return -ERR_INVALID_ARGUMENT;
+        };
+        let mins = std::slice::from_raw_parts_mut(min_out, cap as usize);
+        let maxes = std::slice::from_raw_parts_mut(max_out, cap as usize);
+        crate::replay::engine().copy_peaks_recording(&uuid, angle_id, from, mins, maxes) as i32
+    })
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_replay_copy_recording_uuid(out: *mut u8, cap: usize) -> i32 {
     ffi_guard("mixer_replay_copy_recording_uuid", -1, || unsafe {

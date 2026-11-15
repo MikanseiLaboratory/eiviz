@@ -1819,6 +1819,38 @@ impl ReplayEngine {
         0
     }
 
+    /// Waveform counts for one recording, selected by the recording UUID. A
+    /// session can hold several recordings with the same angle id; this keeps a
+    /// deck showing the waveform of the clip it is actually looking at.
+    pub fn peak_count_recording(&self, uuid: &str, angle_id: u32) -> (u32, u32) {
+        let Some(store) = self.playback_store(uuid) else {
+            return (0, 0);
+        };
+        store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .peak_count(angle_id)
+            .unwrap_or((0, 0))
+    }
+
+    pub fn copy_peaks_recording(
+        &self,
+        uuid: &str,
+        angle_id: u32,
+        from: u32,
+        min_out: &mut [f32],
+        max_out: &mut [f32],
+    ) -> u32 {
+        let Some(store) = self.playback_store(uuid) else {
+            return 0;
+        };
+        store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .copy_peaks(angle_id, from, min_out, max_out)
+            .unwrap_or(0)
+    }
+
     /// Marks the in point on the recording timeline. Marking is a timeline
     /// operation, not a recording one: an operator marks material that is already
     /// recorded, so a stopped recorder can still be marked. Only an empty timeline

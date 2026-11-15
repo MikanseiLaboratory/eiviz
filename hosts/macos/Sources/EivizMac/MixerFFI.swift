@@ -500,6 +500,39 @@ enum MixerFFI {
         mixer_replay_peak_rate()
     }
 
+    /// Waveform of one angle in a specific recording. A session can hold
+    /// several recordings with the same angle id; selecting a clip/event must
+    /// show that recording's waveform, not whichever store opens first.
+    static func replayPeaks(
+        recordingUuid: String,
+        angleId: UInt32
+    ) -> (mins: [Float], maxes: [Float], dropped: UInt32) {
+        guard !recordingUuid.isEmpty else { return replayPeaks(angleId: angleId) }
+        var dropped: UInt32 = 0
+        let count = recordingUuid.withCString { uuid in
+            mixer_replay_peak_count_recording(uuid, angleId, &dropped)
+        }
+        guard count > 0 else { return ([], [], dropped) }
+        var mins = [Float](repeating: 0, count: Int(count))
+        var maxes = [Float](repeating: 0, count: Int(count))
+        let copied = recordingUuid.withCString { uuid in
+            mins.withUnsafeMutableBufferPointer { minBuffer in
+                maxes.withUnsafeMutableBufferPointer { maxBuffer in
+                    mixer_replay_copy_peaks_recording(
+                        uuid,
+                        angleId,
+                        0,
+                        minBuffer.baseAddress,
+                        maxBuffer.baseAddress,
+                        count
+                    )
+                }
+            }
+        }
+        guard copied > 0 else { return ([], [], dropped) }
+        return (Array(mins.prefix(Int(copied))), Array(maxes.prefix(Int(copied))), dropped)
+    }
+
     /// Waveform of one angle: the bucket count and the buckets themselves.
     static func replayPeaks(angleId: UInt32) -> (mins: [Float], maxes: [Float], dropped: UInt32) {
         var dropped: UInt32 = 0

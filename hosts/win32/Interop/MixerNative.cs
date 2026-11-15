@@ -487,6 +487,12 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_peak_rate")]
     internal static partial uint ReplayPeakRate();
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_peak_count_recording", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial uint ReplayPeakCountRecording(string uuid, uint angleId, out uint dropped);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_copy_peaks_recording", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int ReplayCopyPeaksRecording(string uuid, uint angleId, uint from, float* minOut, float* maxOut, uint cap);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_peak_count")]
     internal static unsafe partial uint ReplayPeakCount(uint angleId, uint* dropped);
 
