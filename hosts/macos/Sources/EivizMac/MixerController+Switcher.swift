@@ -420,6 +420,10 @@ extension MixerController {
     }
 
     func deleteScene(_ scene: SceneEntry) {
+        guard !OnAirLock.active else {
+            presentError(L10n.t("msg.onAirLock"), title: L10n.t("chrome.onAirLock"))
+            return
+        }
         guard session.scenes.count > 1 else { return }
         // An angle records a scene's composited output, so the scene is not the
         // operator's to delete while Replay depends on it.
@@ -565,6 +569,10 @@ extension MixerController {
     }
 
     func deleteUnit() {
+        guard !OnAirLock.active else {
+            presentError(L10n.t("msg.onAirLock"), title: L10n.t("chrome.onAirLock"))
+            return
+        }
         guard session.units.count > 1 else { return }
         let id = selectedUnitId
         // An angle may record a unit's program mix, which makes the unit the wrong
@@ -671,6 +679,10 @@ extension MixerController {
     /// `mixer_output_remove` knows neither. Deleting the row alone left the encoder
     /// publishing to the URL with no UI left to stop it.
     func removeOutput(_ output: OutputEntry) {
+        guard !OnAirLock.active else {
+            presentError(L10n.t("msg.onAirLock"), title: L10n.t("chrome.onAirLock"))
+            return
+        }
         if isRemote { return }
         if output.transport == .rtmp, output.streamEncoderId != 0 {
             _ = MixerFFI.streamEncoderRemove(output.streamEncoderId)
