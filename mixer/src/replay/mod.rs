@@ -1700,22 +1700,68 @@ impl ReplayEngine {
     }
 
     pub fn peak_count(&self, angle_id: u32) -> u32 {
-        let inner = self.lock();
-        inner
-            .peaks
-            .get(&angle_id)
-            .map(eiviz_pro_api::PeakAccumulator::bucket_count)
-            .unwrap_or(0)
+        let live = {
+            let inner = self.lock();
+            inner
+                .peaks
+                .get(&angle_id)
+                .map(eiviz_pro_api::PeakAccumulator::bucket_count)
+                .unwrap_or(0)
+        };
+        if live > 0 {
+            return live;
+        }
+        self.stored_peaks(angle_id).0
     }
 
     /// Buckets evicted from the front of an angle's ring.
     pub fn peak_dropped(&self, angle_id: u32) -> u32 {
-        let inner = self.lock();
-        inner
-            .peaks
-            .get(&angle_id)
-            .map(eiviz_pro_api::PeakAccumulator::dropped_buckets)
-            .unwrap_or(0)
+        let live = {
+            let inner = self.lock();
+            inner
+                .peaks
+                .get(&angle_id)
+                .map(eiviz_pro_api::PeakAccumulator::dropped_buckets)
+                .unwrap_or(0)
+        };
+        if live > 0 {
+            return live;
+        }
+        self.stored_peaks(angle_id).1
+    }
+
+    /// Counts and front-drop for an angle in an already recorded store. The live
+    /// accumulator only exists while this process records; a session opened from
+    /// disk has its waveform in the playback store instead.
+    fn stored_peaks(&self, angle_id: u32) -> (u32, u32) {
+        let record = self
+            .record_store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        if let Some(store) = record
+            && let Ok(mut store) = store.lock()
+            && let Ok((count, dropped)) = store.peak_count(angle_id)
+            && count > 0
+        {
+            return (count, dropped);
+        }
+        let stores: Vec<_> = self
+            .playback_stores
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .cloned()
+            .collect();
+        for store in stores {
+            if let Ok(mut store) = store.lock()
+                && let Ok((count, dropped)) = store.peak_count(angle_id)
+                && count > 0
+            {
+                return (count, dropped);
+            }
+        }
+        (0, 0)
     }
 
     /// Copies an angle's waveform. Returns how many buckets were written.
@@ -1745,11 +1791,32 @@ impl ReplayEngine {
         else {
             return 0;
         };
-        store
+        let recorded = store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .copy_peaks(angle_id, from, min_out, max_out)
-            .unwrap_or(0)
+            .unwrap_or(0);
+        if recorded > 0 {
+            return recorded;
+        }
+        let stores: Vec<_> = self
+            .playback_stores
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .cloned()
+            .collect();
+        for store in stores {
+            let copied = store
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .copy_peaks(angle_id, from, min_out, max_out)
+                .unwrap_or(0);
+            if copied > 0 {
+                return copied;
+            }
+        }
+        0
     }
 
     /// Marks the in point on the recording timeline. Marking is a timeline
