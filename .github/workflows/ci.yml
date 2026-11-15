@@ -132,7 +132,7 @@ jobs:
   # on a development machine instead, where the same list finishes in seconds.
   macos-swift:
     name: Mac host (Swift compile)
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -165,7 +165,7 @@ jobs:
 
   macos:
     name: Test mixer and Mac host
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -204,6 +204,16 @@ jobs:
         run: |
           chmod +x hosts/macos/build.sh
           hosts/macos/build.sh
+
+      - name: Run Swift replay checks
+        # The checks read the session fixture from the source tree and link the
+        # build.sh dylibs, so they run where the host build just passed. The
+        # release (WMO + explicit modules) build has been failing on newer
+        # toolchains, and the debug run is what the development machine executes.
+        run: |
+          cd hosts/macos
+          swift build -c debug --product replay-core-checks
+          swift run -c debug --product replay-core-checks
 
   control-api:
     name: Control and API (Ubuntu, no GPU)
