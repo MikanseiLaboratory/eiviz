@@ -5113,6 +5113,9 @@ pub fn open_ffi_store(
         .map(|item| ProReplayAngle {
             angle_id: item.angle_id,
             storage_index: item.storage_index,
+            // A GPU angle's packets arrive already encoded, so the store has no
+            // reason to keep an idle CPU codec (a thread and its ring) around.
+            gpu_encoded: u32::from(item.gpu_encoded),
         })
         .collect();
     let raw = ProReplayConfig {

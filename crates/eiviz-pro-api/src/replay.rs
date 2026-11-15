@@ -400,6 +400,12 @@ pub trait ReplayStore: Send {
         Err(ProError::invalid("proxy is missing"))
     }
 
+    /// Moves the retention protection boundary forward. A store not recording
+    /// under `RETENTION_PROTECT` has nothing to protect and accepts the call.
+    fn set_protect_from(&mut self, _frame: u64) -> ProResult<()> {
+        Ok(())
+    }
+
     /// Reads the stored packet without decoding it, so the mixer can decode on its
     /// own GPU and never copy a decoded picture back to the CPU.
     ///
