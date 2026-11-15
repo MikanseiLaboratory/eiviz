@@ -586,6 +586,7 @@ int32_t mixer_copy_audio_peaks(EivizAudioPeak *out, uint32_t cap);
 int32_t mixer_copy_source_usage(EivizSourceUsage *out, uint32_t cap);
 int32_t mixer_copy_stats(EivizMixerStats *out);
 int32_t mixer_copy_runtime_stats(EivizMixerRuntimeStats *out);
+int32_t mixer_reset_metrics(void);
 int32_t mixer_copy_input_stats(EivizInputRuntimeStats *out, uint32_t cap);
 int32_t mixer_copy_output_stats(EivizOutputRuntimeStats *out, uint32_t cap);
 int32_t mixer_copy_rebar_info(EivizMixerRebarInfo *out);

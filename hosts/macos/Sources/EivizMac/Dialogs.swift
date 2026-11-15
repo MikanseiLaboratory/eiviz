@@ -2482,6 +2482,10 @@ struct ResourcesView: View {
             .font(.system(size: 12, design: .monospaced))
             Spacer()
             HStack {
+                Button(L10n.t("resources.reset")) {
+                    _ = mixer_reset_metrics()
+                    load()
+                }
                 Spacer()
                 Button("Close") { dismiss() }
             }
@@ -2599,7 +2603,10 @@ struct ResourcesView: View {
         let extra = stats.compose_vram_bytes > 0 || stats.delay_vram_bytes > 0
             ? "    Compose \(formatBytes(stats.compose_vram_bytes))    Delay \(formatBytes(stats.delay_vram_bytes))"
             : ""
-        summary = "Uptime \(formatUptime(runtime.uptime_ms))    Skipped \(runtime.render_skipped)    Lost \(runtime.input_queue_dropped)    OMT \(runtime.output_omt) (sub \(runtime.output_omt_subscribed))    NDI \(runtime.output_ndi) (conn \(runtime.output_ndi_connections))    Inputs \(mixer.session.inputs.count)    GPU \(gpuText)    RAM \(ramText)    VRAM \(vramText)\(extra)    Render \(String(format: "%.1f", stats.render_ms)) / \(String(format: "%.1f", stats.frame_budget_ms)) ms"
+        let rendered = runtime.frames_rendered
+        let renderedTotal = rendered &+ runtime.render_skipped
+        let droppedTotal = rendered &+ runtime.input_queue_dropped
+        summary = "Uptime \(formatUptime(runtime.uptime_ms))    Skipped \(runtime.render_skipped) / \(renderedTotal)    Lost \(runtime.input_queue_dropped) / \(droppedTotal)    OMT \(runtime.output_omt) (sub \(runtime.output_omt_subscribed))    NDI \(runtime.output_ndi) (conn \(runtime.output_ndi_connections))    Inputs \(mixer.session.inputs.count)    GPU \(gpuText)    RAM \(ramText)    VRAM \(vramText)\(extra)    Render \(String(format: "%.1f", stats.render_ms)) / \(String(format: "%.1f", stats.frame_budget_ms)) ms"
     }
 }
 

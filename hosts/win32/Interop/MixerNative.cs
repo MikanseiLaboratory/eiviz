@@ -681,6 +681,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_copy_stats")]
     internal static unsafe partial int CopyStats(MixerStats* stats);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_reset_metrics")]
+    internal static partial int ResetMetrics();
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_copy_runtime_stats")]
     internal static unsafe partial int CopyRuntimeStats(MixerRuntimeStats* stats);
 

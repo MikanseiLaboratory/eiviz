@@ -335,6 +335,14 @@ pub fn note_frame_rendered() {
     FRAMES_RENDERED.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Resets the counters an operator reads in the resource window. Live state
+/// (fatal flag, error text) is deliberately not cleared.
+pub fn reset_metrics() {
+    SURFACE_LOST.store(0, Ordering::Relaxed);
+    RENDER_SKIPPED.store(0, Ordering::Relaxed);
+    FRAMES_RENDERED.store(0, Ordering::Relaxed);
+}
+
 pub fn frames_rendered() -> u64 {
     FRAMES_RENDERED.load(Ordering::Relaxed)
 }

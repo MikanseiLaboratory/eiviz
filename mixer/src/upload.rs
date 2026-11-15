@@ -897,6 +897,14 @@ impl UploadStore {
         Arc::clone(&self.audio)
     }
 
+    /// Clears the per-source queue-drop counters without disturbing the frames
+    /// themselves; the resource window's Reset button uses this.
+    pub fn reset_dropped(&mut self) {
+        for ring in self.sources.values_mut() {
+            ring.dropped = 0;
+        }
+    }
+
     pub fn runtime_rows(&self) -> impl Iterator<Item = (u64, u64, u64)> + '_ {
         self.sources
             .iter()

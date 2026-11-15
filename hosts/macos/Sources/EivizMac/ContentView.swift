@@ -52,6 +52,9 @@ struct ContentView: View {
         .foregroundStyle(EivizTheme.text)
         .preferredColorScheme(EivizTheme.colorScheme)
         .id("\(prefs.language)-\(prefs.theme)-\(prefs.localeRevision)")
+        .onReceive(NotificationCenter.default.publisher(for: OnAirLock.changed)) { _ in
+            onAirLock = OnAirLock.active
+        }
         .sheet(isPresented: $mixer.showSettings) { SettingsView() }
         .sheet(isPresented: $mixer.showPreferences) { PreferencesView() }
         .sheet(isPresented: $mixer.showConnect) { ConnectView() }
@@ -65,8 +68,7 @@ struct ContentView: View {
         .sheet(isPresented: $mixer.showOverlay) { OverlayView() }
         .sheet(isPresented: $mixer.showMultiview) { MultiviewView() }
         .sheet(isPresented: $mixer.showMultiviewSlots) { MultiviewSlotsView() }
-        .sheet(isPresented: $mixer.showResources) { ResourcesView() }
-        .sheet(isPresented: $mixer.showLogs) { LogsView() }
+        // Logs and resource metrics are independent windows; see ToolWindows.
         .sheet(item: $customWgslEdit) { edit in
             CustomWgslEditor(
                 text: edit.text,
@@ -108,6 +110,7 @@ struct ContentView: View {
                 .frame(maxWidth: 160)
             } else {
                 Button(L10n.t("chrome.new")) { mixer.newSession() }
+                    .disabled(onAirLock)
                 Button(L10n.t("chrome.save")) { mixer.saveSession() }
                 Menu {
                     Button(L10n.t("chrome.saveAs")) { mixer.saveSessionAs() }
@@ -116,7 +119,9 @@ struct ContentView: View {
                     Text("▾")
                 }
                 Button(L10n.t("chrome.load")) { mixer.loadSession() }
+                    .disabled(onAirLock)
                 Button(L10n.t("chrome.loadLast")) { mixer.loadLastSession() }
+                    .disabled(onAirLock)
                 Menu {
                     ForEach(AppPrefs.shared.existingSessions(), id: \.self) { path in
                         Button(URL(fileURLWithPath: path).lastPathComponent) { mixer.loadSession(path: path) }
@@ -134,7 +139,7 @@ struct ContentView: View {
                 OnAirLock.set(onAirLock)
             }
             .help(L10n.t("msg.onAirLock"))
-            Button(L10n.t("chrome.logs")) { mixer.showLogs = true }
+            Button(L10n.t("chrome.logs")) { ToolWindows.showLogs() }
             Button(L10n.t("chrome.settings")) { mixer.showSettings = true }
                 .disabled(mixer.isRemote && !mixer.remoteConnected)
             Button(L10n.t("chrome.preferences")) { mixer.showPreferences = true }
@@ -875,11 +880,9 @@ struct ContentView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            Text(mixer.resourceText)
+            Button(L10n.t("chrome.resources")) { ToolWindows.showResources(mixer) }
                 .foregroundStyle(EivizTheme.hud)
-                .lineLimit(1)
-                .contentShape(Rectangle())
-                .onTapGesture { mixer.showResources = true }
+                .buttonStyle(.plain)
                 .help(L10n.t("chrome.resources"))
         }
         .font(.system(size: 12))

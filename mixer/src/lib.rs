@@ -7343,6 +7343,19 @@ unsafe fn mixer_copy_runtime_stats_ffi(out: *mut MixerRuntimeStats) -> i32 {
     .unwrap_or_else(|code| code)
 }
 
+/// Resets the operator-facing counters shown in the resource window.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_reset_metrics() -> i32 {
+    ffi_guard("mixer_reset_metrics", ERR_DEVICE, || {
+        crate::diag::reset_metrics();
+        with_mixer(|mixer| {
+            mixer.shared.lock_or_recover().uploads.lock_or_recover().reset_dropped();
+            OK
+        })
+        .unwrap_or_else(|code| code)
+    })
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mixer_copy_input_stats(out: *mut InputRuntimeStats, cap: u32) -> i32 {
     ffi_guard("mixer_copy_input_stats", -1, || unsafe {

@@ -516,18 +516,27 @@ struct ReplaySettingsView: View {
             return
         }
         let used = Set(angles.filter { $0.source == "Scene" }.map(\.sceneId))
-        let scene = mixer.session.scenes.first { !used.contains($0.id) }
+        var scene = mixer.session.scenes.first { !used.contains($0.id) }
+        // A deck can have more angles than scenes. Adding an angle used to leave
+        // sceneId 0 silently, which Apply then refused; create the scene that the
+        // new angle needs instead.
+        if scene == nil {
+            mixer.addScene()
+            scene = mixer.session.scenes.last
+        }
         guard var current = document else { return }
         let id = current.reserveAngleId()
         document = current
         angles.append(
             ReplayAngleInfo(
                 id: id,
-                name: scene?.name ?? "",
+                // The row names the angle, not the scene it records: the scene can
+                // change later and "Scene 2" was never an angle name.
+                name: L10n.format("replay.angleName", "\(id)"),
                 source: "Scene",
                 sceneId: scene?.id ?? 0,
                 inputId: 0,
-                    audioUnitId: 0
+                audioUnitId: 0
             )
         )
         // A single drive takes the new angle: a setup with one drive should not need a
@@ -535,7 +544,7 @@ struct ReplaySettingsView: View {
         if storages.count == 1 {
             storages[0].angleIds.append(id)
         }
-        status = L10n.format("replay.angleAdded", scene?.name ?? "")
+        status = L10n.format("replay.angleAdded", L10n.format("replay.angleName", "\(id)"))
     }
 
     /// Removes one angle by id, from its own row's button.
