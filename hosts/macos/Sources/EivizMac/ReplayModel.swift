@@ -174,6 +174,10 @@ struct ReplayAngleInfo: Identifiable, Hashable {
 struct ReplayEventInfo: Identifiable, Hashable {
     let id: UInt64
     let recordingUuid: String
+    /// Wall clock of the recording's frame 0, when the session knows it. This is what
+    /// makes an IN point readable across a pause/resume (a new recording segment has a
+    /// different frame origin); 0 means the recording predates createdMs.
+    let startedMs: UInt64
     let inFrame: UInt64
     let outFrame: UInt64
     let name: String
@@ -492,11 +496,20 @@ struct ReplayDocument {
     }
 
     var events: [ReplayEventInfo] {
-        array("events").compactMap { item -> ReplayEventInfo? in
+        var starts: [String: UInt64] = [:]
+        for item in array("recordings") {
+            guard let object = item.objectValue,
+                  let uuid = object["uuid"]?.stringValue, !uuid.isEmpty
+            else { continue }
+            starts[uuid] = object["createdMs"]?.uint64Value ?? 0
+        }
+        return array("events").compactMap { item -> ReplayEventInfo? in
             guard let object = item.objectValue else { return nil }
+            let uuid = object["recordingUuid"]?.stringValue ?? ""
             return ReplayEventInfo(
                 id: object["id"]?.uint64Value ?? 0,
-                recordingUuid: object["recordingUuid"]?.stringValue ?? "",
+                recordingUuid: uuid,
+                startedMs: starts[uuid] ?? 0,
                 inFrame: object["inFrame"]?.uint64Value ?? 0,
                 outFrame: object["outFrame"]?.uint64Value ?? 0,
                 name: object["name"]?.stringValue ?? "",
@@ -1251,6 +1264,21 @@ enum ReplayTime {
 
     static func duration(_ inFrame: UInt64, _ outFrame: UInt64, _ fps: (num: UInt32, den: UInt32)) -> String {
         timecode(outFrame > inFrame ? outFrame - inFrame : 0, fps)
+    }
+
+    /// Wall-clock date/time of a frame in a recording whose frame 0 was created at
+    /// `startedMs` (Unix milliseconds). Returns nil for a recording without a start.
+    static func wallClock(
+        startedMs: UInt64,
+        frames: UInt64,
+        fps: (num: UInt32, den: UInt32)
+    ) -> String? {
+        guard startedMs > 0 else { return nil }
+        let seconds = startedMs / 1000 + UInt64((Double(frames) / rate(fps)).rounded())
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy/MM/dd HH:mm:ss"
+        return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(seconds)))
     }
 
     /// `HH:MM:SS` for a duration in seconds.

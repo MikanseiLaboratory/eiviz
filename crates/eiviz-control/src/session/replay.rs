@@ -1053,6 +1053,9 @@ impl ReplayDeckDto {
                 .find(|channel| channel.index == incoming.index)
             {
                 channel.playlist_id = incoming.playlist_id;
+                // The channel decoder is part of the deck's settings too. Dropping it
+                // here made the picker snap back to Auto after every save.
+                channel.decode_backend = incoming.decode_backend;
             }
         }
         merge_timeline_cues(replay, self.timeline_cues);
@@ -2225,6 +2228,30 @@ mod tests {
         assert_eq!(replay.recordings.len(), 1);
         assert_eq!(replay.recordings[0].uuid, "rec-a");
     }
+    #[test]
+    fn deck_save_keeps_the_per_channel_decoder() {
+        let mut replay = ReplayDto {
+            channels: vec![ChannelDto {
+                index: 0,
+                playlist_id: None,
+                input_id: 0,
+                decode_backend: DecodeBackend::Auto,
+            }],
+            ..ReplayDto::default()
+        };
+        let deck = ReplayDeckDto {
+            channels: vec![ChannelDto {
+                index: 0,
+                playlist_id: None,
+                input_id: 0,
+                decode_backend: DecodeBackend::Cpu,
+            }],
+            ..ReplayDeckDto::default()
+        };
+        deck.apply_to(&mut replay);
+        assert_eq!(replay.channels[0].decode_backend, DecodeBackend::Cpu);
+    }
+
     #[test]
     fn a_missing_preserve_pitch_field_defaults_on() {
         let clip: ClipDto =

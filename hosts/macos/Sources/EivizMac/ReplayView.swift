@@ -66,11 +66,16 @@ struct ReplayView: View {
     /// Buckets the mixer evicted, so the first bucket on screen is this many into
     /// the recording. The marks are placed with it.
     @State private var peakDropped: UInt32 = 0
+    /// Seconds of waveform to show; zero shows every bucket the store still holds.
+    @State private var waveformSeconds: Double = 0
     @State private var jogValue: Double = 0
     @State private var showExport = false
     @State private var markLastSeconds = "10"
     @State private var clipOrder = "Append"
     @State private var playingClipUid: String?
+    /// Event row created at Mark In. Mark Out fills this row instead of appending a
+    /// second event, matching the Windows deck's open clip.
+    @State private var openEventId: UInt64?
     /// The channel's playhead, as the mixer reports it. This is what the seek bar moves;
     /// the recording head is where the recorder is writing and must not drive the bar.
     @State private var playheadFrame: UInt64 = 0
@@ -84,6 +89,10 @@ struct ReplayView: View {
     /// reports back (a clamped target, a dropped transport command) must not pin the
     /// thumb forever; after this grace the engine's own position owns the bar again.
     @State private var scrubSince: Date?
+    /// Throttle for live seeks while the thumb is still being dragged.
+    @State private var lastScrubSeek = Date.distantPast
+    /// Throttle for waveform drags: each 100 ms of the swipe moves the picture.
+    @State private var lastWaveformSeek = Date.distantPast
     @State private var sliderEditing = false
     /// The deck opens on the first recorded frame when the channel is idle. Set once
     /// per channel so a later tick does not undo an operator's seek.
@@ -110,6 +119,7 @@ struct ReplayView: View {
             playheadFrame = 0
             channelOutFrame = 0
             playingClipUid = nil
+            openEventId = nil
             selectedClip = nil
             selectedEvent = nil
             didInitialSeek = false
@@ -406,12 +416,25 @@ struct ReplayView: View {
                         set: {
                             scrubFrame = $0
                             scrubSince = Date()
+                            // A drag is a scrub, not a preview that waits for the
+                            // release. Seek while the thumb is held, at 10 Hz, so the
+                            // picture follows the hand without flooding the mixer.
+                            guard sliderEditing,
+                                  Date().timeIntervalSince(lastScrubSeek) >= 0.1
+                            else { return }
+                            lastScrubSeek = Date()
+                            let frame = UInt64(max(0, $0.rounded()))
+                            seekWhole(to: frame, keepPlaying: transport.playing)
                         }
                     ),
                     in: seekRange
                 ) { editing in
                     sliderEditing = editing
-                    guard !editing, let target = scrubFrame else { return }
+                    if editing {
+                        lastScrubSeek = Date.distantPast
+                        return
+                    }
+                    guard let target = scrubFrame else { return }
                     let frame = UInt64(max(0, target.rounded()))
                     playheadFrame = frame
                     // Keep showing the drop point while the mixer catches up, then let
@@ -460,6 +483,20 @@ struct ReplayView: View {
                 Button(L10n.t("replay.jumpLive")) { live() }
                     .frame(minWidth: 130, minHeight: 26)
                     .help(L10n.t("replay.jumpLiveHint"))
+            }
+            HStack(spacing: 8) {
+                Text(L10n.t("replay.waveformRange"))
+                    .font(.caption)
+                    .foregroundStyle(EivizTheme.dim)
+                Picker("", selection: $waveformSeconds) {
+                    Text(L10n.t("replay.waveformAll")).tag(0.0)
+                    Text("10 s").tag(10.0)
+                    Text("30 s").tag(30.0)
+                    Text("60 s").tag(60.0)
+                    Text("5 min").tag(300.0)
+                }
+                .labelsHidden()
+                .frame(width: 110)
             }
             waveform
                 .frame(height: 48)
@@ -1345,19 +1382,38 @@ struct ReplayView: View {
     /// Waveform strip. Each column is the min/max of the buckets it covers, which
     /// is how a quiet gap to cut on becomes visible. The marks and the record head
     /// are drawn on it so the operator can see where the cut lands.
+    /// Bucket window shown by the waveform. Zero means all retained buckets; a
+    /// value zooms to that many seconds ending at the recording head/playhead.
+    private var waveformWindow: (first: Int, last: Int) {
+        let first = Int(peakDropped)
+        let last = first + peakMins.count
+        guard waveformSeconds > 0, let document else { return (first, last) }
+        let rate = Double(MixerFFI.replayPeakRate())
+        let fps = max(1.0, ReplayTime.rate(document.fps))
+        guard rate > 0 else { return (first, last) }
+        let width = waveformSeconds * fps
+        let end = Double(max(playheadFrame, recordingHead))
+        let start = max(0, end - width)
+        let from = max(first, Int(start * rate / fps))
+        let to = min(last, Int(end * rate / fps))
+        return to > from ? (from, to) : (first, last)
+    }
+
     private var waveform: some View {
         Canvas { context, size in
             let buckets = peakMins.count
             guard buckets > 0, size.width > 1, peakMaxes.count == buckets else { return }
+            let (windowFirst, windowLast) = waveformWindow
+            let shown = max(1, windowLast - windowFirst)
             let columns = Int(size.width)
             let middle = size.height / 2
             let scale = middle - 2
             for column in 0..<columns {
-                let from = buckets * column / columns
-                let to = max(from + 1, buckets * (column + 1) / columns)
+                let from = windowFirst + shown * column / columns
+                let to = max(from + 1, windowFirst + shown * (column + 1) / columns)
                 var low = Float.greatestFiniteMagnitude
                 var high = -Float.greatestFiniteMagnitude
-                for bucket in from..<min(to, buckets) {
+                for bucket in from..<min(to, windowLast) {
                     low = min(low, peakMins[bucket])
                     high = max(high, peakMaxes[bucket])
                 }
@@ -1369,8 +1425,8 @@ struct ReplayView: View {
             }
             // Absolute bucket numbering, so a frame maps to the same column here as
             // it does in the mixer's own bucket list.
-            let first = Int(peakDropped)
-            let last = first + buckets
+            let first = windowFirst
+            let last = windowLast
             let bucketRate = Double(MixerFFI.replayPeakRate())
             let framesPerSecond = max(1.0, ReplayTime.rate(fps))
             let marks: [(UInt64?, Color, CGFloat)] = [
@@ -1402,6 +1458,19 @@ struct ReplayView: View {
                     .contentShape(Rectangle())
                     .gesture(
                         DragGesture(minimumDistance: 0)
+                            .onChanged { drag in
+                                // Plain drags scrub live. Shift/Control drags are
+                                // choosing a mark, so they only commit on release.
+                                let modifiers = NSEvent.modifierFlags
+                                guard !modifiers.contains(.shift),
+                                      !modifiers.contains(.control),
+                                      Date().timeIntervalSince(lastWaveformSeek) >= 0.1
+                                else { return }
+                                lastWaveformSeek = Date()
+                                if let frame = waveformFrame(at: drag.location, size: proxy.size) {
+                                    seekFromWaveform(to: frame, keepPlaying: transport.playing)
+                                }
+                            }
                             .onEnded { drag in
                                 seekOrMark(at: drag.location, size: proxy.size, modifiers: NSEvent.modifierFlags)
                             }
@@ -1421,20 +1490,25 @@ struct ReplayView: View {
     /// The waveform draws only the buckets the store still holds, and the store may have
     /// dropped some from the front, so column zero is not frame zero: the dropped count
     /// is the offset, exactly as the drawing uses.
-    private func seekOrMark(at point: CGPoint, size: CGSize, modifiers: NSEvent.ModifierFlags) {
-        guard size.width > 1, let document else { return }
-        let buckets = peakMins.count
-        guard buckets > 0 else { return }
+    private func waveformFrame(at point: CGPoint, size: CGSize) -> UInt64? {
+        guard size.width > 1, let document else { return nil }
+        let (first, last) = waveformWindow
+        let buckets = last - first
+        guard buckets > 0 else { return nil }
         let bucketRate = Double(MixerFFI.replayPeakRate())
         let framesPerSecond = max(1.0, ReplayTime.rate(document.fps))
-        guard bucketRate > 0 else { return }
-        let ratio = Double(point.x / size.width)
-        let frame = ReplayDeckMath.waveformFrame(
-            ratio: ratio,
+        guard bucketRate > 0 else { return nil }
+        return ReplayDeckMath.waveformFrame(
+            ratio: Double(point.x / size.width),
             bucketRate: bucketRate,
             buckets: buckets,
-            dropped: peakDropped,
+            dropped: UInt32(first),
             fps: framesPerSecond)
+    }
+
+    private func seekOrMark(at point: CGPoint, size: CGSize, modifiers: NSEvent.ModifierFlags) {
+        guard size.width > 1 else { return }
+        guard let frame = waveformFrame(at: point, size: size) else { return }
         let mark: WaveformMark? =
             modifiers.contains(.shift) ? .in : (modifiers.contains(.control) ? .out : nil)
         switch mark {
@@ -1609,6 +1683,23 @@ struct ReplayView: View {
         save(current)
     }
 
+    /// Windows creates the event row at Mark In, with an open end, so the operator
+    /// can see the highlight while the action is still running. Mark Out fills this
+    /// row in rather than adding a second event.
+    private func createOpenEvent(at frame: UInt64) {
+        guard var current = document, current.autoAddToPlaylist else { return }
+        let uuid = mixer.replayRecordingUuid()
+        guard !uuid.isEmpty else { return }
+        let name = L10n.format("replay.eventName", "\(current.events.count + 1)")
+        openEventId = current.appendEvent(
+            uuid: uuid,
+            inFrame: frame,
+            outFrame: 0,
+            name: name
+        )
+        save(current)
+    }
+
     private func markIn() {
         // A failed mark leaves the old one alone instead of showing a nonsense
         // timecode.
@@ -1617,6 +1708,7 @@ struct ReplayView: View {
             // A new Mark In starts a new range: the old Mark Out no longer applies.
             outFrame = nil
             markOpen = true
+            createOpenEvent(at: mark)
             return
         }
         // A remote core keeps the mark, so this host only knows that one is open.
@@ -1637,6 +1729,7 @@ struct ReplayView: View {
         inFrame = nil
         outFrame = nil
         markOpen = false
+        openEventId = nil
     }
 
     private func markOut() {
@@ -1652,18 +1745,28 @@ struct ReplayView: View {
             inFrame = nil
             outFrame = nil
             markOpen = false
+            openEventId = nil
         case let .local(uuid, start, end):
             // Keep the range on screen after it is taken: the operator has to see
             // what was just cut, and the waveform and step buttons use the range.
             inFrame = start
             outFrame = end
             markOpen = false
-            let id = current.appendEvent(
-                uuid: uuid,
-                inFrame: start,
-                outFrame: end,
-                name: name
-            )
+            let id: UInt64
+            if let open = openEventId,
+               current.events.contains(where: { $0.id == open })
+            {
+                current.setEventRange(open, inFrame: start, outFrame: end)
+                id = open
+            } else {
+                id = current.appendEvent(
+                    uuid: uuid,
+                    inFrame: start,
+                    outFrame: end,
+                    name: name
+                )
+            }
+            openEventId = nil
             addEventClipIfNeeded(id, to: &current)
             save(current)
         }
@@ -2135,10 +2238,10 @@ struct ReplayView: View {
     /// A waveform click or mark moves the picture without changing whether the channel
     /// is advancing. It still has to leave the live edge, or the next report puts the
     /// playhead back on the recording edge.
-    private func seekFromWaveform(to frame: UInt64) {
+    private func seekFromWaveform(to frame: UInt64, keepPlaying: Bool = false) {
         // A waveform click is a place to look at a sound or a picture before cutting;
-        // parking there is what makes the mark that follows land on the frame clicked.
-        seekHolding(to: frame, keepPlaying: false)
+        // a drag while the channel is running keeps it running from the new frame.
+        seekHolding(to: frame, keepPlaying: keepPlaying)
     }
 
     /// Leaves live follow when needed, seeks, and either holds or keeps playing.

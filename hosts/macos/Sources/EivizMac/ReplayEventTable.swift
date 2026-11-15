@@ -35,6 +35,15 @@ struct ReplayEventTable: View {
             }
             .width(76)
 
+            TableColumn(L10n.t("replay.recordedAt")) { event in
+                Text(ReplayTime.wallClock(
+                    startedMs: event.startedMs,
+                    frames: event.inFrame,
+                    fps: fps) ?? "--")
+                    .font(.system(.caption, design: .monospaced))
+            }
+            .width(150)
+
             TableColumn(L10n.t("replay.name")) { event in
                 TextField("", text: Binding(
                     get: { event.name },
