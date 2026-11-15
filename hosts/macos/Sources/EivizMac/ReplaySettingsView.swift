@@ -40,7 +40,6 @@ struct ReplaySettingsView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(planText).font(.callout)
                     if !status.isEmpty {
                         // Apply and every refusal report here, where it cannot be missed.
                         Text(status).fontWeight(.bold).foregroundStyle(EivizTheme.dim)
@@ -224,6 +223,8 @@ struct ReplaySettingsView: View {
                             .frame(minHeight: 210)                            .frame(minHeight: 230)
                             HStack {
                                 Button(L10n.t("replay.addAngleRow")) { addAngle() }
+                                    .disabled(angleLimitReached)
+                                    .help(L10n.t("replay.angleRowHelp"))
                                 Text(L10n.t("replay.angleRowHelp")).font(.caption)
                             }
                         }
@@ -290,12 +291,11 @@ struct ReplaySettingsView: View {
         }
     }
 
-    private var planText: String {
-        guard let limits = mixer.replayLimits() else { return "" }
-        if limits.angles == 0 || limits.channels == 0 {
-            return L10n.t("replay.planDenied")
-        }
-        return L10n.format("replay.planLimits", "\(limits.angles)", "\(limits.channels)")
+    /// The plan is conveyed by what the deck lets the operator do (disabled rows,
+    /// capped angle count), not by a sentence at the top of the settings window.
+    private var angleLimitReached: Bool {
+        guard let limits = mixer.replayLimits(), limits.angles != .max else { return false }
+        return angles.count >= Int(limits.angles)
     }
 
     /// The format Replay records in: the first Mixing Unit's picture and rate. It is
@@ -511,10 +511,7 @@ struct ReplaySettingsView: View {
         // Refusing here made the button look broken on a new project; the row can
         // be added now and the drive assigned before Apply.
         let needsDrive = storages.isEmpty
-        if let limits = mixer.replayLimits(), limits.angles != .max, angles.count >= Int(limits.angles) {
-            status = L10n.format("replay.planLimits", "\(limits.angles)", "\(limits.channels)")
-            return
-        }
+        if angleLimitReached { return }
         let used = Set(angles.filter { $0.source == "Scene" }.map(\.sceneId))
         var scene = mixer.session.scenes.first { !used.contains($0.id) }
         // A deck can have more angles than scenes. Adding an angle used to leave
