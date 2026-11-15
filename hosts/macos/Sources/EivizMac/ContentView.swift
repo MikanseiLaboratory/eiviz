@@ -68,7 +68,8 @@ struct ContentView: View {
         .sheet(isPresented: $mixer.showOverlay) { OverlayView() }
         .sheet(isPresented: $mixer.showMultiview) { MultiviewView() }
         .sheet(isPresented: $mixer.showMultiviewSlots) { MultiviewSlotsView() }
-        // Logs and resource metrics are independent windows; see ToolWindows.
+        .sheet(isPresented: $mixer.showResources) { ResourcesView() }
+        .sheet(isPresented: $mixer.showLogs) { LogsView() }
         .sheet(item: $customWgslEdit) { edit in
             CustomWgslEditor(
                 text: edit.text,
@@ -139,7 +140,7 @@ struct ContentView: View {
                 OnAirLock.set(onAirLock)
             }
             .help(L10n.t("msg.onAirLock"))
-            Button(L10n.t("chrome.logs")) { ToolWindows.showLogs() }
+            Button(L10n.t("chrome.logs")) { mixer.showLogs = true }
             Button(L10n.t("chrome.settings")) { mixer.showSettings = true }
                 .disabled(mixer.isRemote && !mixer.remoteConnected)
             Button(L10n.t("chrome.preferences")) { mixer.showPreferences = true }
@@ -880,9 +881,11 @@ struct ContentView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            Button(L10n.t("chrome.resources")) { ToolWindows.showResources(mixer) }
+            Text(mixer.resourceText)
                 .foregroundStyle(EivizTheme.hud)
-                .buttonStyle(.plain)
+                .lineLimit(1)
+                .contentShape(Rectangle())
+                .onTapGesture { mixer.showResources = true }
                 .help(L10n.t("chrome.resources"))
         }
         .font(.system(size: 12))

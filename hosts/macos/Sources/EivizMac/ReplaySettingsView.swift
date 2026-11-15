@@ -507,10 +507,10 @@ struct ReplaySettingsView: View {
     /// needs no edits at all, and the row is there to be changed in place if it is not the
     /// one they wanted.
     private func addAngle() {
-        guard !storages.isEmpty else {
-            status = L10n.t("replay.needDriveForAngle")
-            return
-        }
+        // Adding the row is not the same decision as choosing where it records.
+        // Refusing here made the button look broken on a new project; the row can
+        // be added now and the drive assigned before Apply.
+        let needsDrive = storages.isEmpty
         if let limits = mixer.replayLimits(), limits.angles != .max, angles.count >= Int(limits.angles) {
             status = L10n.format("replay.planLimits", "\(limits.angles)", "\(limits.channels)")
             return
@@ -544,7 +544,14 @@ struct ReplaySettingsView: View {
         if storages.count == 1 {
             storages[0].angleIds.append(id)
         }
-        status = L10n.format("replay.angleAdded", L10n.format("replay.angleName", "\(id)"))
+        // Keep the settings document in step with the row table. Apply used to be the
+        // only place that copied `angles` back, so a row added while the table was
+        // open could be overwritten by the next document sync.
+        current.setAngles(angles)
+        document = current
+        status = needsDrive
+            ? L10n.t("replay.needDriveForAngle")
+            : L10n.format("replay.angleAdded", L10n.format("replay.angleName", "\(id)"))
     }
 
     /// Removes one angle by id, from its own row's button.
