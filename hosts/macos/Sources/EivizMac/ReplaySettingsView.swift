@@ -294,7 +294,10 @@ struct ReplaySettingsView: View {
     /// The plan is conveyed by what the deck lets the operator do (disabled rows,
     /// capped angle count), not by a sentence at the top of the settings window.
     private var angleLimitReached: Bool {
-        guard let limits = mixer.replayLimits(), limits.angles != .max else { return false }
+        guard let limits = mixer.replayLimits(),
+              limits.angles > 0,
+              limits.angles != .max
+        else { return false }
         return angles.count >= Int(limits.angles)
     }
 
