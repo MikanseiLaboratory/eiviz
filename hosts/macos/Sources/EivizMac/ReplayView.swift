@@ -67,7 +67,7 @@ struct ReplayView: View {
     /// the recording. The marks are placed with it.
     @State private var peakDropped: UInt32 = 0
     /// Seconds of waveform to show; zero shows every bucket the store still holds.
-    @State private var waveformSeconds: Double = 0
+    @State private var waveformSeconds: Double = 30
     @State private var jogValue: Double = 0
     @State private var showExport = false
     @State private var markLastSeconds = "10"
@@ -93,6 +93,10 @@ struct ReplayView: View {
     @State private var lastScrubSeek = Date.distantPast
     /// Throttle for waveform drags: each 100 ms of the swipe moves the picture.
     @State private var lastWaveformSeek = Date.distantPast
+    /// Playhead when a waveform swipe started; a swipe is relative movement, not an
+    /// absolute jump to wherever the pointer landed.
+    @State private var waveformDragStart: UInt64?
+    @State private var waveformDragWindow: Double = 0
     @State private var sliderEditing = false
     /// The deck opens on the first recorded frame when the channel is idle. Set once
     /// per channel so a later tick does not undo an operator's seek.
@@ -1382,40 +1386,47 @@ struct ReplayView: View {
     /// Waveform strip. Each column is the min/max of the buckets it covers, which
     /// is how a quiet gap to cut on becomes visible. The marks and the record head
     /// are drawn on it so the operator can see where the cut lands.
-    /// Bucket window shown by the waveform. Zero means all retained buckets; a
-    /// value zooms to that many seconds ending at the recording head/playhead.
-    private var waveformWindow: (first: Int, last: Int) {
-        let first = Int(peakDropped)
-        let last = first + peakMins.count
-        guard waveformSeconds > 0, let document else { return (first, last) }
-        let rate = Double(MixerFFI.replayPeakRate())
+    /// Frames shown by the waveform. The playhead is the centre, so the strip
+    /// scrolls under a fixed cursor while playback runs. "All" is the only mode
+    /// that cannot centre the playhead: it shows the retained recording.
+    private var waveformFrameWindow: (start: Double, end: Double) {
+        guard let document else { return (0, 1) }
         let fps = max(1.0, ReplayTime.rate(document.fps))
-        guard rate > 0 else { return (first, last) }
-        let width = waveformSeconds * fps
-        let end = Double(max(playheadFrame, recordingHead))
-        let start = max(0, end - width)
-        let from = max(first, Int(start * rate / fps))
-        let to = min(last, Int(end * rate / fps))
-        return to > from ? (from, to) : (first, last)
+        let head = Double(displayPlayhead)
+        if waveformSeconds > 0 {
+            let width = waveformSeconds * fps
+            let start = head - width / 2
+            return (start, start + width)
+        }
+        return (seekRange.lowerBound, max(seekRange.lowerBound + 1, seekRange.upperBound))
     }
 
     private var waveform: some View {
         Canvas { context, size in
             let buckets = peakMins.count
-            guard buckets > 0, size.width > 1, peakMaxes.count == buckets else { return }
-            let (windowFirst, windowLast) = waveformWindow
-            let shown = max(1, windowLast - windowFirst)
+            guard buckets > 0, size.width > 1, peakMaxes.count == buckets,
+                  let document else { return }
+            let (windowStart, windowEnd) = waveformFrameWindow
+            let windowFrames = max(1, windowEnd - windowStart)
+            let rate = Double(MixerFFI.replayPeakRate())
+            let framesPerSecond = max(1.0, ReplayTime.rate(document.fps))
+            guard rate > 0 else { return }
+            let firstBucket = Int(peakDropped)
             let columns = Int(size.width)
             let middle = size.height / 2
             let scale = middle - 2
             for column in 0..<columns {
-                let from = windowFirst + shown * column / columns
-                let to = max(from + 1, windowFirst + shown * (column + 1) / columns)
+                let fromFrame = windowStart + windowFrames * Double(column) / Double(columns)
+                let toFrame = windowStart + windowFrames * Double(column + 1) / Double(columns)
+                let from = max(firstBucket, Int(fromFrame * rate / framesPerSecond))
+                let to = min(firstBucket + buckets, Int(toFrame * rate / framesPerSecond))
+                guard to > from else { continue }
                 var low = Float.greatestFiniteMagnitude
                 var high = -Float.greatestFiniteMagnitude
-                for bucket in from..<min(to, windowLast) {
-                    low = min(low, peakMins[bucket])
-                    high = max(high, peakMaxes[bucket])
+                for bucket in from..<to {
+                    let index = bucket - firstBucket
+                    low = min(low, peakMins[index])
+                    high = max(high, peakMaxes[index])
                 }
                 guard low <= high else { continue }
                 var path = Path()
@@ -1425,20 +1436,15 @@ struct ReplayView: View {
             }
             // Absolute bucket numbering, so a frame maps to the same column here as
             // it does in the mixer's own bucket list.
-            let first = windowFirst
-            let last = windowLast
-            let bucketRate = Double(MixerFFI.replayPeakRate())
-            let framesPerSecond = max(1.0, ReplayTime.rate(fps))
             let marks: [(UInt64?, Color, CGFloat)] = [
                 (inFrame, .yellow, 1),
                 (outFrame, .yellow, 1),
                 (displayPlayhead, .red, 2),
             ]
             for (frame, color, width) in marks {
-                guard let frame, frame != 0, last > first else { continue }
-                let bucket = Int(Double(frame) * bucketRate / framesPerSecond)
-                guard bucket >= first, bucket <= last else { continue }
-                let x = CGFloat(bucket - first) / CGFloat(last - first) * size.width
+                guard let frame, frame != 0 else { continue }
+                let x = CGFloat((Double(frame) - windowStart) / windowFrames) * size.width
+                guard x >= 0, x <= size.width else { continue }
                 var path = Path()
                 path.move(to: CGPoint(x: x, y: 0))
                 path.addLine(to: CGPoint(x: x, y: size.height))
@@ -1463,16 +1469,38 @@ struct ReplayView: View {
                                 // choosing a mark, so they only commit on release.
                                 let modifiers = NSEvent.modifierFlags
                                 guard !modifiers.contains(.shift),
-                                      !modifiers.contains(.control),
-                                      Date().timeIntervalSince(lastWaveformSeek) >= 0.1
+                                      !modifiers.contains(.control)
+                                else { return }
+                                if waveformDragStart == nil {
+                                    waveformDragStart = playheadFrame
+                                    let (start, end) = waveformFrameWindow
+                                    waveformDragWindow = max(1, end - start)
+                                }
+                                guard Date().timeIntervalSince(lastWaveformSeek) >= 0.1,
+                                      let origin = waveformDragStart
                                 else { return }
                                 lastWaveformSeek = Date()
-                                if let frame = waveformFrame(at: drag.location, size: proxy.size) {
-                                    seekFromWaveform(to: frame, keepPlaying: transport.playing)
-                                }
+                                // A swipe moves the picture by the distance dragged.
+                                // Right means earlier, left means later, like a film
+                                // strip pulled under the cursor.
+                                let moved = -Double(drag.translation.width) / Double(proxy.size.width)
+                                    * waveformDragWindow
+                                let target = max(0, Double(origin) + moved)
+                                seekFromWaveform(
+                                    to: UInt64(target),
+                                    keepPlaying: transport.playing)
                             }
                             .onEnded { drag in
-                                seekOrMark(at: drag.location, size: proxy.size, modifiers: NSEvent.modifierFlags)
+                                if abs(drag.translation.width) < 3
+                                    || NSEvent.modifierFlags.contains(.shift)
+                                    || NSEvent.modifierFlags.contains(.control)
+                                {
+                                    seekOrMark(
+                                        at: drag.location,
+                                        size: proxy.size,
+                                        modifiers: NSEvent.modifierFlags)
+                                }
+                                waveformDragStart = nil
                             }
                     )
             }
@@ -1492,18 +1520,14 @@ struct ReplayView: View {
     /// is the offset, exactly as the drawing uses.
     private func waveformFrame(at point: CGPoint, size: CGSize) -> UInt64? {
         guard size.width > 1, let document else { return nil }
-        let (first, last) = waveformWindow
-        let buckets = last - first
-        guard buckets > 0 else { return nil }
-        let bucketRate = Double(MixerFFI.replayPeakRate())
-        let framesPerSecond = max(1.0, ReplayTime.rate(document.fps))
-        guard bucketRate > 0 else { return nil }
-        return ReplayDeckMath.waveformFrame(
-            ratio: Double(point.x / size.width),
-            bucketRate: bucketRate,
-            buckets: buckets,
-            dropped: UInt32(first),
-            fps: framesPerSecond)
+        let (start, end) = waveformFrameWindow
+        let width = max(1, end - start)
+        let ratio = min(max(Double(point.x / size.width), 0), 1)
+        let frame = start + width * ratio
+        guard frame.isFinite else { return nil }
+        let fps = max(1.0, ReplayTime.rate(document.fps))
+        let range = Double(seekRange.lowerBound)...Double(seekRange.upperBound)
+        return UInt64(min(max(frame, range.lowerBound), range.upperBound))
     }
 
     private func seekOrMark(at point: CGPoint, size: CGSize, modifiers: NSEvent.ModifierFlags) {
