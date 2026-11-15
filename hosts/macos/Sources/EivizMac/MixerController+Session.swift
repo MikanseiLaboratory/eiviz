@@ -480,11 +480,16 @@ extension MixerController {
         bumpSurfaceEpoch()
     }
 
+    /// Applies a loaded session: windows first (the deck's Metal surfaces hold handles
+    /// into the mixer now being destroyed — a session reload that left the deck open
+    /// would freeze it black, the way every other attached window goes when its mixer
+    /// went away), then the mixer, then the document.
     func replaceSession(_ loaded: MixerSessionData) {
         closeAllInputPreviews()
         closeAllAudioInputs()
         closeAllSwitchers()
         closeAllMultiviews()
+        closeReplayWindows()
         FlipBudget.reset()
         mixer_destroy()
         session = loaded

@@ -32,6 +32,9 @@ assemble() {
     /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $EIVIZ_VERSION" "$app/Contents/Info.plist"
   fi
   "$ROOT/hosts/macos/relocate-dylib.sh" "$app/Contents/MacOS/$bin" "$app/Contents/MacOS/libeiviz_mixer.dylib" "$app/Contents/MacOS/libeiviz_remote.dylib"
+  # The relocation above invalidated the bundle's signature; put an ad-hoc
+  # one back so NDI/Bonjour/TCC see a validly signed bundle.
+  codesign --force --deep --sign - "$app"
   echo "${bin}.app -> $app"
 }
 

@@ -1,12 +1,34 @@
 import SwiftUI
 
+/// Everything the clip table can ask the deck to do. Each one writes one field of one
+/// clip. The Windows-shaped table is the only user, so the handlers live with it.
+struct ReplayClipHandlers {
+    /// The clip's out point as the operator should read it: a timecode, plus a note when
+    /// the frames it names have been overwritten by newer recording.
+    var outText: (ReplayClipInfo) -> String
+    var angle: (String, UInt32) -> Void
+    var speed: (String, Int32) -> Void
+    /// Kind, timing and length, whichever the operator changed; nil means "keep it".
+    var transitionKind: (String, String) -> Void
+    var transitionDirection: (String, String) -> Void
+    var transitionTiming: (String, String) -> Void
+    var transitionFrames: (String, UInt32) -> Void
+    var gain: (String, Double) -> Void
+    var preservePitch: (String, Bool) -> Void
+    /// `FollowAngle`, `Silent`, or `Angle:<id>`.
+    var audio: (String, String) -> Void
+    var tags: (String, String) -> Void
+    var cue: (ReplayClipInfo) -> Void
+    var remove: (String) -> Void
+}
+
 /// The playlist table with the Windows deck's columns: marker, IN, OUT, duration, angle,
 /// speed, transition, audio and row actions.
 struct ReplayClipTableWindows: View {
     let clips: [ReplayClipInfo]
     let angles: [ReplayAngleInfo]
     let fps: (num: UInt32, den: UInt32)
-    let handlers: ReplayClipTable.Handlers
+    let handlers: ReplayClipHandlers
     let playingUid: String?
     @Binding var selection: String?
 

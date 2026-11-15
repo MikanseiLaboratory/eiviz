@@ -116,7 +116,13 @@ final class MetalSurfaceView: NSView {
             if attached || budgeted {
                 releaseNative()
             }
-            guard FlipBudget.tryBegin(self) else { return }
+            // A refused begin leaves this surface unattached: the deck shows the
+            // "limit reached" overlay for a tile it could not hand a monitor to, and
+            // the refusal is counted so the deck can say the pictures are missing.
+            guard FlipBudget.tryBegin(self) else {
+                FlipBudget.noteRefusal()
+                return
+            }
             budgeted = true
             let code: Int32
             switch role {

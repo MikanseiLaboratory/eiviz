@@ -25,6 +25,10 @@ struct ReplaySettingsView: View {
     @State private var profiling = false
     @State private var angles: [ReplayAngleInfo] = []
     @State private var status = ""
+    /// The deck's refresh cadence, held locally until Apply. Writing the session
+    /// settings straight from this picker published it on every spin of a control
+    /// that the operator may still change.
+    @State private var presentInterval: UInt32 = 0
 
     var body: some View {
         // The settings are taller than the smallest window the view allows, so they scroll
@@ -125,7 +129,7 @@ struct ReplaySettingsView: View {
                                 }
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(L10n.t("replay.deckRefresh")).font(.caption)
-                                    Picker("", selection: $mixer.session.settings.replayPresentInterval) {
+                                    Picker("", selection: $presentInterval) {
                                         Text(L10n.t("replay.deckRefreshFollow")).tag(UInt32(0))
                                         ForEach([UInt32(1), 2, 3, 4, 6, 8], id: \.self) { frames in
                                             Text(L10n.format("replay.deckRefreshEvery", "\(frames)"))
@@ -285,10 +289,6 @@ struct ReplaySettingsView: View {
         return "\(unit.width) x \(unit.height)   \(unit.fpsNum)/\(unit.fpsDen)"
     }
 
-    private func sceneName(_ sceneId: UInt64) -> String {
-        mixer.session.scenes.first { $0.id == sceneId }?.name
-            ?? L10n.format("replay.sceneMissing", "\(sceneId)")
-    }
 
     private func load() {
         guard let current = mixer.replayDocument else {
@@ -313,16 +313,10 @@ struct ReplaySettingsView: View {
         decodeAhead = current.raw["decodeAhead"]?.boolValue ?? true
         profiling = current.raw["profiling"]?.boolValue ?? false
         angles = current.angles
+        presentInterval = mixer.session.settings.replayPresentInterval
     }
 
-    private func inputKind(_ inputId: UInt64) -> InputKind? {
-        mixer.session.inputs.first { $0.id == inputId }?.kind
-    }
 
-    private func inputName(_ inputId: UInt64) -> String {
-        mixer.session.inputs.first { $0.id == inputId }?.name
-            ?? L10n.format("replay.inputMissing", "\(inputId)")
-    }
 
     /// One entry of the add row's source list.
     private struct SourceOption: Identifiable {
@@ -397,9 +391,6 @@ struct ReplaySettingsView: View {
         }
     }
 
-    private func driveIndex(_ storage: ReplayDocument.StorageSpec) -> Int {
-        storages.firstIndex(of: storage) ?? 0
-    }
 
     /// Drive an angle records to. Angles that name no drive report zero, which the
     /// list shows as such: Apply refuses a setup with an unassigned angle.
@@ -449,14 +440,6 @@ struct ReplaySettingsView: View {
         }
     }
 
-    /// Audio source label for the angle list.
-    private func audioLabel(_ unitId: UInt64) -> String {
-        if unitId == 0 {
-            return L10n.t("replay.audioSilent")
-        }
-        return mixer.session.units.first { $0.id == unitId }?.name
-            ?? L10n.format("replay.audioUnit", "\(unitId)")
-    }
 
     /// Adds a row for a new angle. It starts on the next unused scene, so the common case
     /// needs no edits at all, and the row is there to be changed in place if it is not the
@@ -648,7 +631,9 @@ struct ReplaySettingsView: View {
         // leaves the operator unable to tell the two apart.
         if mixer.applyReplay(current) {
             // The deck refresh interval lives in the session settings, not the replay
-            // document, so applying has to publish the session too.
+            // document: the picker held it locally, and Apply is where it lands.
+            mixer.session.settings.replayPresentInterval = presentInterval
+            // Applying publishes too, so the interval reaches the session with it.
             mixer.publishSession()
             if let gpuCount = ReplayDeckMath.gpuAnglesOverCapacity(angles) {
                 AppKitDialog.toast(L10n.format(

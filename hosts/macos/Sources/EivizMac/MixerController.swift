@@ -603,14 +603,29 @@ final class MixerController: ObservableObject {
         return true
     }
 
-    /// The core normalizes the replay document on replace. The host keeps that copy.
-    private func adoptCanonicalReplay() {
-        var buffer = [UInt8](repeating: 0, count: 8 * 1024 * 1024)
-        let n = buffer.withUnsafeMutableBufferPointer { ptr in
-            mixer_copy_snapshot(ptr.baseAddress, ptr.count)
+    /// Applies one mutation without turning a refusal into an alert. A delete of an
+    /// input the control document has not been handed yet is refused with "not found",
+    /// which is the publish that follows fixing, not the operator's error to read.
+    @discardableResult
+    func mutateLocalQuiet(_ mutation: String) -> Bool {
+        if isRemote { return false }
+        guard let data = mutation.data(using: .utf8) else { return false }
+        let code = data.withUnsafeBytes { ptr in
+            mixer_session_mutate(ptr.bindMemory(to: UInt8.self).baseAddress, data.count)
         }
-        guard n > 0,
-              let text = String(bytes: buffer.prefix(Int(n)), encoding: .utf8),
+        guard code == EIVIZ_OK else { return false }
+        adoptCanonicalReplay()
+        return true
+    }
+
+    /// The core normalizes the replay document on replace. The host keeps that copy.
+    ///
+    /// The snapshot is copied into the one buffer `MixerFFI.SessionSnapshotCopy`
+    /// keeps, sized up only when the core says it does not fit, instead of zeroing
+    /// eight megabytes before every publish.
+    private func adoptCanonicalReplay() {
+        guard let text = MixerFFI.SessionSnapshotCopy.json(),
+              !text.isEmpty,
               let data = text.data(using: .utf8),
               let root = try? JSONDecoder().decode(JSONValue.self, from: data),
               case .object(let object) = root,

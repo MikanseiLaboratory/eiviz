@@ -62,6 +62,26 @@ chmod +x "$ROOT/hosts/macos/relocate-dylib.sh" "$ROOT/hosts/macos/package-app.sh
 "$ROOT/hosts/macos/relocate-dylib.sh" "$BIN/eiviz-mac" "$BIN/libeiviz_mixer.dylib" "$BIN/libeiviz_remote.dylib"
 "$ROOT/hosts/macos/relocate-dylib.sh" "$BIN/eiviz-remote" "$BIN/libeiviz_mixer.dylib" "$BIN/libeiviz_remote.dylib"
 "$ROOT/hosts/macos/package-app.sh" "$BIN"
+# install_name_tool drops the (ad-hoc) code signature while rewriting load
+# commands, and a broken signature makes the binaries start far slower and
+# blocks TCC from showing the app by name. Re-sign everything the linker and
+# the relocation touched, and the bundles package-app.sh assembled.
+codesign --force --sign - "$DYLIB" "$REMOTE"
+codesign --force --sign - "$BIN/eiviz-mac" "$BIN/eiviz-remote"
+# libndi ships signed; the relocation above rewrites its load commands (and the
+# copies in $BIN), so put an ad-hoc one back the same way.
+if ls "$BIN"/libndi*.dylib >/dev/null 2>&1; then
+  codesign --force --sign - "$BIN"/libndi*.dylib
+fi
+for app in "$BIN/eiviz-mac.app" "$BIN/eiviz-remote.app" "$BIN"/*.app; do
+  [ -d "$app" ] || continue
+  codesign --force --deep --sign - "$app"
+done
+echo "codesign status:"
+codesign -v "$BIN/eiviz-mac"
+codesign -v "$BIN/eiviz-remote"
+codesign -v "$DYLIB"
+codesign -v "$REMOTE"
 echo "eiviz-mac -> $BIN/eiviz-mac"
 echo "eiviz-remote -> $BIN/eiviz-remote"
 file "$BIN/eiviz-mac" "$BIN/eiviz-remote" "$BIN/libeiviz_mixer.dylib" "$BIN/libeiviz_remote.dylib"

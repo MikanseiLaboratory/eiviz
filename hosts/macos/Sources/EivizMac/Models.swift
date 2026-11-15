@@ -1959,6 +1959,11 @@ struct MixerSessionData: Codable {
 
     mutating func assignMonitors() {
         if nextMonitorId < 1000 { nextMonitorId = 1000 }
+        // Monitor ids an earlier pass already handed out — a rebuilt copy of this
+        // session with decks open — stay theirs: the counter moves past the highest
+        // one, or the next fresh allocation (1000 and up) hands out a collision.
+        let carried = (scenes.map(\.monitorId) + multiviews.map(\.monitorId)).filter { $0 > 0 }
+        nextMonitorId = max(nextMonitorId, (carried.max() ?? 0) + 1)
         for i in scenes.indices where scenes[i].monitorId == 0 {
             scenes[i].monitorId = nextMonitorId
             nextMonitorId += 1

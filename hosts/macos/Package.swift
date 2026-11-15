@@ -30,7 +30,10 @@ let package = Package(
         .target(
             name: "EivizMac",
             dependencies: ["EivizMixer", "EivizRemote"],
-            path: "Sources/EivizMac"
+            path: "Sources/EivizMac",
+            // The plists are linked into the executables with -sectcreate, not
+            // packaged as resources; without this SwiftPM warns about them.
+            exclude: ["Info.plist", "Info-Remote.plist"]
         ),
         .executableTarget(
             name: "eiviz-mac",
@@ -56,6 +59,9 @@ let package = Package(
             name: "replay-core-checks",
             dependencies: ["EivizMac"],
             path: "Tests/ReplayCoreChecks",
+            // The fixture is read from the source directory at run time; it is not a
+            // buildable file.
+            exclude: ["session-fixture.json"],
             linkerSettings: exeLinker("\(Context.packageDirectory)/Sources/EivizMac/Info.plist")
         ),
     ]

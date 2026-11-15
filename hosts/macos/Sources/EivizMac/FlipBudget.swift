@@ -39,7 +39,11 @@ enum GpuPresentStore {
 }
 
 enum FlipBudget {
-    static let autoDefault = 6
+    /// Automatic surface cap for this host. The deck needs output + live + one picture
+    /// per angle, and macOS draws those with `CAMetalLayer`, a much cheaper swapchain
+    /// than the DX12 one the learned value was tuned on, so the default floor sits
+    /// higher here than a learned ceiling can pull it down.
+    static let autoDefault = 12
     private static let learnWindowMs: UInt64 = 3000
 
     nonisolated(unsafe) private static var limitSetting: UInt32 = 0
@@ -49,10 +53,24 @@ enum FlipBudget {
     nonisolated(unsafe) private static var attachTick: UInt64 = 0
     nonisolated(unsafe) private static var seenLost: UInt64 = 0
     nonisolated(unsafe) private static var refuseQueued = false
+    nonisolated(unsafe) private static var refusals: UInt64 = 0
 
     static var used: Int { attached }
 
     static var limit: Int { effectiveMax() }
+
+    /// How many more surfaces the budget can take on. A deck reads this before it
+    /// plans tiles, so a picture that cannot be shown is known at allocation time
+    /// instead of turning up black later.
+    static var remaining: Int { max(0, effectiveMax() - attached) }
+
+    /// Attach refusals so far. A view that got nowhere with `tryBegin` adds one, and
+    /// the deck turns a new count into a message the operator can read.
+    static var refusalCount: UInt64 { refusals }
+
+    static func noteRefusal() {
+        refusals &+= 1
+    }
 
     static func configure(_ limit: UInt32) {
         limitSetting = isAllowed(limit) ? limit : 0
@@ -66,6 +84,7 @@ enum FlipBudget {
         lastAttach = nil
         attachTick = 0
         seenLost = 0
+        refusals = 0
     }
 
     static func tryOpen(_ surfaces: Int) -> Bool {
