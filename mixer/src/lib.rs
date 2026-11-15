@@ -4437,12 +4437,22 @@ fn stream_encoder_add_ffi(
         let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
         return ERR_IO;
     };
-    if encoder != 0 {
+    if encoder > eiviz_pro_api::STREAM_ENCODER_VIDEOTOOLBOX {
         let message = "video encoder is not available";
         crate::diag::error(&format!("stream encoder id={encoder_id}: {message}"));
         let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
         return ERR_INVALID_ARGUMENT;
     }
+    let encoder_kind = match encoder {
+        // The codes are the module's StreamEncoder codes: passing the ask through is
+        // what makes VideoToolbox reachable, and the module refuses a code it cannot
+        // build, so an unusable ask is refused at stream start, not silently
+        // switched to OpenH264.
+        eiviz_pro_api::STREAM_ENCODER_VIDEOTOOLBOX => {
+            eiviz_pro_api::VideoEncoderKind::VideoToolbox
+        }
+        _ => eiviz_pro_api::VideoEncoderKind::OpenH264,
+    };
     let started = backend.start_stream(&eiviz_pro_api::StreamEncodeConfig {
         video_bitrate: if video_bitrate == 0 {
             4_500_000
@@ -4454,7 +4464,7 @@ fn stream_encoder_add_ffi(
         height,
         fps_num,
         fps_den,
-        encoder: eiviz_pro_api::VideoEncoderKind::OpenH264,
+        encoder: encoder_kind,
         encoder_threads,
         buffer_ms,
         complexity,
@@ -4886,6 +4896,77 @@ pub unsafe extern "C" fn mixer_replay_angle_range(
     })
 }
 
+/// Recorded frame range of one angle of the named recording.
+///
+/// A session that spans several recordings has one range per recording per angle;
+/// [`mixer_replay_angle_range`] answers for the recording that was written last,
+/// which stopped being all of it the moment an operator played a second one. A
+/// recording that is not attached and not the recorder's answers 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_angle_range_of(
+    recording_uuid: *const c_char,
+    angle_id: u32,
+    first: *mut u64,
+    last: *mut u64,
+) -> i32 {
+    ffi_guard("mixer_replay_angle_range_of", 0, || unsafe {
+        if first.is_null() || last.is_null() {
+            return 0;
+        }
+        let Some(recording_uuid) = crate::pro::cstr(recording_uuid) else {
+            return 0;
+        };
+        match crate::replay::engine().angle_range_of(recording_uuid, angle_id) {
+            Some((start, end)) => {
+                *first = start;
+                *last = end;
+                1
+            }
+            None => 0,
+        }
+    })
+}
+
+/// Copies one jog-proxy picture as UYVY from the named recording. Returns 1 when
+/// the proxy exists; a missing one returns 0 and never decodes the full-size
+/// picture in its place. The argument meanings match
+/// [`mixer_replay_copy_proxy`], with the recording named.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_copy_proxy_of(
+    recording_uuid: *const c_char,
+    angle_id: u32,
+    frame: u64,
+    out: *mut u8,
+    cap: usize,
+    width: *mut u32,
+    height: *mut u32,
+    stride: *mut u32,
+) -> i32 {
+    ffi_guard("mixer_replay_copy_proxy_of", 0, || unsafe {
+        if out.is_null() || width.is_null() || height.is_null() || stride.is_null() || cap == 0 {
+            return 0;
+        }
+        let Some(recording_uuid) = crate::pro::cstr(recording_uuid) else {
+            return 0;
+        };
+        let dst = std::slice::from_raw_parts_mut(out, cap);
+        match crate::replay::engine().copy_proxy_of(recording_uuid, angle_id, frame, dst) {
+            Ok((w, h, row_bytes)) => {
+                let row_minimum = u64::from(w) * 2;
+                let extent = u64::from(row_bytes) * u64::from(h);
+                if u64::from(row_bytes) < row_minimum || extent > cap as u64 {
+                    return 0;
+                }
+                *width = w;
+                *height = h;
+                *stride = row_bytes;
+                1
+            }
+            Err(_) => 0,
+        }
+    })
+}
+
 /// Measures what this machine can sustain for one replay recording, as JSON.
 ///
 /// The Replay Setup window uses this to warn before an operator asks for more angles
@@ -5223,6 +5304,32 @@ pub unsafe extern "C" fn mixer_replay_copy_peaks(
         let mins = std::slice::from_raw_parts_mut(min_out, cap as usize);
         let maxes = std::slice::from_raw_parts_mut(max_out, cap as usize);
         crate::replay::engine().copy_peaks(angle_id, from, mins, maxes) as i32
+    })
+}
+
+/// Copies an angle's waveform of the named recording from `from`.
+///
+/// Two recordings in one session each keep their own waveform; the unnamed form
+/// answers for the recording that was written last.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_copy_peaks_of(
+    recording_uuid: *const c_char,
+    angle_id: u32,
+    from: u32,
+    min_out: *mut f32,
+    max_out: *mut f32,
+    cap: u32,
+) -> i32 {
+    ffi_guard("mixer_replay_copy_peaks_of", -1, || unsafe {
+        if min_out.is_null() || max_out.is_null() || cap == 0 {
+            return -ERR_INVALID_ARGUMENT;
+        }
+        let Some(recording_uuid) = crate::pro::cstr(recording_uuid) else {
+            return -ERR_INVALID_ARGUMENT;
+        };
+        let mins = std::slice::from_raw_parts_mut(min_out, cap as usize);
+        let maxes = std::slice::from_raw_parts_mut(max_out, cap as usize);
+        crate::replay::engine().copy_peaks_of(recording_uuid, angle_id, from, mins, maxes) as i32
     })
 }
 

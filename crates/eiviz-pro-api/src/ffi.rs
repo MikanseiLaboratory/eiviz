@@ -23,7 +23,10 @@ use std::os::raw::{c_char, c_void};
 use crate::plan::{Entitlements, Plan, Quota, VideoLimit};
 
 /// First published table. A different major is rejected.
-pub const ABI_MAJOR: u32 = 1;
+/// 2. `ProReplayAngle` grew `gpu_encoded`, an array element, so a mixer and a
+///    module cannot disagree about its size. Everything else that crossed this
+///    boundary before grew through `struct_size` fields and stays compatible.
+pub const ABI_MAJOR: u32 = 2;
 
 pub const PRO_OK: u32 = 0;
 pub const PRO_INVALID: u32 = 1;
@@ -390,6 +393,24 @@ pub struct ProApi {
             *mut ProReplayPacket,
         ) -> ProStatus,
     >,
+    /// Decodes the jog proxy for one frame. Appended after the packet function:
+    /// a mixer built against the smaller `ProApi` never set it, and a module that
+    /// does not publish it has no proxy the mixer can show.
+    pub replay_decode_proxy: Option<
+        unsafe extern "C" fn(
+            *mut c_void,
+            u32,
+            u64,
+            *mut u8,
+            usize,
+            *mut ProReplayDecoded,
+        ) -> ProStatus,
+    >,
+    /// Moves the retention protection boundary. A store recording under
+    /// `RETENTION_PROTECT` must not reclaim a segment that holds a clip or a
+    /// protected event, and the boundary moves as clips are made and lost, so it
+    /// cannot be fixed at `replay_open`.
+    pub replay_set_protect_from: Option<unsafe extern "C" fn(*mut c_void, u64) -> ProStatus>,
 }
 
 /// One run of the recording timeline that goes into the exported file.
@@ -487,6 +508,12 @@ pub struct ProReplayStorage {
 pub struct ProReplayAngle {
     pub angle_id: u32,
     pub storage_index: u32,
+    /// True when this angle's packets arrive already encoded (`write_encoded`),
+    /// so the store must not build a CPU codec for it. An unused codec still
+    /// costs a thread and its state, and a recording of many angles ends up
+    /// carrying one per angle that does nothing. This is an array element, so it
+    /// grew with an `ABI_MAJOR` bump rather than a `struct_size` fallback.
+    pub gpu_encoded: u32,
 }
 
 /// Interleaved `f32` audio for one video frame of the recording timeline.

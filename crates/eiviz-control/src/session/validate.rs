@@ -210,6 +210,18 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
     if !valid_rate(doc.settings.master_fps_num, doc.settings.master_fps_den) {
         return Err(ValidationError::new("master fps is invalid"));
     }
+    // One encoder a session can name: OpenH264 is linked everywhere,
+    // VideoToolbox on macOS builds, where the module is the one that builds it.
+    // Everything else would reach the mixer and stop the stream at start, so the
+    // document says so here, with the encoder named.
+    for encoder in &doc.stream_encoders {
+        if !matches!(encoder.encoder.as_str(), "" | "OpenH264" | "VideoToolbox") {
+            return Err(ValidationError::new(format!(
+                "stream encoder {} names encoder {:?}; the session knows OpenH264 and VideoToolbox",
+                encoder.id, encoder.encoder
+            )));
+        }
+    }
     for preset in &doc.transitions {
         check_curve(preset.easing, preset.bezier.as_ref(), false, "transition")?;
     }
@@ -1506,5 +1518,41 @@ mod tests {
             });
         }
         validate(&doc).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod encoder_validation_tests {
+    use super::*;
+    use crate::session::parse;
+
+    fn encoder_doc(name: &str) -> crate::session::Document {
+        let text = format!(
+            r#"{{
+              "version": 2,
+              "inputs": [{{ "id": 2, "name": "Bars", "kind": "Bars" }}],
+              "scenes": [{{ "id": 1, "name": "Scene 1", "layers": [{{ "inputId": 2, "width": 1, "height": 1 }}] }}],
+              "units": [{{ "id": 1, "name": "MU 1" }}],
+              "streamEncoders": [{{ "id": 1, "name": "YT", "sourceKind": "MuProgram", "unitId": 1, "encoder": "{name}" }}]
+            }}"#
+        );
+        parse(text.as_bytes()).unwrap()
+    }
+
+    /// The session accepts the encoders the mixers can build, and refuses an
+    /// encoder name no mixer knows: the refusal names it, instead of the stream
+    /// stopping at start with nothing the operator could act on.
+    #[test]
+    fn the_session_answers_encoder_names_it_knows() {
+        validate(&encoder_doc("")).unwrap();
+        validate(&encoder_doc("OpenH264")).unwrap();
+        validate(&encoder_doc("VideoToolbox"))
+            .expect("VideoToolbox is a named encoder of the macOS module");
+        let error = validate(&encoder_doc("Av1")).unwrap_err();
+        assert!(
+            error.message.contains("Av1"),
+            "the unknown encoder is named: {}",
+            error.message
+        );
     }
 }

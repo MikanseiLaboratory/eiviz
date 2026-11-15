@@ -324,7 +324,8 @@ message StreamEncoder {
   uint32 encoder_threads = 15;
   // 0 sends immediately. Otherwise hold this many milliseconds, then release at 1x.
   uint32 buffer_ms = 16;
-  // Empty and "OpenH264" are the only accepted encoder.
+  // Empty and "OpenH264" name the linked software encoder everywhere;
+  // "VideoToolbox" names the macOS hardware encoder.
   string encoder = 17;
   // 0 low, 1 medium, 2 high.
   uint32 complexity = 18;

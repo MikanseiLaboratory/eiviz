@@ -1322,7 +1322,8 @@ pub struct StreamEncoderDto {
     /// milliseconds of encoded media, then releases it at 1x.
     #[serde(default)]
     pub buffer_ms: u32,
-    /// Only `OpenH264` is linked. Empty is the same encoder.
+    /// `OpenH264` is linked everywhere; `VideoToolbox` on the macOS module. Empty
+    /// is the same encoder as `OpenH264`.
     #[serde(default = "default_openh264")]
     pub encoder: String,
     /// `0` low, `1` medium, `2` high.

@@ -15,6 +15,7 @@ use crate::session::Document;
 use crate::session::InputKind;
 use crate::session::mutate;
 use crate::session::reconcile::{plan, reinforce_streams, repair_live};
+use crate::session::replay::ReplayRetention;
 use crate::session::store::CanonicalSessionStore;
 use crate::video_trigger::{self, VideoAction, VideoRoles};
 
@@ -517,6 +518,9 @@ impl ControlService {
             self.port.apply_reconcile(&committed, op, &mut statuses)?;
         }
         self.port.publish_session(&committed)?;
+        // The protection boundary follows the document: a clip that is gone stops
+        // protecting the frames it held, in the same commit that removed it.
+        self.replay_refresh_protect(&committed);
         let meta = self.meta(request_id);
         self.hub.publish(Event::SessionChanged {
             meta: meta.clone(),
@@ -537,6 +541,68 @@ impl ControlService {
             sequence: self.hub.next_sequence(),
             ..Default::default()
         })
+    }
+
+    /// Carries each referenced recording's protection boundary to its store when
+    /// the session's retention protects what still has a clip or a protected
+    /// event on it.
+    ///
+    /// The earliest frame a clip or a protected event still points at is the
+    /// boundary, and it moves with the document: losing the clip that marked it
+    /// lets the recorder reclaim those frames again. When nothing points at the
+    /// recording any more the last recorded frame takes over, if the session
+    /// knows it; one it does not is left where it was.
+    fn replay_refresh_protect(&mut self, document: &Document) {
+        let Some(replay) = document.replay.as_ref() else {
+            return;
+        };
+        if replay.retention != ReplayRetention::OverwriteUnprotected {
+            return;
+        }
+        let mut uuids: Vec<String> = replay
+            .recordings
+            .iter()
+            .map(|recording| recording.uuid.clone())
+            .collect();
+        uuids.extend(
+            replay
+                .playlists
+                .iter()
+                .flat_map(|list| list.clips.iter())
+                .map(|clip| clip.recording_uuid.clone()),
+        );
+        uuids.extend(replay.events.iter().map(|event| event.recording_uuid.clone()));
+        uuids.retain(|uuid| !uuid.trim().is_empty());
+        uuids.sort();
+        uuids.dedup();
+        for uuid in uuids {
+            let held = replay
+                .events
+                .iter()
+                .filter(|event| event.protected && event.recording_uuid == uuid)
+                .map(|event| event.in_frame)
+                .chain(
+                    replay
+                        .playlists
+                        .iter()
+                        .flat_map(|list| list.clips.iter())
+                        .filter(|clip| clip.recording_uuid == uuid)
+                        .map(|clip| clip.in_frame),
+                )
+                .min();
+            let frame = match held {
+                Some(frame) => frame,
+                None => replay
+                    .recordings
+                    .iter()
+                    .find(|recording| recording.uuid == uuid)
+                    .map(|recording| recording.last_frame)
+                    .unwrap_or(0),
+            };
+            if frame > 0 {
+                let _ = self.port.replay_set_protect_from(&uuid, frame);
+            }
+        }
     }
 
     pub fn mutate_session(
@@ -879,10 +945,30 @@ impl ControlService {
         let Some(replay) = doc.replay.clone() else {
             return Ok(());
         };
+        // The recording lives where its angles were assigned, not under the first
+        // drive in the list: an operator with a small drive for one camera and a
+        // large one for the rest had every recording linked to the wrong drive,
+        // and a clip of it then lost its recording whenever the session reloaded.
+        // An angle with no assignment names no drive, so the recording stays with
+        // the default instead of being guessed.
+        // The recording lives where its angles were assigned, not under the first
+        // drive in the list: an operator with a small drive for one camera and a
+        // large one for the rest had every recording linked to one drive, and a
+        // clip of it then lost its recording whenever the session reloaded. The
+        // recorder refuses an angle with no assignment, so the first assigned
+        // angle answers; the plain first drive is only left for a document that
+        // never said anything.
         let storage = replay
-            .storage
-            .first()
-            .map(|item| item.path.clone())
+            .angles
+            .iter()
+            .find_map(|angle| {
+                let index = replay
+                    .storage
+                    .iter()
+                    .position(|item| item.angle_ids.contains(&angle.id))?;
+                replay.storage.get(index).map(|item| item.path.clone())
+            })
+            .or_else(|| replay.storage.first().map(|item| item.path.clone()))
             .unwrap_or_default();
         let mut doc = doc;
         let linked = doc.replay.as_mut().is_some_and(|replay| {
@@ -987,12 +1073,38 @@ impl ControlService {
                     ControlError::not_found(format!("Replay channel {channel} has no clips"))
                 })?
         } else {
-            replay
-                .playlists
+            // The channel's own playlist is searched first: a clip with the same
+            // uid on another playlist must not be the one a channel cues, and the
+            // cue then plays the running order of the channel that asked. A clip
+            // outside the channel's playlist still cues as an independent clip,
+            // which is what a session names it for.
+            let channel_playlist = replay
+                .channels
                 .iter()
-                .flat_map(|list| list.clips.iter())
-                .find(|clip| clip.uid == clip_uid)
-                .cloned()
+                .find(|item| item.index == channel)
+                .and_then(|item| item.playlist_id);
+            let on_channel = channel_playlist
+                .and_then(|playlist_id| {
+                    replay
+                        .playlists
+                        .iter()
+                        .find(|list| list.id == playlist_id)
+                })
+                .and_then(|list| {
+                    list.clips
+                        .iter()
+                        .find(|clip| clip.uid == clip_uid)
+                        .cloned()
+                });
+            on_channel
+                .or_else(|| {
+                    replay
+                        .playlists
+                        .iter()
+                        .flat_map(|list| list.clips.iter())
+                        .find(|clip| clip.uid == clip_uid)
+                        .cloned()
+                })
                 .ok_or_else(|| ControlError::not_found(format!("replay clip {clip_uid}")))?
         };
         self.port.replay_cue(
@@ -1176,6 +1288,7 @@ mod tests {
     use crate::live::{LiveState, UnitLiveState};
     use crate::port::*;
     use crate::session::parse;
+    use crate::session::replay::ReplayRetention;
 
     #[derive(Clone, Default)]
     struct FakeMixer {
@@ -1186,6 +1299,9 @@ mod tests {
         fail_next: bool,
         /// What the replay backend reports as its live state.
         replay_recording: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        /// The recording id the replay backend holds open, the way a real mixer
+        /// reports it while a recording runs.
+        replay_uuid: std::sync::Arc<std::sync::Mutex<String>>,
     }
 
     impl FakeMixer {
@@ -1206,6 +1322,19 @@ mod tests {
     }
 
     impl MixerPort for FakeMixer {
+        fn replay_recording(&mut self) -> ControlResult<(String, u64)> {
+            let uuid = self
+                .replay_uuid
+                .lock()
+                .map(|slot| slot.clone())
+                .unwrap_or_default();
+            if uuid.is_empty() {
+                Ok((String::new(), 0))
+            } else {
+                Ok((uuid, 0))
+            }
+        }
+
         fn create(
             &mut self,
             _fps_num: u32,
@@ -1460,6 +1589,11 @@ mod tests {
             ));
             Ok(())
         }
+
+        fn replay_set_protect_from(&mut self, recording: &str, frame: u64) -> ControlResult<()> {
+            self.push_op(format!("replay_protect {recording} {frame}"));
+            Ok(())
+        }
         fn replay_state_json(&self) -> String {
             let state = if self
                 .replay_recording
@@ -1580,6 +1714,60 @@ mod tests {
         });
     }
 
+    /// A recording links to the drive its angles were assigned to, not to the
+    /// first drive in the list: a clip of that recording must survive a session
+    /// reload, and a clip pointed at the wrong drive loses its recording.
+    #[test]
+    fn a_recording_links_to_the_drive_its_angles_use() {
+        on_big_stack(|| {
+            let mut doc = replay_doc();
+            if let Some(replay) = doc.replay.as_mut() {
+                use crate::session::replay::ReplayStorageDto;
+                replay.storage = vec![
+                    ReplayStorageDto {
+                        path: "D:/never-assigned".into(),
+                        angle_ids: Vec::new(),
+                    },
+                    ReplayStorageDto {
+                        path: "E:/cam1".into(),
+                        angle_ids: vec![1],
+                    },
+                ];
+            }
+            let fake = FakeMixer::default();
+            *fake
+                .replay_uuid
+                .lock()
+                .expect("fake mixer state") = "rec-new".into();
+            let mut svc = ControlService::new(fake);
+            svc.replace_session(doc, None, "1").unwrap();
+            svc.execute(
+                RequestKey {
+                    client_instance_id: "test".into(),
+                    request_id: "1".into(),
+                },
+                Command::ReplayRecord { on: true },
+            )
+            .unwrap();
+            let linked = svc
+                .store
+                .document_cloned()
+                .ok_or_else(|| panic!("session is published"))
+                .unwrap();
+            let recording = linked
+                .replay
+                .expect("replay document")
+                .recordings
+                .into_iter()
+                .find(|recording| recording.uuid == "rec-new")
+                .expect("the recording the mixer opened is linked");
+            assert_eq!(
+                recording.storage, "E:/cam1",
+                "the recording lives where its angle records"
+            );
+        });
+    }
+
     /// A Replay document with one channel that selects a two-clip playlist.
     fn replay_doc() -> Document {
         parse(
@@ -1635,6 +1823,91 @@ mod tests {
             assert!(
                 ops.iter().any(|op| op == "replay_cue 0 1 100 160 rec"),
                 "the newest clip must be cued: {ops:?}"
+            );
+        });
+    }
+
+    /// The channel's playlist is searched first, and a clip it does not hold
+    /// still cues as the independent clip the session named. Clip uids are
+    /// unique across the document, so the same-named-clip case cannot arise; the
+    /// order is about never refusing a named clip that lives outside the
+    /// channel's list.
+    #[test]
+    fn cueing_a_clip_prefers_the_channels_playlist() {
+        on_big_stack(|| {
+            let mut doc = replay_doc();
+            if let Some(replay) = doc.replay.as_mut() {
+                use crate::session::replay::{ClipDto, PlaylistDto};
+                replay
+                    .playlists
+                    .push(PlaylistDto {
+                        id: 8,
+                        name: "Other".into(),
+                        revision: 1,
+                        clips: vec![ClipDto {
+                            uid: "clip-9".into(),
+                            angle_id: 1,
+                            recording_uuid: "rec-8".into(),
+                            in_frame: 900,
+                            out_frame: 950,
+                            ..ClipDto::default()
+                        }],
+                        default_transition: crate::session::replay::ClipTransitionDto::default(),
+                    });
+            }
+            let fake = FakeMixer::default();
+            let probe = fake.clone();
+            let mut svc = ControlService::new(fake);
+            svc.replace_session(doc, None, "1").unwrap();
+            svc.execute(
+                RequestKey {
+                    client_instance_id: "test".into(),
+                    request_id: "1".into(),
+                },
+                Command::ReplayCue {
+                    channel: 0,
+                    clip_uid: "clip-9".into(),
+                },
+            )
+            .unwrap();
+            let ops = probe.ops();
+            assert!(
+                ops.iter().any(|op| op == "replay_cue 0 1 900 950 rec-8"),
+                "a clip the channel's playlist does not hold still cues by its own name: {ops:?}"
+            );
+        });
+    }
+
+    /// The recorder may overwrite what no clip or protected event holds, and the
+    /// boundary it learns is the earliest such frame of each recording. Losing the
+    /// clip must also stop protecting the frames it marked.
+    #[test]
+    fn a_protected_session_tells_the_recorder_where_its_clips_start() {
+        on_big_stack(|| {
+            let mut doc = replay_doc();
+            doc.replay
+                .as_mut()
+                .map(|replay| replay.retention = ReplayRetention::OverwriteUnprotected);
+            let fake = FakeMixer::default();
+            let probe = fake.clone();
+            let mut svc = ControlService::new(fake);
+            svc.replace_session(doc, None, "1").unwrap();
+            let ops = probe.ops();
+            assert!(
+                ops.iter().any(|op| op == "replay_protect rec 10"),
+                "the earliest clip of the recording is the boundary: {ops:?}"
+            );
+
+            // Retention that overwrites everything protects nothing, so nothing
+            // is sent.
+            let fake = FakeMixer::default();
+            let probe = fake.clone();
+            let mut svc = ControlService::new(fake);
+            svc.replace_session(replay_doc(), None, "1").unwrap();
+            assert!(
+                !probe.ops().iter().any(|op| op.starts_with("replay_protect")),
+                "a plain overwrite sends no boundary: {ops:?}",
+                ops = probe.ops()
             );
         });
     }

@@ -24,6 +24,21 @@ use sha2::{Digest, Sha256};
 
 use crate::abi::ERR_IO;
 
+/// A stream encoder kind as the module's C ABI codes it.
+///
+/// The codes are the published `StreamEncoder` constants; a mixer that asked the
+/// operator for VideoToolbox must carry exactly that code through, because a
+/// module that cannot build it says so at stream start instead of a quietly
+/// different encoder doing the work.
+fn encoder_code(kind: eiviz_pro_api::VideoEncoderKind) -> u32 {
+    match kind {
+        eiviz_pro_api::VideoEncoderKind::VideoToolbox => {
+            eiviz_pro_api::STREAM_ENCODER_VIDEOTOOLBOX
+        }
+        eiviz_pro_api::VideoEncoderKind::OpenH264 => eiviz_pro_api::STREAM_ENCODER_OPENH264,
+    }
+}
+
 static LOAD_LOCK: Mutex<()> = Mutex::new(());
 static LOADED: OnceLock<LoadedPro> = OnceLock::new();
 static LOAD_ERROR: Mutex<String> = Mutex::new(String::new());
@@ -599,7 +614,7 @@ impl StreamBackend for LoadedPro {
             fps_den: config.fps_den,
             encoder_threads: config.encoder_threads,
             buffer_ms: config.buffer_ms,
-            encoder: 0,
+            encoder: encoder_code(config.encoder),
             complexity: config.complexity,
             ref_frames: config.ref_frames,
             cabac: u32::from(config.cabac),
@@ -1299,4 +1314,26 @@ pub unsafe extern "C" fn mixer_pro_copy_error(out: *mut u8, cap: usize) -> i32 {
         *out.add(bytes.len()) = 0;
     }
     0
+}
+
+#[cfg(test)]
+mod encoder_code_tests {
+    use super::*;
+    use eiviz_pro_api::VideoEncoderKind;
+
+    /// The module's stream config carries the operator's encoder as its own code,
+    /// so the mapping has to be the published constants and nothing else. A
+    /// VideoToolbox ask that landed as OpenH264 would stream with a different
+    /// encoder than the session named, with no error anywhere.
+    #[test]
+    fn the_encoder_kind_maps_to_its_published_code() {
+        assert_eq!(
+            encoder_code(VideoEncoderKind::OpenH264),
+            eiviz_pro_api::STREAM_ENCODER_OPENH264
+        );
+        assert_eq!(
+            encoder_code(VideoEncoderKind::VideoToolbox),
+            eiviz_pro_api::STREAM_ENCODER_VIDEOTOOLBOX
+        );
+    }
 }

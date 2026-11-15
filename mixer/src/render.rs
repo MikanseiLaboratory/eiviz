@@ -871,7 +871,10 @@ pub(crate) fn render_loop(
                                     target.angle_id, target.width, target.height, target.profile
                                 ),
                             );
-                            crate::replay::engine().note_encode_dropped(target.angle_id);
+                            // Counted once: `prepare` already raised the angle's own
+                            // drop counter for the ring that ran dry, and this call
+                            // used to raise the engine's beside it, which doubled
+                            // the number the health line showed.
                         }
                     }
                     continue;
