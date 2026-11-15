@@ -486,93 +486,125 @@ struct ReplayView: View {
                 transportReadout(L10n.t("replay.duration"), markDuration)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 8) {
-                controlGroup {
-                    // One button, like the Windows deck: press to start, press again
-                    // (or while recording) to stop. A separate Stop next to it made
-                    // the same action need two different buttons.
-                    Button {
-                        record(!isRecording)
-                    } label: {
-                        HStack(spacing: 7) {
-                            Circle()
-                                .fill(isRecording ? Color.red : Color(red: 0.88, green: 0.32, blue: 0.32))
-                                .frame(width: 11, height: 11)
-                            Text(isRecording ? L10n.t("replay.stop") : L10n.t("replay.record"))
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .bottom, spacing: 12) {
+                    transportCluster(L10n.t("replay.groupTransport")) {
+                        Button {
+                            record(!isRecording)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(isRecording
+                                        ? Color.red
+                                        : Color(red: 0.88, green: 0.32, blue: 0.32))
+                                    .frame(width: 9, height: 9)
+                                Text(isRecording ? L10n.t("replay.stop") : L10n.t("replay.record"))
+                                    .fontWeight(.semibold)
+                            }
                         }
-                    }
-                    .frame(minWidth: 88, minHeight: 44)
-                    Button { live() } label: {
-                        Text(L10n.t("replay.live"))
-                            .font(.system(size: 11, weight: transport.live ? .bold : .regular))
-                            .foregroundStyle(transport.live ? Color.white : Color(white: 0.65))
-                            .frame(width: 52, height: 52)
+                        .frame(minWidth: 90, minHeight: 32)
+                        .help(L10n.t("replay.recordHint"))
+                        Button { live() } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "dot.radiowaves.left.and.right")
+                                    .font(.system(size: 11, weight: .semibold))
+                                Text(L10n.t("replay.live"))
+                                    .font(.system(size: 11, weight: transport.live ? .bold : .regular))
+                            }
+                            .foregroundStyle(transport.live ? Color.white : Color(white: 0.72))
+                            .frame(width: 66, height: 32)
                             .background(
-                                Circle().fill(transport.live
-                                    ? Color(red: 0.18, green: 0.49, blue: 0.20)
-                                    : Color(white: 0.16))
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(transport.live
+                                        ? Color(red: 0.18, green: 0.49, blue: 0.20)
+                                        : EivizTheme.button)
                             )
-                            .overlay(Circle().stroke(Color(white: 0.35), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut("l", modifiers: [])
-                    .help(L10n.t("replay.jumpLiveHint"))
-                    Button(L10n.t("replay.cue")) { cueReady() }
-                        .keyboardShortcut("c", modifiers: [])
-                        .frame(minWidth: 68, minHeight: 44)
-                        .help(L10n.t("replay.cueHint"))
-                        .disabled(clips.isEmpty)
-                    Button(L10n.t(transport.playing ? "replay.pause" : "replay.play")) { togglePlay() }
+                            .overlay(RoundedRectangle(cornerRadius: 6)
+                                .stroke(EivizTheme.stroke, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .keyboardShortcut("l", modifiers: [])
+                        .help(L10n.t("replay.jumpLiveHint"))
+                        Button(L10n.t("replay.cue")) { cueReady() }
+                            .keyboardShortcut("c", modifiers: [])
+                            .frame(minWidth: 62, minHeight: 32)
+                            .help(L10n.t("replay.cueHint"))
+                            .disabled(clips.isEmpty)
+                        Button { togglePlay() } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: transport.playing ? "pause.fill" : "play.fill")
+                                    .font(.system(size: 10))
+                                Text(L10n.t(transport.playing ? "replay.pause" : "replay.play"))
+                            }
+                        }
                         .keyboardShortcut(.space, modifiers: [])
-                        .frame(minWidth: 84, minHeight: 44)
-                    Button("◀") { step(-1) }
+                        .frame(minWidth: 78, minHeight: 32)
+                        Button { step(-1) } label: {
+                            Image(systemName: "backward.frame.fill")
+                        }
                         .keyboardShortcut(.leftArrow, modifiers: [])
-                        .frame(width: 44, height: 44)
+                        .frame(width: 38, height: 32)
                         .help(L10n.t("replay.stepBackHint"))
-                    Button("▶") { step(1) }
+                        Button { step(1) } label: {
+                            Image(systemName: "forward.frame.fill")
+                        }
                         .keyboardShortcut(.rightArrow, modifiers: [])
-                        .frame(width: 44, height: 44)
+                        .frame(width: 38, height: 32)
                         .help(L10n.t("replay.stepForwardHint"))
-                }
-                controlGroup {
-                    Button(L10n.t("replay.markIn")) { markIn() }
-                        .keyboardShortcut("i", modifiers: [])
-                        .tint(inFrame != nil ? .orange : nil)
-                        .frame(width: 96, height: 44)
-                    Button(L10n.t("replay.markOut")) { markOut() }
-                        .keyboardShortcut("o", modifiers: [])
-                        .tint(outFrame != nil ? .orange : nil)
-                        .frame(width: 96, height: 44)
-                        .disabled(!markOpen)
-                    Button(L10n.t("replay.cancelMark")) { cancelMark() }
-                        .frame(width: 72, height: 44)
-                    TextField("", text: $markLastSeconds)
-                        .frame(width: 44, height: 44)
-                    Text(L10n.t("replay.secondsShort"))
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color(white: 0.54))
-                    Button(L10n.t("replay.markLast")) { markLast() }
-                        .frame(width: 100, height: 44)
-                        .help(L10n.t("replay.markLastHint"))
-                        .disabled(!isRecording)
-                }
-                controlGroup {
-                    Button("25%") { setSpeed(250) }.frame(width: 54, height: 44)
-                    Button("50%") { setSpeed(500) }.frame(width: 54, height: 44)
-                    Button("75%") { setSpeed(750) }.frame(width: 54, height: 44)
-                    Button("100%") { setSpeed(1000) }.frame(width: 56, height: 44)
-                    Slider(value: $jogValue, in: -30...30, step: 1) { editing in
-                        if !editing {
-                            jog(Int(jogValue.rounded()))
-                            jogValue = 0
-                        }
                     }
-                    .frame(width: 110)
-                    Button(L10n.t("replay.export")) { showExport.toggle() }
-                        .frame(minWidth: 110).frame(height: 44)
-                        .popover(isPresented: $showExport) {
-                            exportBar
+                    transportCluster(L10n.t("replay.speed")) {
+                        speedButton(250, "25%")
+                        speedButton(500, "50%")
+                        speedButton(750, "75%")
+                        speedButton(1000, "100%")
+                        Divider()
+                            .frame(height: 24)
+                            .overlay(EivizTheme.stroke)
+                        Text("JOG")
+                            .font(.system(size: 9, weight: .semibold))
+                            .tracking(0.8)
+                            .foregroundStyle(EivizTheme.dim)
+                        Slider(value: $jogValue, in: -30...30, step: 1) { editing in
+                            if !editing {
+                                jog(Int(jogValue.rounded()))
+                                jogValue = 0
+                            }
                         }
+                        .frame(width: 92)
+                    }
+                    Spacer(minLength: 0)
+                }
+                HStack(alignment: .bottom, spacing: 12) {
+                    transportCluster(L10n.t("replay.groupMarks")) {
+                        Button(L10n.t("replay.markIn")) { markIn() }
+                            .keyboardShortcut("i", modifiers: [])
+                            .tint(inFrame != nil ? .orange : nil)
+                            .frame(width: 80, height: 32)
+                        Button(L10n.t("replay.markOut")) { markOut() }
+                            .keyboardShortcut("o", modifiers: [])
+                            .tint(outFrame != nil ? .orange : nil)
+                            .frame(width: 80, height: 32)
+                            .disabled(!markOpen)
+                        Button(L10n.t("replay.cancelMark")) { cancelMark() }
+                            .frame(width: 66, height: 32)
+                        TextField("", text: $markLastSeconds)
+                            .frame(width: 38, height: 32)
+                        Text(L10n.t("replay.secondsShort"))
+                            .font(.system(size: 11))
+                            .foregroundStyle(EivizTheme.dim)
+                        Button(L10n.t("replay.markLast")) { markLast() }
+                            .frame(width: 94, height: 32)
+                            .help(L10n.t("replay.markLastHint"))
+                            .disabled(!isRecording)
+                    }
+                    Spacer(minLength: 0)
+                    Button { showExport.toggle() } label: {
+                        Label(L10n.t("replay.export"), systemImage: "square.and.arrow.up")
+                    }
+                    .frame(minWidth: 120, minHeight: 32)
+                    .popover(isPresented: $showExport) {
+                        exportBar
+                    }
                 }
             }
             HStack(alignment: .center, spacing: 8) {
@@ -619,11 +651,44 @@ struct ReplayView: View {
         }
     }
 
-    private func controlGroup<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        HStack(spacing: 4) { content() }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 4).fill(Color(white: 0.1)))
+    /// A titled cluster of related deck controls. The label and the card are what
+    /// separate "what this button does" (transport, marks, speed) from the rest of
+    /// the bottom strip, which used to be one undifferentiated row of buttons.
+    private func transportCluster<Content: View>(
+        _ title: String,
+        @ViewBuilder _ content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(.system(size: 9, weight: .semibold))
+                .tracking(0.9)
+                .foregroundStyle(EivizTheme.dim)
+            HStack(spacing: 6) { content() }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8).fill(EivizTheme.panel))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(EivizTheme.stroke.opacity(0.65), lineWidth: 1))
+        }
+    }
+
+    /// A speed preset. The current rate is filled, so the row reads as one choice
+    /// instead of four identical buttons.
+    private func speedButton(_ milli: Int32, _ title: String) -> some View {
+        let selected = speedMilli == milli
+        return Button(title) { setSpeed(milli) }
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: selected ? .semibold : .regular))
+            .foregroundStyle(selected ? Color.white : EivizTheme.text)
+            .frame(width: 42, height: 26)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(selected ? EivizTheme.toggleOn : EivizTheme.button))
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(selected ? EivizTheme.toggleOn : EivizTheme.stroke, lineWidth: 1))
     }
 
     private func transportReadout(
