@@ -372,7 +372,10 @@ fn reject_reparse(path: &Path) -> Result<(), String> {
 }
 
 fn ensure_not_reparse(path: &Path) -> Result<(), String> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    // The bare io error text differs by OS ("cannot find" vs "No such file or
+    // directory"), so every caller gets the same context-prefixed message.
+    let metadata =
+        std::fs::symlink_metadata(path).map_err(|error| format!("Pro module path: {error}"))?;
     #[cfg(windows)]
     {
         const REPARSE: u32 = 0x400;

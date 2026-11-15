@@ -759,7 +759,7 @@ pub(crate) fn with_uploads<T>(body: impl FnOnce(&mut UploadStore) -> T) -> Resul
 }
 
 pub(crate) fn live_snapshot() -> crate::vmix_xml::LiveSnapshot {
-    with_mixer(|mixer| {
+    let mut snap = with_mixer(|mixer| {
         let shared = mixer.shared.lock_or_recover();
         let mut snap = crate::vmix_xml::LiveSnapshot::default();
         for (id, unit) in &shared.units {
@@ -767,7 +767,27 @@ pub(crate) fn live_snapshot() -> crate::vmix_xml::LiveSnapshot {
         }
         snap
     })
-    .unwrap_or_default()
+    .unwrap_or_default();
+    // The replay engine sits outside the mixer instance, so its live answer is
+    // layered on whatever the mixer itself reported.
+    let engine = replay::engine();
+    snap.replay.recording = engine.is_recording();
+    let follows = engine.live_follows();
+    let mut channels = [crate::abi::MixerReplayChannelState::default(); 4];
+    let count = engine.copy_channels(&mut channels) as usize;
+    for state in &channels[..count] {
+        snap.replay.channels.insert(
+            state.channel_index,
+            crate::vmix_xml::ReplayChannelLive {
+                playing: state.playing != 0,
+                live: follows.get(&state.channel_index).copied().unwrap_or(false),
+                speed_milli: state.speed_milli,
+                position_frame: state.position_frame,
+                angle_id: state.angle_id,
+            },
+        );
+    }
+    snap
 }
 
 pub(crate) fn live_unit(unit_id: u64) -> Option<crate::vmix_xml::UnitLive> {

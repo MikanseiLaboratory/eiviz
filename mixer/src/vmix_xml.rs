@@ -23,6 +23,32 @@ pub struct UnitLive {
 #[derive(Debug, Clone, Default)]
 pub struct LiveSnapshot {
     pub units: HashMap<u64, UnitLive>,
+    /// What the replay recorder and its channels are doing, for the `<replay>`
+    /// node on a Replay input. Panels such as Bitfocus Companion read these
+    /// attributes as feedback, so an empty node leaves them at their defaults.
+    pub replay: ReplayLive,
+}
+
+/// Recorder state and per-channel transport state, keyed by channel index. The
+/// document's Replay inputs are the channels: the first is A, the second B.
+#[derive(Debug, Clone, Default)]
+pub struct ReplayLive {
+    pub recording: bool,
+    pub channels: HashMap<u32, ReplayChannelLive>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ReplayChannelLive {
+    /// The channel's transport is running.
+    pub playing: bool,
+    /// The transport is following the recording edge (the "Live" position).
+    pub live: bool,
+    /// Played speed in milli of normal, so 500 is half speed.
+    pub speed_milli: i32,
+    /// Frame the channel's playhead sits on, on the recording's timeline.
+    pub position_frame: u64,
+    /// Angle of the clip on air. 0 when nothing is playing.
+    pub angle_id: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -309,7 +335,11 @@ pub fn build_vmix(doc: &Document, live: &LiveSnapshot) -> Vmix {
         edition: EDITION.into(),
         preset: None,
         inputs: Inputs {
-            input: flat.inputs.iter().map(to_vmix_input).collect(),
+            input: flat
+                .inputs
+                .iter()
+                .map(|input| to_vmix_input(input, &live.replay, doc))
+                .collect(),
         },
         outputs: None,
         overlays,
@@ -329,7 +359,8 @@ pub fn build_vmix(doc: &Document, live: &LiveSnapshot) -> Vmix {
     }
 }
 
-fn to_vmix_input(flat: &FlatInput) -> Input {
+fn to_vmix_input(flat: &FlatInput, replay: &ReplayLive, doc: &Document) -> Input {
+    let replay = replay_node(flat, replay, doc);
     Input {
         key: flat.key.clone(),
         number: flat.number.to_string(),
@@ -353,11 +384,115 @@ fn to_vmix_input(flat: &FlatInput) -> Input {
         preset: None,
         list: None,
         image: Vec::new(),
-        replay: None,
+        replay,
         overlay: flat.overlays.clone(),
         crop: None,
         input_position: None,
     }
+}
+
+/// One Replay input, shaped the way vMix publishes its replay state. Bitfocus
+/// Companion and the vMix Stream Deck plugin read these attributes as feedback:
+/// recording, live versus recorded mode, per-channel speed, camera (angle) and
+/// timecode, plus the event count.
+///
+/// Channels: the document's first Replay input is A, the second B, matching the
+/// channel index the mixer assigns. The un-suffixed attributes follow channel A,
+/// the way vMix reports the selected channel's numbers.
+fn replay_node(flat: &FlatInput, replay: &ReplayLive, doc: &Document) -> Option<vmix_core::Replay> {
+    if !matches!(input_kind_of(flat.source_id, doc), Some(InputKind::Replay)) {
+        return None;
+    }
+    let replay_doc = doc.replay.as_ref();
+    let index = replay_doc.and_then(|replay| {
+        replay
+            .channels
+            .iter()
+            .find(|channel| channel.input_id == flat.source_id)
+            .map(|channel| channel.index)
+    });
+    // A channel the mixer is not running (Replay never configured, plan refused)
+    // still shows the document's numbers: the session is the shared state.
+    let state = index.and_then(|index| replay.channels.get(&index));
+    let speed = match index {
+        Some(0) | None => state,
+        Some(_) => replay.channels.get(&0), // un-suffixed follows channel A
+    };
+    let events = replay_doc.map(|replay| replay.events.len()).unwrap_or(0);
+    let fps_num = replay_doc
+        .map(|replay| replay.format.fps_num)
+        .filter(|fps| *fps != 0)
+        .unwrap_or(60_000);
+    let fps_den = replay_doc
+        .map(|replay| replay.format.fps_den)
+        .filter(|fps| *fps != 0)
+        .unwrap_or(1_001);
+    let timecode_text = |state: Option<&ReplayChannelLive>| -> String {
+        let frame = state.map(|item| item.position_frame).unwrap_or(0);
+        replay_timecode(frame, fps_num, fps_den)
+    };
+    let speed_text = |state: Option<&ReplayChannelLive>| -> String {
+        let milli = state.map(|item| item.speed_milli).unwrap_or(1000).max(0);
+        let speed = f64::from(milli) / 1000.0;
+        format!("{speed}")
+    };
+    let camera_text = |state: Option<&ReplayChannelLive>| -> String {
+        let angle = state.map(|item| item.angle_id).unwrap_or(0);
+        if angle == 0 {
+            String::new()
+        } else {
+            angle.to_string()
+        }
+    };
+    Some(vmix_core::Replay {
+        timecode: String::new(),
+        timecode_a: timecode_text(state),
+        timecode_b: timecode_text(state),
+        live: Some(bool_text(state.map(|item| item.live).unwrap_or(false)).to_string()),
+        recording: Some(bool_text(replay.recording).to_string()),
+        channel_mode: "2".into(),
+        events: events.to_string(),
+        events_a: events.to_string(),
+        events_b: events.to_string(),
+        camera_a: camera_text(state),
+        camera_b: camera_text(state),
+        speed: String::new(),
+        speed_a: speed_text(speed),
+        speed_b: speed_text(state),
+    })
+}
+
+/// Input kind of a flattened input, found through its source id. Scene ids use
+/// the `SCENE_BASE` flag and never collide with an input id.
+fn input_kind_of(source_id: u64, doc: &Document) -> Option<InputKind> {
+    doc.inputs
+        .iter()
+        .find(|input| input.id == source_id)
+        .map(|input| input.kind)
+}
+
+/// vMix writes XML booleans as `True` / `False`.
+fn bool_text(value: bool) -> &'static str {
+    if value { "True" } else { "False" }
+}
+
+/// Non-drop timecode from a recording-timeline frame number, at the replay
+/// format's frame rate. A frame counter is what the replay bus counts, so this
+/// shows the same pace the deck's slider does.
+fn replay_timecode(frames: u64, fps_num: u32, fps_den: u32) -> String {
+    let whole = u64::from(fps_num.max(1) / fps_den.max(1));
+    if whole == 0 {
+        return String::new();
+    }
+    let seconds = frames / whole;
+    let rest = (frames % whole) as u32;
+    format!(
+        "{:02}:{:02}:{:02}:{:02}",
+        seconds / 3600,
+        (seconds % 3600) / 60,
+        seconds % 60,
+        rest
+    )
 }
 
 fn dummy_audio() -> Audio {
@@ -501,6 +636,93 @@ mod tests {
         assert_eq!(parsed.inputs.input.len(), 3);
         assert_eq!(parsed.inputs.input[0].input_type, "Blank");
         assert_eq!(parsed.inputs.input[0].overlay.len(), 1);
+    }
+
+    /// A Replay input carries the vMix `<replay>` node with the channel's real
+    /// numbers, and nothing else does.
+    fn replay_doc() -> Document {
+        crate::session::parse(
+            br#"{
+            "version": 2,
+            "inputs": [
+                {"id": 2, "guid": "bbb", "name": "Bars", "kind": "Bars"},
+                {"id": 524289, "guid": "replay-80001", "name": "Replay A", "kind": "Replay"}
+            ],
+            "scenes": [{
+                "id": 1,
+                "name": "Scene One",
+                "layers": [{"inputId": 2}]
+            }],
+            "units": [{"id": 1, "name": "MU1"}],
+            "replay": {
+                "enabled": true,
+                "channels": [{"index": 0, "inputId": 524289, "playlistId": 1}],
+                "angles": [],
+                "events": [{"id": 1, "inFrame": 10, "outFrame": 20}],
+                "format": {"width": 640, "height": 360, "fpsNum": 60000, "fpsDen": 1001,
+                           "profile": "Sq", "segmentFrames": 120},
+                "playlists": [{"id": 1, "name": "PL1", "revision": 1, "clips": []}]
+            }
+        }"#,
+        )
+        .expect("replay session")
+    }
+
+    fn replay_live() -> crate::vmix_xml::ReplayLive {
+        let mut replay = crate::vmix_xml::ReplayLive::default();
+        replay.recording = true;
+        replay.channels.insert(
+            0,
+            crate::vmix_xml::ReplayChannelLive {
+                playing: true,
+                live: false,
+                speed_milli: 500,
+                position_frame: 90,
+                angle_id: 1,
+            },
+        );
+        replay
+    }
+
+    fn replay_live_snapshot() -> LiveSnapshot {
+        let mut live = LiveSnapshot::default();
+        live.replay = replay_live();
+        live
+    }
+
+    #[test]
+    fn replay_input_publishes_the_vmix_replay_node() {
+        let doc = replay_doc();
+        let input_id = doc.inputs.iter().find(|i| i.kind == InputKind::Replay).map(|i| i.id).unwrap();
+        let mut live = replay_live_snapshot();
+        live.units.insert(999, UnitLive { program_source: input_id, preview_source: 0, overlay_sources: Vec::new() });
+        let xml = render_xml(&doc, &live).expect("xml");
+        let parsed =
+            vmix_core::from_str(&xml).unwrap_or_else(|error| panic!("parse {error}: {xml}"));
+        let replay_input = parsed
+            .inputs
+            .input
+            .iter()
+            .find(|input| input.replay.is_some())
+            .map(|input| input.replay.clone().unwrap());
+        let node = replay_input.expect("the Replay input carries <replay>");
+        // Recording is live, speed is half, one event, and the A timecode runs at
+        // the format's frame count (59 at 59.94).
+        assert!(matches!(node.recording.as_deref(), Some("True")), "{node:?}");
+        assert_eq!(node.events, "1");
+        assert_eq!(node.speed_a, "0.5");
+        assert_eq!(node.camera_a, "1");
+        assert_eq!(node.timecode_a, "00:00:01:31", "{node:?}");
+        // A plain Colour input shows no node.
+        assert!(
+            parsed
+                .inputs
+                .input
+                .iter()
+                .filter(|input| input.replay.is_none())
+                .count()
+                >= 1
+        );
     }
 
     #[test]

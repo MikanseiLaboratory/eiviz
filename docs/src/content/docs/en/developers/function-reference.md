@@ -42,8 +42,12 @@ Replay functions need a Replay input in the project, a Professional license, and
 | `ReplayCue` | `Channel`, `Value` | Cues a clip onto the channel. `Value` is a clip uid; omitted or empty cues the newest clip on the channel's playlist |
 | `ReplayPlay` | `Channel`, `Value` | Plays the cued clip. `Value` is a multiple of normal speed (default `1`, so `0.5` is half speed) |
 | `ReplayPause` | `Channel` | Pauses, keeping the current speed |
-| `ReplayChangeSpeed` | `Channel`, `Value` | Plays at a new speed without reloading the clip |
+| `ReplayChangeSpeed` | `Channel`, `Value` | Plays at a new speed without reloading the clip. **This differs from vMix**: vMix adds `Value` to the current speed, eiviz sets the speed to `Value` directly. Panels that press a speed for an absolute rate need no change; a panel that nudges in steps should use `SetRateSlowMotion` with the step computed on its side |
+| `SetRateSlowMotion` | `Channel`, `Value` | vMix's absolute slow-motion rate (`Value` 0–1). Same action as `ReplayPlay`, so `0.5` is half speed |
+| `ReplaySetSpeed` | `Channel`, `Value` | Alias of `SetRateSlowMotion` |
 | `ReplayJumpToNow` | `Channel` | Returns the channel to the recording edge |
+
+The XML document puts a `<replay>` node on every Replay input, the way vMix does: `recording`, `live`, `channelMode`, `events`, `cameraA`/`cameraB`, `speedA`/`speedB` and `timecodeA`/`timecodeB`. The document's first Replay input is channel A, the second is B — the numbers each channel's transport is really at, not a copy of the panel's state. Bitfocus Companion and the vMix Stream Deck plugin read these attributes as feedback.
 
 Replay examples:
 

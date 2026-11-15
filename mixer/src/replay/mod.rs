@@ -217,6 +217,16 @@ impl Inbox {
         self.cap.store(cap.max(1), Ordering::Relaxed);
     }
 
+    /// Drops every waiting frame. Called when a recording starts, so frames the
+    /// previous recording (or its failed write) left in the queues cannot be
+    /// numbered onto the new recording's timeline.
+    fn clear(&self) {
+        self.queues
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+    }
+
     fn offer(&self, frame: RecordFrame) -> bool {
         let cap = self.cap.load(Ordering::Relaxed).max(1);
         let mut queues = self
@@ -1182,6 +1192,15 @@ impl ReplayEngine {
         inner.peaks.clear();
         inner.angle_gpu_dropped.clear();
         self.audio_inbox.clear();
+        // Frames the last recording left behind are not this recording's: they
+        // are numbered against the old timeline and would be stored under the
+        // new one. The written counters are per recording too, so the deck does
+        // not show the previous recording's totals until the new one overtakes
+        // them.
+        self.inbox.clear();
+        inner.stats.frames_written = 0;
+        inner.stats.mark_in_valid = 0;
+        inner.angle_written.clear();
         inner.width = width;
         inner.height = height;
         inner.fps_num = fps_num;
@@ -2072,6 +2091,22 @@ impl ReplayEngine {
         self.lock().uuid.clone()
     }
 
+    /// Whether the recorder is writing right now, for the vMix XML `<replay>`
+    /// node. A panel (Bitfocus Companion) shows this as its recording feedback.
+    pub fn is_recording(&self) -> bool {
+        self.lock().recording
+    }
+
+    /// Channel index → whether the transport is following the recording edge.
+    /// vMix reports the same fact as the node's `live` attribute.
+    pub fn live_follows(&self) -> std::collections::HashMap<u32, bool> {
+        self.lock()
+            .channels
+            .iter()
+            .map(|slot| (slot.index, slot.transport.is_live()))
+            .collect()
+    }
+
     /// Jog proxy for one frame. Missing proxies stay an error so the tile does
     /// not decode the full-size picture instead.
     pub fn copy_proxy(
@@ -2732,8 +2767,13 @@ fn record_loop(inbox: Arc<Inbox>, stop_record: Arc<AtomicBool>, stop_workers: Ar
             )
         };
         if matches!(outcome, Err(_)) {
+            // Stop the recording but do not exit: `ensure_workers` only starts a
+            // recorder when the worker list is empty, and a thread that died here
+            // never comes back — the next Record would succeed and then write
+            // nothing, which is a silent loss of the show. Stopping keeps the
+            // thread alive to serve the recording the operator starts next.
             engine.stop(crate::abi::REPLAY_STOP_IO_ERROR);
-            break;
+            continue;
         }
         let _ = outcome;
     }

@@ -437,21 +437,27 @@ struct ReplayView: View {
                         .disabled(!isRecording)
                         .frame(minWidth: 66, minHeight: 44)
                     Button(L10n.t("replay.live")) { live() }
+                        .keyboardShortcut("l", modifiers: [])
                         .frame(minWidth: 74, minHeight: 44)
                     Button(L10n.t(transport.playing ? "replay.pause" : "replay.play")) { togglePlay() }
+                        .keyboardShortcut(.space, modifiers: [])
                         .frame(minWidth: 84, minHeight: 44)
                     Button("◀") { step(-1) }
+                        .keyboardShortcut(.leftArrow, modifiers: [])
                         .frame(width: 44, height: 44)
                         .help(L10n.t("replay.stepBackHint"))
                     Button("▶") { step(1) }
+                        .keyboardShortcut(.rightArrow, modifiers: [])
                         .frame(width: 44, height: 44)
                         .help(L10n.t("replay.stepForwardHint"))
                 }
                 controlGroup {
                     Button(L10n.t("replay.markIn")) { markIn() }
+                        .keyboardShortcut("i", modifiers: [])
                         .tint(inFrame != nil ? .orange : nil)
                         .frame(width: 96, height: 44)
                     Button(L10n.t("replay.markOut")) { markOut() }
+                        .keyboardShortcut("o", modifiers: [])
                         .tint(outFrame != nil ? .orange : nil)
                         .frame(width: 96, height: 44)
                         .disabled(!markOpen)
@@ -1231,6 +1237,10 @@ struct ReplayView: View {
         if let first = channels.first {
             channel = first.index
         }
+        // The transition editors start from the document, not from their field
+        // defaults: without this the first change saved "Cut / 0 frames" over
+        // whatever the playlist really asked for.
+        loadDefaultTransition()
         if outputMonitor == 0 {
             outputMonitor = mixer.allocateMonitorId()
         }
@@ -1283,6 +1293,7 @@ struct ReplayView: View {
         if let latest = mixer.replayDocument, latest.json != loadedJson {
             document = latest
             loadedJson = latest.json
+            loadDefaultTransition()
         }
         if channels.isEmpty {
             load()
@@ -1990,10 +2001,21 @@ struct ReplayView: View {
     private func applyDefaultTransition() {
         guard var current = document else { return }
         let frames = defaultKind == "Cut" ? 0 : UInt32(defaultFrames) ?? 0
-        current.setDefaultTransition(
-            playlistId: playlistId,
-            transition: ReplayTransitionInfo(kind: defaultKind, timing: defaultTiming, durationFrames: frames)
+        // Loading the document writes the same values back into the editors, which
+        // fires onChange. Saving the identical transition is only an echo, and a
+        // half-loaded editor would clobber the real frames with zero. Direction
+        // has no editor here, so it stays whatever the document already has.
+        let existing = current.defaultTransition(playlistId: playlistId)
+        let next = ReplayTransitionInfo(
+            kind: defaultKind,
+            direction: existing.direction,
+            timing: defaultTiming,
+            durationFrames: frames
         )
+        if existing == next {
+            return
+        }
+        current.setDefaultTransition(playlistId: playlistId, transition: next)
         save(current)
     }
 

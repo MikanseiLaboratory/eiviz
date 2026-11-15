@@ -43,7 +43,12 @@ if [ -f "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_remote.dylib" ]; then
   install_name_tool -id "@rpath/libeiviz_remote.dylib" "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_remote.dylib"
 fi
 cd "$ROOT/hosts/macos"
-swift build "${SWIFT_ARGS[@]}"
+# Build only the shipped products. A plain `swift build` also builds the
+# replay-core-checks test executable, whose release (WMO + explicit modules)
+# build fails on current toolchains while its debug build — the one the checks
+# actually run under — keeps working.
+swift build "${SWIFT_ARGS[@]}" --product eiviz-mac
+swift build "${SWIFT_ARGS[@]}" --product eiviz-remote
 BIN="$(swift build "${SWIFT_ARGS[@]}" --show-bin-path)"
 cp -f "$DYLIB" "$BIN/"
 cp -f "$REMOTE" "$BIN/"
