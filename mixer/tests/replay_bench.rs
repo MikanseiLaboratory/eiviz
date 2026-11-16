@@ -292,3 +292,105 @@ fn replay_stage0() {
         "stage0 defaults: segment_frames=120 profile=SQ encode_queue_frames=6 write_buffer_mb=512"
     );
 }
+
+/// N independent codec instances, each decoding the same SQ 1080p packet at the
+/// master rate: how many channels the machine carries at 60 fps. Every thread owns
+/// its codec; the GPU bench shares one device and queue, which is what the playout
+/// decoder does.
+#[test]
+#[ignore]
+fn decode_concurrency() {
+    let packet = {
+        let mut encoder = Codec::new(Config {
+            width: WIDTH as i32,
+            height: HEIGHT as i32,
+            profile: Profile::Sq,
+            color_space: ColorSpace::Bt709,
+        })
+        .expect("encoder");
+        let pixels = uyvy_frame();
+        encoder
+            .encode_uyvy(&pixels, (WIDTH * 2) as usize)
+            .expect("encode");
+        let mut packet = vec![0u8; 8 * 1024 * 1024];
+        let n = loop {
+            match encoder.save_to(&mut packet) {
+                Ok(n) => break n,
+                Err(_) => packet.resize(packet.len() * 2, 0),
+            }
+        };
+        let mut trimmed = packet;
+        trimmed.truncate(n);
+        trimmed
+    };
+    for (label, use_gpu, channels, frames) in [
+        ("cpu", false, 1usize, 64u32),
+        ("cpu", false, 2, 64),
+        ("cpu", false, 4, 64),
+        ("cpu", false, 8, 64),
+        ("gpu", true, 1usize, 96u32),
+        ("gpu", true, 2, 96),
+        ("gpu", true, 4, 96),
+        ("gpu", true, 8, 96),
+        ("gpu", true, 16, 96),
+    ] {
+        let gpu = if use_gpu {
+            let (instance, _adapter, device, queue) =
+                vmx::gpu::request_headless_device().expect("headless device");
+            let _ = instance;
+            Some(Arc::new((device, queue)))
+        } else {
+            None
+        };
+        let started = Instant::now();
+        let mut joins = Vec::new();
+        for _ in 0..channels {
+            let packet = packet.clone();
+            let gpu = gpu.clone();
+            joins.push(thread::spawn(move || {
+                let mut decoder = Codec::new(Config {
+                    width: WIDTH as i32,
+                    height: HEIGHT as i32,
+                    profile: Profile::Sq,
+                    color_space: ColorSpace::Bt709,
+                })
+                .expect("decoder");
+                decoder.load_from(&packet).expect("load");
+                if let Some((device, queue)) = gpu.as_deref() {
+                    let _ = decoder.decode_to_texture(device, queue).expect("warm");
+                } else {
+                    let mut dst = vec![0u8; (WIDTH * HEIGHT * 2) as usize];
+                    decoder
+                        .decode_uyvy(&mut dst, (WIDTH * 2) as usize)
+                        .expect("warm");
+                }
+                let started = Instant::now();
+                for _ in 0..frames {
+                    decoder.load_from(&packet).expect("load");
+                    match gpu.as_deref() {
+                        Some((device, queue)) => {
+                            let _ = decoder.decode_to_texture(device, queue);
+                        }
+                        None => {
+                            let mut dst = vec![0u8; (WIDTH * HEIGHT * 2) as usize];
+                            decoder
+                                .decode_uyvy(&mut dst, (WIDTH * 2) as usize)
+                                .expect("decode");
+                        }
+                    }
+                }
+                started.elapsed()
+            }));
+        }
+        let mut wall = std::time::Duration::ZERO;
+        for join in joins {
+            wall = wall.max(join.join().expect("thread"));
+        }
+        let per_frame = wall.as_secs_f64() * 1000.0 / f64::from(frames);
+        let fps = f64::from(frames) / wall.as_secs_f64() * channels as f64;
+        println!(
+            "{label} decode 1080p ch={channels:<3} {per_frame:.2} ms/ch  aggregate {fps:.0} fps (60fps -> {:.1} ch)",
+            60.0 / per_frame.max(0.001)
+        );
+    }
+}
