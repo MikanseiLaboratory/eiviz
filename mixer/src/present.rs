@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::panic::{self, AssertUnwindSafe};
 
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
@@ -36,12 +37,83 @@ pub struct Presenter {
     native: NativeSurface,
 }
 
+/// Drops the state that references frame textures and views: the bind group
+/// above all, which is what keeps a bygone generation's `TextureView` resource
+/// reachable from a presenter. Called when a surface is detached and when a
+/// present panicked, so a stale view never survives into the next attach or the
+/// rebuild attempt; the presenter then rebinds (or is torn down) from scratch.
+///
+/// `ready` is left alone on purpose: forcing it off would have the next tick
+/// `Surface::configure` a surface that may belong to a dead device generation, and a
+/// wgpu configure against a foreign device raises a device error, where the panic we
+/// are riding out came before any encoder work at all.
+impl Presenter {
+    fn teardown(&mut self) {
+        self.bind = None;
+        self.bind_key = 0;
+        self.pending = None;
+    }
+}
+
+/// What the present loop may do with one monitor this tick, given how it fared before.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MonitorAction {
+    /// Draw as usual.
+    Draw,
+    /// One rebuild attempt: the presenter's frame references were cleared first, so
+    /// the draw starts without a possibly stale view in its bind group.
+    Retry,
+    /// Give up: detach the monitor and stop presenting until the host attaches it
+    /// again. Pushing on could only panic every frame.
+    Detach,
+}
+
+/// Per-monitor recovery ledger around a present-time panic.
+///
+/// A present panic means a texture view the current wgpu hub cannot resolve — the
+/// epoch assert in wgpu-core's storage ("Cannot get TextureView(..,..), found other
+/// resource ..") fires when a render pass or bind group resolves a view that belongs
+/// to another mixer generation. Reconfiguring the surface cannot rebuild a view whose
+/// hub is gone, so the presenter gets exactly one cleared-out retry; a second failure
+/// detaches it. That turns a monitor that panicked every frame into at most two
+/// silent failures and a stop, until the host re-attaches it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MonitorRecovery {
+    panics: u8,
+}
+
+impl MonitorRecovery {
+    /// Two panics are needed to reach `Detach` — the second is the rebuild retry.
+    const MAX: u8 = 2;
+
+    fn new() -> Self {
+        Self { panics: 0 }
+    }
+
+    fn action(&self) -> MonitorAction {
+        match self.panics {
+            0 => MonitorAction::Draw,
+            1 => MonitorAction::Retry,
+            _ => MonitorAction::Detach,
+        }
+    }
+
+    fn note_panic(&mut self) {
+        self.panics = self.panics.saturating_add(1).min(Self::MAX);
+    }
+
+    fn note_recovered(&mut self) {
+        *self = Self::new();
+    }
+}
+
 #[derive(Default)]
 pub struct Presenters {
     by_key: HashMap<(u64, u32, NativeSurface), Presenter>,
     monitors: HashMap<u64, Presenter>,
     monitor_sources: HashMap<u64, u64>,
     monitor_intervals: HashMap<u64, u32>,
+    monitor_recover: HashMap<u64, MonitorRecovery>,
 }
 
 impl Presenters {
@@ -81,11 +153,20 @@ impl Presenters {
     }
 
     pub fn detach(&mut self, unit_id: u64, kind: u32, surface: NativeSurface) {
-        self.by_key.remove(&(unit_id, kind, surface));
+        if let Some(mut presenter) = self.by_key.remove(&(unit_id, kind, surface)) {
+            presenter.teardown();
+        }
     }
 
     pub fn detach_unit(&mut self, unit_id: u64) {
-        self.by_key.retain(|(id, _, _), _| *id != unit_id);
+        let mut stale = self
+            .by_key
+            .extract_if(|(id, _, _), _| *id == unit_id)
+            .map(|(_, presenter)| presenter)
+            .collect::<Vec<_>>();
+        for presenter in &mut stale {
+            presenter.teardown();
+        }
     }
 
     pub fn attach_monitor(
@@ -102,6 +183,12 @@ impl Presenters {
             Some(prepared) => presenter_from_prepared(device, prepared, surface)?,
             None => create_presenter(device, surface, width, height)?,
         };
+        if let Some(mut stale) = self.monitors.remove(&monitor_id) {
+            stale.teardown();
+        }
+        // A fresh attach is a clean start even for a monitor that had panicked its
+        // way to Detach.
+        self.monitor_recover.remove(&monitor_id);
         self.monitors.insert(monitor_id, presenter);
         self.monitor_sources.insert(monitor_id, source_id);
         self.monitor_intervals.entry(monitor_id).or_insert(1);
@@ -113,9 +200,12 @@ impl Presenters {
     }
 
     pub fn detach_monitor(&mut self, monitor_id: u64) {
-        self.monitors.remove(&monitor_id);
+        if let Some(mut presenter) = self.monitors.remove(&monitor_id) {
+            presenter.teardown();
+        }
         self.monitor_sources.remove(&monitor_id);
         self.monitor_intervals.remove(&monitor_id);
+        self.monitor_recover.remove(&monitor_id);
     }
 
     pub fn set_monitor_source(&mut self, monitor_id: u64, source_id: u64) {
@@ -428,18 +518,89 @@ fn present_monitor_pass(
 ) -> Result<Vec<(wgpu::SurfaceTexture, wgpu::TextureView)>, String> {
     let mut acquired = Vec::new();
     for (monitor_id, cache_key, view, packed) in planned {
-        let Some(presenter) = presenters.monitors.get_mut(monitor_id) else {
+        let monitor_id = *monitor_id;
+        // One panic here is a texture view the current wgpu hub cannot resolve, so
+        // the recovery ledger decides whether this monitor may draw at all.
+        let action = presenters
+            .monitor_recover
+            .get(&monitor_id)
+            .map_or(MonitorAction::Draw, MonitorRecovery::action);
+        match action {
+            MonitorAction::Detach => {
+                if let Some(mut presenter) = presenters.monitors.remove(&monitor_id) {
+                    presenter.teardown();
+                }
+                presenters.monitor_sources.remove(&monitor_id);
+                presenters.monitor_intervals.remove(&monitor_id);
+                presenters.monitor_recover.remove(&monitor_id);
+                crate::diag::error(&format!(
+                    "monitor present {monitor_id:#x} detached: stale texture view survived one rebuild"
+                ));
+                // The host watches this counter and drops the last attached flip
+                // budget surface, which makes it re-attach.
+                crate::diag::note_surface_lost();
+            }
+            MonitorAction::Retry => {
+                // Quiet on purpose: the panic notes below log what happened, and a
+                // retry that keeps failing quietly (an acquire that gives up instead
+                // of panicking) must not speak once per frame.
+                if let Some(presenter) = presenters.monitors.get_mut(&monitor_id) {
+                    presenter.teardown();
+                }
+            }
+            MonitorAction::Draw => {}
+        }
+        // The Detach branch above may already have removed the presenter.
+        let Some(presenter) = presenters.monitors.get_mut(&monitor_id) else {
             continue;
         };
-        if let Some(item) = draw_presenter(
-            device,
-            presenter,
-            *cache_key,
-            view.as_ref(),
-            *packed,
-            encoder,
-        ) {
-            acquired.push(item);
+        let drawn = panic::catch_unwind(AssertUnwindSafe(|| {
+            draw_presenter(
+                device,
+                presenter,
+                *cache_key,
+                view.as_ref(),
+                *packed,
+                encoder,
+            )
+        }));
+        match drawn {
+            Ok(Some(item)) => {
+                if let Some(recovery) = presenters.monitor_recover.get_mut(&monitor_id) {
+                    recovery.note_recovered();
+                }
+                acquired.push(item);
+            }
+            Ok(None) => {}
+            Err(_) => {
+                if let Some(presenter) = presenters.monitors.get_mut(&monitor_id) {
+                    // Any stale view the presenter resolved goes with this teardown,
+                    // so the one rebuild attempt — or the host's next attach — starts
+                    // without it.
+                    presenter.teardown();
+                }
+                let panics = match presenters.monitor_recover.get_mut(&monitor_id) {
+                    Some(recovery) => {
+                        recovery.note_panic();
+                        recovery.panics
+                    }
+                    None => {
+                        presenters
+                            .monitor_recover
+                            .insert(monitor_id, MonitorRecovery { panics: 1 });
+                        1
+                    }
+                };
+                if panics == 1 {
+                    crate::diag::error(&format!(
+                        "monitor present {monitor_id:#x} panicked; stale view reference cleared, one rebuild follows"
+                    ));
+                } else {
+                    crate::diag::error(&format!(
+                        "monitor present {monitor_id:#x} panicked again; it detaches on the next present tick"
+                    ));
+                }
+            }
         }
     }
     Ok(acquired)
@@ -865,7 +1026,7 @@ fn make_present_pipeline(
 
 #[cfg(test)]
 mod tests {
-    use super::{BlitParams, pick_present_mode};
+    use super::{BlitParams, MonitorAction, MonitorRecovery, pick_present_mode};
 
     #[test]
     fn present_params_match_uyvy_shader() {
@@ -898,5 +1059,71 @@ mod tests {
             handle.hinstance.is_some(),
             "Vulkan WSI requires Win32 hinstance"
         );
+    }
+
+    /// A monitor whose present panicked gets exactly one rebuild attempt and is then
+    /// left detached: the sequence of actions must be Draw, Retry, Detach, with the
+    /// Detach state never handed out twice because the presenter is removed on it.
+    ///
+    /// This is the headless model of the real-machine failure: SwiftUI opens and
+    /// closes scene preview windows and replaces the session, the engine hands the
+    /// present loop a texture view from a bygone wgpu hub, and without this ledger
+    /// the "present monitors panicked" guard caught the same panic every frame for
+    /// the rest of the session (62,878 lines in one log).
+    #[test]
+    fn monitor_recovery_panics_once_then_stops() {
+        let mut recovery = MonitorRecovery::new();
+        assert_eq!(
+            recovery.action(),
+            MonitorAction::Draw,
+            "a fresh monitor draws"
+        );
+
+        recovery.note_panic();
+        assert_eq!(
+            recovery.action(),
+            MonitorAction::Retry,
+            "the first panic earns a single rebuild attempt"
+        );
+
+        // A tick where the draw does not panic restores the monitor.
+        recovery.note_recovered();
+        assert_eq!(recovery.action(), MonitorAction::Draw);
+
+        recovery.note_panic();
+        recovery.note_panic();
+        assert_eq!(
+            recovery.action(),
+            MonitorAction::Detach,
+            "the retry failed too, so the monitor detaches and stops"
+        );
+
+        // Beyond the cap the action stays Detach (defensive saturation).
+        recovery.note_panic();
+        assert_eq!(recovery.action(), MonitorAction::Detach);
+    }
+
+    /// A monitor that recovered mid-way (its rebuild attempt drew fine) is reset back
+    /// to a fresh one, and re-attaching a monitor resets its ledger: attach, fail,
+    /// detach, attach, draw — the operator's open, close and re-open of a preview
+    /// window must work again without a manual session reload.
+    #[test]
+    fn monitor_recovery_resets_on_recovery_and_reattach() {
+        let mut recovery = MonitorRecovery::new();
+        recovery.note_panic();
+        assert_eq!(recovery.action(), MonitorAction::Retry);
+        recovery.note_recovered();
+        assert_eq!(
+            recovery.action(),
+            MonitorAction::Draw,
+            "recovery clears the ledger"
+        );
+
+        // One panic then a detached rebuild, then a fresh attach resets again.
+        recovery.note_panic();
+        recovery.note_panic();
+        assert_eq!(recovery.action(), MonitorAction::Detach);
+        recovery.note_recovered();
+        assert_eq!(recovery.action(), MonitorAction::Draw);
     }
 }

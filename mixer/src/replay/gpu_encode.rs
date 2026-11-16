@@ -17,7 +17,7 @@
 //! every frame and the encoder's finite throughput is shared evenly.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use vmx::{Codec, ColorSpace, Config, Profile};
@@ -124,7 +124,20 @@ static ASKED_RING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 static ANGLES: Mutex<Option<HashMap<u32, Angle>>> = Mutex::new(None);
 /// The encoder lanes. Built once and then extended as angles are added, because the pool has
 /// to follow the session and not the frame it first saw.
-static QUEUES: OnceLock<Mutex<Vec<Pending>>> = OnceLock::new();
+///
+/// Each lane carries its own clones of the device and queue it was spawned with, so a
+/// lane that belongs to a mixer generation that has already been destroyed holds that
+/// dead device alive — and every texture it would touch lives in that foreign hub. A
+/// lane therefore also carries the stop flag `reset_device` sets, so a device swap can
+/// drain the lanes and let the old device go.
+static QUEUES: OnceLock<Mutex<Vec<Lane>>> = OnceLock::new();
+
+/// One encoder lane: its work list, wake, device clones and drop switch.
+#[derive(Clone)]
+struct Lane {
+    pending: Pending,
+    stop: Arc<AtomicBool>,
+}
 
 /// The replay format's profile code (0 high, 1 standard, 2 low) as the codec's preset.
 fn profile_of(code: u32) -> Profile {
@@ -251,7 +264,7 @@ pub fn dispatch(angle_id: u32, job: CopyJob) -> bool {
             return false;
         }
         let index = angle_id as usize % guard.len();
-        Arc::clone(&guard[index])
+        guard[index].pending.clone()
     };
     let (list, wake) = &*queue;
     let mut pending = list.lock().unwrap_or_else(|error| error.into_inner());
@@ -328,24 +341,86 @@ fn ensure_encoder(device: &wgpu::Device, queue: &wgpu::Queue, angles: usize) {
     let mut guard = lanes.lock().unwrap_or_else(|error| error.into_inner());
     while guard.len() < wanted {
         let entry: Pending = Arc::new((Mutex::new(VecDeque::new()), Condvar::new()));
-        let index = guard.len();
+        let stop = Arc::new(AtomicBool::new(false));
         let device = device.clone();
         let queue = queue.clone();
         let spawned = entry.clone();
+        let lane_stop = Arc::clone(&stop);
         if std::thread::Builder::new()
-            .name(format!("eiviz-replay-encode-{index}"))
-            .spawn(move || encode_loop(spawned, device, queue))
+            .name(format!("eiviz-replay-encode-{}", guard.len()))
+            .spawn(move || encode_loop(spawned, device, queue, lane_stop))
             .is_err()
         {
             // Out of threads on this machine: keep what we have rather than failing a
             // recording over it.
             break;
         }
-        guard.push(entry);
+        guard.push(Lane {
+            pending: entry,
+            stop,
+        });
     }
 }
 
-fn encode_loop(pending: Pending, device: wgpu::Device, queue: wgpu::Queue) {
+/// Drops the lanes and the angle rings that were built on a device this process no
+/// longer renders with.
+///
+/// Each lane was spawned with clones of the device and queue it was given, so lanes
+/// from a destroyed mixer generation would hold that device — and every ring texture
+/// in it — alive for the life of the process. Recording against the new render loop
+/// with those rings would copy into a foreign hub and panic inside wgpu, so a device
+/// swap drains the work and lets the old device go. The next `prepare` call respawns
+/// lanes on the current device.
+pub fn reset_device() {
+    let stopped: Vec<Lane> = match QUEUES.get() {
+        None => return,
+        Some(lanes) => lanes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .drain(..)
+            .collect(),
+    };
+    for lane in stopped {
+        // Wake the lane out of its queue wait; its loop sees the flag and exits,
+        // dropping its own device and queue clones with it.
+        lane.stop.store(true, Ordering::Release);
+        let (list, wake) = &*lane.pending;
+        if let Ok(mut pending) = list.lock() {
+            // Jobs still queued hold ring textures; drop them here rather than
+            // presenting or encoding from a stopped lane.
+            pending.clear();
+            wake.notify_all();
+        }
+    }
+    // The rings carry the textures this device produced; the render loop copies
+    // into them, so rings from a dead hub must not survive a device swap.
+    *ANGLES.lock().unwrap_or_else(|error| error.into_inner()) = None;
+}
+
+/// Test and health access: lanes currently alive. Zero after a reset until the next
+/// recording prepares an angle again.
+pub fn lane_count() -> usize {
+    QUEUES
+        .get()
+        .map(|lanes| {
+            lanes
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .len()
+        })
+        .unwrap_or(0)
+}
+
+/// Test and health access: angle rings currently held.
+pub fn ring_count() -> usize {
+    ANGLES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .map_or(0, |angles| angles.len())
+}
+
+fn encode_loop(pending: Pending, device: wgpu::Device, queue: wgpu::Queue, stop: Arc<AtomicBool>) {
     let mut codecs: HashMap<u32, Codec> = HashMap::new();
     let mut packet = vec![0u8; 1024 * 1024];
     let (list, wake) = &*pending;
@@ -353,7 +428,13 @@ fn encode_loop(pending: Pending, device: wgpu::Device, queue: wgpu::Queue) {
         let job = {
             let mut guard = list.lock().unwrap_or_else(|error| error.into_inner());
             while guard.is_empty() {
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
                 guard = wake.wait(guard).unwrap_or_else(|error| error.into_inner());
+            }
+            if stop.load(Ordering::Relaxed) {
+                return;
             }
             guard.pop_front()
         };

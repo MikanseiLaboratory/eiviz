@@ -36,6 +36,7 @@ use crate::abi::{
     REPLAY_RECORD_BASE, REPLAY_STATE_IDLE, REPLAY_STATE_RECORDING, REPLAY_STATE_STOPPED,
     REPLAY_STOP_FPS_CHANGED, REPLAY_STOP_NONE, REPLAY_STOP_USER,
 };
+use crate::guard::LockExt;
 use crate::upload::CpuFormat;
 
 pub use health::{HealthMemory, HealthSample, step as health_step};
@@ -417,9 +418,22 @@ pub struct ReplayEngine {
     stop_record: Arc<AtomicBool>,
     stop_workers: Arc<AtomicBool>,
     workers: Mutex<Vec<JoinHandle<()>>>,
-    /// The render device, shared with the playout decoder. Set once when the
-    /// renderer starts; the channel worker can then decode packets on the GPU.
-    gpu: OnceLock<(wgpu::Device, wgpu::Queue)>,
+    /// The render device, shared with the playout decoder. The renderer replaces it
+    /// whenever a new mixer generation starts.
+    ///
+    /// This must not be a `OnceLock`: a mixer that is destroyed and recreated (session
+    /// replacement on the macOS deck) renders with a fresh wgpu device, while the
+    /// textures the old device produced would panic wgpu's storage lookup the moment
+    /// the new render loop binds or presents them ("found other resource" epoch
+    /// mismatch). Replacing the device together with everything that was built on it
+    /// keeps every decoded texture inside the live device's hub.
+    gpu: Mutex<Option<(wgpu::Device, wgpu::Queue)>>,
+    /// Bumped every time [`ReplayEngine::set_gpu`], so `1` after the first render
+    /// loop armed the engine and `2` after its first replacement. In-flight work
+    /// captures the value it started with and re-checks it before it publishes
+    /// anything built on the device, because a replaced device drops everything the
+    /// previous one cached.
+    gpu_generation: AtomicU64,
     /// Decoders whose GPU pipelines were built before playback needed them. The
     /// first vmx decode builds shader pipelines and can take a second on a debug
     /// build; doing that in front of the first clip would freeze playout.
@@ -520,7 +534,8 @@ impl ReplayEngine {
             stop_record: Arc::new(AtomicBool::new(true)),
             stop_workers: Arc::new(AtomicBool::new(false)),
             workers: Mutex::new(Vec::new()),
-            gpu: OnceLock::new(),
+            gpu: Mutex::new(None),
+            gpu_generation: AtomicU64::new(0),
             prepared: Mutex::new(HashMap::new()),
             warming: AtomicBool::new(false),
         };
@@ -536,14 +551,48 @@ impl ReplayEngine {
     }
 
     /// Remembers the render device so a channel can decode a packet on the GPU.
-    /// Called once, when the render loop starts.
+    /// Called when the render loop starts.
+    ///
+    /// A call always replaces what was there before: each render loop owns a wgpu
+    /// device of its own, so the previous slot's device is a bygone mixer generation.
+    /// When a swap happens, everything built on the old device is dropped here — the
+    /// warmed decoders and the encoder lanes/rings — because using any of their
+    /// textures with the new render loop panics inside wgpu's storage lookup. The
+    /// playout generation moves too, so pictures decoded ahead on the old device are
+    /// discarded instead of reaching the composer.
     pub fn set_gpu(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let _ = self.gpu.set((device.clone(), queue.clone()));
+        let replaced = {
+            let mut slot = self.gpu.lock_or_recover();
+            let replaced = slot.is_some();
+            *slot = Some((device.clone(), queue.clone()));
+            replaced
+        };
+        if replaced {
+            self.prepared
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clear();
+            self.warming.store(false, Ordering::Release);
+            self.playback_generation.fetch_add(1, Ordering::AcqRel);
+            crate::replay::gpu_encode::reset_device();
+            crate::diag::info("replay gpu device replaced; cleared decoders and encode rings");
+        }
+        self.gpu_generation.fetch_add(1, Ordering::AcqRel);
         self.warm_decoders();
     }
 
     fn gpu_device(&self) -> Option<(wgpu::Device, wgpu::Queue)> {
-        self.gpu.get().cloned()
+        self.gpu
+            .lock_or_recover()
+            .as_ref()
+            .map(|(device, queue)| (device.clone(), queue.clone()))
+    }
+
+    /// Monotonic count of [`ReplayEngine::set_gpu`] calls (`0` before the first render
+    /// loop ever reached this engine). Exposed so tests can watch a replaced device
+    /// drop the caches it left behind.
+    pub fn gpu_generation(&self) -> u64 {
+        self.gpu_generation.load(Ordering::Acquire)
     }
 
     /// Builds each channel's GPU decoder before playout needs it. The first vmx
@@ -592,12 +641,18 @@ impl ReplayEngine {
             self.warming.store(false, Ordering::Release);
             return;
         }
+        let generation = self.gpu_generation.load(Ordering::Acquire);
         let _ = thread::Builder::new()
             .name("eiviz-replay-warm".into())
             .spawn(move || {
                 let engine = engine();
                 for index in channels {
-                    if !engine.warming.load(Ordering::Relaxed) {
+                    // A device replacement (a new mixer generation) drops the warmed
+                    // decoders mid-build; publishing one built on the dropped device
+                    // would hand the new render loop a texture from a foreign hub.
+                    if !engine.warming.load(Ordering::Relaxed)
+                        || engine.gpu_generation.load(Ordering::Acquire) != generation
+                    {
                         break;
                     }
                     let profile_vmx = match profile {
@@ -637,21 +692,29 @@ impl ReplayEngine {
                         &device,
                         wgpu::TextureFormat::Bgra8Unorm,
                     ));
-                    engine
+                    let mut prepared = engine
                         .prepared
                         .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .insert(
-                            index,
-                            PreparedDecoder {
-                                width,
-                                height,
-                                profile,
-                                codec,
-                                secondary,
-                                transition,
-                            },
-                        );
+                        .unwrap_or_else(|error| error.into_inner());
+                    // A device replacement clears the prepared map while this thread
+                    // works; publishing an entry built on the dropped device after
+                    // that clear would hand the new render loop a texture from a
+                    // foreign hub, so the insert re-checks the generation under the
+                    // same lock the clear took.
+                    if engine.gpu_generation.load(Ordering::Acquire) != generation {
+                        break;
+                    }
+                    prepared.insert(
+                        index,
+                        PreparedDecoder {
+                            width,
+                            height,
+                            profile,
+                            codec,
+                            secondary,
+                            transition,
+                        },
+                    );
                 }
                 engine.warming.store(false, Ordering::Release);
                 crate::diag::info("replay GPU decoders warmed");
@@ -1473,7 +1536,7 @@ impl ReplayEngine {
         payload: &[u8],
     ) -> bool {
         let (width, height, fps_num, fps_den, frame_index) = {
-            let mut inner = self.lock();
+            let inner = self.lock();
             if !inner.recording {
                 return false;
             }
@@ -4128,7 +4191,7 @@ fn channel_loop(stop: Arc<AtomicBool>) {
         } else if !failed.is_empty() {
             // One attempt per wake: a machine out of threads recovers slowly, and a
             // retry storm would churn the running channels alongside it.
-            let mut retry = std::mem::take(&mut failed);
+            let retry = std::mem::take(&mut failed);
             let mut still_failed = Vec::new();
             for index in retry {
                 let Some((_, source_id, audio)) =
@@ -6427,5 +6490,255 @@ mod path_writable_tests {
         std::fs::write(&file, b"x").unwrap();
         assert!(!path_is_writable(&file.to_string_lossy()));
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod gpu_device_tests {
+    //! Replay GPU state across mixer generations.
+    //!
+    //! The deck replaces mixers (session load) while the process keeps running. The
+    //! replay engine once answered a device replacement with `set_gpu`'s silently
+    //! ignored second write, so every later decode ran on a device whose hub the new
+    //! render loop could not see any more, and its textures panicked the present
+    //! pass with wgpu's "found other resource" epoch assert. These tests pin the
+    //! replacement semantics: a new device drops everything the old one cached.
+
+    use super::{engine, gpu_encode};
+    use crate::device::{BackendRequest, GpuDevice};
+    use crate::guard::LockExt;
+    use serial_test::serial;
+    use std::panic;
+    use std::sync::atomic::Ordering;
+
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    fn gpu() -> Option<GpuDevice> {
+        match GpuDevice::with_backend(BackendRequest::Auto) {
+            Ok(device) => Some(device),
+            Err(
+                crate::device::DeviceError::NoAdapter
+                | crate::device::DeviceError::UnsupportedBackend { .. }
+                | crate::device::DeviceError::RequestDevice(_)
+                | crate::device::DeviceError::WrongBackend { .. },
+            ) => None,
+        }
+    }
+
+    /// A second `set_gpu` must replace the device instead of being swallowed: the
+    /// first device and everything built on it has to go, and the generation that
+    /// tests and warm-up threads compare against has to move.
+    #[test]
+    #[serial]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    fn set_gpu_replaces_the_cached_device_and_its_caches() {
+        let Some(older) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let Some(fresh) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let playbacks_before = engine().playback_generation.load(Ordering::Acquire);
+        engine().set_gpu(&older.device, &older.queue);
+        let generation_once = engine().gpu_generation();
+        assert!(generation_once >= 1, "the first set_gpu must bump the generation");
+
+        // A warmed decoder built on the old device must not survive the swap.
+        let codec = vmx::Codec::new(vmx::Config {
+            width: 64,
+            height: 64,
+            profile: vmx::Profile::Sq,
+            color_space: vmx::ColorSpace::Bt709,
+        })
+        .expect("codec");
+        engine()
+            .prepared
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(
+                0,
+                super::PreparedDecoder {
+                    width: 64,
+                    height: 64,
+                    // `Sq` is profile code 1 the way `decode_gpu` maps it (0 hq, 2 lq,
+                    // anything else standard).
+                    profile: 1,
+                    codec,
+                    secondary: None,
+                    transition: None,
+                },
+            );
+
+        // Recording rings from the old device must not survive either.
+        let ring = gpu_encode::prepare(
+            9,
+            64,
+            64,
+            2,
+            wgpu::TextureFormat::Bgra8Unorm,
+            &older.device,
+            &older.queue,
+        )
+        .expect("encoder ring on the old device");
+        drop(ring);
+        assert!(
+            gpu_encode::ring_count() >= 1,
+            "the ring must be registered before the swap"
+        );
+
+        // The swap.
+        engine().set_gpu(&fresh.device, &fresh.queue);
+        assert_eq!(
+            engine().gpu_generation(),
+            generation_once + 1,
+            "the replaced device is a new generation"
+        );
+        assert!(
+            engine()
+                .prepared
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_empty(),
+            "decoders warmed on the previous device were dropped"
+        );
+        assert!(
+            engine().playback_generation.load(Ordering::Acquire) > playbacks_before,
+            "pictures decoded ahead on the previous device are invalidated"
+        );
+        assert_eq!(gpu_encode::lane_count(), 0, "encoder lanes must drain");
+        assert_eq!(gpu_encode::ring_count(), 0, "recording rings must drop");
+
+        // The new generation owns the live device: the fresh device's handle stays
+        // the engine's pick, and nothing of the old one holds its hub alive.
+        let swapped = engine()
+            .gpu
+            .lock_or_recover()
+            .clone()
+            .expect("engine gpu after replace");
+        // The engine holds the live device, not the one the previous generation
+        // dropped: a poll on it is answered without touching the replaced device.
+        assert!(swapped.0.poll(wgpu::PollType::Poll).is_ok());
+        drop(older);
+        drop(fresh);
+
+        // Leave a clean engine for the rest of the suite.
+        engine()
+            .prepared
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        gpu_encode::reset_device();
+    }
+
+    /// The mechanics of the bug, pinned so a future wgpu that turns the assert into
+    /// an error is noticed rather than silently "fixed": a texture view created by
+    /// another wgpu instance (the engine's stale device) resolved by this device's
+    /// hub panics wgpu-core's storage lookup, the exact assert the present loop
+    /// caught 62,878 times in one session.
+    #[test]
+    #[serial]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    fn a_view_from_another_hub_panics_the_storage_lookup() {
+        let Some(older) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let Some(current) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+
+        let texture = |device: &wgpu::Device| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("hub-test"),
+                size: wgpu::Extent3d {
+                    width: 4,
+                    height: 4,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        };
+
+        // The live hub keeps its own views: six of them, so slot 4 is occupied by
+        // epoch 1 — the composer's long-lived views in the real mixer.
+        let live_textures = (0..6)
+            .map(|_| texture(&current.device))
+            .collect::<Vec<_>>();
+        let live_views = live_textures
+            .iter()
+            .map(|tex| tex.create_view(&wgpu::TextureViewDescriptor::default()))
+            .collect::<Vec<_>>();
+
+        // The stale hub had recycled its view slot before the swap: create, drop and
+        // recreate so the surviving view's id carries an older epoch at the index the
+        // live hub gave to its own epoch-1 view.
+        let stale_textures = (0..5)
+            .map(|_| texture(&older.device))
+            .collect::<Vec<_>>();
+        let mut stale_views = stale_textures
+            .iter()
+            .map(|tex| tex.create_view(&wgpu::TextureViewDescriptor::default()))
+            .collect::<Vec<_>>();
+        // Drop the view at slot 4, then create one again: the freed id is handed back
+        // with its epoch advanced, so the surviving stale view says epoch 2 where the
+        // live hub keeps epoch 1 — the exact id pair of the session's real panic.
+        let freed = stale_views.swap_remove(4);
+        drop(freed);
+        let recycled = stale_textures[0]
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let layout = current
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("hub-test"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                }],
+            });
+
+        let panicked = panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = current
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("hub-test"),
+                    layout: &layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&recycled),
+                    }],
+                });
+        }));
+        let message = panicked
+            .err()
+            .map(|payload| crate::guard::panic_message(payload.as_ref()))
+            .unwrap_or_default();
+        assert!(
+            message.contains("found other resource TextureViewId("),
+            "a foreign-hub view must trip wgpu's storage assert, got: {message}"
+        );
+        // The live view in that slot has epoch 1, exactly like the mixer's composer
+        // views the real panic reported.
+        assert!(
+            message.contains(", found other resource TextureViewId(4,1)"),
+            "the live hub slot 4 holds its own first-generation view, got: {message}"
+        );
+        drop(live_views);
+        drop(live_textures);
+        drop(stale_views);
+        drop(stale_textures);
     }
 }
