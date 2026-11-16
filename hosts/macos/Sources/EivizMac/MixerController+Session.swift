@@ -484,8 +484,12 @@ extension MixerController {
         bumpSurfaceEpoch()
     }
 
-    /// Replaces the live session. Returns false when the session was refused before the
-    /// current one was torn down, so a caller does not mark it as the last session.
+    /// Applies a loaded session: windows first (the deck's Metal surfaces hold handles
+    /// into the mixer now being destroyed — a session reload that left the deck open
+    /// would freeze it black, the way every other attached window goes when its mixer
+    /// went away), then the mixer, then the document. Returns false when the session
+    /// was refused before the current one was torn down, so a caller does not mark it
+    /// as the last session.
     @discardableResult
     func replaceSession(_ loaded: MixerSessionData) -> Bool {
         if let reason = SessionPlanGate.blockReason(for: loaded) {
@@ -496,6 +500,7 @@ extension MixerController {
         closeAllAudioInputs()
         closeAllSwitchers()
         closeAllMultiviews()
+        closeReplayWindows()
         FlipBudget.reset()
         mixer_destroy()
         session = loaded
@@ -519,6 +524,10 @@ extension MixerController {
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
         fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
         fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
+        EivizSurfaceCap.shared.update(
+            width: session.settings.defaultWidth,
+            height: session.settings.defaultHeight
+        )
         FlipBudget.configure(session.settings.flipSwapchainLimit)
         applyBusColors()
         applySession()
@@ -1189,17 +1198,29 @@ extension MixerController {
         var stats = MixerFFI.zeroed() as EivizMixerStats
         _ = mixer_copy_stats(&stats)
         FlipBudget.observeLost(stats.surface_lost)
+        // The skip rate needs two samples: how many of the composed frames the mixer
+        // dropped since the last tick, not the raw render time which carries a
+        // vsync wait every Fifo present pays.
+        let deltas = lastRenderCounters
+        var skipRate = 0.0
+        if stats.frames_rendered != deltas.rendered {
+            let late = Double(stats.frames_skipped) - Double(deltas.skipped)
+            let frames = Double(stats.frames_rendered) - Double(deltas.rendered)
+            if frames > 0, late > 0 { skipRate = late / frames }
+        }
+        lastRenderCounters = (rendered: stats.frames_rendered, skipped: stats.frames_skipped)
         // The HUD is text: four updates a second is enough, and the IOKit GPU
         // sample behind it is not free at 20 Hz.
         hudTicks += 1
         if stats.frame_budget_ms > 0, hudTicks % 5 == 0 {
-            let hud = HostResources.hud(renderMs: stats.render_ms, budgetMs: stats.frame_budget_ms)
-            if resourceText != hud.text {
-                resourceText = hud.text
-            }
-            if warnText != hud.warn {
-                warnText = hud.warn
-            }
+            let hud = HostResources.hud(
+                renderMs: stats.render_ms,
+                budgetMs: stats.frame_budget_ms,
+                skipRate: skipRate,
+                lastRenderMs: stats.render_ms
+            )
+            resourceText = hud.text
+            warnText = hud.warn
         }
         if let id = fileVideoId, let info = copyVideoInfo(id) {
             videoPlaying = info.playing != 0
@@ -1379,6 +1400,10 @@ extension MixerController {
     }
 
     func presentError(_ message: String, title: String) {
+        // A modal that runs during boot can vanish behind a window the app cannot yet
+        // raise (a bare-executable process may not be able to activate at all), so the
+        // message also lands in the host log where the operator can still find it.
+        HostLog.write("WARN", "\(title): \(message)")
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message

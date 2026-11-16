@@ -410,7 +410,7 @@ fn dispatch_replay(
 }
 
 /// Every vMix function this layer maps to Replay.
-const REPLAY_FUNCTIONS: [&str; 9] = [
+const REPLAY_FUNCTIONS: [&str; 11] = [
     "ReplayStartRecording",
     "ReplayStopRecording",
     "ReplayMarkIn",
@@ -420,6 +420,11 @@ const REPLAY_FUNCTIONS: [&str; 9] = [
     "ReplayPause",
     "ReplayJumpToNow",
     "ReplayChangeSpeed",
+    // vMix's absolute-rate functions. `SetRateSlowMotion` is the one vMix
+    // documents for panels; `ReplaySetSpeed` aliases it. Both take the same
+    // scale this layer's `ReplayPlay` already uses.
+    "SetRateSlowMotion",
+    "ReplaySetSpeed",
 ];
 
 fn replay_command(
@@ -459,6 +464,14 @@ fn replay_command(
         // Changing the speed also starts playback, which is what an operator means
         // by pressing a speed button.
         "ReplayChangeSpeed" => eiviz_control::Command::ReplayTransport {
+            channel: replay_channel(params)?,
+            playing: true,
+            speed_milli: replay_speed(params)?,
+            seek_frame: -1,
+        },
+        // vMix's absolute rate: `Value` 0-1, so 0.5 is half speed. Kept under its
+        // vMix name because panels (Bitfocus Companion's "Set Speed") call it that.
+        "SetRateSlowMotion" | "ReplaySetSpeed" => eiviz_control::Command::ReplayTransport {
             channel: replay_channel(params)?,
             playing: true,
             speed_milli: replay_speed(params)?,

@@ -1420,6 +1420,10 @@ fn stream_encoder_apply(encoder: &StreamEncoderDto) -> StreamEncoderApply {
         buffer_ms: encoder.buffer_ms,
         encoder: match encoder.encoder.as_str() {
             "" | "OpenH264" => 0,
+            // `STREAM_ENCODER_VIDEOTOOLBOX` in eiviz-pro-api. The code goes through
+            // unchanged: the module refuses one it cannot build (VideoToolbox is
+            // macOS only), so a mismatch is an error at stream start rather than a
+            // quietly different encoder doing the work.
             "VideoToolbox" => 1,
             _ => u32::MAX,
         },
@@ -1901,6 +1905,54 @@ mod tests {
         assert!(
             ops.iter()
                 .any(|op| matches!(op, ReconcileOp::RemoveStreamEncoder { id: 1 }))
+        );
+    }
+}
+
+#[cfg(test)]
+mod encoder_apply_tests {
+    use super::*;
+    use crate::session::parse;
+
+    /// A document session test already builds; the encoder name is all this test
+    /// changes.
+    fn encoder_doc(name: &str) -> crate::session::Document {
+        let text = format!(
+            r#"{{
+              "version": 2,
+              "inputs": [{{ "id": 2, "name": "Bars", "kind": "Bars" }}],
+              "scenes": [{{ "id": 1, "name": "Scene 1", "layers": [{{ "inputId": 2, "width": 1, "height": 1 }}] }}],
+              "units": [{{ "id": 1, "name": "MU 1" }}],
+              "streamEncoders": [{{ "id": 1, "name": "YT", "sourceKind": "MuProgram", "unitId": 1, "encoder": "{name}" }}]
+            }}"#
+        );
+        parse(text.as_bytes()).unwrap()
+    }
+
+    /// The encoder name arrives as the session's string and goes out as the
+    /// module's stream code. VideoToolbox reaches the module as its code: the
+    /// module refuses one it cannot build, so the ask is never silently switched
+    /// to OpenH264, and an unknown name still stops the stream from starting.
+    #[test]
+    fn the_encoder_name_maps_to_its_stream_code() {
+        let empty = encoder_doc("");
+        assert_eq!(stream_encoder_apply(&empty.stream_encoders[0]).encoder, 0);
+        let openh264 = encoder_doc("OpenH264");
+        assert_eq!(
+            stream_encoder_apply(&openh264.stream_encoders[0]).encoder,
+            0
+        );
+        let videotoolbox = encoder_doc("VideoToolbox");
+        assert_eq!(
+            stream_encoder_apply(&videotoolbox.stream_encoders[0]).encoder,
+            1,
+            "VideoToolbox passes through as its own code"
+        );
+        let unknown = encoder_doc("Av1");
+        assert_eq!(
+            stream_encoder_apply(&unknown.stream_encoders[0]).encoder,
+            u32::MAX,
+            "an unknown encoder builds no stream at all"
         );
     }
 }

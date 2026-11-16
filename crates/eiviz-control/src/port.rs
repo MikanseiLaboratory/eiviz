@@ -213,6 +213,15 @@ pub trait MixerPort: Send {
         Ok(())
     }
 
+    /// Moves the retention protection boundary of one recording. The session
+    /// works out which frame a clip or a protected event still holds; the mixer
+    /// carries it to that recording's store, which then refuses to reclaim
+    /// anything before it. A mixer without a store for the recording accepts
+    /// the call and moves nothing.
+    fn replay_set_protect_from(&mut self, _recording: &str, _frame: u64) -> ControlResult<()> {
+        Ok(())
+    }
+
     fn replay_state_json(&self) -> String {
         "{}".into()
     }

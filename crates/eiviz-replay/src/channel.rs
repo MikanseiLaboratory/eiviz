@@ -584,9 +584,18 @@ impl Transport {
                     // here on purpose: the extension already covers this frame, so going round
                     // again would only re-test the same end and grow it a second time.
                     // Compare against the operator's original out point, not the
-                    // extended one: a clip extended to 50 has a span of 51, so testing
-                    // `last_frame >= span` was false on the very next tick and stopped
-                    // chase playback one frame after it started following the edge.
+                    // extended one: an extended clip's out point grows with the edge,
+                    // so testing the current end was false on the very next tick and
+                    // stopped the hold one frame after it started following the edge.
+                    //
+                    // The test stays in source frames: `last_frame` is the recording's
+                    // newest source frame while `span()` counts output frames, so
+                    // comparing the two made a clip at a speed other than one judge
+                    // the room it had from a frame the recording never had. A reverse
+                    // clip meets the same out point from the other side, and its hold
+                    // walks back one frame per output frame toward the recording's
+                    // earliest frame; the head bounds only the newest frame there, so
+                    // any recording supports it.
                     let base_out = if self.held_out != 0 {
                         self.held_out
                     } else {
@@ -594,17 +603,33 @@ impl Transport {
                     };
                     if (self.hold_last || self.chasing)
                         && self.last_frame > 0
-                        && self.last_frame > base_out
+                        && self
+                            .current
+                            .as_ref()
+                            .is_some_and(|clip| clip.speed < 0.0 || self.last_frame > base_out)
                     {
+                        let reverse = self.current.as_ref().is_some_and(|clip| clip.speed < 0.0);
                         if self.held_out == 0 {
                             self.held_out = base_out;
                         }
-                        let grown = self.last_frame;
-                        if let Some(clip) = self.current.as_mut() {
-                            clip.out_frame = clip.out_frame.max(grown);
-                        }
-                        if let Some(clip) = self.list.last_mut() {
-                            clip.out_frame = clip.out_frame.max(grown);
+                        if reverse {
+                            // One frame per hold keeps the playhead at the new end on the
+                            // next output frame, so a reverse hold walks back one frame
+                            // per tick instead of jumping past the recording's start.
+                            if let Some(clip) = self.current.as_mut() {
+                                clip.out_frame = clip.out_frame.saturating_sub(1);
+                            }
+                            if let Some(clip) = self.list.last_mut() {
+                                clip.out_frame = clip.out_frame.saturating_sub(1);
+                            }
+                        } else {
+                            let grown = self.last_frame;
+                            if let Some(clip) = self.current.as_mut() {
+                                clip.out_frame = clip.out_frame.max(grown);
+                            }
+                            if let Some(clip) = self.list.last_mut() {
+                                clip.out_frame = clip.out_frame.max(grown);
+                            }
                         }
                         self.shown = None;
                         self.position = self.span();
@@ -999,6 +1024,109 @@ mod tests {
         assert!(
             !transport.is_playing(),
             "with no recorded frames past the cut it parks as before"
+        );
+    }
+
+    /// The hold test compares source frames, not the output-frame count: a slow
+    /// clip spends more output frames than the recording has source frames past
+    /// the cut, so a span-based test refused a hold the recording supports.
+    #[test]
+    fn holding_a_slow_clip_runs_on_past_its_out_point() {
+        let mut transport = Transport::new();
+        let mut slow = clip("a", 0, 10, ClipTransition::CUT);
+        slow.speed = 0.5;
+        transport.set_clip(slow.clone(), 0);
+        transport.set_playlist(vec![slow]);
+        // The head is three frames past the cut but far short of the 22 output
+        // frames the clip takes at half speed.
+        transport.note_recorded_frame(13);
+        transport.set_holding_last(true);
+        transport.set_playing(true);
+        for _ in 0..24 {
+            transport.step(1.0);
+        }
+        assert!(
+            transport.is_playing(),
+            "the recording is past the cut, so the clip must keep going"
+        );
+        assert_eq!(
+            transport.source_frame(),
+            13,
+            "the hold reaches the recording's newest frame"
+        );
+    }
+
+    /// The hold re-tests against the operator's out point, not the extended end,
+    /// or an extended clip parks one tick after it reached the recording edge.
+    #[test]
+    fn holding_the_last_clip_keeps_running_at_the_edge() {
+        let mut transport = Transport::new();
+        let a = clip("a", 0, 2, ClipTransition::CUT);
+        transport.set_clip(a.clone(), 0);
+        transport.set_playlist(vec![a]);
+        // The clip reached the edge; the recording is writing no new frames.
+        transport.note_recorded_frame(50);
+        transport.set_holding_last(true);
+        transport.set_playing(true);
+        for _ in 0..8 {
+            transport.step(1.0);
+        }
+        assert!(
+            transport.is_playing(),
+            "the clip follows the edge: it must not park one tick in"
+        );
+    }
+
+    /// The hold test compares source frames now. A clip played faster than the
+    /// recording walks more source frames per output frame, so its out point is
+    /// the boundary the recording has to pass, not the shorter span the output
+    /// frames count.
+    #[test]
+    fn holding_a_fast_clip_needs_the_head_past_its_out_point() {
+        let mut transport = Transport::new();
+        let mut fast = clip("a", 0, 10, ClipTransition::CUT);
+        fast.speed = 2.0;
+        transport.set_clip(fast.clone(), 0);
+        transport.set_playlist(vec![fast]);
+        // The head sat at frame 6: past the clip's six output frames but before its
+        // out point, so the recording has nothing beyond the cut to show.
+        transport.note_recorded_frame(6);
+        transport.set_holding_last(true);
+        transport.set_playing(true);
+        // The clip is 11 source frames at twice the speed: six output frames.
+        for _ in 0..8 {
+            transport.step(1.0);
+        }
+        assert!(
+            !transport.is_playing(),
+            "the recording never passed the out point, so the clip parks"
+        );
+    }
+
+    /// A reverse clip reaches its out point from the top, and its hold runs back
+    /// toward the recording's earliest frame instead of stopping at the cut.
+    #[test]
+    fn holding_a_reverse_clip_runs_back_past_its_out_point() {
+        let mut transport = Transport::new();
+        let mut reverse = clip("a", 600, 300, ClipTransition::CUT);
+        reverse.speed = -1.0;
+        transport.set_clip(reverse.clone(), 0);
+        transport.set_playlist(vec![reverse]);
+        transport.note_recorded_frame(700);
+        transport.set_holding_last(true);
+        transport.set_playing(true);
+        // The clip spans 301 source frames, one per output frame at full rate. The
+        // last step shows the cut and the advance past it applies the hold.
+        for _ in 0..301 {
+            transport.step(1.0);
+        }
+        assert_eq!(transport.source_frame(), 299, "one frame past the cut");
+        assert!(transport.is_playing(), "the hold keeps the clip going");
+        transport.step(1.0);
+        assert!(
+            transport.source_frame() < 299,
+            "the hold walks back one frame per tick: {}",
+            transport.source_frame()
         );
     }
 

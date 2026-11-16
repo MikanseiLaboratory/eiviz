@@ -1253,12 +1253,41 @@ enum ReplayTime {
         fps.den == 0 ? 60.0 : Double(fps.num) / Double(fps.den)
     }
 
+    /// A display has to stay inside whole-number precision, so rates beyond this are
+    /// not converted to a timecode at all.
+    static let rateDisplayLimit: Double = 1_000_000
+    /// The frame total a timecode may name. 999 hours at the display rate ceiling is
+    /// already far past any recording; capping it keeps the arithmetic checked.
+    static let maxDisplayFrames: Double = Double(UInt64(999) * 3600) * 1_000_000
+
+    /// The frame digits `FF` can carry at `rate`: what one second rounds up to. 59.94
+    /// shows frame numbers 00–59, i.e. the rounded 60, while 50 shows 00–49.
+    static func frameDigitsPerSecond(_ rate: Double) -> UInt64 {
+        rate <= 0 ? 1 : UInt64(rate.rounded(.awayFromZero))
+    }
+
+    /// The frame a second boundary lands on, at the real rate. Second 1 of 59.94 fps
+    /// starts at frame 60 (round(59.94)), not at 59 — this is what keeps the display
+    /// and the parser one rate apart.
+    static func secondsBoundary(_ seconds: UInt64, in rate: Double) -> UInt64? {
+        guard rate.isFinite, rate > 0, rate <= rateDisplayLimit else { return nil }
+        let frames = (Double(seconds) * rate).rounded()
+        guard frames.isFinite, frames >= 0, frames <= maxDisplayFrames else { return nil }
+        return UInt64(frames)
+    }
+
     /// HH:MM:SS:FF.
+    ///
+    /// The seconds part is the real rate, not the rounded one: counting a 59.94
+    /// recording at 60 would drift a second every few minutes, so hour:minute:second
+    /// comes from dividing the frame count by 59.94 and the `FF` digits are the frames
+    /// left inside that second. An exact 60 fps recording reads the same either way.
     static func timecode(_ frames: UInt64, _ fps: (num: UInt32, den: UInt32)) -> String {
-        let perSecond = Int(rate(fps).rounded())
-        guard perSecond > 0 else { return "\(frames)" }
-        let seconds = frames / UInt64(perSecond)
-        let frame = frames % UInt64(perSecond)
+        let rate = rate(fps)
+        guard rate.isFinite, rate > 0, rate <= rateDisplayLimit else { return "\(frames)" }
+        let seconds = UInt64(Double(frames) / rate)
+        guard let boundary = secondsBoundary(seconds, in: rate) else { return "\(frames)" }
+        let frame = frames > boundary ? frames - boundary : 0
         return String(
             format: "%02llu:%02llu:%02llu:%02llu",
             seconds / 3600,

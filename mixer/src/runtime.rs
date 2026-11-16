@@ -576,6 +576,11 @@ impl MixerPort for ProcessMixer {
             .map_err(crate::replay::control_error)
     }
 
+    fn replay_set_protect_from(&mut self, recording: &str, frame: u64) -> ControlResult<()> {
+        crate::replay::engine().set_protect_from(recording, frame);
+        Ok(())
+    }
+
     fn replay_jump_to_now(&mut self, channel: u32) -> ControlResult<()> {
         crate::replay::engine()
             .jump_to_now(channel)

@@ -769,6 +769,13 @@ pub struct MixerStats {
     pub compose_vram_bytes: u64,
     pub delay_vram_bytes: u64,
     pub surface_lost: u64,
+    /// Composed frames since start, and frames the present or the master tick
+    /// dropped. Appended after the first layout: a host built against the smaller
+    /// struct never reads them. The skip rate between two samples is what says
+    /// "the show missed frames"; the raw render time can carry a vsync wait that
+    /// every Fifo present pays even while things are healthy.
+    pub frames_rendered: u64,
+    pub frames_skipped: u64,
 }
 
 #[repr(C)]

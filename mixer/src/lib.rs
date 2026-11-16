@@ -761,7 +761,7 @@ pub(crate) fn with_uploads<T>(body: impl FnOnce(&mut UploadStore) -> T) -> Resul
 }
 
 pub(crate) fn live_snapshot() -> crate::vmix_xml::LiveSnapshot {
-    with_mixer(|mixer| {
+    let mut snap = with_mixer(|mixer| {
         let shared = mixer.shared.lock_or_recover();
         let mut snap = crate::vmix_xml::LiveSnapshot::default();
         for (id, unit) in &shared.units {
@@ -769,7 +769,27 @@ pub(crate) fn live_snapshot() -> crate::vmix_xml::LiveSnapshot {
         }
         snap
     })
-    .unwrap_or_default()
+    .unwrap_or_default();
+    // The replay engine sits outside the mixer instance, so its live answer is
+    // layered on whatever the mixer itself reported.
+    let engine = replay::engine();
+    snap.replay.recording = engine.is_recording();
+    let follows = engine.live_follows();
+    let mut channels = [crate::abi::MixerReplayChannelState::default(); 4];
+    let count = engine.copy_channels(&mut channels) as usize;
+    for state in &channels[..count] {
+        snap.replay.channels.insert(
+            state.channel_index,
+            crate::vmix_xml::ReplayChannelLive {
+                playing: state.playing != 0,
+                live: follows.get(&state.channel_index).copied().unwrap_or(false),
+                speed_milli: state.speed_milli,
+                position_frame: state.position_frame,
+                angle_id: state.angle_id,
+            },
+        );
+    }
+    snap
 }
 
 pub(crate) fn live_unit(unit_id: u64) -> Option<crate::vmix_xml::UnitLive> {
@@ -4430,15 +4450,19 @@ fn stream_encoder_add_ffi(
         let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
         return ERR_IO;
     };
+    if encoder > eiviz_pro_api::STREAM_ENCODER_VIDEOTOOLBOX {
+        let message = "video encoder is not available";
+        crate::diag::error(&format!("stream encoder id={encoder_id}: {message}"));
+        let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
+        return ERR_INVALID_ARGUMENT;
+    }
     let encoder_kind = match encoder {
-        0 => eiviz_pro_api::VideoEncoderKind::OpenH264,
-        1 => eiviz_pro_api::VideoEncoderKind::VideoToolbox,
-        _ => {
-            let message = "video encoder is not available";
-            crate::diag::error(&format!("stream encoder id={encoder_id}: {message}"));
-            let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
-            return ERR_INVALID_ARGUMENT;
-        }
+        // The codes are the module's StreamEncoder codes: passing the ask through is
+        // what makes VideoToolbox reachable, and the module refuses a code it cannot
+        // build, so an unusable ask is refused at stream start, not silently
+        // switched to OpenH264.
+        eiviz_pro_api::STREAM_ENCODER_VIDEOTOOLBOX => eiviz_pro_api::VideoEncoderKind::VideoToolbox,
+        _ => eiviz_pro_api::VideoEncoderKind::OpenH264,
     };
     let started = backend.start_stream(&eiviz_pro_api::StreamEncodeConfig {
         video_bitrate: if video_bitrate == 0 {
@@ -7256,6 +7280,8 @@ unsafe fn mixer_copy_stats_ffi(out: *mut MixerStats) -> i32 {
                 compose_vram_bytes: tel.last_compose_vram,
                 delay_vram_bytes: tel.last_delay_vram,
                 surface_lost: crate::diag::surface_lost(),
+                frames_rendered: crate::diag::frames_rendered(),
+                frames_skipped: crate::diag::render_skipped(),
             };
         }
         OK

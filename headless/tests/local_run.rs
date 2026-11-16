@@ -5,12 +5,16 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// The renderer this test asks for explicitly. Dx12 only exists on Windows, Metal only on
+/// macOS and Vulkan on the rest, so a fixed name fails everywhere but one platform.
+#[cfg(target_os = "windows")]
+const RENDERER: &str = "dx12";
+#[cfg(target_os = "macos")]
+const RENDERER: &str = "metal";
+#[cfg(all(unix, not(target_os = "macos")))]
+const RENDERER: &str = "vulkan";
+
 fn run_until_ready(exe: &str, session: &Path, bind: &str) -> String {
-    let renderer = if cfg!(target_os = "macos") {
-        "metal"
-    } else {
-        "dx12"
-    };
     let mut child = Command::new(exe)
         .args([
             "run",
@@ -19,7 +23,7 @@ fn run_until_ready(exe: &str, session: &Path, bind: &str) -> String {
             "--bind",
             bind,
             "--renderer",
-            renderer,
+            RENDERER,
         ])
         .env("EIVIZ_PLAN", "professional")
         .stderr(Stdio::piped())

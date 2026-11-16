@@ -143,6 +143,9 @@ final class MixerController: ObservableObject {
         session.units.first { $0.id == selectedUnitId } ?? session.units[0]
     }
 
+    /// The last render counters, so tick can compute the skip rate between samples.
+    var lastRenderCounters = (rendered: UInt64(0), skipped: UInt64(0))
+
     private var activity: NSObjectProtocol?
 
     private func beginActivity() {
@@ -233,6 +236,10 @@ final class MixerController: ObservableObject {
         syncedSessionRevision = MixerFFI.sessionRevision()
         updateStatus()
         openPendingSession()
+        // The Pro module finished loading (or refused) after the scene's onAppear drew
+        // the title, which at that moment had only the plan the empty capability probe
+        // reported. Draw it again now that the plan is known.
+        AppChrome.applyTitle()
     }
 
     private func prepareProModule() -> Bool {
@@ -696,6 +703,9 @@ final class MixerController: ObservableObject {
 
     func publishSession() {
         if isRemote { return }
+        // New surfaces read the cap from here, so a master-format change in the
+        // settings reaches the flip size without needing to re-create controllers.
+        EivizSurfaceCap.shared.update(width: session.settings.defaultWidth, height: session.settings.defaultHeight)
         replaceRuntime()
     }
 
@@ -749,14 +759,29 @@ final class MixerController: ObservableObject {
         return true
     }
 
-    /// The core normalizes the replay document on replace. The host keeps that copy.
-    private func adoptCanonicalReplay() {
-        var buffer = [UInt8](repeating: 0, count: 8 * 1024 * 1024)
-        let n = buffer.withUnsafeMutableBufferPointer { ptr in
-            mixer_copy_snapshot(ptr.baseAddress, ptr.count)
+    /// Applies one mutation without turning a refusal into an alert. A delete of an
+    /// input the control document has not been handed yet is refused with "not found",
+    /// which is the publish that follows fixing, not the operator's error to read.
+    @discardableResult
+    func mutateLocalQuiet(_ mutation: String) -> Bool {
+        if isRemote { return false }
+        guard let data = mutation.data(using: .utf8) else { return false }
+        let code = data.withUnsafeBytes { ptr in
+            mixer_session_mutate(ptr.bindMemory(to: UInt8.self).baseAddress, data.count)
         }
-        guard n > 0,
-              let text = String(bytes: buffer.prefix(Int(n)), encoding: .utf8),
+        guard code == EIVIZ_OK else { return false }
+        adoptCanonicalReplay()
+        return true
+    }
+
+    /// The core normalizes the replay document on replace. The host keeps that copy.
+    ///
+    /// The snapshot is copied into the one buffer `MixerFFI.SessionSnapshotCopy`
+    /// keeps, sized up only when the core says it does not fit, instead of zeroing
+    /// eight megabytes before every publish.
+    private func adoptCanonicalReplay() {
+        guard let text = MixerFFI.SessionSnapshotCopy.json(),
+              !text.isEmpty,
               let data = text.data(using: .utf8),
               let root = try? JSONDecoder().decode(JSONValue.self, from: data),
               case .object(let object) = root,

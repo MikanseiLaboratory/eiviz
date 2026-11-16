@@ -47,8 +47,12 @@ FUNCTION Cut Input=3
 | `ReplayCue` | `Channel`, `Value` | チャンネルにクリップをキューします。`Value`はクリップのUIDで、省略または空ならそのチャンネルのプレイリストの最新クリップをキューします。 |
 | `ReplayPlay` | `Channel`, `Value` | キュー中のクリップを再生します。`Value`は等速を1とした倍率です（既定`1`、`0.5`で半速）。 |
 | `ReplayPause` | `Channel` | 現在の速度を保ったまま一時停止します。 |
-| `ReplayChangeSpeed` | `Channel`, `Value` | クリップを読み直さずに速度を変更して再生します。 |
+| `ReplayChangeSpeed` | `Channel`, `Value` | クリップを読み直さずに速度を変更して再生します。**vMixと挙動が異なります**: vMixは現在の速度に`Value`を加減算しますが、eivizは`Value`を速度として直接設定します。絶対値として速度を指定するパネルはそのままで動きます。段階的に速度を変えるパネルは、パネル側で差分を計算して`SetRateSlowMotion`を使ってください。 |
+| `SetRateSlowMotion` | `Channel`, `Value` | vMix準拠の絶対スロー速度指定（`Value` 0〜1）。`ReplayPlay`と同じ動作で、`0.5`が半速です。 |
+| `ReplaySetSpeed` | `Channel`, `Value` | `SetRateSlowMotion`の別名です。 |
 | `ReplayJumpToNow` | `Channel` | チャンネルを録画位置（最新）に戻します。 |
+
+XMLドキュメントでは、Replay入力にvMixと同じ`<replay>`ノードを出力します（`recording`、`live`、`channelMode`、`events`、`cameraA`/`cameraB`、`speedA`/`speedB`、`timecodeA`/`timecodeB`）。セッションの1つ目のReplay入力がチャンネルA、2つ目がBで、各チャンネルのトランスポートの実測値です。Bitfocus Companion や vMix Stream Deck プラグインは、この属性をフィードバックとして読み取ります。
 
 ### リプレイの実行例
 

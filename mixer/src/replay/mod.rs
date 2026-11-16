@@ -154,8 +154,12 @@ struct AudioInbox {
 }
 
 impl AudioInbox {
-    /// Blocks that may wait before the oldest is dropped. Audio is written in
-    /// order, so a stalled disk loses the tail rather than corrupting the head.
+    /// Blocks that may wait in front of the write. Audio is written in arrival
+    /// order: throwing away the block at the head when the queue is full would
+    /// punch a permanent ten-millisecond hole into the recording's sound, which
+    /// nothing can fill later, so a full inbox refuses the block that just
+    /// arrived instead and keeps the timeline contiguous. The scheduler counts
+    /// every refusal (`audio_drops`).
     const CAPACITY: usize = 32;
 
     fn new() -> Self {
@@ -168,9 +172,8 @@ impl AudioInbox {
     fn offer(&self, job: AudioJob) -> bool {
         let mut queue = self.queue.lock().unwrap_or_else(|error| error.into_inner());
         if queue.len() >= Self::CAPACITY {
-            queue.pop_front();
-            queue.push_back(job);
-            self.wake.notify_one();
+            // Refuse, do not evict: the head block is the one the writer reads
+            // next, and it has to stay where it is.
             return false;
         }
         queue.push_back(job);
@@ -216,6 +219,16 @@ impl Inbox {
 
     fn set_capacity(&self, cap: usize) {
         self.cap.store(cap.max(1), Ordering::Relaxed);
+    }
+
+    /// Drops every waiting frame. Called when a recording starts, so frames the
+    /// previous recording (or its failed write) left in the queues cannot be
+    /// numbered onto the new recording's timeline.
+    fn clear(&self) {
+        self.queues
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
     }
 
     fn offer(&self, frame: RecordFrame) -> bool {
@@ -330,18 +343,18 @@ struct Inner {
     recording: bool,
     uuid: String,
     mark_in: Option<u64>,
-    /// Set once the first frame of a recording arrives. Same meaning as `first_frame`
-    /// being non-zero, but a recording can legitimately start at frame 0, so a flag is kept.
-    has_frames: std::sync::atomic::AtomicBool,
-    last_frame: AtomicU64,
-    first_frame: AtomicU64,
-    /// Per-angle readback losses. A counter, so it does not need the mutex.
-    dropped_readback: Mutex<HashMap<u32, u64>>,
-    /// Frames the readback handed over while recording.
-    offered: AtomicU64,
-    /// Frames handed to the readback while recording.
-    pushed: AtomicU64,
-    recent_drops: AtomicU32,
+    /// Timeline cues and playlists as shared slices, so the playout tick clones two
+    /// reference counts instead of two full Vecs under the engine lock every frame.
+    /// Rebuilt in `configure`, the only place `config` changes outside `record`.
+    timeline_cues: Arc<[eiviz_control::session::replay::ReplayTimelineCueDto]>,
+    playlists: Arc<[eiviz_control::session::replay::PlaylistDto]>,
+    /// Where the health line is waiting to publish while the control service was
+    /// busy with a command. The next health wake retried the publish once, so the
+    /// lock contention loses nothing.
+    health_owed: bool,
+    /// Instant `recent_drops` was zeroed at, for the health loop's rate window.
+    /// Touched on the health thread, which the engine lock still keeps ordered
+    /// against `record`'s reset.
     recent_at: Instant,
     epoch: Instant,
     write_drop_seen: u64,
@@ -367,11 +380,6 @@ struct Inner {
     /// Wall clock (milliseconds since the epoch) at the recording start: the time of
     /// frame 0, which is what the deck shows as the recording's timecode.
     started_unix_ms: u64,
-    /// The render frame the recording began on. A recording numbers its frames from
-    /// its own first frame, so a clip's frame numbers match the segments the store
-    /// wrote; the render counter keeps running across recordings.
-    /// `u64::MAX` until the recording's first frame names it.
-    started_frame: AtomicU64,
     /// Why record and play are refused while the document stays loaded.
     /// Community and a missing Pro module set this. A plan that simply has too
     /// many channels refuses the document instead.
@@ -392,6 +400,21 @@ pub struct ReplayEngine {
     /// Bumped when a recording is attached for playback, so a channel drops the
     /// frames it decoded ahead from the recording that is no longer its own.
     playback_generation: AtomicU64,
+    /// Recording frame bookkeeping. The copy pool calls `offer_frame` once per angle
+    /// per frame from up to twelve threads while the render thread and the deck's
+    /// status poll share the engine mutex, and a recording whose readback held that
+    /// mutex took the deck seconds to answer a click. Every field here is a counter
+    /// or a high-water mark, so they are read and written with atomics outside the
+    /// lock; the per-angle readback losses keep their own small mutex.
+    started_frame: AtomicU64,
+    has_frames: std::sync::atomic::AtomicBool,
+    first_frame: AtomicU64,
+    last_frame: AtomicU64,
+    offered: AtomicU64,
+    pushed: AtomicU64,
+    recent_drops: AtomicU32,
+    /// Per-angle readback losses. A counter, so it does not need the engine mutex.
+    dropped_readback: Mutex<HashMap<u32, u64>>,
     stop_record: Arc<AtomicBool>,
     stop_workers: Arc<AtomicBool>,
     workers: Mutex<Vec<JoinHandle<()>>>,
@@ -399,6 +422,12 @@ pub struct ReplayEngine {
     /// the mixer generation: New/Open creates a new wgpu::Instance, and IDs from
     /// the previous instance cannot be resolved by the new renderer.
     gpu: Mutex<Option<GpuBinding>>,
+    /// Bumped on every effective [`ReplayEngine::set_gpu`], so `1` after the first
+    /// render loop armed the engine and `2` after its first replacement. In-flight
+    /// work captures the value it started with and re-checks it before it publishes
+    /// anything built on the device, because a replaced device drops everything the
+    /// previous one cached.
+    gpu_generation: AtomicU64,
     /// Whether playout may decode on the GPU. The binding is generation-checked,
     /// so New/Open no longer needs to disable vmx's Metal decoder on macOS.
     gpu_decode: AtomicBool,
@@ -409,6 +438,11 @@ pub struct ReplayEngine {
     warming: AtomicBool,
 }
 
+/// A wgpu handle pair the render loop handed over, tagged with the mixer
+/// generation it belongs to. `Clone` follows the handles: wgpu 30's device and
+/// queue clones are cheap share-alikes, so a test can read the slot without
+/// taking the binding away from the engine.
+#[derive(Clone)]
 struct GpuBinding {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -478,13 +512,9 @@ impl ReplayEngine {
                 recording: false,
                 uuid: String::new(),
                 mark_in: None,
-                has_frames: std::sync::atomic::AtomicBool::new(false),
-                last_frame: std::sync::atomic::AtomicU64::new(0),
-                first_frame: std::sync::atomic::AtomicU64::new(0),
-                dropped_readback: Mutex::new(HashMap::new()),
-                offered: std::sync::atomic::AtomicU64::new(0),
-                pushed: std::sync::atomic::AtomicU64::new(0),
-                recent_drops: std::sync::atomic::AtomicU32::new(0),
+                timeline_cues: Arc::from(Vec::new()),
+                playlists: Arc::from(Vec::new()),
+                health_owed: false,
                 recent_at: Instant::now(),
                 epoch: Instant::now(),
                 write_drop_seen: 0,
@@ -502,7 +532,6 @@ impl ReplayEngine {
                 health: HealthMemory::default(),
                 started_at: None,
                 started_unix_ms: 0,
-                started_frame: std::sync::atomic::AtomicU64::new(u64::MAX),
                 operations_reason: None,
             }),
             inbox: Arc::new(Inbox::new()),
@@ -511,10 +540,19 @@ impl ReplayEngine {
             record_store: Mutex::new(None),
             playback_stores: Mutex::new(HashMap::new()),
             playback_generation: AtomicU64::new(0),
+            started_frame: AtomicU64::new(u64::MAX),
+            has_frames: std::sync::atomic::AtomicBool::new(false),
+            first_frame: AtomicU64::new(0),
+            last_frame: AtomicU64::new(0),
+            offered: AtomicU64::new(0),
+            pushed: AtomicU64::new(0),
+            recent_drops: AtomicU32::new(0),
+            dropped_readback: Mutex::new(HashMap::new()),
             stop_record: Arc::new(AtomicBool::new(true)),
             stop_workers: Arc::new(AtomicBool::new(false)),
             workers: Mutex::new(Vec::new()),
             gpu: Mutex::new(None),
+            gpu_generation: AtomicU64::new(0),
             gpu_decode: AtomicBool::new(true),
             prepared: Mutex::new(HashMap::new()),
             warming: AtomicBool::new(false),
@@ -527,49 +565,50 @@ impl ReplayEngine {
             vmx::ColorSimdPath::detect(),
             profile::is_enabled(),
         ));
-        engine.spawn_workers();
         engine
     }
 
-    fn spawn_workers(&self) {
-        let inbox = Arc::clone(&self.inbox);
-        let stop = Arc::clone(&self.stop_record);
-        let store_slot = Arc::new(());
-        let _ = store_slot;
-        // Workers are started on record/configure so the engine can be created
-        // before the control service exists.
-        let _ = (inbox, stop);
-    }
-
     /// Remembers the render device so a channel can decode a packet on the GPU.
-    /// Called once, when the render loop starts.
+    /// Called when the render loop starts.
+    ///
+    /// A call always replaces what was there before: each render loop owns a wgpu
+    /// device of its own, so the previous slot's device is a bygone mixer generation.
+    /// When a swap happens, everything built on the old device is dropped here — the
+    /// warmed decoders and the encoder lanes/rings — because using any of their
+    /// textures with the new render loop panics inside wgpu's storage lookup. The
+    /// playout generation moves too, so pictures decoded ahead on the old device are
+    /// discarded instead of reaching the composer.
     pub fn set_gpu(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let generation = crate::lifecycle::generation();
-        {
+        let replaced = {
             let mut slot = self.gpu.lock_or_recover();
-            if slot
-                .as_ref()
-                .is_some_and(|binding| binding.generation == generation)
-            {
-                return;
-            }
+            let replaced = slot.is_some();
             // Pipelines, decoders and encoder rings built on the old device are
             // tied to the old wgpu::Instance. Drop them before warming again.
             self.prepared.lock_or_recover().clear();
             self.warming.store(false, Ordering::Release);
-            let replaced = slot.is_some();
+            // The playout generation moves even without a mixer generation bump: a
+            // device replacement drops everything decoded ahead on the old one.
+            if replaced {
+                self.playback_generation.fetch_add(1, Ordering::AcqRel);
+            }
             *slot = Some(GpuBinding {
                 device: device.clone(),
                 queue: queue.clone(),
                 generation,
             });
-            if replaced {
-                crate::diag::info(&format!(
-                    "replay GPU rebinding to mixer generation {generation}"
-                ));
-            }
+            replaced
+        };
+        if replaced {
+            crate::diag::info(&format!(
+                "replay GPU rebinding to mixer generation {generation}; cleared decoders and encode rings"
+            ));
         }
-        crate::replay::gpu_encode::reset();
+        // The lanes hold device clones of their own, so a first bind still has
+        // nothing to drop but the rings must never outlive the device they were
+        // copied from.
+        crate::replay::gpu_encode::reset_device();
+        self.gpu_generation.fetch_add(1, Ordering::AcqRel);
         if self.gpu_decode.load(Ordering::Relaxed) {
             self.warm_decoders();
         }
@@ -580,6 +619,13 @@ impl ReplayEngine {
         let slot = self.gpu.lock_or_recover();
         let binding = slot.as_ref()?;
         (binding.generation == generation).then(|| (binding.device.clone(), binding.queue.clone()))
+    }
+
+    /// Monotonic count of [`ReplayEngine::set_gpu`] calls (`0` before the first render
+    /// loop ever reached this engine). Exposed so tests can watch a replaced device
+    /// drop the caches it left behind.
+    pub fn gpu_generation(&self) -> u64 {
+        self.gpu_generation.load(Ordering::Acquire)
     }
 
     /// Builds each channel's GPU decoder before playout needs it. The first vmx
@@ -628,12 +674,18 @@ impl ReplayEngine {
             self.warming.store(false, Ordering::Release);
             return;
         }
+        let generation = self.gpu_generation.load(Ordering::Acquire);
         let _ = thread::Builder::new()
             .name("eiviz-replay-warm".into())
             .spawn(move || {
                 let engine = engine();
                 for index in channels {
-                    if !engine.warming.load(Ordering::Relaxed) {
+                    // A device replacement (a new mixer generation) drops the warmed
+                    // decoders mid-build; publishing one built on the dropped device
+                    // would hand the new render loop a texture from a foreign hub.
+                    if !engine.warming.load(Ordering::Relaxed)
+                        || engine.gpu_generation.load(Ordering::Acquire) != generation
+                    {
                         break;
                     }
                     let profile_vmx = match profile {
@@ -673,21 +725,29 @@ impl ReplayEngine {
                         &device,
                         wgpu::TextureFormat::Bgra8Unorm,
                     ));
-                    engine
+                    let mut prepared = engine
                         .prepared
                         .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .insert(
-                            index,
-                            PreparedDecoder {
-                                width,
-                                height,
-                                profile,
-                                codec,
-                                secondary,
-                                transition,
-                            },
-                        );
+                        .unwrap_or_else(|error| error.into_inner());
+                    // A device replacement clears the prepared map while this thread
+                    // works; publishing an entry built on the dropped device after
+                    // that clear would hand the new render loop a texture from a
+                    // foreign hub, so the insert re-checks the generation under the
+                    // same lock the clear took.
+                    if engine.gpu_generation.load(Ordering::Acquire) != generation {
+                        break;
+                    }
+                    prepared.insert(
+                        index,
+                        PreparedDecoder {
+                            width,
+                            height,
+                            profile,
+                            codec,
+                            secondary,
+                            transition,
+                        },
+                    );
                 }
                 engine.warming.store(false, Ordering::Release);
                 crate::diag::info("replay GPU decoders warmed");
@@ -726,10 +786,15 @@ impl ReplayEngine {
             self.stop(REPLAY_STOP_USER);
             // Replay is gone from the project, so the recorded material goes with it.
             self.release_store();
+            // Attached recordings are closed too: their sessions are gone and the
+            // stores would otherwise stay open until the process ended.
+            self.reap_playback_stores(&std::collections::HashSet::new());
             let mut inner = self.lock();
             inner.config = ReplayDto::default();
             inner.operations_reason = None;
             inner.channels.clear();
+            inner.timeline_cues = Arc::from(Vec::new());
+            inner.playlists = Arc::from(Vec::new());
             // Removing Replay leaves nothing to report, so the state goes back to
             // idle instead of holding the last recording's numbers.
             inner.stats.state = REPLAY_STATE_IDLE;
@@ -794,6 +859,8 @@ impl ReplayEngine {
         // A recording in progress keeps its own store and is never replaced.
         {
             let referenced = referenced_recordings(&dto);
+            let keep: std::collections::HashSet<String> =
+                referenced.iter().map(|(uuid, _)| uuid.clone()).collect();
             let recording_in_progress = {
                 let inner = self.lock();
                 (inner.recording, inner.uuid.clone())
@@ -839,6 +906,14 @@ impl ReplayEngine {
                     None => crate::diag::error("replay attach: no module is loaded"),
                 }
             }
+            // A recording the session no longer references releases its store: the
+            // entry outlived the clips that used it, and only a reap keeps it from
+            // staying open to the end of the process.
+            self.reap_playback_stores(&keep);
+            // Rings the dropped angles would have kept reserved go with them.
+            crate::replay::gpu_encode::retain_angles(
+                &dto.angles.iter().map(|angle| angle.id).collect::<Vec<_>>(),
+            );
         }
         let mut inner = self.lock();
         let mut old = std::mem::take(&mut inner.channels);
@@ -878,6 +953,10 @@ impl ReplayEngine {
         }
         let mut inner = self.lock();
         inner.operations_reason = operations_reason;
+        // The cue tables are shared slices so the playout tick clones two reference
+        // counts instead of two full Vecs under the engine lock every frame.
+        inner.timeline_cues = Arc::from(dto.timeline_cues.clone());
+        inner.playlists = Arc::from(dto.playlists.clone());
         inner.config = dto;
         inner.targets_cache = None;
         inner.playlist_revision = inner.playlist_revision.wrapping_add(1);
@@ -1003,6 +1082,9 @@ impl ReplayEngine {
         if let Some(reason) = self.lock().operations_reason.clone() {
             return Err(ReplayFailure::plan(reason));
         }
+        // The recording's id comes first: the protect boundary is computed from the
+        // clips and events that name THIS recording, and the uuid is what names it.
+        let uuid = format!("rec-{}", uuid_stamp());
         let (
             paths,
             width,
@@ -1040,16 +1122,21 @@ impl ReplayEngine {
                 paths.push(storage.path.clone());
             }
             // Anything a clip or a protected event still points at must survive an
-            // overwrite, so the module learns the earliest such frame.
+            // overwrite, so the module learns the earliest such frame. Only this
+            // recording's own timeline counts: an earlier recording's clips are not
+            // frames of the recording being opened, and mixing them protected every
+            // future recording beyond its own earliest clip.
             let mut guard = u64::MAX;
             for event in &inner.config.events {
-                if event.protected {
+                if event.recording_uuid == uuid && event.protected {
                     guard = guard.min(event.in_frame);
                 }
             }
             for list in &inner.config.playlists {
                 for clip in &list.clips {
-                    guard = guard.min(clip.in_frame);
+                    if clip.recording_uuid == uuid {
+                        guard = guard.min(clip.in_frame);
+                    }
                 }
             }
             (
@@ -1163,7 +1250,6 @@ impl ReplayEngine {
                 "not enough free space: {free} bytes free, {reserve} bytes reserved"
             )));
         }
-        let uuid = format!("rec-{}", uuid_stamp());
         let remembered = angles.clone();
         let backend = crate::pro::module()
             .replay()
@@ -1232,7 +1318,23 @@ impl ReplayEngine {
         // A new recording starts a new waveform and a new audio tail.
         inner.peaks.clear();
         inner.angle_gpu_dropped.clear();
+        // Readback losses belong to the recording they happened on: a counter
+        // that keeps the last recording's drops would let a healthy take
+        // inherit a bad health line for hours.
+        self.dropped_readback
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
         self.audio_inbox.clear();
+        // Frames the last recording left behind are not this recording's: they
+        // are numbered against the old timeline and would be stored under the
+        // new one. The written counters are per recording too, so the deck does
+        // not show the previous recording's totals until the new one overtakes
+        // them.
+        self.inbox.clear();
+        inner.stats.frames_written = 0;
+        inner.stats.mark_in_valid = 0;
+        inner.angle_written.clear();
         inner.width = width;
         inner.height = height;
         inner.fps_num = fps_num;
@@ -1242,13 +1344,15 @@ impl ReplayEngine {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|elapsed| elapsed.as_millis() as u64)
             .unwrap_or(0);
-        inner.first_frame.store(0, Ordering::Relaxed);
-        inner.last_frame.store(0, Ordering::Relaxed);
-        inner.has_frames.store(false, Ordering::Relaxed);
-        inner.offered.store(0, Ordering::Relaxed);
-        inner.pushed.store(0, Ordering::Relaxed);
+        // The frame bookkeeping lives next to the store, not behind the engine
+        // lock, so a recording start resets it directly.
+        self.first_frame.store(0, Ordering::Relaxed);
+        self.last_frame.store(0, Ordering::Relaxed);
+        self.has_frames.store(false, Ordering::Relaxed);
+        self.offered.store(0, Ordering::Relaxed);
+        self.pushed.store(0, Ordering::Relaxed);
         // The first frame this recording sees becomes its frame 0.
-        inner.started_frame.store(u64::MAX, Ordering::Relaxed);
+        self.started_frame.store(u64::MAX, Ordering::Relaxed);
         inner.stats.state = REPLAY_STATE_RECORDING;
         inner.stats.stop_reason = REPLAY_STOP_NONE;
         inner.stats.remaining_is_estimate = 1;
@@ -1298,9 +1402,50 @@ impl ReplayEngine {
         }
     }
 
+    /// Moves the retention protection boundary of one recording to `frame`.
+    ///
+    /// The session owns the decision (which clips and events still hold the
+    /// recording); the mixer only has to carry it to the store that recorded it,
+    /// which is the record store while the recording is open and the play store
+    /// once it is detached. A recording the engine has no store for is skipped:
+    /// nothing it owns can be reclaimed anyway. The store itself ignores the
+    /// call when the retention is not `RETENTION_PROTECT`.
+    pub fn set_protect_from(&self, recording_uuid: &str, frame: u64) {
+        let recording_uuid = recording_uuid.trim();
+        if recording_uuid.is_empty() {
+            return;
+        }
+        let store = {
+            let is_record_store = {
+                let inner = self.lock();
+                inner.uuid == recording_uuid
+            };
+            if is_record_store {
+                self.record_store
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .clone()
+            } else {
+                self.playback_stores
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .get(recording_uuid)
+                    .cloned()
+            }
+        };
+        let Some(store) = store else {
+            return;
+        };
+        if let Ok(mut store) = store.lock() {
+            let _ = store.set_protect_from(frame);
+        }
+    }
+
     pub fn shutdown(&self) {
         self.stop(REPLAY_STOP_USER);
         self.release_store();
+        // Every play store closes with the mixer: nothing survives the process.
+        self.reap_playback_stores(&std::collections::HashSet::new());
         self.stop_workers.store(true, Ordering::Relaxed);
         self.inbox.wake.notify_all();
         let mut workers = self
@@ -1428,14 +1573,14 @@ impl ReplayEngine {
         payload: &[u8],
     ) -> bool {
         let (width, height, fps_num, fps_den, frame_index) = {
-            let mut inner = self.lock();
+            let inner = self.lock();
             if !inner.recording {
                 return false;
             }
             // A recording numbers frames from its own start, like the readback path.
-            let frame_index = match inner.started_frame.load(Ordering::Relaxed) {
+            let frame_index = match self.started_frame.load(Ordering::Relaxed) {
                 u64::MAX => {
-                    inner.started_frame.store(frame_index, Ordering::Relaxed);
+                    self.started_frame.store(frame_index, Ordering::Relaxed);
                     0
                 }
                 start => frame_index.saturating_sub(start),
@@ -1474,11 +1619,13 @@ impl ReplayEngine {
                 let mut inner = self.lock();
                 *inner.angle_written.entry(angle_id).or_insert(0) += 1;
                 inner.stats.frames_written = inner.stats.frames_written.saturating_add(1);
-                if !inner.has_frames.swap(true, Ordering::Relaxed) {
-                    inner.first_frame.store(frame_index, Ordering::Relaxed);
+                // The frame bookkeeping is lock-free; only the written counts needed
+                // the engine.
+                if !self.has_frames.swap(true, Ordering::Relaxed) {
+                    self.first_frame.store(frame_index, Ordering::Relaxed);
                 }
-                inner.last_frame.fetch_max(frame_index, Ordering::Relaxed);
-                inner.stats.recording_frame = inner.last_frame.load(Ordering::Relaxed);
+                self.last_frame.fetch_max(frame_index, Ordering::Relaxed);
+                inner.stats.recording_frame = self.last_frame.load(Ordering::Relaxed);
                 inner.stats.last_frame = inner.stats.recording_frame;
                 true
             }
@@ -1517,11 +1664,10 @@ impl ReplayEngine {
         // mutex in the way the deck took up to three seconds to answer a click while twelve
         // angles were recording. Every field below is a counter or a high-water mark, so it
         // is recorded with atomics instead.
-        let inner = self.lock();
-        let start = inner.started_frame.load(Ordering::Relaxed);
+        let start = self.started_frame.load(Ordering::Relaxed);
         let frame_index = if start == u64::MAX {
             // First frame of this recording names frame 0 for the store.
-            match inner.started_frame.compare_exchange(
+            match self.started_frame.compare_exchange(
                 u64::MAX,
                 frame_index,
                 Ordering::Relaxed,
@@ -1543,22 +1689,22 @@ impl ReplayEngine {
         });
         if !accepted {
             {
-                let mut drops = inner
+                let mut drops = self
                     .dropped_readback
                     .lock()
                     .unwrap_or_else(|error| error.into_inner());
                 *drops.entry(angle_id).or_default() += 1;
             }
-            inner.recent_drops.fetch_add(1, Ordering::Relaxed);
+            self.recent_drops.fetch_add(1, Ordering::Relaxed);
             return;
         }
-        if !inner.has_frames.swap(true, Ordering::Relaxed) {
-            inner.first_frame.store(frame_index, Ordering::Relaxed);
+        if !self.has_frames.swap(true, Ordering::Relaxed) {
+            self.first_frame.store(frame_index, Ordering::Relaxed);
         }
-        inner.last_frame.fetch_max(frame_index, Ordering::Relaxed);
+        self.last_frame.fetch_max(frame_index, Ordering::Relaxed);
         // Offered counts what the readback delivered; the encoder's own count comes from the
         // module, so the difference says where frames are lost.
-        inner.offered.fetch_add(1, Ordering::Relaxed);
+        self.offered.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Records that a GPU angle could not encode, so the health line can say why a
@@ -1570,25 +1716,26 @@ impl ReplayEngine {
 
     /// Counts a frame handed to the readback. `frames_offered` should match it.
     pub fn note_pushed(&self) {
-        self.lock().pushed.fetch_add(1, Ordering::Relaxed);
+        self.pushed.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Records readback frames that finished but were replaced before the disk
-    /// writer could take them.
+    /// writer could take them. The render thread answers this once per angle per
+    /// frame, so it counts with the same atomics `offer_frame` uses rather than
+    /// taking the engine mutex the deck's status poll needs.
     pub fn note_replaced(&self, angle_id: u32, count: u64) {
         if count == 0 {
             return;
         }
-        let inner = self.lock();
         {
-            let mut drops = inner
+            let mut drops = self
                 .dropped_readback
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             *drops.entry(angle_id).or_default() += count;
         }
         let capped = count.min(u64::from(u32::MAX)) as u32;
-        inner.recent_drops.fetch_add(capped, Ordering::Relaxed);
+        self.recent_drops.fetch_add(capped, Ordering::Relaxed);
     }
 
     /// Records a GPU angle that had no free encode ring texture. This is not a
@@ -1643,7 +1790,7 @@ impl ReplayEngine {
                 .map(|angle| (angle.id, angle.audio_unit_id))
                 .collect();
             // Angles that follow a mixing unit take that unit's program mix.
-            let frame_index = inner.last_frame.load(Ordering::Relaxed);
+            let frame_index = self.last_frame.load(Ordering::Relaxed);
             for (angle_id, unit_id) in targets {
                 let Some(pcm) = by_unit.get(&unit_id) else {
                     continue;
@@ -1823,7 +1970,7 @@ impl ReplayEngine {
     /// session can hold several recordings with the same angle id; this keeps a
     /// deck showing the waveform of the clip it is actually looking at.
     pub fn peak_count_recording(&self, uuid: &str, angle_id: u32) -> (u32, u32) {
-        let Some(store) = self.playback_store(uuid) else {
+        let Some((store, _)) = self.playback_store(uuid) else {
             return (0, 0);
         };
         store
@@ -1841,14 +1988,7 @@ impl ReplayEngine {
         min_out: &mut [f32],
         max_out: &mut [f32],
     ) -> u32 {
-        let Some(store) = self.playback_store(uuid) else {
-            return 0;
-        };
-        store
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .copy_peaks(angle_id, from, min_out, max_out)
-            .unwrap_or(0)
+        self.copy_peaks_of(uuid, angle_id, from, min_out, max_out)
     }
 
     /// Marks the in point on the recording timeline. Marking is a timeline
@@ -1857,12 +1997,12 @@ impl ReplayEngine {
     /// has nothing to mark.
     pub fn mark_in(&self) -> Result<u64, ReplayFailure> {
         let mut inner = self.lock();
-        if !inner.has_frames.load(Ordering::Relaxed) {
+        if !self.has_frames.load(Ordering::Relaxed) {
             return Err(ReplayFailure::io(
                 "there is nothing to mark yet: the recording has no frames",
             ));
         }
-        let frame = inner.last_frame.load(Ordering::Relaxed);
+        let frame = self.last_frame.load(Ordering::Relaxed);
         inner.mark_in = Some(frame);
         inner.stats.mark_in_frame = frame;
         inner.stats.mark_in_valid = 1;
@@ -1878,7 +2018,7 @@ impl ReplayEngine {
         let in_frame = inner
             .mark_in
             .ok_or_else(|| ReplayFailure::invalid("no Mark In is open"))?;
-        let out_frame = inner.last_frame.load(Ordering::Relaxed).max(in_frame);
+        let out_frame = self.last_frame.load(Ordering::Relaxed).max(in_frame);
         if out_frame <= in_frame {
             return Err(ReplayFailure::invalid(
                 "the mark is empty: nothing was recorded after Mark In",
@@ -1974,8 +2114,17 @@ impl ReplayEngine {
         Ok(true)
     }
 
-    /// The store a channel plays a given recording from.
-    fn playback_store(&self, uuid: &str) -> Option<Arc<Mutex<Box<dyn ReplayStore>>>> {
+    /// The store a channel plays a given recording from, with the id a decoder uses
+    /// to tell stores apart. The id has to come from the recording's uuid rather
+    /// than from the store's pointer: the allocator recycles addresses, and a
+    /// recycled address would let a new store inherit the previous one's
+    /// "no packets here" flag.
+    ///
+    /// Live playout and a clip from the recording still being written use the
+    /// record store. A clip that names another recording it could not open gets
+    /// nothing: reading the wrong recording would show a picture that belongs to a
+    /// different moment, which is worse than saying it is missing.
+    fn playback_store(&self, uuid: &str) -> Option<(Arc<Mutex<Box<dyn ReplayStore>>>, String)> {
         let uuid = uuid.trim();
         if !uuid.is_empty() {
             if let Some(store) = self
@@ -1984,28 +2133,71 @@ impl ReplayEngine {
                 .unwrap_or_else(|error| error.into_inner())
                 .get(uuid)
             {
-                return Some(Arc::clone(store));
+                return Some((Arc::clone(store), uuid.to_string()));
             }
-        }
-        // Live playout and a clip from the recording still being written use the
-        // record store. A clip that names another recording it could not open gets
-        // nothing: reading the wrong recording would show a picture that belongs to a
-        // different moment, which is worse than saying it is missing.
-        if !uuid.is_empty() {
             // The record store keeps the last recording open after Stop, so a clip from
             // it still plays without being attached a second time.
             let is_record_store = {
                 let inner = self.lock();
                 inner.uuid == uuid
             };
-            if !is_record_store {
-                return None;
+            if is_record_store {
+                return self
+                    .record_store
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .clone()
+                    .map(|store| (store, uuid.to_string()));
             }
+            return None;
         }
+        // Live playout follows whatever the recorder holds; the store is named by
+        // the recording it writes, or by nothing before the first recording.
         self.record_store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
+            .map(|store| {
+                let id = {
+                    let inner = self.lock();
+                    inner.uuid.clone()
+                };
+                (store, id)
+            })
+    }
+
+    /// Closes and removes the play stores the session no longer references.
+    ///
+    /// A store stays open for the whole process otherwise, holding its module
+    /// handle, its index and its own threads for recordings no clip names any
+    /// more. The recording in progress is never reaped: its store is the file
+    /// being written.
+    fn reap_playback_stores(&self, keep: &std::collections::HashSet<String>) {
+        let stale: Vec<(String, Arc<Mutex<Box<dyn ReplayStore>>>)> = {
+            let mut stores = self
+                .playback_stores
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let stale: Vec<(String, Arc<Mutex<Box<dyn ReplayStore>>>)> = stores
+                .iter()
+                .filter(|(uuid, _)| !keep.contains(uuid.as_str()))
+                .map(|(uuid, store)| (uuid.clone(), Arc::clone(store)))
+                .collect();
+            for (uuid, _) in stale.iter() {
+                stores.remove(uuid);
+            }
+            stale
+        };
+        if stale.is_empty() {
+            return;
+        }
+        self.playback_generation.fetch_add(1, Ordering::Relaxed);
+        for (uuid, store) in stale {
+            if let Ok(mut store) = store.lock() {
+                let _ = store.close();
+            }
+            crate::diag::info(&format!("replay attach: released {uuid}"));
+        }
     }
 
     pub fn cue(
@@ -2016,7 +2208,7 @@ impl ReplayEngine {
         out_frame: u64,
         recording_uuid: &str,
     ) -> Result<(), ReplayFailure> {
-        let mut inner = self.lock();
+        let inner = self.lock();
         if let Some(reason) = inner.operations_reason.clone() {
             return Err(ReplayFailure::plan(reason));
         }
@@ -2034,7 +2226,10 @@ impl ReplayEngine {
                 "the recording for this clip is not on any drive; the timecodes stay in the session",
             ));
         }
-        if let Some((first, _)) = self.angle_range(angle_id)
+        // The overwritten check reads the same recording the clip names: the
+        // recorder's own newest range said nothing about an older recording,
+        // whose segments had long moved on.
+        if let Some((first, _)) = self.angle_range_of(recording_uuid, angle_id)
             && eiviz_control::session::replay::clip_overwritten(out_frame, Some(first))
         {
             return Err(ReplayFailure::invalid(
@@ -2176,7 +2371,7 @@ impl ReplayEngine {
 
     pub fn jump_to_now(&self, channel: u32) -> Result<(), i32> {
         let mut inner = self.lock();
-        let frame = inner.last_frame.load(Ordering::Relaxed).saturating_sub(3);
+        let frame = self.last_frame.load(Ordering::Relaxed).saturating_sub(3);
         let angle = inner
             .config
             .angles
@@ -2225,11 +2420,10 @@ impl ReplayEngine {
                 angle_id: clip.map(|clip| clip.angle_id).unwrap_or(0),
                 clip_uid_hash: clip.map(|clip| clip_uid_hash(&clip.uid)).unwrap_or(0),
                 substituted_frames: src.transport.substituted,
-                decode_ms_avg_milli: if src.transport.decode_samples == 0 {
-                    0
-                } else {
-                    (src.transport.decode_us_sum / src.transport.decode_samples / 1000) as u32
-                },
+                decode_ms_avg_milli: decode_ms_avg_milli(
+                    src.transport.decode_us_sum,
+                    src.transport.decode_samples,
+                ),
                 decode_misses: src.transport.substituted,
             };
         }
@@ -2246,19 +2440,50 @@ impl ReplayEngine {
         self.lock().uuid.clone()
     }
 
+    /// Whether the recorder is writing right now, for the vMix XML `<replay>`
+    /// node. A panel (Bitfocus Companion) shows this as its recording feedback.
+    pub fn is_recording(&self) -> bool {
+        self.lock().recording
+    }
+
+    /// Channel index → whether the transport is following the recording edge.
+    /// vMix reports the same fact as the node's `live` attribute.
+    pub fn live_follows(&self) -> std::collections::HashMap<u32, bool> {
+        self.lock()
+            .channels
+            .iter()
+            .map(|slot| (slot.index, slot.transport.is_live()))
+            .collect()
+    }
+
     /// Jog proxy for one frame. Missing proxies stay an error so the tile does
     /// not decode the full-size picture instead.
+    ///
+    /// Same as [`Self::copy_proxy_of`] for the recording that was written last;
+    /// a caller that knows which recording the picture belongs to passes its id
+    /// to the `_of` form, because with several recordings in one session the
+    /// record store is only one of them.
     pub fn copy_proxy(
         &self,
         angle_id: u32,
         frame: u64,
         dst: &mut [u8],
     ) -> Result<(u32, u32, u32), ReplayFailure> {
-        let store = self
-            .record_store
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone()
+        self.copy_proxy_of(&self.recording_uuid(), angle_id, frame, dst)
+    }
+
+    /// Jog proxy for one frame of the named recording. A recording whose store
+    /// is neither attached nor the recorder's is an error: showing a different
+    /// recording's frame would be worse than admitting there is nothing.
+    pub fn copy_proxy_of(
+        &self,
+        recording_uuid: &str,
+        angle_id: u32,
+        frame: u64,
+        dst: &mut [u8],
+    ) -> Result<(u32, u32, u32), ReplayFailure> {
+        let (store, _) = self
+            .playback_store(recording_uuid)
             .ok_or_else(|| ReplayFailure::invalid("proxy is missing"))?;
         let decoded = store
             .lock()
@@ -2305,6 +2530,47 @@ impl ReplayEngine {
             }
         }
         None
+    }
+
+    /// Recorded frame range of one angle of the named recording. A clip names the
+    /// recording its frames were cut from, so an overwrite guard and a jog view for
+    /// a recording other than the one written last must read exactly that store,
+    /// never whatever the engine happens to hold open.
+    pub fn angle_range_of(&self, recording_uuid: &str, angle_id: u32) -> Option<(u64, u64)> {
+        let (store, _) = self.playback_store(recording_uuid)?;
+        store_range(&store, angle_id)
+    }
+
+    /// Copies an angle's waveform of the named recording, live buckets first. The
+    /// live ring belongs to the recording being written, so a clip from it keeps
+    /// climbing while the recorder runs; an older recording reads only its store.
+    pub fn copy_peaks_of(
+        &self,
+        recording_uuid: &str,
+        angle_id: u32,
+        from: u32,
+        min_out: &mut [f32],
+        max_out: &mut [f32],
+    ) -> u32 {
+        let live = {
+            let inner = self.lock();
+            inner
+                .peaks
+                .get(&angle_id)
+                .map(|accumulator| accumulator.copy(from, min_out, max_out) as u32)
+                .unwrap_or(0)
+        };
+        if live > 0 {
+            return live;
+        }
+        let Some((store, _)) = self.playback_store(recording_uuid) else {
+            return 0;
+        };
+        store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .copy_peaks(angle_id, from, min_out, max_out)
+            .unwrap_or(0)
     }
 
     /// Installs a channel's clips without going through the session gate. Test
@@ -2538,7 +2804,7 @@ impl ReplayEngine {
             free_bytes: free,
             estimate_rate_bps: rate,
             remaining_secs: eiviz_pro_api::remaining_secs(free.saturating_sub(reserve_bytes), rate),
-            path_writable: u32::from(std::fs::create_dir_all(path).is_ok()),
+            path_writable: u32::from(path_is_writable(path)),
         }
     }
 
@@ -2553,36 +2819,42 @@ impl ReplayEngine {
         let inbox = Arc::clone(&self.inbox);
         let stop_record = Arc::clone(&self.stop_record);
         let stop_workers = Arc::clone(&self.stop_workers);
-        workers.push(
-            thread::Builder::new()
-                .name("eiviz-replay-rec".into())
-                .spawn(move || record_loop(inbox, stop_record, stop_workers))
-                .expect("replay record thread"),
-        );
+        // A spawn that fails must not kill what is left of the mixer: the thread
+        // budget is the machine's, and one missing worker is reported instead of
+        // panicked out of, so the rest still run and the next configure retries.
+        match thread::Builder::new()
+            .name("eiviz-replay-rec".into())
+            .spawn(move || record_loop(inbox, stop_record, stop_workers))
+        {
+            Ok(handle) => workers.push(handle),
+            Err(error) => crate::diag::error(&format!("replay recorder thread: {error}")),
+        }
         let stop_workers = Arc::clone(&self.stop_workers);
-        workers.push(
-            thread::Builder::new()
-                .name("eiviz-replay-health".into())
-                .spawn({
-                    let stop_workers = Arc::clone(&stop_workers);
-                    move || health_loop(stop_workers)
-                })
-                .expect("replay health thread"),
-        );
+        match thread::Builder::new()
+            .name("eiviz-replay-health".into())
+            .spawn(move || health_loop(stop_workers))
+        {
+            Ok(handle) => workers.push(handle),
+            Err(error) => crate::diag::error(&format!("replay health thread: {error}")),
+        }
         let audio_inbox = Arc::clone(&self.audio_inbox);
-        let audio_stop = Arc::clone(&stop_workers);
-        workers.push(
-            thread::Builder::new()
-                .name("eiviz-replay-audio".into())
-                .spawn(move || audio_loop(audio_inbox, audio_stop))
-                .expect("replay audio thread"),
-        );
-        workers.push(
-            thread::Builder::new()
-                .name("eiviz-replay-ch-A".into())
-                .spawn(move || channel_loop(stop_workers))
-                .expect("replay channel thread"),
-        );
+        let audio_stop = Arc::clone(&self.stop_workers);
+        match thread::Builder::new()
+            .name("eiviz-replay-audio".into())
+            .spawn(move || audio_loop(audio_inbox, audio_stop))
+        {
+            Ok(handle) => workers.push(handle),
+            Err(error) => crate::diag::error(&format!("replay audio thread: {error}")),
+        }
+        match thread::Builder::new()
+            .name("eiviz-replay-ch-A".into())
+            .spawn({
+                let stop_workers = Arc::clone(&self.stop_workers);
+                move || channel_loop(stop_workers)
+            }) {
+            Ok(handle) => workers.push(handle),
+            Err(error) => crate::diag::error(&format!("replay channel thread: {error}")),
+        }
     }
 
     /// The channels that should be playing, and the frame timing they share.
@@ -2638,11 +2910,11 @@ impl ReplayEngine {
             .unwrap_or_else(|error| error.into_inner())
             .stats();
         let mut inner = self.lock();
-        apply_pro_stats(&mut inner, &snapshot);
+        apply_pro_stats(&mut inner, self, &snapshot);
     }
 }
 
-fn apply_pro_stats(inner: &mut Inner, snapshot: &ReplayStats) {
+fn apply_pro_stats(inner: &mut Inner, engine: &ReplayEngine, snapshot: &ReplayStats) {
     inner.stats.state = if inner.recording {
         STATE_RECORDING
     } else if snapshot.state == STATE_STOPPED {
@@ -2660,15 +2932,17 @@ fn apply_pro_stats(inner: &mut Inner, snapshot: &ReplayStats) {
     // Whichever is larger is the truth: a module that under-reports must not hide frames that
     // are on disk, and a store that has flushed more than this engine saw is ahead.
     inner.stats.frames_written = snapshot.frames_written.max(inner.stats.frames_written);
-    inner.stats.frames_offered = inner.offered.load(Ordering::Relaxed);
-    inner.stats.frames_pushed = inner.pushed.load(Ordering::Relaxed);
+    // The readback counters live next to the store, not behind the engine lock, so
+    // the refresh reads them while it holds the lock for the rest of the stats.
+    inner.stats.frames_offered = engine.offered.load(Ordering::Relaxed);
+    inner.stats.frames_pushed = engine.pushed.load(Ordering::Relaxed);
     inner.stats.started_unix_ms = inner.started_unix_ms;
     inner.stats.frames_dropped = snapshot.frames_dropped;
     inner.stats.frames_dropped_recent = snapshot.frames_dropped_recent;
     inner.stats.first_frame = snapshot.first_frame;
     inner.stats.last_frame = snapshot
         .last_frame
-        .max(inner.last_frame.load(Ordering::Relaxed));
+        .max(engine.last_frame.load(Ordering::Relaxed));
     inner.stats.channel_count = inner.channels.len() as u32;
     let rate = estimate_rate_bps(
         profile_code(inner.config.format.profile),
@@ -2723,7 +2997,16 @@ fn apply_pro_stats(inner: &mut Inner, snapshot: &ReplayStats) {
         // the truth: a module that under-reports an angle must not hide frames that are
         // on disk, and a store that has flushed more than this engine saw is ahead.
         let ours = inner.angle_written.get(&angle_id).copied().unwrap_or(0);
-        let mut stats = angle_stats(reported, &inner, scene_gpu_id);
+        // The per-angle readback losses keep their own mutex, so the refresh takes
+        // it once per angle rather than leaving it to the stat assembly.
+        let dropped = engine
+            .dropped_readback
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&angle_id)
+            .copied()
+            .unwrap_or(0);
+        let mut stats = angle_stats(reported, &inner, scene_gpu_id, dropped);
         stats.frames_written = stats.frames_written.max(ours);
         angles.push(stats);
     }
@@ -2736,6 +3019,7 @@ fn angle_stats(
     angle: &ReplayAngleStats,
     inner: &Inner,
     scene_gpu_id: u64,
+    dropped_readback: u64,
 ) -> MixerReplayAngleStats {
     MixerReplayAngleStats {
         angle_id: angle.angle_id,
@@ -2748,13 +3032,7 @@ fn angle_stats(
         write_buffer_cap: angle.write_buffer_cap,
         write_latency_p95_ms: angle.write_latency_p95_ms,
         frames_written: angle.frames_written,
-        dropped_readback: inner
-            .dropped_readback
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get(&angle.angle_id)
-            .copied()
-            .unwrap_or(0),
+        dropped_readback,
         dropped_encode: angle.dropped_encode.saturating_add(
             inner
                 .angle_gpu_dropped
@@ -2927,8 +3205,13 @@ fn record_loop(inbox: Arc<Inbox>, stop_record: Arc<AtomicBool>, stop_workers: Ar
             )
         };
         if matches!(outcome, Err(_)) {
+            // Stop the recording but do not exit: `ensure_workers` only starts a
+            // recorder when the worker list is empty, and a thread that died here
+            // never comes back — the next Record would succeed and then write
+            // nothing, which is a silent loss of the show. Stopping keeps the
+            // thread alive to serve the recording the operator starts next.
             engine.stop(crate::abi::REPLAY_STOP_IO_ERROR);
-            break;
+            continue;
         }
         let _ = outcome;
     }
@@ -3034,7 +3317,7 @@ fn health_loop(stop: Arc<AtomicBool>) {
                         .max()
                         .unwrap_or(0),
                     dropped_write_recent,
-                    dropped_readback_recent: inner.recent_drops.load(Ordering::Relaxed),
+                    dropped_readback_recent: engine.recent_drops.load(Ordering::Relaxed),
                     remaining_secs: inner.stats.remaining_secs,
                     warn_secs: inner.config.warnings.remaining_warn_secs,
                     alert_secs: inner.config.warnings.remaining_alert_secs,
@@ -3057,19 +3340,24 @@ fn health_loop(stop: Arc<AtomicBool>) {
             let write_drops: u64 = inner.angles.iter().map(|angle| angle.dropped_write).sum();
             inner.write_drop_seen = write_drops;
             if inner.recent_at.elapsed() >= Duration::from_secs(5) {
-                inner.recent_drops.store(0, Ordering::Relaxed);
+                engine.recent_drops.store(0, Ordering::Relaxed);
                 inner.recent_at = Instant::now();
             }
             health_step(&mut inner.health, &sample, now_ms)
         };
+        // A publish that lost the race for the control service must not be lost for
+        // good: the numbers it carried are now in `stats`, so the next wake retries
+        // once from there. Losing an event instead would leave the deck with a
+        // stale severity and a stop reason it never heard about.
         if view.changed {
             let message = health_message(view.issues, view.severity);
             crate::diag::warn_throttled("replay.health", &message);
+            let (stop_reason, remaining_secs) = {
+                let inner = engine.lock();
+                (inner.stats.stop_reason, inner.stats.remaining_secs)
+            };
+            let mut published = false;
             if let Ok(mut svc) = crate::runtime::control().try_lock() {
-                let (stop_reason, remaining_secs) = {
-                    let inner = engine.lock();
-                    (inner.stats.stop_reason, inner.stats.remaining_secs)
-                };
                 svc.publish_replay_health(
                     view.severity,
                     view.issues,
@@ -3077,10 +3365,39 @@ fn health_loop(stop: Arc<AtomicBool>) {
                     remaining_secs,
                     message,
                 );
+                published = true;
             }
             let mut inner = engine.lock();
             inner.stats.issues = view.issues;
             inner.stats.severity = view.severity;
+            inner.health_owed = !published;
+        } else {
+            let owed = {
+                let mut inner = engine.lock();
+                std::mem::take(&mut inner.health_owed)
+            };
+            if owed {
+                let (issues, severity, stop_reason, remaining_secs) = {
+                    let inner = engine.lock();
+                    (
+                        inner.stats.issues,
+                        inner.stats.severity,
+                        inner.stats.stop_reason,
+                        inner.stats.remaining_secs,
+                    )
+                };
+                if let Ok(mut svc) = crate::runtime::control().try_lock() {
+                    svc.publish_replay_health(
+                        severity,
+                        issues,
+                        stop_reason,
+                        remaining_secs,
+                        health_message(issues, severity),
+                    );
+                } else {
+                    engine.lock().health_owed = true;
+                }
+            }
         }
     }
 }
@@ -3089,7 +3406,11 @@ fn health_loop(stop: Arc<AtomicBool>) {
 /// frames, and remembers when the store cannot hand out packets so a test store
 /// does not pay for a failed FFI call every frame.
 struct ChannelDecoder {
-    store_id: usize,
+    /// Identity of the store the decoder was built against, from the recording's
+    /// uuid. A pointer alone could be recycled by the allocator: a new store at a
+    /// recycled address would inherit the old one's `packet_available`, and a
+    /// recording that never had packets would wait for a packet source forever.
+    store_key: String,
     width: u32,
     height: u32,
     profile: u32,
@@ -3117,7 +3438,9 @@ enum DecodedGpu {
 impl ChannelDecoder {
     fn new(width: u32, height: u32, profile: u32) -> Self {
         Self {
-            store_id: 0,
+            // No store yet; the key is set by the first decode, so the first
+            // store does not look like a change from itself.
+            store_key: String::new(),
             width,
             height,
             profile,
@@ -3152,6 +3475,7 @@ impl ChannelDecoder {
     fn decode(
         &mut self,
         store: &Arc<Mutex<Box<dyn ReplayStore>>>,
+        store_key: &str,
         plan: &channel::FramePlan,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -3160,7 +3484,7 @@ impl ChannelDecoder {
             return DecodedGpu::Failed;
         };
         let (outgoing, outgoing_substituted) =
-            match self.decode_one(store, angle, frame, device, queue, false) {
+            match self.decode_one(store, store_key, angle, frame, device, queue, false) {
                 DecodedGpu::Frame(frame, substituted) => (frame, substituted),
                 other => return other,
             };
@@ -3170,15 +3494,22 @@ impl ChannelDecoder {
         if !wants_secondary(plan) {
             return DecodedGpu::Frame(outgoing, outgoing_substituted);
         }
-        let (incoming, incoming_substituted) =
-            match self.decode_one(store, second_angle, second_frame, device, queue, true) {
-                DecodedGpu::Frame(frame, substituted) => (frame, substituted),
-                // No packet source at all: the CPU path owns this channel.
-                DecodedGpu::Unsupported => return DecodedGpu::Unsupported,
-                // The incoming frame did not decode. Showing the outgoing one is
-                // what the CPU path does, so a bad clip boundary is not black.
-                DecodedGpu::Failed => return DecodedGpu::Frame(outgoing, outgoing_substituted),
-            };
+        let (incoming, incoming_substituted) = match self.decode_one(
+            store,
+            store_key,
+            second_angle,
+            second_frame,
+            device,
+            queue,
+            true,
+        ) {
+            DecodedGpu::Frame(frame, substituted) => (frame, substituted),
+            // No packet source at all: the CPU path owns this channel.
+            DecodedGpu::Unsupported => return DecodedGpu::Unsupported,
+            // The incoming frame did not decode. Showing the outgoing one is
+            // what the CPU path does, so a bad clip boundary is not black.
+            DecodedGpu::Failed => return DecodedGpu::Frame(outgoing, outgoing_substituted),
+        };
         let crate::upload::GpuVideoFrame {
             pts: outgoing_pts,
             texture: _outgoing_texture,
@@ -3257,17 +3588,19 @@ impl ChannelDecoder {
     fn decode_one(
         &mut self,
         store: &Arc<Mutex<Box<dyn ReplayStore>>>,
+        store_key: &str,
         angle_id: u32,
         frame_index: u64,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         incoming: bool,
     ) -> DecodedGpu {
-        let store_id = Arc::as_ptr(store) as usize;
-        if store_id != self.store_id {
+        if store_key != self.store_key {
             // A new recording may be a different store (or a test double that has
-            // no packet source), so the capability is re-checked once.
-            self.store_id = store_id;
+            // no packet source), so the capability is re-checked once. The key is
+            // the recording's uuid: an allocator that hands a recycled address to a
+            // new store must not inherit the old store's `packet_available`.
+            self.store_key = store_key.to_string();
             self.packet_available = true;
             self.codec = None;
             self.incoming_codec = None;
@@ -3463,9 +3796,28 @@ struct ChannelPlayout {
     /// of a frame (a software adapter, a busy CPU) must not try to run ahead: the
     /// extra decode would cost more time than the queue saves.
     last_decode: Duration,
-    /// Playhead at the previous tick. A timeline cue fires when this and the
-    /// current frame sit on opposite sides of its boundary.
+    /// Playhead at the previous tick. A timeline cue fires when the playhead moves
+    /// forward across a cue's boundary between this frame and the previous one:
+    /// `due_timeline_cues` fires only forward crossings, so a rewind that crosses
+    /// the same boundary again does not run the scene states backwards.
     last_source: Option<u64>,
+}
+
+/// What a late tick can take from the picture queue, and what is left for the
+/// synchronous path.
+///
+/// A tick that overran covers more than one output frame. The queue holds pictures
+/// already decoded for those frames, so it gives up as many as the tick owes; the
+/// synchronous path steps the ones the queue could not cover, exactly as it does
+/// when no queue is in use. Consuming one per tick instead was how a single late
+/// tick left the picture late for good: the deadline moved on with the catch-up
+/// while the queue kept giving one frame at a time.
+///
+/// Returns `(consumed, shortfall)` in output frames.
+fn catch_up_split(queued: usize, late: u32) -> (usize, u32) {
+    let owed = late.max(1) as usize;
+    let consumed = owed.min(queued);
+    (consumed, (owed - consumed) as u32)
 }
 
 impl ChannelPlayout {
@@ -3489,17 +3841,16 @@ impl ChannelPlayout {
         }
     }
 
-    /// Fires scene states the playhead crossed since the previous tick.
-    ///
-    /// The mixer lock is taken only after the replay lock is released. A jog
-    /// that crosses the same boundary again fires once for that crossing.
     /// Fires the timeline cues a source frame crosses. The cue tables are handed in: the
     /// caller has just read them under the same lock as the transport it advanced.
+    ///
+    /// The mixer lock is taken only after the replay lock is released. Only forward
+    /// crossings fire, which is what `due_timeline_cues` decides.
     fn fire_crossed_cues(
         &mut self,
         cues: &(
-            Vec<eiviz_control::session::replay::ReplayTimelineCueDto>,
-            Vec<eiviz_control::session::replay::PlaylistDto>,
+            Arc<[eiviz_control::session::replay::ReplayTimelineCueDto]>,
+            Arc<[eiviz_control::session::replay::PlaylistDto]>,
         ),
         current: u64,
         period: Duration,
@@ -3584,11 +3935,13 @@ impl ChannelPlayout {
                 slot.transport.clone(),
                 slot.transport_revision,
                 inner.playlist_revision,
-                inner.last_frame.load(Ordering::Relaxed),
+                engine.last_frame.load(Ordering::Relaxed),
                 engine.playback_generation.load(Ordering::Relaxed),
+                // Two reference counts, not two full Vecs: the cue tables live on
+                // the engine as shared slices for exactly this tick's read.
                 (
-                    inner.config.timeline_cues.clone(),
-                    inner.config.playlists.clone(),
+                    Arc::clone(&inner.timeline_cues),
+                    Arc::clone(&inner.playlists),
                 ),
                 inner
                     .config
@@ -3601,12 +3954,19 @@ impl ChannelPlayout {
         };
         let gpu = engine.gpu_device();
         // The recording the on-air clip belongs to. Two channels can hold clips from
-        // two recordings at the same time; each reads its own.
-        let store = engine.playback_store(transport.recording_uuid());
+        // two recordings at the same time; each reads its own. The store's id is the
+        // recording's uuid, so a decoder never mistakes a new store for the old one
+        // at a recycled address.
+        let playback = engine.playback_store(transport.recording_uuid());
+        let store = playback.as_ref().map(|(store, _)| Arc::clone(store));
+        let store_key = playback.map(|(_, key)| key).unwrap_or_default();
         let width = context.width;
         let height = context.height;
         let profile = context.profile;
         let fps = context.fps;
+        // Steps the synchronous path still owes, after the picture queue has had
+        // its share of the catch-up. A tick on time is one step, as always.
+        let mut sync_steps = late;
         // A cue, a speed change or a reconfigure makes every queued picture wrong, and
         // the ones already decoded belong to the transport that was on air before it.
         if self.seen != (transport_revision, revision, playback_generation) {
@@ -3617,24 +3977,78 @@ impl ChannelPlayout {
         self.fire_crossed_cues(&cues, transport.source_frame(), context.period);
         // A picture decoded during an earlier tick's spare time is shown straight away:
         // that is what keeps it on time when a decode runs long.
-        if let Some(pending) = self.ahead.pop_front() {
+        if !self.ahead.is_empty() {
             profile::queued();
+            // A late tick owes more than one frame, and the queue holds the pictures
+            // already decoded for those frames: it gives up as many as the tick owes
+            // and shows the newest, the way the synchronous path steps its transport.
+            // One per tick is how a single late tick left the picture behind the
+            // deadlines for good, because the queue only refills on a tick on time.
+            let owed = late.max(1);
+            let (take, _) = catch_up_split(self.ahead.len(), late);
+            let mut catch_up: Vec<AheadFrame> = Vec::with_capacity(take);
+            while catch_up.len() < take
+                && let Some(pending) = self.ahead.pop_front()
+            {
+                catch_up.push(pending);
+            }
+            let shortfall = owed.saturating_sub(catch_up.len() as u32);
+            // The newest of the frames the queue gave up is the one on screen; the
+            // rest are released, which is what a synchronous catch-up does by
+            // stepping past the pictures it does not draw.
+            let Some(newest) = catch_up.pop() else {
+                // The queue was not empty a moment ago, so this cannot be reached.
+                write_back_transport(engine, index, revision, transport_revision, transport);
+                return;
+            };
             let pushed = matches!(
-                crate::with_uploads(|uploads| uploads.push_playout_gpu(source_id, pending.frame)),
+                crate::with_uploads(|uploads| uploads.push_playout_gpu(source_id, newest.frame)),
                 Ok(Ok(()))
             );
-            if pushed {
+            if !pushed {
+                // A refused publish is one tick of held picture. The frame the push
+                // took is gone, but the transport does not move and the pictures
+                // still in the catch-up go back where they came from, so the next
+                // tick continues where this one stopped rather than skipping.
+                crate::diag::warn_throttled(
+                    "replay-push-pending",
+                    "replay playout publish refused a queued picture",
+                );
+                while let Some(restored) = catch_up.pop() {
+                    self.ahead.push_front(restored);
+                }
+                transport.substituted = transport.substituted.saturating_add(1);
+                write_back_transport(engine, index, revision, transport_revision, transport);
+                return;
+            }
+            for skipped in catch_up {
+                drop(skipped);
+            }
+            if shortfall == 0 {
                 if let (Some(store), Some((device, queue))) = (store.as_ref(), gpu.as_ref()) {
                     // The sound belongs to the picture that was just shown, not to the
                     // decode cursor, which is already a frame or two further on.
-                    push_channel_audio(source_id, &pending.transport, store, &audio, fps);
-                    self.pump(engine, context, &mut transport, store, device, queue, late);
+                    push_channel_audio(source_id, &newest.transport, store, &audio, fps);
+                    self.pump(
+                        engine,
+                        context,
+                        &mut transport,
+                        store,
+                        &store_key,
+                        device,
+                        queue,
+                        late,
+                    );
                 }
-            } else {
-                transport.substituted = transport.substituted.saturating_add(1);
+                write_back_transport(engine, index, revision, transport_revision, transport);
+                return;
             }
-            write_back_transport(engine, index, revision, transport_revision, transport);
-            return;
+            // The queue emptied before the tick was caught up. The synchronous path
+            // finishes the catch-up, but from the frame just shown rather than from
+            // the decode cursor: continuing at the cursor's position would redraw
+            // frames the queue has already handed out.
+            transport = newest.transport;
+            sync_steps = shortfall;
         }
         // `step` advances even when it decides to hold the picture, so the transport
         // must be written back on every path. Stepping every missed frame and keeping
@@ -3646,7 +4060,7 @@ impl ChannelPlayout {
         // slow machine still shows the transition, just at fewer intermediate points. That
         // is what the operator asked to see; a jump from A to B is not.
         let mut plan: Option<channel::FramePlan> = None;
-        for _ in 0..late {
+        for _ in 0..sync_steps {
             if let Some(next_plan) = transport.step(1.0) {
                 plan = keep_plan(plan, next_plan);
             }
@@ -3696,7 +4110,7 @@ impl ChannelPlayout {
 
             if ready {
                 let started = Instant::now();
-                match decoder.decode(store, &plan, device, queue) {
+                match decoder.decode(store, &store_key, &plan, device, queue) {
                     DecodedGpu::Frame(frame, substituted) => {
                         let spent = started.elapsed();
                         let elapsed = spent.as_micros() as u64;
@@ -3720,7 +4134,16 @@ impl ChannelPlayout {
                         }
                         // Fill the queue from the time left in this tick: those
                         // pictures then cost the next ticks nothing to show.
-                        self.pump(engine, context, &mut transport, store, device, queue, late);
+                        self.pump(
+                            engine,
+                            context,
+                            &mut transport,
+                            store,
+                            &store_key,
+                            device,
+                            queue,
+                            sync_steps,
+                        );
                         write_back_transport(
                             &engine,
                             index,
@@ -3834,6 +4257,7 @@ impl ChannelPlayout {
         context: &PlayoutContext,
         transport: &mut channel::Transport,
         store: &Arc<Mutex<Box<dyn ReplayStore>>>,
+        store_key: &str,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         late: u32,
@@ -3884,7 +4308,7 @@ impl ChannelPlayout {
                 return;
             }
             let started = Instant::now();
-            let decoded = decoder.decode(store, &plan, device, queue);
+            let decoded = decoder.decode(store, store_key, &plan, device, queue);
             let spent = started.elapsed();
             // A decode that already costs a quarter of the frame is a machine that
             // cannot afford to run ahead: queue the one picture, then stop. The
@@ -3941,7 +4365,12 @@ impl ChannelPlayout {
 /// speed across it.
 fn channel_loop(stop: Arc<AtomicBool>) {
     let engine = engine();
-    let mut workers: Vec<JoinHandle<()>> = Vec::new();
+    // The channel each thread serves, next to its handle. A spawn that failed used
+    // to panic the supervisor with it, and every other channel went dark; the
+    // failure is remembered instead and the channel is retried on a later wake
+    // without disturbing the ones already running.
+    let mut workers: Vec<(u32, JoinHandle<()>)> = Vec::new();
+    let mut failed: Vec<u32> = Vec::new();
     let mut running: Option<(Vec<u32>, PlayoutContext)> = None;
     let mut generation_stop = Arc::new(AtomicBool::new(false));
     while !stop.load(Ordering::Relaxed) {
@@ -3957,17 +4386,18 @@ fn channel_loop(stop: Arc<AtomicBool>) {
         let current = (indices, context.clone());
         if running.as_ref() != Some(&current) {
             generation_stop.store(true, Ordering::Release);
-            for worker in workers.drain(..) {
+            for (_, worker) in workers.drain(..) {
                 let _ = worker.join();
             }
             generation_stop = Arc::new(AtomicBool::new(false));
             running = Some(current);
+            failed.clear();
             if !channels.is_empty() {
                 let context = Arc::new(context);
                 for (index, source_id, audio) in channels {
                     let worker_stop = Arc::clone(&generation_stop);
                     let worker_context = Arc::clone(&context);
-                    let handle = thread::Builder::new()
+                    let spawned = thread::Builder::new()
                         .name(format!("eiviz-replay-ch{index}"))
                         .spawn(move || {
                             ChannelPlayout::new(index, source_id, audio, &worker_context).run(
@@ -3975,18 +4405,57 @@ fn channel_loop(stop: Arc<AtomicBool>) {
                                 &worker_context,
                                 &worker_stop,
                             )
-                        })
-                        .expect("replay channel thread");
-                    workers.push(handle);
+                        });
+                    match spawned {
+                        Ok(handle) => workers.push((index, handle)),
+                        Err(error) => {
+                            // The channel is retried on its own on the next wake.
+                            crate::diag::error(&format!("replay channel {index} thread: {error}"));
+                            failed.push(index);
+                        }
+                    }
                 }
             }
+        } else if !failed.is_empty() {
+            // One attempt per wake: a machine out of threads recovers slowly, and a
+            // retry storm would churn the running channels alongside it.
+            let retry = std::mem::take(&mut failed);
+            let mut still_failed = Vec::new();
+            for index in retry {
+                let Some((_, source_id, audio)) = channels
+                    .iter()
+                    .find(|(channel_index, ..)| channel_index == &index)
+                else {
+                    // The channel left the setup; the next change rebuilds it.
+                    continue;
+                };
+                let source_id = *source_id;
+                let audio = Arc::clone(audio);
+                let worker_stop = Arc::clone(&generation_stop);
+                let worker_context = Arc::new(context.clone());
+                let spawned = thread::Builder::new()
+                    .name(format!("eiviz-replay-ch{index}"))
+                    .spawn(move || {
+                        ChannelPlayout::new(index, source_id, audio, &worker_context).run(
+                            engine,
+                            &worker_context,
+                            &worker_stop,
+                        )
+                    });
+                match spawned {
+                    Ok(handle) => workers.push((index, handle)),
+                    // Still no thread: try again on the next wake.
+                    Err(_) => still_failed.push(index),
+                }
+            }
+            failed = still_failed;
         }
         // Short enough that a channel added from the host starts at once, long enough
         // that watching for one costs nothing.
         thread::sleep(Duration::from_millis(100));
     }
     generation_stop.store(true, Ordering::Release);
-    for worker in workers {
+    for (_, worker) in workers {
         let _ = worker.join();
     }
 }
@@ -4434,6 +4903,18 @@ fn clip_uid_hash(uid: &str) -> u64 {
     hash
 }
 
+/// Average decode cost as the deck reads it, in thousandths of a millisecond.
+///
+/// Rounded rather than floored: a sub-millisecond average that truncates into zero
+/// reads as "no decode cost at all", which hides exactly the machines the
+/// measurement was meant to show.
+fn decode_ms_avg_milli(decode_us_sum: u64, samples: u64) -> u32 {
+    if samples == 0 {
+        return 0;
+    }
+    ((decode_us_sum + 500u64.saturating_mul(samples)) / (samples * 1000)) as u32
+}
+
 /// Clips of the playlist a channel selects, in play order.
 fn playlist_clips(config: &ReplayDto, playlist_id: Option<u64>) -> Vec<channel::Clip> {
     use eiviz_control::session::replay::{ReplayTransitionKind, ReplayTransitionTiming};
@@ -4537,6 +5018,46 @@ fn uuid_stamp() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Write test for a directory a Replay estimate is asked about.
+///
+/// The estimate used to `create_dir_all` the path as its way of asking, which left an
+/// empty directory behind every time the operator measured a drive that did not have
+/// the recording folder yet. The test is read-only: the nearest directory that exists
+/// decides what would have been inherited, and a probe file there is made and
+/// removed again. A target that does not exist yet is not a refusal — creating it is
+/// the recorder's job once the operator commits — so the nearest ancestor answers.
+fn path_is_writable(path: &str) -> bool {
+    use std::sync::atomic::{AtomicU64 as ProbeCounter, Ordering::Relaxed};
+    static PROBES: ProbeCounter = ProbeCounter::new(0);
+    let target = std::path::Path::new(path);
+    if target.is_file() {
+        return false;
+    }
+    let mut probe_dir = target.to_path_buf();
+    while !probe_dir.is_dir() && probe_dir.pop() {}
+    if !probe_dir.is_dir() {
+        return false;
+    }
+    let name = format!(
+        ".eiviz-replay-writable-{}-{}",
+        std::process::id(),
+        PROBES.fetch_add(1, Relaxed)
+    );
+    let probe = probe_dir.join(name);
+    match std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&probe)
+    {
+        Ok(file) => {
+            drop(file);
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// Control-layer error for a Replay refusal. The message is the reason the mixer
@@ -4672,6 +5193,61 @@ impl ReplayStore for FfiReplayStore {
             pts_100ns: out.pts_100ns,
             substituted: out.substituted != 0,
         })
+    }
+
+    /// Decodes the jog proxy through the module. A module that does not publish
+    /// the function has no proxy to show the tile, which is exactly the trait's
+    /// own "proxy is missing" refusal and never a reason to decode the
+    /// full-size picture in its place.
+    fn decode_proxy(
+        &mut self,
+        angle_id: u32,
+        frame_index: u64,
+        dst: &mut [u8],
+    ) -> eiviz_pro_api::ProResult<eiviz_pro_api::DecodedFrame> {
+        let Some(decode) = self.api.replay_decode_proxy else {
+            return Err(eiviz_pro_api::ProError::invalid("proxy is missing"));
+        };
+        let mut out = ProReplayDecoded {
+            struct_size: std::mem::size_of::<ProReplayDecoded>() as u32,
+            ..ProReplayDecoded::default()
+        };
+        let status = unsafe {
+            decode(
+                self.handle,
+                angle_id,
+                frame_index,
+                dst.as_mut_ptr(),
+                dst.len(),
+                &mut out,
+            )
+        };
+        if status.code != 0 {
+            return Err(eiviz_pro_api::ProError::invalid("proxy is missing"));
+        }
+        Ok(eiviz_pro_api::DecodedFrame {
+            actual_frame_index: out.actual_frame_index,
+            width: out.width,
+            height: out.height,
+            stride: out.stride,
+            pts_100ns: out.pts_100ns,
+            substituted: out.substituted != 0,
+        })
+    }
+
+    /// Moves the retention protection boundary in the module. A module built
+    /// before the function existed never protected anything, and its call stays
+    /// an accepted no-op, which is what the trait default does.
+    fn set_protect_from(&mut self, frame: u64) -> eiviz_pro_api::ProResult<()> {
+        let Some(set) = self.api.replay_set_protect_from else {
+            return Ok(());
+        };
+        let status = unsafe { set(self.handle, frame) };
+        if status.code == 0 {
+            Ok(())
+        } else {
+            Err(eiviz_pro_api::ProError::io("replay protect failed"))
+        }
     }
 
     fn read_packet(
@@ -5421,6 +5997,34 @@ mod queue_tests {
         assert_eq!(inbox_capacity(1000, 16, 16), 64);
     }
 
+    /// Audio is stored in arrival order, so refusing the block that just arrived
+    /// keeps the timeline contiguous; evicting the head instead would punch a
+    /// permanent ten-millisecond hole into the recording's sound.
+    #[test]
+    fn a_full_audio_inbox_refuses_the_new_block_instead_of_the_head() {
+        let inbox = AudioInbox::new();
+        let job = |index: u64| AudioJob {
+            angle_id: 1,
+            frame_index: index,
+            sample_rate: 48_000,
+            channels: 2,
+            pcm: Vec::new(),
+        };
+        for index in 0..AudioInbox::CAPACITY as u64 {
+            assert!(inbox.offer(job(index)), "block {index} should fit");
+        }
+        assert!(
+            !inbox.offer(job(AudioInbox::CAPACITY as u64)),
+            "the block after a full queue is refused"
+        );
+        let stop = AtomicBool::new(false);
+        let head = inbox.pop(&stop).expect("the head block is still there");
+        assert_eq!(
+            head.frame_index, 0,
+            "the head of the queue was never evicted"
+        );
+    }
+
     #[test]
     fn the_playout_context_carries_the_decode_ahead_setting() {
         // The setting comes from the replay document and the workers read it from
@@ -5915,5 +6519,519 @@ mod blend_pts_tests {
         assert!(blend_pts(outgoing, outgoing, 0.5) > outgoing);
         assert!(blend_pts(outgoing, outgoing - 1_000_000, 0.5) > outgoing);
         assert!(blend_pts(i64::MAX, i64::MAX, 0.5) > outgoing);
+    }
+}
+
+#[cfg(test)]
+mod catch_up_tests {
+    use super::*;
+
+    #[test]
+    fn a_picture_queue_covers_a_late_tick_and_the_rest_is_owed() {
+        // Depth two, tick late by three frames: both pictures go to the screen
+        // and the synchronous path still steps one.
+        assert_eq!(catch_up_split(2, 3), (2, 1));
+        // A tick on time takes exactly one picture, as the queue always did.
+        assert_eq!(catch_up_split(2, 1), (1, 0));
+        // An empty queue owes the whole tick to the synchronous path.
+        assert_eq!(catch_up_split(0, 4), (0, 4));
+        // lateness arrives capped before the split, so the queue gives what it has.
+        assert_eq!(catch_up_split(1, 6), (1, 5));
+    }
+}
+
+#[cfg(test)]
+mod decode_average_tests {
+    use super::*;
+
+    /// A sub-millisecond decode used to floor into zero, which read as "no decode
+    /// cost at all" on exactly the machines the measurement was meant for.
+    #[test]
+    fn the_decode_average_rounds_instead_of_floors() {
+        assert_eq!(decode_ms_avg_milli(999, 1), 1);
+        assert_eq!(decode_ms_avg_milli(0, 1), 0);
+        assert_eq!(decode_ms_avg_milli(1_000_499, 1_000), 1);
+        assert_eq!(decode_ms_avg_milli(1_000_500, 1_000), 1);
+        assert_eq!(decode_ms_avg_milli(2 * 1_000, 2), 1);
+        assert_eq!(decode_ms_avg_milli(1_499_999, 1_000), 1);
+        assert_eq!(decode_ms_avg_milli(1_500_000, 1_000), 2);
+        assert_eq!(decode_ms_avg_milli(4_999, 5), 1);
+    }
+}
+
+#[cfg(test)]
+mod playback_store_tests {
+    use super::*;
+    use eiviz_pro_api::ProResult;
+
+    /// A store that counts its closes, so a reaped recording is told apart from
+    /// one the session still names.
+    struct CountingStore {
+        closes: Arc<Mutex<u32>>,
+    }
+
+    impl ReplayStore for CountingStore {
+        fn write_video(
+            &mut self,
+            _angle_id: u32,
+            _frame_index: u64,
+            _frame: &VideoFrame,
+        ) -> ProResult<WriteOutcome> {
+            Err(eiviz_pro_api::ProError::unavailable("test store"))
+        }
+
+        fn decode(
+            &mut self,
+            _angle_id: u32,
+            _frame_index: u64,
+            _dst: &mut [u8],
+        ) -> ProResult<eiviz_pro_api::DecodedFrame> {
+            Err(eiviz_pro_api::ProError::unavailable("test store"))
+        }
+
+        fn range(&self, _angle_id: u32) -> ProResult<Option<(u64, u64)>> {
+            Ok(None)
+        }
+
+        fn stats(&self) -> ReplayStats {
+            ReplayStats::default()
+        }
+
+        fn close(&mut self) -> ProResult<()> {
+            *self
+                .closes
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) += 1;
+            Ok(())
+        }
+    }
+
+    fn counting(closes: &Arc<Mutex<u32>>) -> Arc<Mutex<Box<dyn ReplayStore>>> {
+        let store: Box<dyn ReplayStore> = Box::new(CountingStore {
+            closes: Arc::clone(closes),
+        });
+        Arc::new(Mutex::new(store))
+    }
+
+    /// A store the session no longer references is closed and removed instead of
+    /// staying open to the end of the process.
+    #[test]
+    fn a_recording_the_session_dropped_is_closed() {
+        let engine = engine();
+        let closes = Arc::new(Mutex::new(0u32));
+        {
+            let mut stores = engine
+                .playback_stores
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            stores.insert("rec-kept".into(), counting(&closes));
+            stores.insert("rec-stale".into(), counting(&closes));
+        }
+        let keep: std::collections::HashSet<String> =
+            ["rec-kept".to_string()].into_iter().collect();
+        engine.reap_playback_stores(&keep);
+        assert_eq!(
+            *closes.lock().unwrap_or_else(|error| error.into_inner()),
+            1,
+            "only the stale store was closed"
+        );
+        let stores = engine
+            .playback_stores
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(!stores.contains_key("rec-stale"));
+        assert!(stores.contains_key("rec-kept"), "the kept store survived");
+        drop(stores);
+        engine
+            .playback_stores
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove("rec-kept");
+    }
+}
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::*;
+    use eiviz_pro_api::ProResult;
+
+    /// A store that answers the proxy read and remembers which frame was asked
+    /// for, so the test can tell one recording's store from another's.
+    struct ProxyStore {
+        reads: Arc<Mutex<Vec<(u32, u64)>>>,
+    }
+
+    impl ReplayStore for ProxyStore {
+        fn write_video(
+            &mut self,
+            _angle_id: u32,
+            _frame_index: u64,
+            _frame: &VideoFrame,
+        ) -> ProResult<WriteOutcome> {
+            Err(eiviz_pro_api::ProError::unavailable("test store"))
+        }
+
+        fn decode(
+            &mut self,
+            _angle_id: u32,
+            _frame_index: u64,
+            _dst: &mut [u8],
+        ) -> ProResult<eiviz_pro_api::DecodedFrame> {
+            Err(eiviz_pro_api::ProError::unavailable("test store"))
+        }
+
+        fn decode_proxy(
+            &mut self,
+            angle_id: u32,
+            frame_index: u64,
+            _dst: &mut [u8],
+        ) -> ProResult<eiviz_pro_api::DecodedFrame> {
+            self.reads
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push((angle_id, frame_index));
+            Ok(eiviz_pro_api::DecodedFrame {
+                actual_frame_index: frame_index,
+                width: 16,
+                height: 8,
+                stride: 32,
+                pts_100ns: 0,
+                substituted: false,
+            })
+        }
+
+        fn range(&self, _angle_id: u32) -> ProResult<Option<(u64, u64)>> {
+            Ok(Some((0, 10)))
+        }
+
+        fn stats(&self) -> ReplayStats {
+            ReplayStats::default()
+        }
+
+        fn close(&mut self) -> ProResult<()> {
+            Ok(())
+        }
+    }
+
+    fn proxy(reads: &Arc<Mutex<Vec<(u32, u64)>>>) -> Arc<Mutex<Box<dyn ReplayStore>>> {
+        let store: Box<dyn ReplayStore> = Box::new(ProxyStore {
+            reads: Arc::clone(reads),
+        });
+        Arc::new(Mutex::new(store))
+    }
+
+    /// A jog proxy is read from the recording the clip names, not from whatever
+    /// recorder wrote last. Two sessions, one mixer: each recording's store is
+    /// its own, and a recording that is attached nowhere is an error.
+    #[test]
+    fn a_proxy_comes_from_the_recording_the_clip_names() {
+        let engine = engine();
+        let reads = Arc::new(Mutex::new(Vec::new()));
+        engine
+            .playback_stores
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert("rec-a".into(), proxy(&reads));
+
+        let mut dst = vec![0u8; 16 * 8 * 2];
+        let (width, height, stride) = engine
+            .copy_proxy_of("rec-a", 1, 5, &mut dst)
+            .expect("the attached recording serves its own proxy");
+        assert_eq!((width, height, stride), (16, 8, 32));
+        assert_eq!(
+            *reads.lock().unwrap_or_else(|error| error.into_inner()),
+            vec![(1, 5)]
+        );
+
+        // A recording the engine has no store for is refused, never guessed.
+        assert!(engine.copy_proxy_of("rec-other", 1, 5, &mut dst).is_err());
+        assert!(
+            engine
+                .playback_stores
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .remove("rec-a")
+                .is_some(),
+            "test cleanup removed its own store"
+        );
+        assert_eq!(
+            engine.angle_range_of("rec-other", 1),
+            None,
+            "a missing recording has no range"
+        );
+    }
+}
+
+#[cfg(test)]
+mod path_writable_tests {
+    use super::*;
+
+    /// The estimate answers whether the recorder could write a recording there,
+    /// without creating anything: a yes or a no it left an empty directory
+    /// behind for.
+    #[test]
+    fn the_writable_probe_leaves_the_path_untouched() {
+        let root = std::env::temp_dir().join(format!("eiviz-writable-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        // A drive root that exists is answered directly.
+        assert!(path_is_writable(&root.to_string_lossy()));
+        // A missing subdirectory is answered by its nearest existing ancestor;
+        // nothing is created either way.
+        let missing = root.join("recordings/night");
+        assert!(path_is_writable(&missing.to_string_lossy()));
+        assert!(!missing.exists(), "the probe created nothing");
+        // A file is not a place a recording can go.
+        let file = root.join("not-a-directory");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(!path_is_writable(&file.to_string_lossy()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod gpu_device_tests {
+    //! Replay GPU state across mixer generations.
+    //!
+    //! The deck replaces mixers (session load) while the process keeps running. The
+    //! replay engine once answered a device replacement with `set_gpu`'s silently
+    //! ignored second write, so every later decode ran on a device whose hub the new
+    //! render loop could not see any more, and its textures panicked the present
+    //! pass with wgpu's "found other resource" epoch assert. These tests pin the
+    //! replacement semantics: a new device drops everything the old one cached.
+
+    use super::{engine, gpu_encode};
+    use crate::device::{BackendRequest, GpuDevice};
+    use crate::guard::LockExt;
+    use serial_test::serial;
+    use std::panic;
+    use std::sync::atomic::Ordering;
+
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    fn gpu() -> Option<GpuDevice> {
+        match GpuDevice::with_backend(BackendRequest::Auto) {
+            Ok(device) => Some(device),
+            Err(
+                crate::device::DeviceError::NoAdapter
+                | crate::device::DeviceError::UnsupportedBackend { .. }
+                | crate::device::DeviceError::RequestDevice(_)
+                | crate::device::DeviceError::WrongBackend { .. },
+            ) => None,
+        }
+    }
+
+    /// A second `set_gpu` must replace the device instead of being swallowed: the
+    /// first device and everything built on it has to go, and the generation that
+    /// tests and warm-up threads compare against has to move.
+    #[test]
+    #[serial]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    fn set_gpu_replaces_the_cached_device_and_its_caches() {
+        let Some(older) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let Some(fresh) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let playbacks_before = engine().playback_generation.load(Ordering::Acquire);
+        engine().set_gpu(&older.device, &older.queue);
+        let generation_once = engine().gpu_generation();
+        assert!(
+            generation_once >= 1,
+            "the first set_gpu must bump the generation"
+        );
+
+        // A warmed decoder built on the old device must not survive the swap.
+        let codec = vmx::Codec::new(vmx::Config {
+            width: 64,
+            height: 64,
+            profile: vmx::Profile::Sq,
+            color_space: vmx::ColorSpace::Bt709,
+        })
+        .expect("codec");
+        engine()
+            .prepared
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(
+                0,
+                super::PreparedDecoder {
+                    width: 64,
+                    height: 64,
+                    // `Sq` is profile code 1 the way `decode_gpu` maps it (0 hq, 2 lq,
+                    // anything else standard).
+                    profile: 1,
+                    codec,
+                    secondary: None,
+                    transition: None,
+                },
+            );
+
+        // Recording rings from the old device must not survive either.
+        let ring = gpu_encode::prepare(
+            9,
+            64,
+            64,
+            2,
+            wgpu::TextureFormat::Bgra8Unorm,
+            &older.device,
+            &older.queue,
+        )
+        .expect("encoder ring on the old device");
+        drop(ring);
+        assert!(
+            gpu_encode::ring_count() >= 1,
+            "the ring must be registered before the swap"
+        );
+
+        // The swap.
+        engine().set_gpu(&fresh.device, &fresh.queue);
+        assert_eq!(
+            engine().gpu_generation(),
+            generation_once + 1,
+            "the replaced device is a new generation"
+        );
+        assert!(
+            engine()
+                .prepared
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_empty(),
+            "decoders warmed on the previous device were dropped"
+        );
+        assert!(
+            engine().playback_generation.load(Ordering::Acquire) > playbacks_before,
+            "pictures decoded ahead on the previous device are invalidated"
+        );
+        assert_eq!(gpu_encode::lane_count(), 0, "encoder lanes must drain");
+        assert_eq!(gpu_encode::ring_count(), 0, "recording rings must drop");
+
+        // The new generation owns the live device: the fresh device's handle stays
+        // the engine's pick, and nothing of the old one holds its hub alive.
+        let swapped = engine()
+            .gpu
+            .lock_or_recover()
+            .clone()
+            .expect("engine gpu after replace");
+        // The engine holds the live device, not the one the previous generation
+        // dropped: a poll on it is answered without touching the replaced device.
+        assert!(swapped.device.poll(wgpu::PollType::Poll).is_ok());
+        drop(older);
+        drop(fresh);
+
+        // Leave a clean engine for the rest of the suite.
+        engine()
+            .prepared
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        gpu_encode::reset_device();
+    }
+
+    /// The mechanics of the bug, pinned so a future wgpu that turns the assert into
+    /// an error is noticed rather than silently "fixed": a texture view created by
+    /// another wgpu instance (the engine's stale device) resolved by this device's
+    /// hub panics wgpu-core's storage lookup, the exact assert the present loop
+    /// caught 62,878 times in one session.
+    #[test]
+    #[serial]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    fn a_view_from_another_hub_panics_the_storage_lookup() {
+        let Some(older) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+        let Some(current) = gpu() else {
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+
+        let texture = |device: &wgpu::Device| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("hub-test"),
+                size: wgpu::Extent3d {
+                    width: 4,
+                    height: 4,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        };
+
+        // The live hub keeps its own views: six of them, so slot 4 is occupied by
+        // epoch 1 — the composer's long-lived views in the real mixer.
+        let live_textures = (0..6).map(|_| texture(&current.device)).collect::<Vec<_>>();
+        let live_views = live_textures
+            .iter()
+            .map(|tex| tex.create_view(&wgpu::TextureViewDescriptor::default()))
+            .collect::<Vec<_>>();
+
+        // The stale hub had recycled its view slot before the swap: create, drop and
+        // recreate so the surviving view's id carries an older epoch at the index the
+        // live hub gave to its own epoch-1 view.
+        let stale_textures = (0..5).map(|_| texture(&older.device)).collect::<Vec<_>>();
+        let mut stale_views = stale_textures
+            .iter()
+            .map(|tex| tex.create_view(&wgpu::TextureViewDescriptor::default()))
+            .collect::<Vec<_>>();
+        // Drop the view at slot 4, then create one again: the freed id is handed back
+        // with its epoch advanced, so the surviving stale view says epoch 2 where the
+        // live hub keeps epoch 1 — the exact id pair of the session's real panic.
+        let freed = stale_views.swap_remove(4);
+        drop(freed);
+        let recycled = stale_textures[0].create_view(&wgpu::TextureViewDescriptor::default());
+
+        let layout = current
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("hub-test"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                }],
+            });
+
+        let panicked = panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = current
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("hub-test"),
+                    layout: &layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&recycled),
+                    }],
+                });
+        }));
+        let message = panicked
+            .err()
+            .map(|payload| crate::guard::panic_message(payload.as_ref()))
+            .unwrap_or_default();
+        assert!(
+            message.contains("found other resource TextureViewId("),
+            "a foreign-hub view must trip wgpu's storage assert, got: {message}"
+        );
+        // The live view in that slot has epoch 1, exactly like the mixer's composer
+        // views the real panic reported.
+        assert!(
+            message.contains(", found other resource TextureViewId(4,1)"),
+            "the live hub slot 4 holds its own first-generation view, got: {message}"
+        );
+        drop(live_views);
+        drop(live_textures);
+        drop(stale_views);
+        drop(stale_textures);
     }
 }

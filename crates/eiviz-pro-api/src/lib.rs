@@ -59,7 +59,8 @@ pub use replay::{
     estimate_rate_bps, free_bytes, free_bytes_at, profile_code, remaining_secs,
 };
 pub use stream::{
-    AudioEncodeConfig, StreamBackend, StreamEncodeConfig, StreamOutput, VideoEncoderKind,
+    AudioEncodeConfig, STREAM_ENCODER_OPENH264, STREAM_ENCODER_VIDEOTOOLBOX, StreamBackend,
+    StreamEncodeConfig, StreamOutput, VideoEncoderKind,
 };
 
 /// Entry point implemented by the Community stand-in and by the private Pro crate.

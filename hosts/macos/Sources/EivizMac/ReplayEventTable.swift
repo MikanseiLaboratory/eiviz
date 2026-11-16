@@ -12,18 +12,21 @@ struct ReplayEventTable: View {
     let setRange: (UInt64, UInt64, UInt64) -> Void
     let addToPlaylist: (ReplayEventInfo) -> Void
     let remove: (UInt64) -> Void
+    /// A timecode a cell could not parse. The deck shows it in its status line
+    /// instead of quietly leaving the old value in the field.
+    let parseIssue: (ReplayDeckMath.TimecodeParseError) -> Void
 
     var body: some View {
         Table(events, selection: $selection) {
             TableColumn(L10n.t("replay.in")) { event in
-                TimecodeField(frames: event.inFrame, fps: fps) { value in
+                TimecodeField(frames: event.inFrame, fps: fps, report: parseIssue) { value in
                     setRange(event.id, value, event.outFrame)
                 }
             }
             .width(96)
 
             TableColumn(L10n.t("replay.out")) { event in
-                TimecodeField(frames: event.outFrame, fps: fps) { value in
+                TimecodeField(frames: event.outFrame, fps: fps, report: parseIssue) { value in
                     setRange(event.id, event.inFrame, value)
                 }
             }
@@ -88,6 +91,7 @@ struct ReplayEventTable: View {
 private struct TimecodeField: View {
     let frames: UInt64
     let fps: (num: UInt32, den: UInt32)
+    let report: (ReplayDeckMath.TimecodeParseError) -> Void
     let commit: (UInt64) -> Void
 
     @State private var text = ""
@@ -101,24 +105,15 @@ private struct TimecodeField: View {
                 text = ReplayTime.timecode(next, fps)
             }
             .onSubmit {
-                if let value = Self.parse(text, fps: fps) {
+                switch ReplayDeckMath.parseTimecode(text, fps: fps) {
+                case .success(let value):
                     commit(value)
-                } else {
+                case .failure(let issue):
+                    // The cell goes back to the frame it showed, and the reason joins
+                    // the deck's status line instead of dying in a silent revert.
                     text = ReplayTime.timecode(frames, fps)
+                    report(issue)
                 }
             }
-    }
-
-    private static func parse(_ text: String, fps: (num: UInt32, den: UInt32)) -> UInt64? {
-        let parts = text.split(separator: ":")
-        guard parts.count == 4,
-              let hours = UInt64(parts[0]),
-              let minutes = UInt64(parts[1]),
-              let seconds = UInt64(parts[2]),
-              let frames = UInt64(parts[3])
-        else { return nil }
-        let rate = UInt64(ReplayTime.rate(fps).rounded())
-        guard rate > 0, frames < rate else { return nil }
-        return ((hours * 3600 + minutes * 60 + seconds) * rate) + frames
     }
 }

@@ -31,6 +31,9 @@ let package = Package(
             name: "EivizMac",
             dependencies: ["EivizMixer", "EivizRemote"],
             path: "Sources/EivizMac",
+            // The plists are linked into the executables with -sectcreate, not
+            // packaged as resources; without this SwiftPM warns about them.
+            exclude: ["Info.plist", "Info-Remote.plist"],
             // ReplayCoreChecks is an executable check target, not an XCTest bundle;
             // it imports EivizMac with @testable so the module must be built for testing.
             swiftSettings: [.unsafeFlags(["-enable-testing"])]
@@ -59,6 +62,9 @@ let package = Package(
             name: "replay-core-checks",
             dependencies: ["EivizMac", "EivizMixer"],
             path: "Tests/ReplayCoreChecks",
+            // The fixture is read from the source directory at run time; it is not a
+            // buildable file.
+            exclude: ["session-fixture.json"],
             linkerSettings: exeLinker("\(Context.packageDirectory)/Sources/EivizMac/Info.plist")
         ),
     ]

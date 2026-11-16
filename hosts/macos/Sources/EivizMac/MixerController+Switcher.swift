@@ -341,8 +341,9 @@ extension MixerController {
               let index = session.inputs.firstIndex(where: { $0.id == id }),
               !session.inputs[index].isBuiltin
         else { return }
+        let kind = session.inputs[index].kind
         if isRemote {
-            if session.inputs[index].kind == .replay, isLastReplayChannel(inputId: id) {
+            if kind == .replay, isLastReplayChannel(inputId: id) {
                 // Removing the last channel removes the whole replay document.
                 _ = mutateRemote(MixerRemote.deleteReplay())
             } else {
@@ -350,13 +351,33 @@ extension MixerController {
             }
             return
         }
-        let kind = session.inputs[index].kind
         let lastReplay = kind == .replay && isLastReplayChannel(inputId: id)
         let wasPending = pendingInputAdds.remove(id) != nil
         closeInputPreview(id)
         closeAudioInput(id)
         videoRoles.removeValue(forKey: id)
         _ = mixer_destroy_source(id)
+        // The references the Windows deck also removes: scene layers that composite
+        // the input, multiview tiles that show it and the overlays on it. Leaving any
+        // of them behind would rebuild the input the next time the host session is
+        // published, on top of the stale monitor pixels it keeps drawing.
+        for sceneIndex in session.scenes.indices {
+            session.scenes[sceneIndex].layers.removeAll { $0.inputId == id }
+        }
+        for layoutIndex in session.multiviews.indices {
+            var touched = false
+            for tileIndex in session.multiviews[layoutIndex].tiles.indices {
+                var tile = session.multiviews[layoutIndex].tiles[tileIndex]
+                guard tile.kind == .input, tile.sourceId == id else { continue }
+                tile.kind = .none
+                tile.sourceId = 0
+                session.multiviews[layoutIndex].tiles[tileIndex] = tile
+                touched = true
+            }
+            if touched {
+                pushMultiview(session.multiviews[layoutIndex])
+            }
+        }
         removeReplayChannel(inputId: id)
         session.inputs.remove(at: index)
         session.overlays.removeAll { $0.sourceKind == .input && $0.sceneGpuId == id }
@@ -366,11 +387,11 @@ extension MixerController {
             }
         }
         selectedInputId = nil
-        pushOverlays()
         // Same rule as adding: the document has to learn about the removal, or a
         // client reading it still sees an input the mixer no longer owns. An input
         // the document never accepted (still pending) has nothing to remove, and the
-        // last Replay channel has to go through DeleteReplay or the core refuses.
+        // last Replay channel has to go through DeleteReplay or the core refuses
+        // (mutate.rs refuses DeleteInput on the last channel for exactly this).
         if !wasPending {
             if kind == .replay {
                 _ = mutateLocal(lastReplay ? MixerRemote.deleteReplay() : MixerRemote.deleteInput(id))
@@ -378,6 +399,9 @@ extension MixerController {
                 _ = mutateLocal(MixerRemote.deleteInput(id))
             }
         }
+        publishSession()
+        pushOverlays()
+        objectWillChange.send()
     }
 
     /// Moves one input by `delta` positions (the list's arrow controls). The drag

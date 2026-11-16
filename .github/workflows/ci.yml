@@ -271,6 +271,17 @@ jobs:
             exit 1
           fi
 
+      - name: Run Swift replay checks
+        # The checks read the session fixture from the source tree and link the
+        # build.sh dylibs, so they run where the host build just passed. The
+        # release (WMO + explicit modules) build has been failing on newer
+        # toolchains, and the debug run is what the development machine executes.
+        run: |
+          cd hosts/macos
+          swift build -c debug --product replay-core-checks
+          # swift run on the CI image lacks --product; the executable name is unambiguous here.
+          swift run -c debug replay-core-checks
+
   control-api:
     name: Control and API (Ubuntu, no GPU)
     runs-on: ubuntu-latest

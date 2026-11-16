@@ -27,7 +27,9 @@ struct ReplaySettingsView: View {
     @State private var status = ""
     @State private var capacityText = ""
     @State private var capacityRunning = false
-    /// Deck refresh interval, edited here but kept out of the live session until Apply.
+    /// The deck's refresh cadence, held locally until Apply. Writing the session
+    /// settings straight from this picker published it on every spin of a control
+    /// that the operator may still change.
     @State private var deckRefresh: UInt32 = 0
     /// The document as last loaded/applied, so an external angle edit can be adopted
     /// without reloading over the operator's unsaved fields on every tick.
@@ -310,10 +312,6 @@ struct ReplaySettingsView: View {
         return "\(unit.width) x \(unit.height)   \(unit.fpsNum)/\(unit.fpsDen)"
     }
 
-    private func sceneName(_ sceneId: UInt64) -> String {
-        mixer.session.scenes.first { $0.id == sceneId }?.name
-            ?? L10n.format("replay.sceneMissing", "\(sceneId)")
-    }
 
     /// One picker drives both fields: `Source` leaves the unit id zero so the
     /// recorder takes the angle source's own audio instead of a Mixing Unit bus.
@@ -363,14 +361,7 @@ struct ReplaySettingsView: View {
         deckRefresh = mixer.session.settings.replayPresentInterval
     }
 
-    private func inputKind(_ inputId: UInt64) -> InputKind? {
-        mixer.session.inputs.first { $0.id == inputId }?.kind
-    }
 
-    private func inputName(_ inputId: UInt64) -> String {
-        mixer.session.inputs.first { $0.id == inputId }?.name
-            ?? L10n.format("replay.inputMissing", "\(inputId)")
-    }
 
     /// One entry of the add row's source list.
     private struct SourceOption: Identifiable {
@@ -445,9 +436,6 @@ struct ReplaySettingsView: View {
         }
     }
 
-    private func driveIndex(_ storage: ReplayDocument.StorageSpec) -> Int {
-        storages.firstIndex(of: storage) ?? 0
-    }
 
     /// Drive an angle records to. Angles that name no drive report zero, which the
     /// list shows as such: Apply refuses a setup with an unassigned angle.
@@ -497,14 +485,6 @@ struct ReplaySettingsView: View {
         }
     }
 
-    /// Audio source label for the angle list.
-    private func audioLabel(_ unitId: UInt64) -> String {
-        if unitId == 0 {
-            return L10n.t("replay.audioSilent")
-        }
-        return mixer.session.units.first { $0.id == unitId }?.name
-            ?? L10n.format("replay.audioUnit", "\(unitId)")
-    }
 
     /// Adds a row for a new angle. It starts on the next unused scene, so the common case
     /// needs no edits at all, and the row is there to be changed in place if it is not the

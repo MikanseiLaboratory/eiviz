@@ -67,11 +67,6 @@ enum MixerFFI {
         return String(bytes: buffer.prefix(Int(n)), encoding: .utf8) ?? ""
     }
 
-    static func lastError(_ action: String) -> String {
-        let detail = lastErrorText()
-        return detail.isEmpty ? L10n.error(action, -1) : "\(L10n.error(action, -1)): \(detail)"
-    }
-
     static func check(_ code: Int32, _ action: String) -> String? {
         code == EIVIZ_OK ? nil : L10n.error(action, code)
     }
@@ -117,6 +112,42 @@ enum MixerFFI {
         let (n, bytes) = copyUtf8(startCap: 4096) { mixer_session_current_path($0, $1) }
         guard n > 0 else { return nil }
         return String(bytes: bytes, encoding: .utf8)
+    }
+
+    /// Whole-session JSON, reusing one buffer between calls.
+    ///
+    /// Every mutation adopts the core's canonical document, and the snapshot is read at
+    /// least twice each time an edit moves. The copy has no "remaining size" call — it
+    /// answers "would not fit" with -1 — so the buffer lives here, starts small and
+    /// doubles only when the core says the document no longer fits. Touched from the
+    /// main actor only, where every mutation and every session poll runs.
+    enum SessionSnapshotCopy {
+        nonisolated(unsafe) private static var buffer: [UInt8] = []
+
+        static func json() -> String? {
+            let maxCap = 64 << 20
+            var cap = buffer.isEmpty ? 256 << 10 : buffer.count
+            while true {
+                if buffer.count < cap {
+                    buffer = [UInt8](repeating: 0, count: cap)
+                }
+                let n = buffer.withUnsafeMutableBufferPointer { pointer -> Int32 in
+                    mixer_copy_snapshot(pointer.baseAddress, pointer.count)
+                }
+                guard n >= 0 else { return nil }
+                if n == 0 { return "" }
+                if n == -1 {
+                    guard cap < maxCap else { return nil }
+                    cap = min(maxCap, cap * 2)
+                    continue
+                }
+                return String(bytes: buffer.prefix(Int(n)), encoding: .utf8)
+            }
+        }
+
+        static func data() -> Data? {
+            json().map { Data($0.utf8) }
+        }
     }
 
     /// Revision of the control session. The host polls this to notice edits made by the

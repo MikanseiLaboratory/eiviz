@@ -389,6 +389,12 @@ typedef struct EivizMixerStats {
     uint64_t compose_vram_bytes;
     uint64_t delay_vram_bytes;
     uint64_t surface_lost;
+    /* Appended after the first layout; a host built against the smaller struct
+       never reads them. The skip rate between two samples is what says the show
+       missed frames — the raw render time can carry a vsync wait every Fifo
+       present pays even while things are healthy. */
+    uint64_t frames_rendered;
+    uint64_t frames_skipped;
 } EivizMixerStats;
 
 typedef struct EivizMixerRuntimeStats {

@@ -49,6 +49,14 @@ pub fn ring_for_with(angles: usize, asked: u32) -> usize {
     ring_for(angles)
 }
 
+/// The depth the rings are built at right now: the operator's ask while it is set,
+/// otherwise the angle-count default. `prepare` and `ring_bytes` both read this so
+/// the setting has to either take effect or be refused at configure, never just
+/// stored.
+fn current_ring(angles: usize) -> usize {
+    ring_for_with(angles, ASKED_RING.load(Ordering::Relaxed))
+}
+
 fn ring_for(angles: usize) -> usize {
     match angles {
         0..=16 => 4,
@@ -124,6 +132,12 @@ static ASKED_RING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 static ANGLES: Mutex<Option<HashMap<u32, Angle>>> = Mutex::new(None);
 /// The encoder lanes. Built once and then extended as angles are added, because the pool has
 /// to follow the session and not the frame it first saw.
+///
+/// Each lane carries its own clones of the device and queue it was spawned with, so a
+/// lane that belongs to a mixer generation that has already been destroyed holds that
+/// dead device alive — and every texture it would touch lives in that foreign hub. The
+/// stop flag inside `Pending` is what `reset_device` sets, so a device swap can drain
+/// the lanes and let the old device go.
 static QUEUES: OnceLock<Mutex<Vec<PendingRef>>> = OnceLock::new();
 
 /// The replay format's profile code (0 high, 1 standard, 2 low) as the codec's preset.
@@ -213,8 +227,10 @@ pub fn prepare(
     if stale {
         angles.remove(&angle_id);
     }
-    // Read the count before the entry borrows the map.
-    let ring = ring_for(angles.len());
+    // Read the count before the entry borrows the map. The depth is the
+    // operator's ask when there is one (`set_ring_depth` stores it at
+    // configure), and the angle-count default when there is not.
+    let ring = current_ring(angles.len());
     let angle = angles.entry(angle_id).or_insert_with(|| Angle {
         free: (0..ring)
             .map(|_| make_texture(device, width, height, format))
@@ -287,6 +303,33 @@ fn note_dropped(angle_id: u32) {
     }
 }
 
+/// Releases the rings of angles the configuration no longer records.
+///
+/// A configure that dropped a GPU angle used to leave its ring of full-size
+/// textures reserved: no frame went into them again, but the memory stayed until
+/// the process died. Called with the angle ids of the configuration the engine
+/// just applied; a ring that is still wanted is untouched.
+pub fn retain_angles(keep: &[u32]) {
+    let mut guard = ANGLES.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(angles) = guard.as_mut() {
+        let stale = dropped_angle_ids(&angles.keys().copied().collect::<Vec<_>>(), keep);
+        for angle_id in stale {
+            angles.remove(&angle_id);
+        }
+    }
+}
+
+/// Which of the recorded angles have no ring left to release. Split out so the
+/// decision is testable without a device: the rings themselves need a GPU to
+/// exist, the ids do not.
+fn dropped_angle_ids(recorded: &[u32], keep: &[u32]) -> Vec<u32> {
+    recorded
+        .iter()
+        .filter(|angle_id| !keep.contains(angle_id))
+        .copied()
+        .collect()
+}
+
 fn return_to_ring(angle_id: u32, texture: wgpu::Texture) {
     let mut guard = ANGLES.lock().unwrap_or_else(|error| error.into_inner());
     if let Some(angle) = guard.as_mut().and_then(|angles| angles.get_mut(&angle_id)) {
@@ -308,7 +351,7 @@ fn ensure_encoder(device: &wgpu::Device, queue: &wgpu::Queue, angles: usize) {
         let index = guard.len();
         let device = device.clone();
         let queue = queue.clone();
-        let spawned = entry.clone();
+        let spawned = Arc::clone(&entry);
         if std::thread::Builder::new()
             .name(format!("eiviz-replay-encode-{index}"))
             .spawn(move || encode_loop(spawned, device, queue))
@@ -320,6 +363,72 @@ fn ensure_encoder(device: &wgpu::Device, queue: &wgpu::Queue, angles: usize) {
         }
         guard.push(entry);
     }
+}
+
+/// Drops the lanes and the angle rings that were built on a device this process no
+/// longer renders with.
+///
+/// Each lane was spawned with clones of the device and queue it was given, so lanes
+/// from a destroyed mixer generation would hold that device — and every ring texture
+/// in it — alive for the life of the process. Recording against the new render loop
+/// with those rings would copy into a foreign hub and panic inside wgpu, so a device
+/// swap drains the work and lets the old device go. The next `prepare` call respawns
+/// lanes on the current device.
+///
+/// Retires all GPU encode state when the mixer is destroyed or its wgpu Instance
+/// changes. Rings and lanes hold the old device; keeping them across New/Open
+/// produces TextureViewId mismatches in the current renderer.
+pub fn reset_device() {
+    *ANGLES.lock().unwrap_or_else(|error| error.into_inner()) = None;
+    let Some(lanes) = QUEUES.get() else {
+        return;
+    };
+    let stopped: Vec<PendingRef> = lanes
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .drain(..)
+        .collect();
+    for lane in stopped {
+        // Wake the lane out of its queue wait; its loop sees the flag and exits,
+        // dropping its own device and queue clones with it.
+        lane.stop.store(true, Ordering::Release);
+        if let Ok(mut pending) = lane.jobs.lock() {
+            // Jobs still queued hold ring textures; drop them here rather than
+            // presenting or encoding from a stopped lane.
+            pending.clear();
+        }
+        lane.wake.notify_all();
+    }
+}
+
+/// Same retirement under the name the mixer teardown calls. Two entry points
+/// for one state: the mixer is destroyed and render loops rebind to a different
+/// generator, and both want lanes and rings gone.
+pub fn reset() {
+    reset_device();
+}
+
+/// Test and health access: lanes currently alive. Zero after a reset until the next
+/// recording prepares an angle again.
+pub fn lane_count() -> usize {
+    QUEUES
+        .get()
+        .map(|lanes| {
+            lanes
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .len()
+        })
+        .unwrap_or(0)
+}
+
+/// Test and health access: angle rings currently held.
+pub fn ring_count() -> usize {
+    ANGLES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .map_or(0, |angles| angles.len())
 }
 
 fn encode_loop(pending: PendingRef, device: wgpu::Device, queue: wgpu::Queue) {
@@ -373,10 +482,15 @@ fn encode_loop(pending: PendingRef, device: wgpu::Device, queue: wgpu::Queue) {
             return_to_ring(job.angle_id, job.texture);
             continue;
         }
-        let size = loop {
-            match codec.save_to(&mut packet) {
-                Ok(size) => break size,
-                Err(_) => packet.resize(packet.len().saturating_mul(2).max(1024), 0),
+        let size = match save_packet(codec, &mut packet) {
+            Some(size) => size,
+            None => {
+                crate::diag::error(&format!(
+                    "replay GPU encode gave up on the packet for angle {} after the buffer passed its cap",
+                    job.angle_id
+                ));
+                return_to_ring(job.angle_id, job.texture);
+                continue;
             }
         };
         crate::replay::engine().write_gpu_encoded(
@@ -386,6 +500,39 @@ fn encode_loop(pending: PendingRef, device: wgpu::Device, queue: wgpu::Queue) {
             &packet[..size],
         );
         return_to_ring(job.angle_id, job.texture);
+    }
+}
+
+/// Pulls the encoded packet out of the codec, doubling the buffer as the codec
+/// asks for room.
+///
+/// The doubling has to stop somewhere: a codec that keeps asking for more than
+/// twice a 32 MiB buffer is wedged, and an unbounded resize would grow the lane's
+/// packet for as long as it stayed wedged. The cap is generous compared with the
+/// bitrate a frame actually needs, so a legitimate packet can never hit it.
+/// Returns the packet length, or `None` when the frame is given up on.
+fn save_packet(codec: &mut Codec, packet: &mut Vec<u8>) -> Option<usize> {
+    grow_until_fit(|packet| codec.save_to(packet).ok(), packet)
+}
+
+/// The double-until-it-fits loop behind [`save_packet`], on a filler so the cap
+/// itself is testable without a codec that refuses forever.
+fn grow_until_fit(
+    mut fill: impl FnMut(&mut Vec<u8>) -> Option<usize>,
+    packet: &mut Vec<u8>,
+) -> Option<usize> {
+    const MAX_PACKET_BYTES: usize = 32 * 1024 * 1024;
+    const MAX_RETRIES: usize = 16;
+    let mut retries = 0usize;
+    loop {
+        if let Some(size) = fill(packet) {
+            return Some(size);
+        }
+        retries += 1;
+        packet.resize(packet.len().saturating_mul(2).max(1024), 0);
+        if retries > MAX_RETRIES || packet.len() > MAX_PACKET_BYTES {
+            return None;
+        }
     }
 }
 
@@ -421,26 +568,15 @@ fn build_codec(angle_id: u32) -> Option<Codec> {
 
 /// Bytes the encoder rings will hold for this configuration, so a caller can refuse a
 /// setting that would not fit instead of discovering it when the driver fails.
+///
+/// The depth is the operator's ask when one is set (`set_ring_depth` records it), so
+/// the check a configure runs against the machine's budget describes the rings that
+/// would actually be built; a plain zero keeps the angle-count default.
 pub fn ring_bytes(config: &eiviz_control::session::replay::ReplayDto) -> u64 {
     let angles = config.angles.len().max(1);
-    let ring = ring_for(angles) as u64;
+    let ring = ring_for_with(angles, config.buffering.encoder_ring_frames) as u64;
     let frame = u64::from(config.format.width.max(1)) * u64::from(config.format.height.max(1)) * 4;
     angles as u64 * ring * frame
-}
-
-/// Retires all GPU encode state when the mixer is destroyed or its wgpu
-/// Instance changes. Rings and lanes hold the old device; keeping them across
-/// New/Open produces TextureViewId mismatches in the current renderer.
-pub fn reset() {
-    *ANGLES.lock().unwrap_or_else(|error| error.into_inner()) = None;
-    let Some(lanes) = QUEUES.get() else {
-        return;
-    };
-    let mut guard = lanes.lock().unwrap_or_else(|error| error.into_inner());
-    for lane in guard.drain(..) {
-        lane.stop.store(true, Ordering::Release);
-        lane.wake.notify_all();
-    }
 }
 
 #[cfg(test)]
@@ -469,5 +605,58 @@ mod tests {
         assert!(queue_for(4) >= queue_for(8));
         assert!(queue_for(8) >= queue_for(16));
         assert!(queue_for(64) >= 2);
+    }
+
+    /// The operator's ring ask has to reach the rings: a depth that is set but
+    /// ignored would silently build the default, and the configure check that
+    /// budgets VRAM with `ring_bytes` would describe a different ring than the one
+    /// that exists.
+    #[test]
+    fn the_asked_ring_depth_wins_over_the_default() {
+        assert_eq!(ring_for_with(4, 0), ring_for(4), "zero keeps the default");
+        assert_eq!(ring_for_with(4, 6), 6, "a real ask is honoured");
+        assert_eq!(
+            ring_for_with(48, 7),
+            7,
+            "a real ask wins even where the default had shrunk"
+        );
+    }
+
+    /// A wedged encode used to double the lane's packet buffer forever. The cap
+    /// has to give up on the frame, and a packet that starts fitting must not
+    /// need the cap at all.
+    #[test]
+    fn a_stuck_encode_caps_the_packet_growth() {
+        // A filler that never produces anything: the doubling would run away
+        // without a cap. One doubling past the cap can land in the buffer before
+        // the check catches it, so the growth stops within a factor of two.
+        let mut packet = vec![0u8; 1024 * 1024];
+        assert!(grow_until_fit(|_| None, &mut packet).is_none());
+        assert!(
+            packet.len() <= 65 * 1024 * 1024,
+            "the packet stopped growing near its cap: len={}",
+            packet.len()
+        );
+
+        // A packet that fits on the third ask is untouched by the cap. The
+        // doubling starts at the 1 KiB floor the lane's packet uses.
+        let mut asks = 0;
+        let mut packet = vec![0u8; 8];
+        let size = grow_until_fit(
+            |buf| {
+                asks += 1;
+                if asks < 3 { None } else { Some(buf.len() - 2) }
+            },
+            &mut packet,
+        );
+        assert_eq!(size, Some(2046));
+    }
+
+    /// Angles the configuration dropped have no ring left to keep.
+    #[test]
+    fn a_dropped_angle_releases_its_ring_id() {
+        assert_eq!(dropped_angle_ids(&[1, 2, 3], &[1, 3]), vec![2]);
+        assert!(dropped_angle_ids(&[1], &[1]).is_empty());
+        assert_eq!(dropped_angle_ids(&[5], &[]), vec![5]);
     }
 }

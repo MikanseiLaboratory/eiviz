@@ -13,11 +13,60 @@ var failures = 0
     }
 }
 
+/// A parse refused for exactly the named reason.
+func failsAs(
+    _ result: Result<UInt64, ReplayDeckMath.TimecodeParseError>,
+    _ expected: ReplayDeckMath.TimecodeParseError
+) -> Bool {
+    if case .failure(let issue) = result { return issue == expected }
+    return false
+}
+
 let fps: (num: UInt32, den: UInt32) = (60_000, 1_001)
+// The seconds part of a timecode is converted with the real rate (59.94, not the
+// rounded 60), and the frame digits follow from the same rate. At exactly 60 fps
+// both readings agree; at 59.94 they agree only because the display and the parser
+// share these helpers.
 check("timecode zero", ReplayTime.timecode(0, fps) == "00:00:00:00")
 check("timecode one second", ReplayTime.timecode(60, fps) == "00:00:01:00")
+check("timecode one second exact 60", ReplayTime.timecode(60, (60, 1)) == "00:00:01:00")
+check("timecode two seconds exact 60", ReplayTime.timecode(120, (60, 1)) == "00:00:02:00")
 check("duration", ReplayTime.duration(30, 90, fps) == "00:00:01:00")
 check("clock", ReplayTime.clock(3661) == "01:01:01")
+// A 59.94 recording counted at 60 would drift a second every few minutes: frame
+// 1199 is 20.00 seconds in, not 19:59.
+check("timecode 59.94 keeps the real second",
+      ReplayTime.timecode(1199, fps) == "00:00:20:00")
+check("timecode 59.94 last frame of the 20th second",
+      ReplayTime.timecode(1198, fps) == "00:00:19:59")
+// The parser is the inverse of the display, at the same rate, so text the deck
+// wrote comes back as the frame it showed.
+func timecodeRoundTrip(_ frames: UInt64, _ fps: (num: UInt32, den: UInt32)) -> Bool {
+    guard case .success(let parsed) = ReplayDeckMath.parseTimecode(
+        ReplayTime.timecode(frames, fps), fps: fps)
+    else { return false }
+    return parsed == frames
+}
+check("timecode parse round trips 59.94", timecodeRoundTrip(1199, fps))
+check("timecode parse round trips 59.94 mid-second", timecodeRoundTrip(1234, fps))
+check("timecode parse round trips exact 60", timecodeRoundTrip(240, (60, 1)))
+check("parse reads the frame the deck showed", {
+    guard case .success(let parsed) = ReplayDeckMath.parseTimecode("00:00:01:05", fps: fps) else { return false }
+    return ReplayTime.timecode(parsed, fps) == "00:00:01:05"
+}())
+check("parse refuses wrong shape", failsAs(ReplayDeckMath.parseTimecode("00:01:02", fps: fps), .malformed))
+check("parse refuses minutes past 59", failsAs(ReplayDeckMath.parseTimecode("00:60:00:00", fps: fps), .fieldRange))
+check("parse refuses frames past the rate", failsAs(ReplayDeckMath.parseTimecode("00:00:00:60", fps: fps), .fieldRange))
+check("parse allows the frame digit at 59.94", {
+    // 59.94 has 60 frame numbers per second, so :59 is its last.
+    guard case .success = ReplayDeckMath.parseTimecode("00:00:01:59", fps: fps) else { return false }
+    return true
+}())
+check("parse refuses absurd hours", failsAs(ReplayDeckMath.parseTimecode("1000:00:00:00", fps: fps), .fieldRange))
+check("parse refuses a rate no display can carry",
+      failsAs(ReplayDeckMath.parseTimecode("00:00:01:00", fps: (UInt32.max, 1)), .tooLarge))
+check("timecode falls back to frames past the display limit",
+      ReplayTime.timecode(5, (UInt32.max, 1)) == "5")
 
 let livePlaying = ReplayTransportState(live: true, playing: true)
 let pause = ReplayTransportRules.toggle(livePlaying)
@@ -63,6 +112,41 @@ check("playlist remaining past end", ReplayDeckMath.remainingPlaylist(clips: cli
 
 check("clip hash is stable", ReplayDeckMath.clipUidHash("abc") == ReplayDeckMath.clipUidHash("abc"))
 check("clip hash differs", ReplayDeckMath.clipUidHash("abc") != ReplayDeckMath.clipUidHash("abd"))
+
+
+// MARK: - Typed spans and timecodes are validated, not corrected
+
+check("mark last ten seconds", ReplayDeckMath.markLastSpan(secondsText: "10", fps: fps) == 599)
+check("mark last exact 60", ReplayDeckMath.markLastSpan(secondsText: "10", fps: (60, 1)) == 600)
+check("mark last accepts fractional seconds", ReplayDeckMath.markLastSpan(secondsText: "0.5", fps: (60, 1)) == 30)
+check("mark last allows a day", ReplayDeckMath.markLastSpan(secondsText: "86400", fps: (60, 1)) != nil)
+check("mark last refuses past a day", ReplayDeckMath.markLastSpan(secondsText: "86401", fps: (60, 1)) == nil)
+check("mark last refuses text", ReplayDeckMath.markLastSpan(secondsText: "about", fps: (60, 1)) == nil)
+check("mark last refuses empty", ReplayDeckMath.markLastSpan(secondsText: "  ", fps: (60, 1)) == nil)
+check("mark last refuses negative", ReplayDeckMath.markLastSpan(secondsText: "-5", fps: (60, 1)) == nil)
+
+
+// MARK: - Monitor ids may not collide with ones a session already carries
+
+var carriedMonitors = MixerSessionData.default()
+carriedMonitors.nextMonitorId = 1000
+for index in carriedMonitors.scenes.indices {
+    var scene = carriedMonitors.scenes[index]
+    scene.monitorId = 0
+    carriedMonitors.scenes[index] = scene
+}
+check("fresh session starts the counter at 1000", carriedMonitors.nextMonitorId == 1000)
+if let freshScene = carriedMonitors.scenes.first {
+    var scene = freshScene
+    scene.monitorId = 5000
+    carriedMonitors.scenes[0] = scene
+}
+carriedMonitors.assignMonitors()
+check("assign clears a carried monitor id", carriedMonitors.nextMonitorId >= 5001)
+let allocated = carriedMonitors.nextMonitorId
+carriedMonitors.assignMonitors()
+check("a second pass keeps the counter", carriedMonitors.nextMonitorId == allocated)
+
 
 // MARK: - Document edits
 
@@ -795,6 +879,10 @@ if let source = try? String(contentsOf: l10nPath, encoding: .utf8),
         includingPropertiesForKeys: nil
     ) {
         let regex = try! NSRegularExpression(pattern: #"L10n\.(?:t|format)\("([^"]+)""#)
+        // A literal action inside L10n.error becomes the "action.<name>" key, the
+        // same way `fail(_:_:)` turns its action argument into one. Callers build
+        // some of those keys at runtime; those are not literals and are skipped.
+        let errorRegex = try! NSRegularExpression(pattern: #"L10n\.error\("([^"]+)""#)
         for file in files where file.pathExtension == "swift" {
             guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
             let range = NSRange(text.startIndex..<text.endIndex, in: text)
@@ -804,6 +892,12 @@ if let source = try? String(contentsOf: l10nPath, encoding: .utf8),
                 // Interpolated call sites build the key at runtime; they are not literals.
                 if key.contains("\\(") { continue }
                 if !englishKeys.contains(key) { missing.append(key) }
+            }
+            for match in errorRegex.matches(in: text, range: range) {
+                guard let keyRange = Range(match.range(at: 1), in: text) else { continue }
+                let action = String(text[keyRange])
+                if action.contains("\\(") { continue }
+                if !englishKeys.contains("action.\(action)") { missing.append("action.\(action)") }
             }
         }
     }

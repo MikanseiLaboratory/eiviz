@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import EivizMixer
 import SwiftUI
 // `UTType.mpeg4Movie`, for the export save panel. AppKit does not re-export it.
@@ -34,10 +35,6 @@ struct ReplayView: View {
     @State private var stats: EivizReplayStats?
     @State private var selectedEvent: UInt64?
     @State private var selectedClip: String?
-    @State private var kind = "Cut"
-    @State private var timing = "Overwrap"
-    @State private var frames = "0"
-    @State private var preservePitch = false
     /// Default transition for clips added later.
     @State private var defaultKind = "Cut"
     @State private var defaultTiming = "Overwrap"
@@ -50,11 +47,12 @@ struct ReplayView: View {
     @StateObject private var exporter = ReplayExportRunner()
     /// Recording health: where the frames went.
     @State private var health = ""
-    /// True while a selection change fills the editors, so they do not write back.
     @State private var status = ""
     /// Recorded waveform of the angle being watched.
     /// Monitor per angle, so each angle scene has somewhere to present.
     @State private var angleMonitors: [UInt32: UInt64] = [:]
+    /// Angles the surface budget could not take on, so their tiles show the limit
+    /// overlay instead of a black box that reads as a broken camera.
     /// Show every angle as a live picture instead of the selected one, the way the
     /// Windows deck's Multiview does.
     @State private var multiview = false
@@ -102,7 +100,14 @@ struct ReplayView: View {
     /// per channel so a later tick does not undo an operator's seek.
     @State private var didInitialSeek = false
 
-    private let tick = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
+    /// Read once per tick and cached: rows read the recording uuid and the angle
+    /// ranges, and the state line reads the missing-file count. A per-row FFI round
+    /// trip and a disk stat per cell used to land inside the table's render.
+    @State private var recordingUuid = ""
+    @State private var angleRanges: [UInt32: (first: UInt64, last: UInt64)] = [:]
+    @State private var missingRecordings = 0
+
+    @State private var tick = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 8) {
@@ -777,24 +782,6 @@ struct ReplayView: View {
     private var clips: [ReplayClipInfo] { document?.clips(playlistId: playlistId) ?? [] }
     private var playlists: [PlaylistInfo] { document?.playlists ?? [] }
 
-    private func monitor(title: String, caption: String, monitorId: UInt64, sourceId: UInt64) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).fontWeight(.bold)
-            if monitorId != 0 && sourceId != 0 {
-                MetalPreviewRepresentable(
-                    role: .monitor(monitorId: monitorId, sourceId: sourceId),
-                    presentInterval: deckPresentInterval)
-                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: 180)
-                    .background(Color.black)
-            } else {
-                Color.black.aspectRatio(16.0 / 9.0, contentMode: .fit)
-            }
-            Text(caption).font(.caption).foregroundStyle(EivizTheme.dim)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     private var outputCaption: String {
         guard let item = channels.first(where: { $0.index == channel }) else {
             return L10n.t("replay.noChannels")
@@ -836,9 +823,10 @@ struct ReplayView: View {
         } else {
             base = L10n.t("replay.stateIdle")
         }
-        let missing = document?.missingRecordingCount(skip: stats?.state == 1 ? mixer.replayRecordingUuid() : nil) ?? 0
-        if missing > 0 {
-            return base + "  " + L10n.format("replay.mediaMissing", "\(missing)")
+        // The count was read once this tick; polling the disk inside a computed
+        // property means a stat call per render.
+        if missingRecordings > 0 {
+            return base + "  " + L10n.format("replay.mediaMissing", "\(missingRecordings)")
         }
         return base
     }
@@ -942,7 +930,10 @@ struct ReplayView: View {
                 protect: { setEventProtected($0, $1) },
                 setRange: { id, start, end in setEventRange(id, start, end) },
                 addToPlaylist: { addEventToPlaylist($0) },
-                remove: { deleteEvent($0) })
+                remove: { deleteEvent($0) },
+                parseIssue: { issue in
+                    status = L10n.t(ReplayDeckMath.timecodeIssueKey(issue))
+                })
             if (document?.events ?? []).isEmpty {
                 Text(L10n.t("replay.noEvents"))
                     .font(.caption)
@@ -1029,7 +1020,7 @@ struct ReplayView: View {
                 clips: clips,
                 angles: angles,
                 fps: fps,
-                handlers: ReplayClipTable.Handlers(
+                handlers: ReplayClipHandlers(
                     outText: { clipOutText($0) },
                     angle: { setClipAngle($0, $1) },
                     speed: { setClipSpeed($0, $1) },
@@ -1243,6 +1234,10 @@ struct ReplayView: View {
         if let first = channels.first {
             channel = first.index
         }
+        // The transition editors start from the document, not from their field
+        // defaults: without this the first change saved "Cut / 0 frames" over
+        // whatever the playlist really asked for.
+        loadDefaultTransition()
         if outputMonitor == 0 {
             outputMonitor = mixer.allocateMonitorId()
         }
@@ -1251,13 +1246,21 @@ struct ReplayView: View {
         }
     }
 
-    /// One monitor per angle, allocated when the angle set changes. The body only
-    /// reads this, so no state changes during layout.
+    /// One monitor per angle, allocated while the surface budget still has room. The
+    /// body only reads this, so no state changes during layout. An angle the budget
+    /// cannot take stays without a monitor; its tile says "Limit reached" instead of
+    /// turning into a black box nobody can explain.
+    ///
+    /// The places of output and live are counted first: their surfaces may not have
+    /// attached yet when this runs, and the deck's own two pictures must not be pushed
+    /// out by its numbered tiles.
     private func ensureAngleMonitors() {
-        guard let document else { return }
-        var monitors: [UInt32: UInt64] = [:]
-        for angle in document.angles {
-            monitors[angle.id] = angleMonitors[angle.id] ?? mixer.allocateMonitorId()
+        guard let document, !mixer.isRemote else { return }
+        var monitors = angleMonitors.filter { id, _ in
+            document.angles.contains { $0.id == id }
+        }
+        for angle in document.angles where (monitors[angle.id] ?? 0) == 0 {
+            monitors[angle.id] = mixer.allocateMonitorId()
         }
         if monitors != angleMonitors {
             angleMonitors = monitors
@@ -1266,8 +1269,9 @@ struct ReplayView: View {
 
     /// Where the frames went: what the readback delivered, what the encoder
     /// accepted, and what the disk is doing. Without it an operator only sees that
-    /// a recording is short, not which stage lost the picture.
-    private func refreshHealth() {
+    /// a recording is short, not which stage lost the picture. Takes the snapshot the
+    /// tick already read, so the health line does not ask the mixer again.
+    private func refreshHealth(_ snapshot: (stats: EivizReplayStats, angles: [EivizReplayAngleStats])?) {
         // The recording runs somewhere else, so its health is read there.
         if mixer.isRemote {
             health = L10n.t("replay.remoteMonitor")
@@ -1275,7 +1279,7 @@ struct ReplayView: View {
         }
         // Kept while a recording exists, including after it stopped, so the reason
         // it stopped stays readable.
-        guard let snapshot = mixer.replayStatsWithAngles(), snapshot.stats.state != 0 else {
+        guard let snapshot, snapshot.stats.state != 0 else {
             health = ""
             return
         }
@@ -1287,17 +1291,34 @@ struct ReplayView: View {
     }
 
     private func refresh() {
-        stats = mixer.replayStats()
-        refreshHealth()
+        // One read feeds the state line, the transport and the health line: the old
+        // tick asked for a plain copy and then the full per-angle copy of the same
+        // numbers half a line later.
+        let snapshot = mixer.replayStatsWithAngles()
+        stats = snapshot?.stats
+        refreshHealth(snapshot)
+        // What rows and the state line read this tick, copied once. A replay deck
+        // with dozens of clips used to pay a mixer call per OUT cell and a disk stat
+        // per recording every time the table drew.
         ensureAngleMonitors()
+        recordingUuid = mixer.isRemote ? "" : MixerFFI.replayRecordingUuid()
+        var ranges: [UInt32: (first: UInt64, last: UInt64)] = [:]
+        for angle in angles {
+            ranges[angle.id] = mixer.replayAngleRange(angle.id)
+        }
+        angleRanges = ranges
+        missingRecordings = document?.missingRecordingCount(
+            skip: (stats?.state == 1 && !recordingUuid.isEmpty) ? recordingUuid : nil) ?? 0
         // The core can change the document (remote edits, the vMix API), so adopt
-        // anything we did not write ourselves.
+        // anything we did not write ourselves. The compare is structural: re-encoding
+        // the host copy normalized it into a constant mismatch.
         if let latest = mixer.replayDocument, latest.json != loadedJson {
             document = latest
             loadedJson = latest.json
             // A newly added angle needs its own monitor now; waiting for the next
             // tick left the multiview tile black until the deck was reopened.
             ensureAngleMonitors()
+            loadDefaultTransition()
         }
         if channels.isEmpty {
             load()
@@ -1468,13 +1489,15 @@ struct ReplayView: View {
                 context.stroke(path, with: .color(color), lineWidth: width)
             }
         }
-        .frame(height: 56)
+        .frame(height: 48)
         .background(Color.black.opacity(0.35))
         // Clicking the waveform moves the playhead; Shift-click sets Mark In there and
         // Control-click sets Mark Out. The waveform is where the quiet moment is visible,
         // so a cut is struck where the operator is looking instead of seeking, looking
-        // away to the buttons, and pressing one while the playhead runs on. The modifier
-        // is read from the live event because SwiftUI's tap gesture does not report it.
+        // away to the buttons, and pressing one while the playhead runs on. The
+        // modifiers are read when the gesture starts: SwiftUI's drag events do not
+        // carry them, and the class-level flag answers what the keyboard holds at
+        // drag end, not what it held at click.
         .overlay(
             GeometryReader { proxy in
                 Color.clear
@@ -1621,8 +1644,18 @@ struct ReplayView: View {
     /// `force` is for the whole-recording bar: it replaces the clip on air, because the
     /// operator asked for a frame outside it. The waveform and step paths keep the
     /// current clip (they are looking close to where the operator already is).
+    ///
+    /// A Remote cannot take the scratch cue: its protocol only cues clips its own
+    /// document already holds, and "seek-scrub" is not one of them — the cue failed
+    /// there and the seek with it. A live remote channel also ignores the plain seek
+    /// (the rate the engine keeps for the recording edge wins), so the deck says why
+    /// the drag did not move instead of letting the row go dead.
     private func cueScratchForSeek(target: UInt64, force: Bool = false) {
         if !force, !transport.live, playingClipUid != nil { return }
+        if mixer.isRemote {
+            status = L10n.t("replay.remoteSeekLive")
+            return
+        }
         guard let angle = activeAngle,
               let range = mixer.replayAngleRange(angle.id),
               range.last > range.first
@@ -1691,6 +1724,8 @@ struct ReplayView: View {
 
     /// Marks the last N seconds as one event without walking the playhead: the range is
     /// written straight into the session, the same range Mark In / Mark Out would leave.
+    /// The span is validated before it is converted: a NaN or a span past a day would
+    /// have converted into an integer here and taken the deck down with the trap.
     private func markLast() {
         guard isRecording else {
             status = L10n.t("replay.markLastNeedsRecording")
@@ -1700,8 +1735,10 @@ struct ReplayView: View {
             status = L10n.t("replay.markOutFailed")
             return
         }
-        let seconds = max(1.0, Double(markLastSeconds) ?? 10)
-        let span = UInt64(seconds * ReplayTime.rate(fps))
+        guard let span = ReplayDeckMath.markLastSpan(secondsText: markLastSeconds, fps: fps) else {
+            status = L10n.t("replay.markLastRange")
+            return
+        }
         let now = max(snapshot.recording_frame, snapshot.last_frame)
         let start = now > span ? now - span : 0
         let recording = mixer.replayRecordingUuid()
@@ -1926,6 +1963,8 @@ struct ReplayView: View {
         save(current)
     }
 
+    /// Writes the clip gain. The mixer clamps it, so a nonsense value is refused
+    /// here rather than silently corrected.
     private func setClipGain(_ uid: String, _ db: Double) {
         guard var current = document else { return }
         guard db.isFinite, db >= -60.0, db <= 12.0 else {
@@ -1936,12 +1975,16 @@ struct ReplayView: View {
         save(current)
     }
 
+    /// Writes the pitch flag of the selected clip. Slow motion otherwise drops the
+    /// pitch along with the speed.
     private func setClipPitch(_ uid: String, _ value: Bool) {
         guard var current = document else { return }
         current.setClipPreservePitch(playlistId: playlistId, uid: uid, value: value)
         save(current)
     }
 
+    /// Writes the clip's audio source. A clip may deliberately be silent, or take
+    /// another angle's sound.
     private func setClipAudioChoice(_ uid: String, _ value: String) {
         guard var current = document else { return }
         if value.hasPrefix("Angle:") {
@@ -2055,7 +2098,7 @@ struct ReplayView: View {
         _ = current.addEventClip(
             eventId: eventId,
             angleId: angleId,
-            playlistId: current.channelPlaylist(channelIndex: channel) ?? 0,
+            playlistId: current.channelPlaylist(channelIndex: channel),
             sortByTimecode: clipOrder == "Timecode")
     }
 
@@ -2134,11 +2177,31 @@ struct ReplayView: View {
     private func applyDefaultTransition() {
         guard var current = document else { return }
         let frames = defaultKind == "Cut" ? 0 : UInt32(defaultFrames) ?? 0
-        current.setDefaultTransition(
-            playlistId: playlistId,
-            transition: ReplayTransitionInfo(kind: defaultKind, timing: defaultTiming, durationFrames: frames)
+        // Loading the document writes the same values back into the editors, which
+        // fires onChange. Saving the identical transition is only an echo, and a
+        // half-loaded editor would clobber the real frames with zero. Direction
+        // has no editor here, so it stays whatever the document already has.
+        let existing = current.defaultTransition(playlistId: playlistId)
+        let next = ReplayTransitionInfo(
+            kind: defaultKind,
+            direction: existing.direction,
+            timing: defaultTiming,
+            durationFrames: frames
         )
+        if existing == next {
+            return
+        }
+        current.setDefaultTransition(playlistId: playlistId, transition: next)
         save(current)
+    }
+
+    /// Shows the playlist default in the editors.
+    private func loadDefaultTransition() {
+        guard let current = document else { return }
+        let fallback = current.defaultTransition(playlistId: playlistId)
+        defaultKind = fallback.kind
+        defaultTiming = fallback.timing
+        defaultFrames = "\(fallback.durationFrames)"
     }
 
     private func record(_ on: Bool) {
@@ -2321,7 +2384,7 @@ struct ReplayView: View {
         scrubFrame = nil
         // A speed preset is a playback instruction. On a live channel there is no clip to
         // play, so leave the edge at the current frame and run that clip at the new rate.
-        if transport.live, stats?.last_frame ?? 0 > 0 {
+        if transport.live, (stats?.last_frame ?? 0) > 0 {
             // A speed preset on a live channel starts the recorded picture at that rate,
             // from the newest frame rather than from wherever a stale position said zero.
             seekHolding(to: ReplayDeckMath.liveHoldTarget(playhead: displayPlayhead, recordingHead: recordingHead), keepPlaying: true)
@@ -2333,8 +2396,6 @@ struct ReplayView: View {
         }
     }
 
-    /// Live tiles stay the scene. Jog tiles decode the proxy, or say it is missing.
-    @ViewBuilder
     private func clipOutText(_ clip: ReplayClipInfo) -> String {
         let time = ReplayTime.timecode(clip.outFrame, fps)
         guard clipExpired(clip) else { return time }
@@ -2342,10 +2403,11 @@ struct ReplayView: View {
     }
 
     private func clipExpired(_ clip: ReplayClipInfo) -> Bool {
-        let current = mixer.replayRecordingUuid()
-        guard !current.isEmpty,
-              clip.recordingUuid.caseInsensitiveCompare(current) == .orderedSame,
-              let range = mixer.replayAngleRange(clip.angleId)
+        // Both reads were copied once this tick: one mixer call per OUT cell used to
+        // pay for itself with every keypress, every draw and every row added.
+        guard !recordingUuid.isEmpty,
+              clip.recordingUuid.caseInsensitiveCompare(recordingUuid) == .orderedSame,
+              let range = angleRanges[clip.angleId]
         else { return false }
         return clip.outFrame < range.first
     }

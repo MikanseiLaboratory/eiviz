@@ -53,12 +53,16 @@ patch_install_name "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_mixer.dylib" "@rpath/libei
 patch_install_name "$REMOTE" "@rpath/libeiviz_remote.dylib" "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_remote.dylib"
 patch_install_name "$EIVIZ_MIXER_LIBDIR/deps/libeiviz_remote.dylib" "@rpath/libeiviz_remote.dylib" "$REMOTE"
 cd "$ROOT/hosts/macos"
-# SwiftPM searches the products directory before the Rust target directory. A dylib
-# copied there by an earlier build would then be linked instead of the one just built,
-# so clear the stale copies before linking.
+# Build only the shipped products. A plain `swift build` also builds the
+# replay-core-checks test executable, whose release (WMO + explicit modules)
+# build fails on current toolchains while its debug build — the one the checks
+# actually run under — keeps working. SwiftPM searches the products directory
+# before the Rust target directory, so a dylib copied there by an earlier build
+# would be linked instead of the one just built; clear the stale copies first.
 BIN="$(swift build "${SWIFT_ARGS[@]}" --show-bin-path)"
 rm -f "$BIN/libeiviz_mixer.dylib" "$BIN/libeiviz_remote.dylib" "$BIN"/libndi*.dylib
-swift build "${SWIFT_ARGS[@]}"
+swift build "${SWIFT_ARGS[@]}" --product eiviz-mac
+swift build "${SWIFT_ARGS[@]}" --product eiviz-remote
 BIN="$(swift build "${SWIFT_ARGS[@]}" --show-bin-path)"
 cp -f "$DYLIB" "$BIN/"
 cp -f "$REMOTE" "$BIN/"
@@ -72,6 +76,26 @@ chmod +x "$ROOT/hosts/macos/relocate-dylib.sh" "$ROOT/hosts/macos/package-app.sh
 "$ROOT/hosts/macos/relocate-dylib.sh" "$BIN/eiviz-mac" "$BIN/libeiviz_mixer.dylib" "$BIN/libeiviz_remote.dylib"
 "$ROOT/hosts/macos/relocate-dylib.sh" "$BIN/eiviz-remote" "$BIN/libeiviz_mixer.dylib" "$BIN/libeiviz_remote.dylib"
 "$ROOT/hosts/macos/package-app.sh" "$BIN"
+# install_name_tool drops the (ad-hoc) code signature while rewriting load
+# commands, and a broken signature makes the binaries start far slower and
+# blocks TCC from showing the app by name. Re-sign everything the linker and
+# the relocation touched, and the bundles package-app.sh assembled.
+codesign --force --sign - "$DYLIB" "$REMOTE"
+codesign --force --sign - "$BIN/eiviz-mac" "$BIN/eiviz-remote"
+# libndi ships signed; the relocation above rewrites its load commands (and the
+# copies in $BIN), so put an ad-hoc one back the same way.
+if ls "$BIN"/libndi*.dylib >/dev/null 2>&1; then
+  codesign --force --sign - "$BIN"/libndi*.dylib
+fi
+for app in "$BIN/eiviz-mac.app" "$BIN/eiviz-remote.app" "$BIN"/*.app; do
+  [ -d "$app" ] || continue
+  codesign --force --deep --sign - "$app"
+done
+echo "codesign status:"
+codesign -v "$BIN/eiviz-mac"
+codesign -v "$BIN/eiviz-remote"
+codesign -v "$DYLIB"
+codesign -v "$REMOTE"
 echo "eiviz-mac -> $BIN/eiviz-mac"
 echo "eiviz-remote -> $BIN/eiviz-remote"
 file "$BIN/eiviz-mac" "$BIN/eiviz-remote" "$BIN/libeiviz_mixer.dylib" "$BIN/libeiviz_remote.dylib"
