@@ -3,7 +3,7 @@
 [![Test Build](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/ci.yml/badge.svg)](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/ci.yml)
 [![Publish Release](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/release.yml/badge.svg)](https://github.com/MikanseiLaboratory/eiviz/actions/workflows/release.yml)
 
-<img width="816" height="460" alt="eiviz-07-I1-frameless-text-right" src="https://github.com/user-attachments/assets/a5953466-5084-423e-813b-b0118f7dc88d" />
+<img width="408" height="230" alt="eiviz" src="https://raw.githubusercontent.com/MikanseiLaboratory/eiviz/main/docs/src/assets/branding/png/eiviz-07-I1-frameless-text-right.png" />
 
 A cross-platform vision mixer with unlimited M/E. eiviz / 映像(eizou) + visual.
 
@@ -11,7 +11,7 @@ A cross-platform vision mixer with unlimited M/E. eiviz / 映像(eizou) + visual
 | --- | --- | --- |
 | Windows x64 | Direct3D 12 or Vulkan | Supported |
 | Windows Arm | Direct3D 12 or Vulkan | Under Development |
-| macOS | Metal | Supported (untested) |
+| macOS | Metal | Supported (Apple Silicon; verified on M3) |
 | Linux | Vulkan | CLI Only |
 
 [Documentation](https://mikanseilaboratory.github.io/eiviz/en/) · [日本語](README.ja.md)
@@ -27,6 +27,14 @@ Run `eiviz-*-win-x64-setup.exe`.
 ### macOS Apple Silicon (`macos-arm64`)
 
 Run `eiviz-*-macos-arm64.pkg`.
+
+macOS 14 or later on Apple Silicon is the supported target. The package is ad-hoc
+signed until notarization credentials are wired into the release; if Gatekeeper
+blocks it, right-click the package and choose Open, or run
+`xattr -dr com.apple.quarantine /Applications/eiviz.app` after installing.
+
+macOS DeckLink I/O is not supported; use Windows for DeckLink hardware. The
+macOS Pro module still provides RTMP, Replay, and licensing.
 
 ### macOS Intel (`macos-x64`)
 
@@ -57,3 +65,7 @@ eiviz original source is licensed under the [PolyForm Shield License 1.0.0](LICE
 Internal use is allowed, including at for-profit organizations. Competing with eiviz is not: shipping a vision mixer (paid or free) that is a practical substitute for this software, or for another product Shugo Kawamura / Mikansei Laboratory provides using it. A separate license from Shugo Kawamura / Mikansei Laboratory is required for that.
 
 Third-party crates and libraries stay under their original MIT / Apache-2.0 / Zlib terms. See [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### Credits
+
+Logo: Guleruun (https://twitter.com/guleruun)

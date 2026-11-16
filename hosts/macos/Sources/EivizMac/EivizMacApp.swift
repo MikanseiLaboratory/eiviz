@@ -35,6 +35,7 @@ public enum EivizLaunch {
 }
 
 struct EivizMacApp: App {
+    @NSApplicationDelegateAdaptor(EivizAppDelegate.self) private var appDelegate
     @StateObject private var mixer = MixerController()
 
     init() {
@@ -70,5 +71,13 @@ struct EivizMacApp: App {
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1680, height: 980)
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button(L10n.t("chrome.preferences")) {
+                    mixer.showPreferences = true
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+        }
     }
 }

@@ -17,12 +17,12 @@ eivizは特定の企業ではなく、メインメンテナとコミュニティ
 
 [ドキュメント](https://mikanseilaboratory.github.io/eiviz/ja/) · [English](README.md)
 
-<img width="1916" height="1030" alt="eiviz" src="https://github.com/user-attachments/assets/7b2f30c0-7870-49d7-9fdc-369da2e10ef4" />
+<img width="480" height="258" alt="eiviz" src="https://raw.githubusercontent.com/MikanseiLaboratory/eiviz/main/docs/src/assets/branding/png/eiviz-07-I1-frameless-text-right.png" />
 
 | 環境 | 描画 | 状態 |
 | --- | --- | --- |
 | Windows x64 | Direct3D 12またはVulkan | 対応済み |
-| macOS | Metal | 対応済み(未テスト) |
+| macOS | Metal | 対応済み（Apple Silicon、M3で検証） |
 | Linux | Vulkan | headlessのみ |
 
 ## インストール
@@ -36,6 +36,12 @@ eivizは特定の企業ではなく、メインメンテナとコミュニティ
 ### macOS Apple Silicon（`macos-arm64`）
 
 `eiviz-*-macos-arm64.pkg`を実行します。
+
+macOS 14以降のApple Siliconがサポート対象です。公証の資格情報がリリースに入るまでは
+ad-hoc署名のため、Gatekeeperに止められた場合はpkgを右クリックして「開く」を選ぶか、
+インストール後に`xattr -dr com.apple.quarantine /Applications/eiviz.app`を実行してください。
+
+macOSのDeckLink入出力は非対応です。DeckLinkを使う場合はWindowsを使用してください。macOS版ProモジュールはRTMP・Replay・ライセンスを提供します。
 
 ### macOS Intel（`macos-x64`）
 
@@ -89,3 +95,7 @@ Vibe codingアプリケーションではなく、開発の要所・必要なタ
 有償・無償を問わず、eivizの競合となる映像スイッチャーを開発・販売を禁止します。河村柊吾/未完成成果物研究所がこのソースコードを利用して出している他の製品についても同じ条件が適用されます。競合製品を出したい場合は、別途ライセンス契約が必要です。詳細はお問い合わせください。
 
 同梱の第三者ライブラリは、それぞれのMIT、Apache-2.0、Zlibのままです。[NOTICE](NOTICE)と[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)を見てください。
+
+### クレジット
+
+ロゴ: Guleruun (https://twitter.com/guleruun)

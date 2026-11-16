@@ -14,6 +14,7 @@ struct SceneAnimView: View {
     @State private var live = SceneAnimLive.idle
     @State private var status = ""
     @State private var viewZoom: CGFloat = 0.8
+    @State private var persistTask: Task<Void, Never>?
 
     private let tally = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
     private static let easings: [(String, UInt32)] = [
@@ -75,8 +76,13 @@ struct SceneAnimView: View {
             }
         }
         .onDisappear {
-            if persist, mixer.isRemote, let scene {
+            persistTask?.cancel()
+            guard persist, let scene else { return }
+            if mixer.isRemote {
                 _ = mixer.commitRemoteScene(scene)
+            } else {
+                // Flush an edit that was still inside the coalescing window.
+                _ = mixer.mutateLocal(MixerRemote.upsertScene(scene))
             }
         }
     }
@@ -659,7 +665,9 @@ struct SceneAnimView: View {
         if ended {
             mixer.pushSceneAnim(scene)
             if persist {
-                mixer.publishSession()
+                // The animation lives in the scene; send that scene, not the whole
+                // host document (which would roll back other clients' edits).
+                _ = mixer.mutateLocal(MixerRemote.upsertScene(scene))
             }
         }
     }
@@ -680,10 +688,20 @@ struct SceneAnimView: View {
         let scene = mixer.session.scenes[index]
         guard !mixer.isRemote else { return }
         mixer.pushSceneAnim(scene)
-        if persist {
-            mixer.publishSession()
-        }
+        schedulePersist(scene)
         status = ""
+    }
+
+    /// Sliders and steppers call `update` for every step. Coalesce the document
+    /// write: each `upsertScene` plans the whole session, and the last value wins.
+    private func schedulePersist(_ scene: SceneEntry) {
+        guard persist, !mixer.isRemote else { return }
+        persistTask?.cancel()
+        persistTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            _ = mixer.mutateLocal(MixerRemote.upsertScene(scene))
+        }
     }
 
     private func updateSequence(_ id: UInt64, _ body: (inout SceneSequence) -> Void) {

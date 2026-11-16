@@ -1804,6 +1804,19 @@ mod tests {
     }
 
     #[test]
+    fn an_explicit_video_toolbox_profile_maps_to_encoder_one() {
+        let mut doc = rtmp_doc("youtube", "rtmp://example/live");
+        doc.stream_encoders[0].encoder = "VideoToolbox".into();
+        let ops = plan(None, &doc);
+        assert!(
+            ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamEncoder(spec) if spec.encoder == 1)
+            }),
+            "{ops:?}"
+        );
+    }
+
+    #[test]
     fn changing_the_encode_profile_rebuilds_the_encoder() {
         let prev = rtmp_doc("youtube", "rtmp://example/live");
         let mut next = rtmp_doc("youtube", "rtmp://example/live");

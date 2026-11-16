@@ -190,6 +190,67 @@ sequenceDiagram
   Clock->>Out: Audio
 ```
 
+## Hardware acceleration by stage
+
+The mixer keeps one GPU frame type and one upload/ingest contract across platforms; only
+the platform import step differs. The selected profile is logged at startup as
+`accel ...`, so a performance report can name the actual path.
+
+| Stage | Windows | macOS | Linux |
+|---|---|---|---|
+| File / UVC decode | Media Foundation with hardware transforms and a D3D manager | AVFoundation / VideoToolbox into `CVMetalTextureCache` | Vulkan Video |
+| Frame upload | ReBAR or Vulkan host-visible ring | Unified-memory shared `MTLTexture` ring | Vulkan staging/host-visible |
+| NDI ingest | ReBAR / Vulkan ingest ring | Unified-memory ring with frame leases | Vulkan ingest ring |
+| MP4 export | Media Foundation hardware H.264/HEVC | AVAssetWriter / VideoToolbox H.264/HEVC | Not available |
+| Live RTMP video | OpenH264 (software) | VideoToolbox H.264 (OpenH264 fallback) | OpenH264 (software) |
+| Replay encode | VMX1 CPU encoder; GPU ring copies pixels | VMX1 CPU encoder; GPU ring copies pixels | VMX1 CPU encoder |
+| DeckLink I/O | Pro module + hardware | Not supported | Pro module + hardware |
+
+macOS is not using a software decode path where Windows uses hardware: decode is
+VideoToolbox and the decoded surface is imported into Metal without a CPU copy. MP4 export
+also uses the platform media engine. On macOS, live RTMP now uses the VideoToolbox H.264
+encoder and falls back to OpenH264 only when hardware encoding is unavailable. Replay
+remains software on every platform. The main macOS
+performance trade-off is GPU throughput versus a large discrete Windows GPU, not an
+architectural copy or decode penalty.
+
+macOS deliberately keeps the VideoToolbox H.264 path local to the RTMP module rather than
+forcing a cross-platform encoder interface. The RTMP muxer already consumes AVCC and the
+SPS/PPS sequence header, so the macOS path can bypass OpenH264 without changing the wire
+format. OpenH264 remains the fallback when VideoToolbox hardware encoding is unavailable.
+Replay still uses the VMX1 codec rather than H.264.
+
+### Measured baseline (M3 MacBook Air)
+
+A headless Metal session was measured on a 16 GB M3 MacBook Air. It held four 1080p59.94
+Mixing Units, a nine-pane multiview, a 4K still, a 1080p file, the built-in camera, and two
+network outputs. The `eiviz stats` line reports `render_ms`, the frame budget, RSS/VRAM, and
+`surface_lost` every five seconds.
+
+| Scenario | Process CPU | `render_ms` | Notes |
+|---|---|---|---|
+| Four units + multiview + still | ~22 % | 1.3–1.7 ms | 1.0 GB RSS, 654 MB VRAM |
+| Add file + camera | ~31 % | 1.3–1.9 ms | NV12 decode + VideoToolbox transfer |
+| Add OMT + NDI outputs | ~130 % during switching | 1.3–2.9 ms | NDI's CPU SpeedHQ encode dominates |
+| Outputs disabled | ~45 % | 1.3–2.0 ms | same video/camera load |
+
+The frame budget at 59.94 Hz is 16.68 ms, so composition itself keeps roughly a 6–12×
+margin. `surface_lost` stayed zero and no frame deadline was missed. RSS stayed near 1.35 GB
+and VRAM near 682 MB with four units. The largest cost is the NDI SDK's software encoder;
+it is CPU on every platform. OMT can skip encode when no receiver is subscribed. AVFoundation now delivers NV12 and a
+`VTPixelTransferSession` converts it to BGRA before the zero-copy Metal import. That
+removed the previous AVFoundation BGRA conversion from the CPU path and dropped the
+file+camera case from about 47 % to 31 %.
+
+The ARM64 `yuv422_to_bgra` kernel was scalar; a NEON version now converts 1080p in
+1.51 ms instead of 5.21 ms (about 3.5× faster) on the same M3. That kernel is used where
+YUV 4:2:2 is converted on the CPU; the macOS AVFoundation path uses NV12 plus a
+VideoToolbox transfer instead.
+
+These numbers are one machine and one preset, not a Windows comparison. The headless
+session and commands are reproducible through `eivizctl`; the stats line is emitted by
+`eiviz-headless` in both normal and soak runs.
+
 ## GPU
 
 Compose calls the GPU through a wgpu abstraction. Windows is Direct3D 12; macOS is Metal.  
@@ -198,9 +259,11 @@ CPU pictures usually upload through system memory.
 On Windows with Resizable BAR on a discrete GPU, the host reaches through wgpu to the DX12 low-level API and writes straight into VRAM.  
 Apple Silicon uses unified memory for a similar path.
 
-File and UVC decode on the GPU when they can, then convert into the compose format.  
-GPU work is preferred so the CPU can spend time on NDI and other CPU-heavy paths.  
-That behaviour can be changed in [Settings](/eiviz/en/introduction/settings/).
+File and UVC decode on macOS uses `CVMetalTextureCache` and hands the decoded
+`CVPixelBuffer` to Metal without a CPU copy. The texture is imported through the Metal
+HAL and released with the wgpu texture. NDI ingest uses the same unified-memory
+approach with a leased shared-texture ring.  
+GPU upload can be changed in [Settings](/eiviz/en/introduction/settings/).
 
 ```mermaid
 flowchart TB
@@ -251,3 +314,25 @@ DeckLink I/O, RTMP streaming, and paid-plan entitlements are provided by a signe
 Calls not permitted under the active plan return `ERR_NOT_SUPPORTED_PLAN`; unlinked implementations return `ERR_IO` (plan validation takes precedence). Host UIs dynamically expose DeckLink and RTMP options based on runtime `mixer_capabilities` rather than compile-time feature flags.
 
 Paid plans are authenticated using cryptographically signed license tickets. The Pro module embeds the Ed25519 public key, evaluates expiration against the later of the system clock and a persisted timestamp, and authenticates the machine if a majority of salted hardware fingerprints match. The host UI is solely responsible for installing tickets and displaying status, containing no entitlement decision logic. Plan limits are detailed in [Plans](/eiviz/en/introduction/plans/).
+
+### macOS video encode audit
+
+`scripts/macos-video-encoders.swift` probes the VideoToolbox encoder list. On the M3 test
+machine it reports hardware H.264 (`com.apple.videotoolbox.videoencoder.ave.avc`), hardware
+HEVC (`com.apple.videotoolbox.videoencoder.ave.hevc`), hardware ProRes, and hardware decode
+for H.264, HEVC, and AV1. There is **no AV1 encoder** in VideoToolbox, and macOS exposes no
+Vulkan Video; Metal plus VideoToolbox is the native path.
+
+| Codec | Hardware encode | Hardware decode | Current eiviz use |
+|---|---|---|---|
+| H.264 | Yes | Yes | MP4 export; RTMP uses VideoToolbox with OpenH264 fallback |
+| HEVC | Yes | Yes | MP4 export |
+| AV1 | No | Yes | Not used |
+| ProRes | Yes | — | Not used |
+
+The RTMP H.264 backend now uses `VTCompressionSession` (real-time, no frame reordering,
+short GOP), feeds NV12 directly, and keeps the existing muxer. Replay is the next smaller
+opportunity: VMX1 already uses GPU FDCT/quant, and a hardware HEVC backend would need
+all-intra or short-GOP trade-offs for clip seeking. AV1 software encoding is not suitable
+for live 1080p60 on a fanless M3; AV1 hardware decode is already available. Vulkan Video is
+not a macOS option.

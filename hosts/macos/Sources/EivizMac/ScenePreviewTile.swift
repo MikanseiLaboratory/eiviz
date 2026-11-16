@@ -100,6 +100,8 @@ struct ScenePreviewTile: View, @MainActor Equatable {
                     onClick: onPreview
                 )
                 .frame(width: 176, height: 90)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onPreview)
             } else {
                 Color.black.frame(width: 176, height: 90)
                     .contentShape(Rectangle())

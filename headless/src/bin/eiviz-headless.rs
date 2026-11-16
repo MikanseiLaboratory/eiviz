@@ -460,8 +460,25 @@ fn run_daemon_runtime(
         };
         let mut stdin_rx = eiviz_headless::stdin_control::spawn_lines();
         let mut stdin_open = stdin_session.is_some();
+        let mut stats_tick = tokio::time::interval(std::time::Duration::from_secs(5));
+        stats_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
+                _ = stats_tick.tick() => {
+                    let mut stats = eiviz_mixer::MixerStats::default();
+                    if unsafe { eiviz_mixer::mixer_copy_stats(&mut stats) } == 0 {
+                        eprintln!(
+                            "eiviz stats render_ms={:.2} budget_ms={:.2} ram_mb={} vram_mb={} compose_vram_mb={} delay_vram_mb={} surface_lost={}",
+                            stats.render_ms,
+                            stats.frame_budget_ms,
+                            stats.ram_bytes / (1024 * 1024),
+                            stats.vram_bytes / (1024 * 1024),
+                            stats.compose_vram_bytes / (1024 * 1024),
+                            stats.delay_vram_bytes / (1024 * 1024),
+                            stats.surface_lost,
+                        );
+                    }
+                }
                 _ = shutdown_signal() => break,
                 _ = handle.wait_shutdown_request() => break,
                 line = stdin_rx.recv(), if stdin_open => {

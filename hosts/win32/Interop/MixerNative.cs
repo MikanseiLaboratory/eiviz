@@ -474,6 +474,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_channel_cue", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int ReplayCue(uint channel, uint angleId, ulong inFrame, ulong outFrame, string recordingUuid);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_chase")]
+    internal static partial int ReplayChase(uint channel, uint on);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_hold_last")]
     internal static partial int ReplayHoldLast(uint channel, uint on);
 
@@ -483,6 +486,12 @@ internal static partial class MixerNative
     /// <summary>Buckets per second the replay waveform is stored at.</summary>
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_peak_rate")]
     internal static partial uint ReplayPeakRate();
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_peak_count_recording", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial uint ReplayPeakCountRecording(string uuid, uint angleId, out uint dropped);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_replay_copy_peaks_recording", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int ReplayCopyPeaksRecording(string uuid, uint angleId, uint from, float* minOut, float* maxOut, uint cap);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_replay_peak_count")]
     internal static unsafe partial uint ReplayPeakCount(uint angleId, uint* dropped);
@@ -678,6 +687,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_copy_stats")]
     internal static unsafe partial int CopyStats(MixerStats* stats);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_reset_metrics")]
+    internal static partial int ResetMetrics();
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_copy_runtime_stats")]
     internal static unsafe partial int CopyRuntimeStats(MixerRuntimeStats* stats);
 
@@ -782,6 +794,9 @@ internal static partial class MixerNative
     /// </summary>
     [LibraryImport(LibraryName, EntryPoint = "mixer_session_mutate")]
     internal static unsafe partial int SessionMutate(byte* json, nuint length);
+
+    [LibraryImport(LibraryName, EntryPoint = "mixer_session_register_input")]
+    internal static unsafe partial int SessionRegisterInput(byte* json, nuint length);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_poll_events")]
     internal static unsafe partial int PollEvents(ulong after, byte* buffer, nuint capacity);

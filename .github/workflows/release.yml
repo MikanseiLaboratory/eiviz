@@ -30,6 +30,7 @@ env:
   NDI_SDK_URL: https://downloads.ndi.tv/SDK/NDI_SDK/NDI%206%20SDK.exe
   NDI_SDK_URL_MACOS: https://downloads.ndi.tv/SDK/NDI_SDK_Mac/Install_NDI_SDK_v6_Apple.pkg
   LLVM_VERSION: "20.1.8"
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
 
 jobs:
   meta:
@@ -207,7 +208,7 @@ jobs:
   macos-arm64:
     name: Release macOS arm64
     needs: meta
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 60
     env:
       EIVIZ_PRO_MODULE_PUBLIC_KEY: ${{ secrets.EIVIZ_PRO_MODULE_PUBLIC_KEY }}
@@ -242,12 +243,16 @@ jobs:
         run: cargo test -p eiviz_mixer --release --locked -- --test-threads=1
 
       - name: Build headless
-        run: cargo build -p eiviz-headless --release --locked --bins
+        run: cargo build -p eiviz-headless --release --locked --bins --target aarch64-apple-darwin
 
       - name: Build Mac host
+        env:
+          EIVIZ_MAC_ARCH: aarch64-apple-darwin
         run: |
           chmod +x hosts/macos/build.sh
           hosts/macos/build.sh
+          BIN="$(cd hosts/macos && swift build -c release --arch arm64 --show-bin-path)"
+          file -b "$BIN/eiviz-mac" | grep -q "arm64"
 
       - name: Bundle signed Pro module
         env:
@@ -260,7 +265,7 @@ jobs:
         run: |
           TAG="${{ needs.meta.outputs.tag }}"
           STAGING="eiviz-${TAG}-macos-arm64"
-          BIN="$(cd hosts/macos && swift build -c release --show-bin-path)"
+          BIN="$(cd hosts/macos && swift build -c release --arch arm64 --show-bin-path)"
           mkdir -p "$STAGING"
           cp "$BIN/eiviz-mac" "$STAGING/"
           cp "$BIN/eiviz-remote" "$STAGING/"
@@ -269,9 +274,11 @@ jobs:
           cp pro-module/libeiviz_pro.dylib "$STAGING/"
           cp pro-module/libeiviz_pro.dylib.manifest "$STAGING/"
           cp pro-module/eiviz-pro.required "$STAGING/"
-          cp target/release/eiviz-headless "$STAGING/"
-          cp target/release/eivizctl "$STAGING/"
+          cp target/aarch64-apple-darwin/release/eiviz-headless "$STAGING/"
+          cp target/aarch64-apple-darwin/release/eivizctl "$STAGING/"
           cp headless/eiviz-headless.example.env "$STAGING/"
+          file -b "$STAGING/eiviz-mac" | grep -q "arm64"
+          file -b "$STAGING/eiviz-headless" | grep -q "arm64"
           if [ -f "$BIN/libndi.dylib" ]; then
             cp "$BIN/libndi.dylib" "$STAGING/"
           fi
@@ -289,6 +296,9 @@ jobs:
           fi
           if [ -f "$STAGING/libndi.6.dylib" ]; then
             codesign --force --sign - --timestamp=none "$STAGING/libndi.6.dylib"
+          fi
+          if [ -f "$STAGING/libeiviz_pro.dylib" ]; then
+            codesign --force --sign - --timestamp=none "$STAGING/libeiviz_pro.dylib"
           fi
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-remote"
@@ -312,7 +322,7 @@ jobs:
   macos-x64:
     name: Release macOS x64
     needs: meta
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 60
     env:
       EIVIZ_PRO_MODULE_PUBLIC_KEY: ${{ secrets.EIVIZ_PRO_MODULE_PUBLIC_KEY }}
@@ -354,7 +364,7 @@ jobs:
           chmod +x hosts/macos/build.sh
           hosts/macos/build.sh
           BIN="$(cd hosts/macos && swift build -c release --arch x86_64 --show-bin-path)"
-          file "$BIN/eiviz-mac" | grep -E "x86_64|i386"
+          file -b "$BIN/eiviz-mac" | grep -Eq "x86_64|i386"
 
       - name: Bundle signed Pro module
         env:
@@ -379,6 +389,8 @@ jobs:
           cp target/x86_64-apple-darwin/release/eiviz-headless "$STAGING/"
           cp target/x86_64-apple-darwin/release/eivizctl "$STAGING/"
           cp headless/eiviz-headless.example.env "$STAGING/"
+          file -b "$STAGING/eiviz-mac" | grep -q "x86_64"
+          file -b "$STAGING/eiviz-headless" | grep -q "x86_64"
           if [ -f "$BIN/libndi.dylib" ]; then
             cp "$BIN/libndi.dylib" "$STAGING/"
           fi
@@ -396,6 +408,9 @@ jobs:
           fi
           if [ -f "$STAGING/libndi.6.dylib" ]; then
             codesign --force --sign - --timestamp=none "$STAGING/libndi.6.dylib"
+          fi
+          if [ -f "$STAGING/libeiviz_pro.dylib" ]; then
+            codesign --force --sign - --timestamp=none "$STAGING/libeiviz_pro.dylib"
           fi
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-remote"

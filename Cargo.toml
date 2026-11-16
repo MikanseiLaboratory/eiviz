@@ -37,6 +37,15 @@ prost-types = "0.13"
 clap = { version = "4", features = ["derive", "env"] }
 tiny_http = "0.12"
 
+# Cargo's release default is `-Wl,-S` (strip = "debuginfo"). Xcode 27's ld emits
+# dylibs that it then refuses to read back ("mis-aligned LINKEDIT string pool") when
+# both the deployment target is below the SDK (14.0 here) and that flag is present.
+# That broke the Pro test plugin under `cargo test` and the two dylibs build.sh links.
+# Release builds of this workspace carry no debug info anyway, so leaving the symbol
+# table alone costs a few percent of size and keeps every macOS toolchain happy.
+[profile.release]
+strip = "none"
+
 [profile.dev.package.eiviz-control]
 opt-level = 1
 

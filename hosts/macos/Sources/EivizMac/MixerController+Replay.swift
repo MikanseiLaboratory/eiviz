@@ -100,6 +100,9 @@ extension MixerController {
         window.title = L10n.t("replay.windowTitle")
         window.identifier = NSUserInterfaceItemIdentifier("replay")
         window.contentViewController = host
+        // This is a deck, not another tab of the main window. macOS otherwise groups
+        // same-process windows into a tab bar.
+        window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
         window.appearance = NSApp.appearance
         window.backgroundColor = EivizTheme.nsBackground
@@ -149,6 +152,9 @@ extension MixerController {
         window.title = L10n.t("replay.setupTitle")
         window.identifier = NSUserInterfaceItemIdentifier("replay-setup")
         window.contentViewController = host
+        // This is a deck, not another tab of the main window. macOS otherwise groups
+        // same-process windows into a tab bar.
+        window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
         window.appearance = NSApp.appearance
         window.backgroundColor = EivizTheme.nsBackground
@@ -279,17 +285,28 @@ extension MixerController {
         return replayDocument?.angles.first { $0.audioUnitId == unitId }
     }
 
+    /// Starts or stops the recorder. Returns nil on success, or the reason the
+    /// mixer/Pro module gave for refusing it. The deck shows that reason instead of
+    /// a generic "recording could not start" that hides a permission or storage error.
     @discardableResult
-    func replayEnableRecording(_ on: Bool) -> Bool {
+    func replayEnableRecording(_ on: Bool) -> String? {
         if isRemote {
             return MixerRemoteReplay.record(handle: remoteHandle, on: on) == 0
+                ? nil
+                : L10n.t(on ? "replay.recordRefused" : "replay.commandRefused")
         }
         if on {
             if let document = replayDocument {
-                _ = MixerFFI.replayConfigure(document.json)
+                let configured = MixerFFI.replayConfigure(document.json)
+                if configured != EIVIZ_OK {
+                    return replayRefusal(L10n.t("replay.recordRefused"))
+                }
             }
-            let started = MixerFFI.replayRecord(true) == 0
-            if started, var document = replayDocument {
+            let started = MixerFFI.replayRecord(true)
+            guard started == EIVIZ_OK else {
+                return replayRefusal(L10n.t("replay.recordRefused"))
+            }
+            if var document = replayDocument {
                 let uuid = MixerFFI.replayRecordingUuid()
                 if !uuid.isEmpty {
                     document.linkRecording(
@@ -303,9 +320,12 @@ extension MixerController {
                     publishSession()
                 }
             }
-            return started
+            return nil
         }
-        let stopped = MixerFFI.replayRecord(false) == 0
+        let stopped = MixerFFI.replayRecord(false)
+        if stopped != EIVIZ_OK {
+            return replayRefusal(L10n.t("replay.commandRefused"))
+        }
         if var document = replayDocument {
             let uuid = MixerFFI.replayRecordingUuid()
             if !uuid.isEmpty, let stats = MixerFFI.replayStats() {
@@ -318,7 +338,14 @@ extension MixerController {
                 publishSession()
             }
         }
-        return stopped
+        return nil
+    }
+
+    /// The mixer's own explanation when it has one, so the deck can show why a
+    /// command was refused (storage permission, missing angle, Pro module error).
+    private func replayRefusal(_ fallback: String) -> String {
+        let detail = MixerFFI.lastErrorText()
+        return detail.isEmpty ? fallback : detail
     }
 
     /// Returns the mark-in frame when the host owns it. The remote core keeps the
@@ -400,6 +427,12 @@ extension MixerController {
     func replayHoldLast(channel: UInt32, on: Bool) -> Bool {
         if isRemote { return false }
         return MixerFFI.replayHoldLast(channel: channel, on: on) == 0
+    }
+
+    /// Keeps a scratch playback following the recording as it is written.
+    func replayChase(channel: UInt32, on: Bool) -> Bool {
+        if isRemote { return false }
+        return MixerFFI.replayChase(channel: channel, on: on) == 0
     }
 
     func replayStats() -> EivizReplayStats? {

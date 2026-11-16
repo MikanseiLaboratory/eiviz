@@ -55,9 +55,15 @@ enum InputKind: String, Codable, CaseIterable {
     static let tabKinds: [InputKind] = [.color, .still, .video, .omt, .ndi, .uvc, .deckLink, .mix, .audio, .replay]
 
     static func deckLinkInputAllowed() -> Bool {
+        #if os(macOS)
+        // The Pro module can report DeckLink support, but the macOS build has no
+        // DeckLink backend. Never offer a category that cannot capture here.
+        return false
+        #else
         var caps = EivizCapabilities()
         guard mixer_capabilities(&caps) == 0 else { return false }
         return caps.decklink_linked != 0 && caps.decklink_input_limit != 0
+        #endif
     }
 
     /// Instant Replay needs a Professional license and the Pro module.
@@ -1234,7 +1240,7 @@ struct StreamEncoderEntry: Identifiable {
     var encoderThreads: UInt32 = 0
     /// Milliseconds to hold before the first send. Zero sends immediately.
     var bufferMs: UInt32 = 0
-    var encoder: String = "OpenH264"
+    var encoder: String = "VideoToolbox"
     var complexity: UInt32 = 0
     var refFrames: UInt32 = 1
     var cabac: Bool = false
@@ -2020,6 +2026,15 @@ struct AudioDevice: Identifiable, Hashable {
     var channels: UInt32
     var id: String
     var name: String
+    /// 0 render, 1 capture, 2 both. Matches AUDIO_DIR_* in the mixer.
+    var direction: UInt32 = 0
+}
+
+struct AudioProcess: Decodable, Identifiable, Hashable {
+    var name: String
+    var exe: String
+    var aumid: String = ""
+    var id: String { exe + "|" + aumid }
 }
 
 struct VideoCaptureDevice: Identifiable, Hashable {

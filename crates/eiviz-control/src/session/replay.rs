@@ -912,6 +912,16 @@ impl ReplayRecordingDto {
         std::path::Path::new(&self.storage).join(&self.uuid)
     }
 }
+/// Which decoder a channel may use for playback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum DecodeBackend {
+    /// Use the GPU when available, otherwise the CPU path.
+    #[default]
+    Auto,
+    Gpu,
+    Cpu,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelDto {
@@ -920,6 +930,10 @@ pub struct ChannelDto {
     pub playlist_id: Option<u64>,
     #[serde(default)]
     pub input_id: u64,
+    /// Per-channel decoder choice. Auto keeps the GPU with CPU fallback; Cpu
+    /// avoids the GPU decoder for this channel even when the engine can use it.
+    #[serde(default)]
+    pub decode_backend: DecodeBackend,
 }
 
 /// A scene state fired from the replay timeline.
@@ -1039,6 +1053,9 @@ impl ReplayDeckDto {
                 .find(|channel| channel.index == incoming.index)
             {
                 channel.playlist_id = incoming.playlist_id;
+                // The channel decoder is part of the deck's settings too. Dropping it
+                // here made the picker snap back to Auto after every save.
+                channel.decode_backend = incoming.decode_backend;
             }
         }
         merge_timeline_cues(replay, self.timeline_cues);
@@ -1286,6 +1303,7 @@ pub fn add_channel_input(doc: &mut Document) -> Result<u32, String> {
         index,
         playlist_id: None,
         input_id: id,
+        decode_backend: DecodeBackend::Auto,
     });
     replay.normalize();
     doc.inputs.push(replay_input(
@@ -1341,6 +1359,7 @@ pub fn adopt_channel_input(doc: &mut Document, input_id: u64) -> Result<u32, Str
         index,
         playlist_id: None,
         input_id,
+        decode_backend: DecodeBackend::Auto,
     });
     replay.normalize();
     Ok(index)
@@ -1796,6 +1815,7 @@ mod tests {
             index: 0,
             playlist_id: None,
             input_id: 7,
+            decode_backend: DecodeBackend::Auto,
         });
         replay.events.push(event(3));
         let deck = ReplayDeckDto {
@@ -1814,6 +1834,7 @@ mod tests {
                 index: 0,
                 playlist_id: Some(2),
                 input_id: 0,
+                decode_backend: DecodeBackend::Auto,
             }],
             timeline_cues: Vec::new(),
         };
@@ -1838,6 +1859,7 @@ mod tests {
             index: 0,
             playlist_id: Some(1),
             input_id: 4,
+            decode_backend: DecodeBackend::Auto,
         });
         let mut settings = ReplaySettingsDto::from_document(&replay);
         settings.storage.push(ReplayStorageDto {
@@ -2206,6 +2228,30 @@ mod tests {
         assert_eq!(replay.recordings.len(), 1);
         assert_eq!(replay.recordings[0].uuid, "rec-a");
     }
+    #[test]
+    fn deck_save_keeps_the_per_channel_decoder() {
+        let mut replay = ReplayDto {
+            channels: vec![ChannelDto {
+                index: 0,
+                playlist_id: None,
+                input_id: 0,
+                decode_backend: DecodeBackend::Auto,
+            }],
+            ..ReplayDto::default()
+        };
+        let deck = ReplayDeckDto {
+            channels: vec![ChannelDto {
+                index: 0,
+                playlist_id: None,
+                input_id: 0,
+                decode_backend: DecodeBackend::Cpu,
+            }],
+            ..ReplayDeckDto::default()
+        };
+        deck.apply_to(&mut replay);
+        assert_eq!(replay.channels[0].decode_backend, DecodeBackend::Cpu);
+    }
+
     #[test]
     fn a_missing_preserve_pitch_field_defaults_on() {
         let clip: ClipDto =

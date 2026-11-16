@@ -226,6 +226,20 @@ enum ReplayDeckMath {
         min(max(frame, range.lowerBound), range.upperBound)
     }
 
+    /// Right end of the whole-recording seek bar. The bar always spans the recording:
+    /// the last recorded frame, the frame the recorder is writing, and the playhead (a
+    /// clip can sit past the last frame while the recording is still running) all keep
+    /// the thumb inside the range.
+    static func seekUpper(last: UInt64, playhead: UInt64, recordingHead: UInt64) -> UInt64 {
+        max(1, last, playhead, recordingHead)
+    }
+
+    /// True once the engine reports the frame a seek asked for. Until then the drag owns
+    /// the bar, so the thumb does not snap back to where the channel used to be.
+    static func seekLanded(reported: UInt64, target: Double, tolerance: Double = 1) -> Bool {
+        abs(Double(reported) - target) <= tolerance
+    }
+
     /// Where a live channel is parked when the operator pauses or changes speed: the
     /// playhead if the deck has one, otherwise the recording head. A stale zero playhead
     /// must not send the picture back to the first frame.

@@ -156,6 +156,15 @@ enum MixerFFI {
         mixer_session_revision()
     }
 
+    /// Adds an input the host already attached. Used instead of a mutation for new
+    /// inputs so the core does not start the same capture device a second time.
+    static func registerInput(_ input: InputEntry) -> Int32 {
+        guard let data = try? JSONEncoder().encode(input) else { return -1 }
+        return data.withUnsafeBytes { ptr in
+            mixer_session_register_input(ptr.bindMemory(to: UInt8.self).baseAddress, data.count)
+        }
+    }
+
     static func sessionJSON() -> Data? {
         let (n, bytes) = copyUtf8(startCap: 1 << 20) { mixer_session_copy_json($0, $1) }
         guard n >= 0 else { return nil }
@@ -212,20 +221,116 @@ enum MixerFFI {
         }
     }
 
-    static func audioDevices() -> [AudioDevice] {
+    static func audioDevices(direction: UInt32? = nil) -> [AudioDevice] {
         var buffer = [EivizAudioDeviceInfo](repeating: zeroed(), count: 64)
         let n = buffer.withUnsafeMutableBufferPointer { ptr in
             mixer_audio_enum_devices(0, ptr.baseAddress, UInt32(ptr.count))
         }
         guard n > 0 else { return [] }
-        return buffer.prefix(Int(n)).map { info in
+        let devices = buffer.prefix(Int(n)).map { info in
             AudioDevice(
                 kind: info.kind,
                 channels: info.channels,
                 id: cString(info.id),
-                name: cString(info.name)
+                name: cString(info.name),
+                direction: info.direction
             )
         }
+        guard let direction else { return devices }
+        return devices.filter { $0.direction == direction || $0.direction == 2 }
+    }
+
+    static func streamEncoderAdd(_ encoder: StreamEncoderEntry, sourceKind: UInt32, sourceId: UInt64) -> Int32 {
+        let threads = encoder.encoderThreads == 0
+            ? UInt32(max(1, min(4, ProcessInfo.processInfo.activeProcessorCount)))
+            : encoder.encoderThreads
+        return mixer_stream_encoder_add(
+            encoder.id,
+            sourceKind,
+            sourceId,
+            encoder.unitId,
+            encoder.audioUnitId,
+            encoder.width,
+            encoder.height,
+            encoder.fpsNum,
+            encoder.fpsDen,
+            encoder.videoBitrate,
+            encoder.audioBitrate,
+            encoder.keyint,
+            encoder.videoOnly ? 1 : 0,
+            threads,
+            encoder.bufferMs,
+            encoder.encoder == "OpenH264" ? 0 : 1,
+            encoder.complexity,
+            encoder.refFrames,
+            encoder.cabac ? 1 : 0,
+            encoder.deblock ? 1 : 0,
+            encoder.backgroundDetection ? 1 : 0,
+            encoder.adaptiveQuant ? 1 : 0,
+            encoder.sceneChange ? 1 : 0,
+            encoder.audioDelayMs
+        )
+    }
+
+    static func streamDestinationAdd(encoderId: UInt64, destinationId: UInt64, url: String, secretRef: String) -> Int32 {
+        url.withCString { cUrl in
+            secretRef.withCString { cSecret in
+                mixer_stream_destination_add(encoderId, destinationId, cUrl, cSecret)
+            }
+        }
+    }
+
+    static func streamEncoderRemove(_ encoderId: UInt64) -> Int32 {
+        mixer_stream_encoder_remove(encoderId)
+    }
+
+    static func replayCapacity(path: String, width: UInt32, height: UInt32) -> (ReplayCapacity?, String) {
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        var written = 0
+        func measure() -> Int32 {
+            path.withCString { text in
+                buffer.withUnsafeMutableBufferPointer { ptr in
+                    mixer_bench_capacity(
+                        UnsafeRawPointer(text).assumingMemoryBound(to: UInt8.self),
+                        path.utf8.count,
+                        width,
+                        height,
+                        ptr.baseAddress,
+                        ptr.count,
+                        &written
+                    )
+                }
+            }
+        }
+        var code = measure()
+        // The mixer reports the size it needs; grow once instead of failing on a
+        // capacity document that happens to exceed the starting buffer.
+        if code == EIVIZ_ERR_BUFFER_TOO_SMALL, written > buffer.count {
+            buffer = [UInt8](repeating: 0, count: written)
+            code = measure()
+        }
+        guard code == 0, written > 0, written <= buffer.count else {
+            let detail = lastErrorText()
+            return (nil, detail.isEmpty ? "Capacity measurement failed" : detail)
+        }
+        guard let capacity = try? JSONDecoder().decode(
+            ReplayCapacity.self,
+            from: Data(buffer.prefix(written))
+        ) else {
+            return (nil, "Capacity measurement returned invalid JSON")
+        }
+        return (capacity, "")
+    }
+
+    static func audioProcesses() -> [AudioProcess] {
+        var buffer = [UInt8](repeating: 0, count: 1 << 20)
+        let n = buffer.withUnsafeMutableBufferPointer { ptr in
+            mixer_audio_process_list(ptr.baseAddress, ptr.count)
+        }
+        guard n > 0, let data = String(bytes: buffer.prefix(Int(n)), encoding: .utf8)?.data(using: .utf8) else {
+            return []
+        }
+        return (try? JSONDecoder().decode([AudioProcess].self, from: data)) ?? []
     }
 
     private static func cString<T>(_ value: T) -> String {
@@ -363,6 +468,11 @@ enum MixerFFI {
         mixer_replay_hold_last(channel, on ? 1 : 0)
     }
 
+    /// Keeps a scratch playback following the recording while it is still being written.
+    static func replayChase(channel: UInt32, on: Bool) -> Int32 {
+        mixer_replay_chase(channel, on ? 1 : 0)
+    }
+
     /// Per-channel live state, so the deck shows what the mixer is doing. Empty when the
     /// mixer reports nothing.
     static func replayChannels() -> [EivizReplayChannelState] {
@@ -421,12 +531,37 @@ enum MixerFFI {
         mixer_replay_peak_rate()
     }
 
-    /// How many buckets one angle's waveform holds, and how many were evicted from
-    /// the front — read before a copy so an unchanged waveform does not get copied.
-    static func replayPeakCount(angleId: UInt32) -> (count: UInt32, dropped: UInt32) {
+    /// Waveform of one angle in a specific recording. A session can hold
+    /// several recordings with the same angle id; selecting a clip/event must
+    /// show that recording's waveform, not whichever store opens first.
+    static func replayPeaks(
+        recordingUuid: String,
+        angleId: UInt32
+    ) -> (mins: [Float], maxes: [Float], dropped: UInt32) {
+        guard !recordingUuid.isEmpty else { return replayPeaks(angleId: angleId) }
         var dropped: UInt32 = 0
-        let count = mixer_replay_peak_count(angleId, &dropped)
-        return (count, dropped)
+        let count = recordingUuid.withCString { uuid in
+            mixer_replay_peak_count_recording(uuid, angleId, &dropped)
+        }
+        guard count > 0 else { return ([], [], dropped) }
+        var mins = [Float](repeating: 0, count: Int(count))
+        var maxes = [Float](repeating: 0, count: Int(count))
+        let copied = recordingUuid.withCString { uuid in
+            mins.withUnsafeMutableBufferPointer { minBuffer in
+                maxes.withUnsafeMutableBufferPointer { maxBuffer in
+                    mixer_replay_copy_peaks_recording(
+                        uuid,
+                        angleId,
+                        0,
+                        minBuffer.baseAddress,
+                        maxBuffer.baseAddress,
+                        count
+                    )
+                }
+            }
+        }
+        guard copied > 0 else { return ([], [], dropped) }
+        return (Array(mins.prefix(Int(copied))), Array(maxes.prefix(Int(copied))), dropped)
     }
 
     /// Waveform of one angle: the bucket count and the buckets themselves.

@@ -25,10 +25,15 @@ struct ReplaySettingsView: View {
     @State private var profiling = false
     @State private var angles: [ReplayAngleInfo] = []
     @State private var status = ""
+    @State private var capacityText = ""
+    @State private var capacityRunning = false
     /// The deck's refresh cadence, held locally until Apply. Writing the session
     /// settings straight from this picker published it on every spin of a control
     /// that the operator may still change.
-    @State private var presentInterval: UInt32 = 0
+    @State private var deckRefresh: UInt32 = 0
+    /// The document as last loaded/applied, so an external angle edit can be adopted
+    /// without reloading over the operator's unsaved fields on every tick.
+    @State private var loadedJson = ""
 
     var body: some View {
         // The settings are taller than the smallest window the view allows, so they scroll
@@ -37,7 +42,6 @@ struct ReplaySettingsView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(planText).font(.callout)
                     if !status.isEmpty {
                         // Apply and every refusal report here, where it cannot be missed.
                         Text(status).fontWeight(.bold).foregroundStyle(EivizTheme.dim)
@@ -106,13 +110,16 @@ struct ReplaySettingsView: View {
                                 .frame(minWidth: 230, alignment: .leading)
                             }
                             HStack(spacing: 12) {
-                                Button(L10n.t("replay.capacityRun")) {}
-                                    .disabled(true)
-                                    .frame(minWidth: 150, minHeight: 28)
-                                    .help(L10n.t("replay.capacityIdle"))
-                                Text("—")
+                                Button(capacityRunning ? L10n.t("replay.capacityRunning") : L10n.t("replay.capacityRun")) {
+                                    runCapacity()
+                                }
+                                .disabled(capacityRunning)
+                                .frame(minWidth: 150, minHeight: 28)
+                                .help(L10n.t("replay.capacityIdle"))
+                                Text(capacityText.isEmpty ? "—" : capacityText)
                                     .font(.system(size: 11))
                                     .foregroundStyle(EivizTheme.dim)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                             HStack(alignment: .top) {
                                 // One format for every angle, taken from the first Mixing Unit.
@@ -129,7 +136,7 @@ struct ReplaySettingsView: View {
                                 }
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(L10n.t("replay.deckRefresh")).font(.caption)
-                                    Picker("", selection: $presentInterval) {
+                                    Picker("", selection: $deckRefresh) {
                                         Text(L10n.t("replay.deckRefreshFollow")).tag(UInt32(0))
                                         ForEach([UInt32(1), 2, 3, 4, 6, 8], id: \.self) { frames in
                                             Text(L10n.format("replay.deckRefreshEvery", "\(frames)"))
@@ -186,10 +193,11 @@ struct ReplaySettingsView: View {
                                 }
                                 .width(110)
                                 TableColumn(L10n.t("replay.audio")) { $angle in
-                                    Picker("", selection: $angle.audioUnitId) {
-                                        Text(L10n.t("replay.audioSilent")).tag(UInt64(0))
+                                    Picker("", selection: audioChoice($angle)) {
+                                        Text(L10n.t("replay.audioSilent")).tag("Silent")
+                                        Text(L10n.t("replay.audioSource")).tag("Source")
                                         ForEach(mixer.session.units) { unit in
-                                            Text(unit.name).tag(unit.id)
+                                            Text(unit.name).tag("Unit:\(unit.id)")
                                         }
                                     }
                                     .labelsHidden()
@@ -217,6 +225,8 @@ struct ReplaySettingsView: View {
                             .frame(minHeight: 210)                            .frame(minHeight: 230)
                             HStack {
                                 Button(L10n.t("replay.addAngleRow")) { addAngle() }
+                                    .disabled(angleLimitReached)
+                                    .help(L10n.t("replay.angleRowHelp"))
                                 Text(L10n.t("replay.angleRowHelp")).font(.caption)
                             }
                         }
@@ -263,6 +273,17 @@ struct ReplaySettingsView: View {
         }
         .frame(minWidth: 620, maxWidth: .infinity, minHeight: 520, maxHeight: .infinity)
         .onAppear { load() }
+        .onChange(of: mixer.replayDocument?.json) {
+            guard let latest = mixer.replayDocument, latest.json != loadedJson else { return }
+            // Adopt a new/removed angle from the deck, but do not reload over a
+            // picker the operator is changing: a unit audio choice was reverting to
+            // Silent on the next document tick.
+            let remoteIds = Set(latest.angles.map(\.id))
+            let localIds = Set(angles.map(\.id))
+            if remoteIds != localIds {
+                load()
+            }
+        }
     }
 
     private func numberField(_ key: String, _ value: Binding<String>, width: CGFloat) -> some View {
@@ -272,12 +293,14 @@ struct ReplaySettingsView: View {
         }
     }
 
-    private var planText: String {
-        guard let limits = mixer.replayLimits() else { return "" }
-        if limits.angles == 0 || limits.channels == 0 {
-            return L10n.t("replay.planDenied")
-        }
-        return L10n.format("replay.planLimits", "\(limits.angles)", "\(limits.channels)")
+    /// The plan is conveyed by what the deck lets the operator do (disabled rows,
+    /// capped angle count), not by a sentence at the top of the settings window.
+    private var angleLimitReached: Bool {
+        guard let limits = mixer.replayLimits(),
+              limits.angles > 0,
+              limits.angles != .max
+        else { return false }
+        return angles.count >= Int(limits.angles)
     }
 
     /// The format Replay records in: the first Mixing Unit's picture and rate. It is
@@ -290,12 +313,34 @@ struct ReplaySettingsView: View {
     }
 
 
+    /// One picker drives both fields: `Source` leaves the unit id zero so the
+    /// recorder takes the angle source's own audio instead of a Mixing Unit bus.
+    private func audioChoice(_ angle: Binding<ReplayAngleInfo>) -> Binding<String> {
+        Binding(
+            get: {
+                angle.wrappedValue.audio == "Unit"
+                    ? "Unit:\(angle.wrappedValue.audioUnitId)"
+                    : (angle.wrappedValue.audio == "Source" ? "Source" : "Silent")
+            },
+            set: { value in
+                if value.hasPrefix("Unit:"), let id = UInt64(value.dropFirst(5)) {
+                    angle.wrappedValue.audio = "Unit"
+                    angle.wrappedValue.audioUnitId = id
+                } else {
+                    angle.wrappedValue.audio = value
+                    angle.wrappedValue.audioUnitId = 0
+                }
+            }
+        )
+    }
+
     private func load() {
         guard let current = mixer.replayDocument else {
             status = L10n.t("replay.missing")
             return
         }
         document = current
+        loadedJson = current.json
         storages = current.storages
         profile = current.profile
         segmentFrames = "\(current.segmentFrames)"
@@ -313,7 +358,7 @@ struct ReplaySettingsView: View {
         decodeAhead = current.raw["decodeAhead"]?.boolValue ?? true
         profiling = current.raw["profiling"]?.boolValue ?? false
         angles = current.angles
-        presentInterval = mixer.session.settings.replayPresentInterval
+        deckRefresh = mixer.session.settings.replayPresentInterval
     }
 
 
@@ -445,27 +490,33 @@ struct ReplaySettingsView: View {
     /// needs no edits at all, and the row is there to be changed in place if it is not the
     /// one they wanted.
     private func addAngle() {
-        guard !storages.isEmpty else {
-            status = L10n.t("replay.needDriveForAngle")
-            return
-        }
-        if let limits = mixer.replayLimits(), limits.angles != .max, angles.count >= Int(limits.angles) {
-            status = L10n.format("replay.planLimits", "\(limits.angles)", "\(limits.channels)")
-            return
-        }
+        // Adding the row is not the same decision as choosing where it records.
+        // Refusing here made the button look broken on a new project; the row can
+        // be added now and the drive assigned before Apply.
+        let needsDrive = storages.isEmpty
+        if angleLimitReached { return }
         let used = Set(angles.filter { $0.source == "Scene" }.map(\.sceneId))
-        let scene = mixer.session.scenes.first { !used.contains($0.id) }
+        var scene = mixer.session.scenes.first { !used.contains($0.id) }
+        // A deck can have more angles than scenes. Adding an angle used to leave
+        // sceneId 0 silently, which Apply then refused; create the scene that the
+        // new angle needs instead.
+        if scene == nil {
+            mixer.addScene()
+            scene = mixer.session.scenes.last
+        }
         guard var current = document else { return }
         let id = current.reserveAngleId()
         document = current
         angles.append(
             ReplayAngleInfo(
                 id: id,
-                name: scene?.name ?? "",
+                // The row names the angle, not the scene it records: the scene can
+                // change later and "Scene 2" was never an angle name.
+                name: L10n.format("replay.angleName", "\(id)"),
                 source: "Scene",
                 sceneId: scene?.id ?? 0,
                 inputId: 0,
-                    audioUnitId: 0
+                audioUnitId: 0
             )
         )
         // A single drive takes the new angle: a setup with one drive should not need a
@@ -473,7 +524,14 @@ struct ReplaySettingsView: View {
         if storages.count == 1 {
             storages[0].angleIds.append(id)
         }
-        status = L10n.format("replay.angleAdded", scene?.name ?? "")
+        // Keep the settings document in step with the row table. Apply used to be the
+        // only place that copied `angles` back, so a row added while the table was
+        // open could be overwritten by the next document sync.
+        current.setAngles(angles)
+        document = current
+        status = needsDrive
+            ? L10n.t("replay.needDriveForAngle")
+            : L10n.format("replay.angleAdded", L10n.format("replay.angleName", "\(id)"))
     }
 
     /// Removes one angle by id, from its own row's button.
@@ -511,6 +569,40 @@ struct ReplaySettingsView: View {
 
     /// Free space for one drive, from the same mixer model the recorder uses. The
     /// settings table is where an operator sees a full drive before pressing Apply.
+    private func runCapacity() {
+        let path = storages.map(\.path).first(where: { !$0.isEmpty })
+            ?? ReplayDocument.defaultStoragePath()
+        try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        // Measure the picture the session is actually configured for, not the
+        // separate Replay format. Moving color bars are encoded on the CPU and
+        // the drive is measured directly.
+        let width = mixer.session.settings.defaultWidth
+        let height = mixer.session.settings.defaultHeight
+        capacityRunning = true
+        capacityText = L10n.t("replay.capacityRunning")
+        DispatchQueue.global(qos: .userInitiated).async {
+            let (capacity, error) = MixerFFI.replayCapacity(
+                path: path,
+                width: width,
+                height: height
+            )
+            DispatchQueue.main.async {
+                capacityRunning = false
+                guard let capacity else {
+                    capacityText = error.isEmpty ? L10n.t("replay.capacityFailed") : error
+                    return
+                }
+                capacityText = L10n.format(
+                    "replay.capacityResult",
+                    "\(capacity.anglesAt60)",
+                    "\(Int(capacity.encodeFps.rounded()))",
+                    "\(Int(capacity.diskWriteMbS.rounded()))",
+                    String(format: "%.1f", capacity.bitrateMbps)
+                )
+            }
+        }
+    }
+
     private func freeSpaceText(_ path: String, angles: [UInt32]) -> String {
         let trimmed = path.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, let unit = mixer.session.units.first else { return "—" }
@@ -590,6 +682,15 @@ struct ReplaySettingsView: View {
         if storages.count == 1 {
             storages[0].angleIds = angles.map(\.id).sorted()
         }
+        // A path that looks valid can still be denied by the OS (a TCC-protected
+        // folder, a read-only volume). Refuse here instead of letting the recorder
+        // fail later with a bare I/O error.
+        for storage in storages {
+            if let problem = ReplayDocument.storageProblem(storage.path) {
+                status = problem
+                return
+            }
+        }
         current.setStorages(storages)
         var format = current.raw["format"]?.objectValue ?? [:]
         // The whole format travels: a document that keeps a zero resolution or a zero
@@ -631,10 +732,14 @@ struct ReplaySettingsView: View {
         // leaves the operator unable to tell the two apart.
         if mixer.applyReplay(current) {
             // The deck refresh interval lives in the session settings, not the replay
-            // document: the picker held it locally, and Apply is where it lands.
-            mixer.session.settings.replayPresentInterval = presentInterval
-            // Applying publishes too, so the interval reaches the session with it.
-            mixer.publishSession()
+            // document. Send only that part as a mutation: replacing the whole host
+            // document here would revert inputs/scenes/outputs another writer changed
+            // while this window was open.
+            mixer.session.settings.replayPresentInterval = deckRefresh
+            guard mixer.mutateLocal(MixerRemote.setSettings(mixer.session)) else {
+                status = L10n.t("replay.publishRefused")
+                return
+            }
             if let gpuCount = ReplayDeckMath.gpuAnglesOverCapacity(angles) {
                 AppKitDialog.toast(L10n.format(
                     "replay.gpuAnglesOverCapacity",

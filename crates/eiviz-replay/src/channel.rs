@@ -192,6 +192,10 @@ pub struct Transport {
     /// The last clip's own out point, kept so the extension can be re-applied as the
     /// recording grows without the clip's end walking away from where the operator cut it.
     held_out: u64,
+    /// A scratch playback that should keep going into newly recorded frames instead of
+    /// stopping at the out point it was cued with. Distinct from `hold_last`, which is
+    /// the operator's playlist setting.
+    chasing: bool,
     shown: Option<FramePlan>,
 }
 
@@ -215,6 +219,7 @@ impl Transport {
             looping: false,
             hold_last: false,
             held_out: 0,
+            chasing: false,
             shown: None,
         }
     }
@@ -286,7 +291,9 @@ impl Transport {
         self.resume = None;
         self.position = 0.0;
         self.live = false;
+        self.chasing = false;
         self.lag = 0.0;
+        self.held_out = 0;
         self.playing = false;
         self.shown = None;
     }
@@ -398,6 +405,17 @@ impl Transport {
         self.playing
     }
 
+    /// Keeps a scratch/whole-recording playback following newly recorded frames.
+    /// A playlist clip keeps its cut point; this mode is only for the deck's seek
+    /// playback while the recorder is still writing.
+    pub fn set_chasing(&mut self, chasing: bool) {
+        self.chasing = chasing;
+    }
+
+    pub fn is_chasing(&self) -> bool {
+        self.chasing
+    }
+
     /// True while the picture is held past the clip's end, which is how an
     /// additive transition spends its inserted duration.
     pub fn is_holding(&self) -> bool {
@@ -407,18 +425,26 @@ impl Transport {
     }
 
     /// Seeks inside the current clip to an absolute source frame.
+    ///
+    /// A seek is an explicit move away from the edge. Leaving `live` set let the live
+    /// flag win over the requested frame, so the deck's thumb snapped back to the
+    /// recording head even though it had just been dragged.
     pub fn seek_source(&mut self, frame: u64) {
+        self.live = false;
+        self.lag = 0.0;
+        self.chasing = false;
         if let Some(current) = &self.current {
             let speed = usable_speed(current.speed);
             self.position = ((frame as f64 - current.in_frame as f64) / speed).max(0.0);
-            self.shown = None;
         }
+        self.shown = None;
     }
 
     /// Follows the recording edge. `angle` is used when nothing is cued yet.
     pub fn jump_to_now(&mut self, last_frame: u64, angle: u32) {
         self.last_frame = last_frame;
         self.live = true;
+        self.chasing = false;
         self.live_angle = self
             .current
             .as_ref()
@@ -557,23 +583,33 @@ impl Transport {
                     // `source()` and the timecode both read the clip's range. The loop is left
                     // here on purpose: the extension already covers this frame, so going round
                     // again would only re-test the same end and grow it a second time.
+                    // Compare against the operator's original out point, not the
+                    // extended one: an extended clip's out point grows with the edge,
+                    // so testing the current end was false on the very next tick and
+                    // stopped the hold one frame after it started following the edge.
                     //
-                    // The hold test stays in source frames: `last_frame` is the recording's
-                    // newest source frame while `span()` counts output frames, so comparing
-                    // the two made a clip at a speed other than one judge the room it had
-                    // from a frame the recording never had. A reverse clip meets the same
-                    // out point from the other side, and its hold walks back one frame per
-                    // output frame toward the recording's earliest frame; the head is the
-                    // newest frame there and does not bound it, so any recording supports it.
-                    if self.hold_last
+                    // The test stays in source frames: `last_frame` is the recording's
+                    // newest source frame while `span()` counts output frames, so
+                    // comparing the two made a clip at a speed other than one judge
+                    // the room it had from a frame the recording never had. A reverse
+                    // clip meets the same out point from the other side, and its hold
+                    // walks back one frame per output frame toward the recording's
+                    // earliest frame; the head bounds only the newest frame there, so
+                    // any recording supports it.
+                    let base_out = if self.held_out != 0 {
+                        self.held_out
+                    } else {
+                        self.current.as_ref().map_or(0, |clip| clip.out_frame)
+                    };
+                    if (self.hold_last || self.chasing)
                         && self.last_frame > 0
                         && self.current.as_ref().is_some_and(|clip| {
-                            clip.speed < 0.0 || self.last_frame > clip.out_frame
+                            clip.speed < 0.0 || self.last_frame > base_out
                         })
                     {
                         let reverse = self.current.as_ref().is_some_and(|clip| clip.speed < 0.0);
                         if self.held_out == 0 {
-                            self.held_out = self.current.as_ref().map_or(0, |clip| clip.out_frame);
+                            self.held_out = base_out;
                         }
                         if reverse {
                             // One frame per hold keeps the playhead at the new end on the
@@ -990,6 +1026,56 @@ mod tests {
         );
     }
 
+    /// The hold test compares source frames, not the output-frame count: a slow
+    /// clip spends more output frames than the recording has source frames past
+    /// the cut, so a span-based test refused a hold the recording supports.
+    #[test]
+    fn holding_a_slow_clip_runs_on_past_its_out_point() {
+        let mut transport = Transport::new();
+        let mut slow = clip("a", 0, 10, ClipTransition::CUT);
+        slow.speed = 0.5;
+        transport.set_clip(slow.clone(), 0);
+        transport.set_playlist(vec![slow]);
+        // The head is three frames past the cut but far short of the 22 output
+        // frames the clip takes at half speed.
+        transport.note_recorded_frame(13);
+        transport.set_holding_last(true);
+        transport.set_playing(true);
+        for _ in 0..24 {
+            transport.step(1.0);
+        }
+        assert!(
+            transport.is_playing(),
+            "the recording is past the cut, so the clip must keep going"
+        );
+        assert_eq!(
+            transport.source_frame(),
+            13,
+            "the hold reaches the recording's newest frame"
+        );
+    }
+
+    /// The hold re-tests against the operator's out point, not the extended end,
+    /// or an extended clip parks one tick after it reached the recording edge.
+    #[test]
+    fn holding_the_last_clip_keeps_running_at_the_edge() {
+        let mut transport = Transport::new();
+        let a = clip("a", 0, 2, ClipTransition::CUT);
+        transport.set_clip(a.clone(), 0);
+        transport.set_playlist(vec![a]);
+        // The clip reached the edge; the recording is writing no new frames.
+        transport.note_recorded_frame(50);
+        transport.set_holding_last(true);
+        transport.set_playing(true);
+        for _ in 0..8 {
+            transport.step(1.0);
+        }
+        assert!(
+            transport.is_playing(),
+            "the clip follows the edge: it must not park one tick in"
+        );
+    }
+
     /// The hold test compares source frames now. A clip played faster than the
     /// recording walks more source frames per output frame, so its out point is
     /// the boundary the recording has to pass, not the shorter span the output
@@ -1309,6 +1395,42 @@ mod tests {
             "{}",
             transport.source_frame()
         );
+    }
+
+    #[test]
+    fn a_seek_leaves_the_live_edge() {
+        let mut transport = Transport::new();
+        let a = clip("a", 0, 1000, ClipTransition::CUT);
+        transport.set_clip(a, 0);
+        transport.jump_to_now(1000, 6);
+        transport.set_playing(true);
+        assert!(transport.is_live());
+        transport.seek_source(500);
+        assert!(!transport.is_live(), "a seek must leave LIVE");
+        assert_eq!(transport.source_frame(), 500);
+    }
+
+    #[test]
+    fn chasing_follows_newly_recorded_frames() {
+        let mut transport = Transport::new();
+        let a = clip("a", 0, 2, ClipTransition::CUT);
+        transport.set_clip(a.clone(), 0);
+        transport.set_playlist(vec![a]);
+        transport.note_recorded_frame(50);
+        transport.set_chasing(true);
+        transport.set_playing(true);
+        for _ in 0..6 {
+            transport.step(1.0);
+        }
+        assert!(transport.is_playing(), "chase must not stop at the cut");
+        assert!(
+            transport.source_frame() >= 50,
+            "chase reaches the recording edge: {}",
+            transport.source_frame()
+        );
+        transport.note_recorded_frame(55);
+        transport.step(1.0);
+        assert_eq!(transport.source_frame(), 55);
     }
 
     #[test]

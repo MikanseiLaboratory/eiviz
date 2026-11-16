@@ -1462,6 +1462,22 @@ proto_enum!(
     { All => All, Include => Include, Exclude => Exclude }
 );
 
+fn decode_backend_code(backend: crate::session::replay::DecodeBackend) -> u32 {
+    match backend {
+        crate::session::replay::DecodeBackend::Auto => 0,
+        crate::session::replay::DecodeBackend::Gpu => 1,
+        crate::session::replay::DecodeBackend::Cpu => 2,
+    }
+}
+
+fn decode_backend_from_proto(code: u32) -> crate::session::replay::DecodeBackend {
+    match code {
+        1 => crate::session::replay::DecodeBackend::Gpu,
+        2 => crate::session::replay::DecodeBackend::Cpu,
+        _ => crate::session::replay::DecodeBackend::Auto,
+    }
+}
+
 fn replay_to_pb(replay: &crate::session::replay::ReplayDto) -> pb::Replay {
     use crate::session::replay::*;
     pb::Replay {
@@ -1591,6 +1607,7 @@ fn replay_to_pb(replay: &crate::session::replay::ReplayDto) -> pb::Replay {
                 playlist_id: channel.playlist_id.unwrap_or(0),
                 has_playlist: channel.playlist_id.is_some(),
                 input_id: channel.input_id,
+                decode_backend: decode_backend_code(channel.decode_backend),
             })
             .collect(),
         auto_add_to_playlist: replay.auto_add_to_playlist,
@@ -1773,6 +1790,7 @@ fn replay_from_pb(replay: pb::Replay) -> Result<crate::session::replay::ReplayDt
                 index: channel.index,
                 playlist_id: channel.has_playlist.then_some(channel.playlist_id),
                 input_id: channel.input_id,
+                decode_backend: decode_backend_from_proto(channel.decode_backend),
             })
             .collect(),
         auto_add_to_playlist: replay.auto_add_to_playlist,
@@ -2164,6 +2182,7 @@ mod tests {
                 index: 1,
                 playlist_id: Some(2),
                 input_id: 11,
+                decode_backend: DecodeBackend::Gpu,
             }],
             auto_add_to_playlist: true,
             decode_ahead: false,

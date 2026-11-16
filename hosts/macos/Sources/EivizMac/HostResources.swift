@@ -27,8 +27,13 @@ enum HostResources {
         let text = String(format: "CPU %.0f%%   GPU ", cpu)
             + gpuText
             + String(format: "   RAM %.0f%%   VRAM %.0f%%   Render %.1f ms / %.1f ms", ram, vram, renderMs, budgetMs)
+        // `cpu` is process CPU against one core, so 100% is one core, not the
+        // machine. Judge the alert against all logical cores: a process using one
+        // core on an 8-core Mac is 12.5% load, not a high-load condition.
+        let cores = Float(max(1, ProcessInfo.processInfo.activeProcessorCount))
+        let machineCpu = min(100, cpu / cores)
         var hits: [String] = []
-        if cpu >= 85 { hits.append(String(format: "CPU %.0f%%", cpu)) }
+        if machineCpu >= 85 { hits.append(String(format: "CPU %.0f%%", machineCpu)) }
         if let gpu, gpu >= 85 { hits.append(String(format: "GPU %.0f%%", gpu)) }
         if ram >= 85 { hits.append(String(format: "RAM %.0f%%", ram)) }
         if vram >= 85 { hits.append(String(format: "VRAM %.0f%%", vram)) }
@@ -52,8 +57,9 @@ enum HostResources {
             lastStamp = now
         }
         guard lastStamp != .distantPast, elapsed > 0.05 else { return 0 }
-        let cores = max(1, Double(ProcessInfo.processInfo.activeProcessorCount))
-        return Float(min(100, max(0, (cpu - lastCpu) / elapsed / cores * 100)))
+        // Report the process against one core, the way Activity Monitor does. Dividing
+        // by the core count made a pegged app look like 10% on an 8-core Mac.
+        return Float(max(0, (cpu - lastCpu) / elapsed * 100))
     }
 
     private static func sampleRam() -> Float {

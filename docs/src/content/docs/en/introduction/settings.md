@@ -65,7 +65,7 @@ Where pictures leave the mixer.
 <img src="/eiviz/images/en/introduction/settings/outputs.jpg" alt="Screenshot of the Outputs settings" style="max-width: 100%; height: auto;" />
 
 Each row is a name, a transport, an On/Off switch, a video source, audio, resolution, and frame rate.  
-Transport is OMT or NDI. Hardware outputs such as DeckLink are still in progress.  
+Transport is OMT, NDI, DeckLink, or RTMP. RTMP uses a stream encoder and a Keychain-held stream key; DeckLink requires the Pro module and supported hardware.  
 Source can be Input, Scene, MU PRV, MU PGM, or Multiview.  
 Audio is one Mixing Unit's MU Bus, or None (no audio).  
 When Multiview is selected as the video source, audio cannot be sent.  

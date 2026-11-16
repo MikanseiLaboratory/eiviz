@@ -12,10 +12,7 @@ struct ReplayView: View {
     @EnvironmentObject private var mixer: MixerController
 
     @State private var document: ReplayDocument?
-    /// The document the deck last took, kept for a structural compare: the deck's own
-    /// encoder renames nothing, so a string compare of the re-encoded copy was true on
-    /// every tick and reloaded the document 5 times a second.
-    @State private var loadedValue: JSONValue?
+    @State private var loadedJson = ""
     @State private var channel: UInt32 = 0
     /// Where the channel is: at the live edge or in recorded material, and whether it is
     @State private var transport = ReplayTransportState.atEdge
@@ -27,6 +24,8 @@ struct ReplayView: View {
     @State private var looping = false
     /// Whether the last clip keeps running past its out point. Also the mixer's; mirrored.
     @State private var holdLast = false
+    /// A scratch playback is following the recording edge while the recorder runs.
+    @State private var chasing = false
     @State private var inFrame: UInt64?
     /// Marked out point. Kept so the operator can read back what was marked.
     @State private var outFrame: UInt64?
@@ -54,7 +53,6 @@ struct ReplayView: View {
     @State private var angleMonitors: [UInt32: UInt64] = [:]
     /// Angles the surface budget could not take on, so their tiles show the limit
     /// overlay instead of a black box that reads as a broken camera.
-    @State private var angleShortOfBudget: [UInt32] = []
     /// Show every angle as a live picture instead of the selected one, the way the
     /// Windows deck's Multiview does.
     @State private var multiview = false
@@ -66,11 +64,16 @@ struct ReplayView: View {
     /// Buckets the mixer evicted, so the first bucket on screen is this many into
     /// the recording. The marks are placed with it.
     @State private var peakDropped: UInt32 = 0
+    /// Seconds of waveform to show; zero shows every bucket the store still holds.
+    @State private var waveformSeconds: Double = 30
     @State private var jogValue: Double = 0
     @State private var showExport = false
     @State private var markLastSeconds = "10"
     @State private var clipOrder = "Append"
     @State private var playingClipUid: String?
+    /// Event row created at Mark In. Mark Out fills this row instead of appending a
+    /// second event, matching the Windows deck's open clip.
+    @State private var openEventId: UInt64?
     /// The channel's playhead, as the mixer reports it. This is what the seek bar moves;
     /// the recording head is where the recorder is writing and must not drive the bar.
     @State private var playheadFrame: UInt64 = 0
@@ -80,7 +83,22 @@ struct ReplayView: View {
     /// While the operator drags the bar the engine has not moved yet, so the drag value
     /// owns the bar until the seek lands.
     @State private var scrubFrame: Double?
+    /// When the current drag/keyboard seek started. A seek that the engine never
+    /// reports back (a clamped target, a dropped transport command) must not pin the
+    /// thumb forever; after this grace the engine's own position owns the bar again.
+    @State private var scrubSince: Date?
+    /// Throttle for live seeks while the thumb is still being dragged.
+    @State private var lastScrubSeek = Date.distantPast
+    /// Throttle for waveform drags: each 100 ms of the swipe moves the picture.
+    @State private var lastWaveformSeek = Date.distantPast
+    /// Playhead when a waveform swipe started; a swipe is relative movement, not an
+    /// absolute jump to wherever the pointer landed.
+    @State private var waveformDragStart: UInt64?
+    @State private var waveformDragWindow: Double = 0
     @State private var sliderEditing = false
+    /// The deck opens on the first recorded frame when the channel is idle. Set once
+    /// per channel so a later tick does not undo an operator's seek.
+    @State private var didInitialSeek = false
 
     /// Read once per tick and cached: rows read the recording uuid and the angle
     /// ranges, and the state line reads the missing-file count. A per-row FFI round
@@ -88,13 +106,6 @@ struct ReplayView: View {
     @State private var recordingUuid = ""
     @State private var angleRanges: [UInt32: (first: UInt64, last: UInt64)] = [:]
     @State private var missingRecordings = 0
-    /// Refusal counter already acknowledged in `status`, so a tile that could not get
-    /// a surface says so once instead of shouting every tick.
-    @State private var notedBudgetRefusal: UInt64 = 0
-    /// The modifiers of a waveform drag, captured when the mouse went down. Reading
-    /// them at drag end answers "what is on the keyboard now", not what the row was
-    /// clicked with.
-    @State private var waveModifiers: NSEvent.ModifierFlags?
 
     @State private var tick = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
 
@@ -113,11 +124,30 @@ struct ReplayView: View {
             // A different channel has its own playhead; carrying the last one over made
             // the slider and the readouts describe a channel that is no longer selected.
             scrubFrame = nil
+            scrubSince = nil
             playheadFrame = 0
             channelOutFrame = 0
             playingClipUid = nil
+            openEventId = nil
             selectedClip = nil
+            selectedEvent = nil
+            didInitialSeek = false
+            chasing = false
             transport = .atEdge
+        }
+        // Clicking an event previews its first frame. The seek bar and the playhead
+        // readout follow the same click instead of describing the previous position.
+        .onChange(of: selectedEvent) { _, id in
+            guard let id,
+                  let event = document?.events.first(where: { $0.id == id })
+            else { return }
+            previewEvent(event)
+        }
+        // A clip row is the operator pointing at a clip: cue it so Play starts that
+        // clip, and put the bar on its first frame now.
+        .onChange(of: selectedClip) { _, uid in
+            guard let uid, let clip = clips.first(where: { $0.uid == uid }) else { return }
+            cue(clip)
         }
     }
 
@@ -133,18 +163,21 @@ struct ReplayView: View {
             }
             .labelsHidden()
             .frame(width: 110, height: 30)
+            Picker("", selection: Binding(
+                get: { channelInfo?.decodeBackend ?? "Auto" },
+                set: { setDecodeBackend($0) }
+            )) {
+                Text(L10n.t("replay.decodeAuto")).tag("Auto")
+                Text(L10n.t("replay.decodeGpu")).tag("Gpu")
+                Text(L10n.t("replay.decodeCpu")).tag("Cpu")
+            }
+            .labelsHidden()
+            .frame(width: 92, height: 30)
+            .help(L10n.t("replay.decodeBackendHelp"))
             Divider().frame(height: 24)
             Text(stateText)
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(isRecording ? Color.red : EivizTheme.text)
-            Spacer(minLength: 8)
-            Text(capacityLine)
-                .font(.system(size: 11))
-                .foregroundStyle(Color(white: 0.54))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: 200)
-                .layoutPriority(0)
             Spacer(minLength: 8)
             HStack(spacing: 6) {
                 Text(L10n.t("replay.recordTc"))
@@ -162,11 +195,6 @@ struct ReplayView: View {
             Text(String(format: "%.2f fps", ReplayTime.rate(fps)))
                 .font(.system(size: 11))
                 .foregroundStyle(Color(white: 0.54))
-            Button(L10n.t("replay.capacityRun")) {}
-                .disabled(true)
-                .frame(minWidth: 130, minHeight: 30)
-                .help(L10n.t("replay.capacityIdle"))
-                .layoutPriority(2)
             Button(L10n.t("replay.openSetup")) { mixer.openReplaySettings() }
                 .frame(minWidth: 130, minHeight: 30)
                 .layoutPriority(2)
@@ -189,26 +217,49 @@ struct ReplayView: View {
         return max(1, min(8, interval))
     }
 
+    /// The whole recording, never the clip or event that happens to be on air: the bar
+    /// is the timeline the operator seeks on, so its scale must not shrink while the
+    /// channel is playing something shorter than the recording.
     private var seekRange: ClosedRange<Double> {
         if let angle = activeAngle,
            let range = mixer.replayAngleRange(angle.id),
            range.last > range.first {
-            let upper = max(range.last, playheadFrame, recordingHead)
-            return Double(range.first)...Double(max(1, upper))
+            let upper = ReplayDeckMath.seekUpper(
+                last: range.last,
+                playhead: playheadFrame,
+                recordingHead: recordingHead)
+            return Double(range.first)...Double(upper)
         }
-        return 0...Double(max(1, stats?.last_frame ?? 1, playheadFrame))
+        let upper = ReplayDeckMath.seekUpper(
+            last: stats?.last_frame ?? 1,
+            playhead: playheadFrame,
+            recordingHead: recordingHead)
+        return 0...Double(upper)
+    }
+
+    private var seekTotalFrame: UInt64 {
+        UInt64(max(0, seekRange.upperBound.rounded()))
     }
 
     private var displayPlayhead: UInt64 {
         scrubFrame.map { UInt64(max(0, $0.rounded())) } ?? playheadFrame
     }
 
-    private var capacityLine: String {
-        guard let snapshot = stats else { return "" }
-        let free = ByteCountFormatter.string(
-            fromByteCount: Int64(snapshot.free_bytes), countStyle: .file)
-        if snapshot.remaining_secs == UInt32.max { return free }
-        return "\(free) / \(ReplayTime.clock(snapshot.remaining_secs))"
+    /// The bar follows the channel's own position, including while a clip or an event
+    /// plays. A seek holds the bar only until the engine reports that frame, or until
+    /// playback has moved past it; after that the engine owns the bar again. This must
+    /// not wait on the Slider's editing flag: a flag left true used to keep `scrubFrame`
+    /// forever and the whole bar stopped following the picture.
+    private func syncPlayhead(reported: UInt64) {
+        if let target = scrubFrame {
+            let landed = ReplayDeckMath.seekLanded(reported: reported, target: target)
+            let passed = Double(reported) > target + 1
+            let expired = scrubSince.map { Date().timeIntervalSince($0) > 0.8 } ?? true
+            guard landed || passed || expired else { return }
+            scrubFrame = nil
+            scrubSince = nil
+        }
+        playheadFrame = reported
     }
 
     private var deckPictures: some View {
@@ -284,12 +335,6 @@ struct ReplayView: View {
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(EivizTheme.stroke))
     }
 
-    /// Was this angle one the surface budget could not take on? Those tiles used to
-    /// turn into black boxes that read as a camera that died.
-    private func angleOverLimit(_ angle: ReplayAngleInfo) -> Bool {
-        !mixer.isRemote && angleShortOfBudget.contains(angle.id)
-    }
-
     private var angleRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
@@ -326,11 +371,6 @@ struct ReplayView: View {
                             .stroke(selected ? Color.green : EivizTheme.stroke,
                                     lineWidth: selected ? 2 : 1)
                     )
-                    .overlay {
-                        surfaceLimitBadge(angleOverLimit(angle))
-                            .frame(width: 76, height: 40)
-                            .allowsHitTesting(false)
-                    }
                     .help("\(index + 1): \(angle.label)")
                 }
             }
@@ -382,18 +422,38 @@ struct ReplayView: View {
                 Slider(
                     value: Binding(
                         get: { scrubFrame ?? Double(playheadFrame) },
-                        set: { scrubFrame = $0 }
+                        set: {
+                            scrubFrame = $0
+                            scrubSince = Date()
+                            // A drag is a scrub, not a preview that waits for the
+                            // release. Seek while the thumb is held, at 10 Hz, so the
+                            // picture follows the hand without flooding the mixer.
+                            guard sliderEditing,
+                                  Date().timeIntervalSince(lastScrubSeek) >= 0.1
+                            else { return }
+                            lastScrubSeek = Date()
+                            let frame = UInt64(max(0, $0.rounded()))
+                            seekWhole(to: frame, keepPlaying: transport.playing)
+                        }
                     ),
                     in: seekRange
                 ) { editing in
                     sliderEditing = editing
-                    guard !editing, let target = scrubFrame else { return }
+                    if editing {
+                        lastScrubSeek = Date.distantPast
+                        return
+                    }
+                    guard let target = scrubFrame else { return }
                     let frame = UInt64(max(0, target.rounded()))
                     playheadFrame = frame
                     // Keep showing the drop point while the mixer catches up, then let
-                    // the engine's position own the bar again.
-                    seekWhole(to: frame)
+                    // the engine's position own the bar again. A drag while the channel
+                    // is advancing seeks without stopping it.
+                    seekWhole(to: frame, keepPlaying: transport.playing)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                        // A held thumb has not stopped being dragged just because it
+                        // stopped moving for a moment.
+                        guard !sliderEditing else { return }
                         if let current = scrubFrame, abs(current - target) < 0.5 {
                             scrubFrame = nil
                         }
@@ -404,25 +464,53 @@ struct ReplayView: View {
                 // end-of-drag callback never runs. Commit those changes here.
                 .onChange(of: scrubFrame) { _, value in
                     guard !sliderEditing, let value else { return }
+                    scrubSince = Date()
                     let frame = UInt64(max(0, value.rounded()))
                     playheadFrame = frame
-                    seekWhole(to: frame)
+                    seekWhole(to: frame, keepPlaying: transport.playing)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                        guard !sliderEditing else { return }
                         if let current = scrubFrame, abs(current - value) < 0.5 {
                             scrubFrame = nil
                         }
                     }
                 }
+                // The bar's two numbers: where the picture is now, and how long the
+                // whole recording is. Both stay the recording's scale while a shorter
+                // clip is on air.
+                HStack(spacing: 0) {
+                    Text(ReplayTime.timecode(displayPlayhead, fps))
+                        .foregroundStyle(Color(red: 0.49, green: 0.82, blue: 0.29))
+                    Text(" / ")
+                        .foregroundStyle(Color(white: 0.54))
+                    Text(ReplayTime.timecode(seekTotalFrame, fps))
+                        .foregroundStyle(Color(white: 0.69))
+                }
+                .font(.system(size: 11, design: .monospaced))
+                .fixedSize()
+                .help(L10n.t("replay.seekWholeHint"))
                 Button(L10n.t("replay.jumpLive")) { live() }
                     .frame(minWidth: 130, minHeight: 26)
                     .help(L10n.t("replay.jumpLiveHint"))
+            }
+            HStack(spacing: 8) {
+                Text(L10n.t("replay.waveformRange"))
+                    .font(.caption)
+                    .foregroundStyle(EivizTheme.dim)
+                Picker("", selection: $waveformSeconds) {
+                    Text("10 s").tag(10.0)
+                    Text("30 s").tag(30.0)
+                    Text("60 s").tag(60.0)
+                    Text("5 min").tag(300.0)
+                }
+                .labelsHidden()
+                .frame(width: 110)
             }
             waveform
                 .frame(height: 48)
                 .accessibilityElement()
                 .accessibilityLabel(L10n.t("replay.waveformSeek"))
             HStack(spacing: 12) {
-                Spacer()
                 transportReadout(
                     L10n.t("replay.playhead"),
                     ReplayTime.timecode(displayPlayhead, fps),
@@ -442,78 +530,126 @@ struct ReplayView: View {
                 )
                 transportReadout(L10n.t("replay.duration"), markDuration)
             }
-            HStack(spacing: 8) {
-                controlGroup {
-                    Button {
-                        record(true)
-                    } label: {
-                        HStack(spacing: 7) {
-                            Circle()
-                                .fill(isRecording ? Color.red : Color(red: 0.88, green: 0.32, blue: 0.32))
-                                .frame(width: 11, height: 11)
-                            Text(isRecording ? "REC" : L10n.t("replay.record"))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .bottom, spacing: 12) {
+                    transportCluster(L10n.t("replay.groupTransport")) {
+                        Button {
+                            record(!isRecording)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(isRecording
+                                        ? Color.red
+                                        : Color(red: 0.88, green: 0.32, blue: 0.32))
+                                    .frame(width: 9, height: 9)
+                                Text(isRecording ? L10n.t("replay.stop") : L10n.t("replay.record"))
+                                    .fontWeight(.semibold)
+                            }
                         }
-                    }
-                    .disabled(isRecording)
-                    .frame(minWidth: 88, minHeight: 44)
-                    Button(L10n.t("replay.stop")) { record(false) }
-                        .disabled(!isRecording)
-                        .frame(minWidth: 66, minHeight: 44)
-                    Button(L10n.t("replay.live")) { live() }
+                        .frame(minWidth: 90, minHeight: 32)
+                        .help(L10n.t("replay.recordHint"))
+                        Button { live() } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "dot.radiowaves.left.and.right")
+                                    .font(.system(size: 11, weight: .semibold))
+                                Text(L10n.t("replay.live"))
+                                    .font(.system(size: 11, weight: transport.live ? .bold : .regular))
+                            }
+                            .foregroundStyle(transport.live ? Color.white : Color(white: 0.72))
+                            .frame(width: 66, height: 32)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(transport.live
+                                        ? Color(red: 0.18, green: 0.49, blue: 0.20)
+                                        : EivizTheme.button)
+                            )
+                            .overlay(RoundedRectangle(cornerRadius: 6)
+                                .stroke(EivizTheme.stroke, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
                         .keyboardShortcut("l", modifiers: [])
-                        .frame(minWidth: 74, minHeight: 44)
-                    Button(L10n.t(transport.playing ? "replay.pause" : "replay.play")) { togglePlay() }
+                        .help(L10n.t("replay.jumpLiveHint"))
+                        Button(L10n.t("replay.cue")) { cueReady() }
+                            .keyboardShortcut("c", modifiers: [])
+                            .frame(minWidth: 62, minHeight: 32)
+                            .help(L10n.t("replay.cueHint"))
+                            .disabled(clips.isEmpty)
+                        Button { togglePlay() } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: transport.playing ? "pause.fill" : "play.fill")
+                                    .font(.system(size: 10))
+                                Text(L10n.t(transport.playing ? "replay.pause" : "replay.play"))
+                            }
+                        }
                         .keyboardShortcut(.space, modifiers: [])
-                        .frame(minWidth: 84, minHeight: 44)
-                    Button("◀") { step(-1) }
+                        .frame(minWidth: 78, minHeight: 32)
+                        Button { step(-1) } label: {
+                            Image(systemName: "backward.frame.fill")
+                        }
                         .keyboardShortcut(.leftArrow, modifiers: [])
-                        .frame(width: 44, height: 44)
+                        .frame(width: 38, height: 32)
                         .help(L10n.t("replay.stepBackHint"))
-                    Button("▶") { step(1) }
+                        Button { step(1) } label: {
+                            Image(systemName: "forward.frame.fill")
+                        }
                         .keyboardShortcut(.rightArrow, modifiers: [])
-                        .frame(width: 44, height: 44)
+                        .frame(width: 38, height: 32)
                         .help(L10n.t("replay.stepForwardHint"))
-                }
-                controlGroup {
-                    Button(L10n.t("replay.markIn")) { markIn() }
-                        .keyboardShortcut("i", modifiers: [])
-                        .tint(inFrame != nil ? .orange : nil)
-                        .frame(width: 96, height: 44)
-                    Button(L10n.t("replay.markOut")) { markOut() }
-                        .keyboardShortcut("o", modifiers: [])
-                        .tint(outFrame != nil ? .orange : nil)
-                        .frame(width: 96, height: 44)
-                        .disabled(!markOpen)
-                    Button(L10n.t("replay.cancelMark")) { cancelMark() }
-                        .frame(width: 72, height: 44)
-                    TextField("", text: $markLastSeconds)
-                        .frame(width: 44, height: 44)
-                    Text(L10n.t("replay.secondsShort"))
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color(white: 0.54))
-                    Button(L10n.t("replay.markLast")) { markLast() }
-                        .frame(width: 100, height: 44)
-                        .help(L10n.t("replay.markLastHint"))
-                        .disabled(!isRecording)
-                }
-                Spacer(minLength: 8)
-                controlGroup {
-                    Button("25%") { setSpeed(250) }.frame(width: 54, height: 44)
-                    Button("50%") { setSpeed(500) }.frame(width: 54, height: 44)
-                    Button("75%") { setSpeed(750) }.frame(width: 54, height: 44)
-                    Button("100%") { setSpeed(1000) }.frame(width: 56, height: 44)
-                    Slider(value: $jogValue, in: -30...30, step: 1) { editing in
-                        if !editing {
-                            jog(Int(jogValue.rounded()))
-                            jogValue = 0
-                        }
                     }
-                    .frame(width: 110)
-                    Button(L10n.t("replay.export")) { showExport.toggle() }
-                        .frame(minWidth: 110).frame(height: 44)
-                        .popover(isPresented: $showExport) {
-                            exportBar
+                    transportCluster(L10n.t("replay.speed")) {
+                        speedButton(250, "25%")
+                        speedButton(500, "50%")
+                        speedButton(750, "75%")
+                        speedButton(1000, "100%")
+                        Divider()
+                            .frame(height: 24)
+                            .overlay(EivizTheme.stroke)
+                        Text("JOG")
+                            .font(.system(size: 9, weight: .semibold))
+                            .tracking(0.8)
+                            .foregroundStyle(EivizTheme.dim)
+                        Slider(value: $jogValue, in: -30...30, step: 1) { editing in
+                            if !editing {
+                                jog(Int(jogValue.rounded()))
+                                jogValue = 0
+                            }
                         }
+                        .frame(width: 92)
+                    }
+                    Spacer(minLength: 0)
+                }
+                HStack(alignment: .bottom, spacing: 12) {
+                    transportCluster(L10n.t("replay.groupMarks")) {
+                        Button(L10n.t("replay.markIn")) { markIn() }
+                            .keyboardShortcut("i", modifiers: [])
+                            .tint(inFrame != nil ? .orange : nil)
+                            .frame(width: 80, height: 32)
+                        Button(L10n.t("replay.markOut")) { markOut() }
+                            .keyboardShortcut("o", modifiers: [])
+                            .tint(outFrame != nil ? .orange : nil)
+                            .frame(width: 80, height: 32)
+                            .disabled(!markOpen)
+                        Button(L10n.t("replay.cancelMark")) { cancelMark() }
+                            .frame(width: 66, height: 32)
+                        TextField("", text: $markLastSeconds)
+                            .frame(width: 38, height: 32)
+                        Text(L10n.t("replay.secondsShort"))
+                            .font(.system(size: 11))
+                            .foregroundStyle(EivizTheme.dim)
+                        Button(L10n.t("replay.markLast")) { markLast() }
+                            .frame(width: 94, height: 32)
+                            .help(L10n.t("replay.markLastHint"))
+                            .disabled(!isRecording)
+                    }
+                    Spacer(minLength: 0)
+                    Button { showExport.toggle() } label: {
+                        Label(L10n.t("replay.export"), systemImage: "square.and.arrow.up")
+                    }
+                    .frame(minWidth: 120, minHeight: 32)
+                    .popover(isPresented: $showExport) {
+                        exportBar
+                    }
                 }
             }
             HStack(alignment: .center, spacing: 8) {
@@ -560,27 +696,44 @@ struct ReplayView: View {
         }
     }
 
-    /// The answer a numbered tile shows when the deck could not give it a Metal
-    /// surface within the budget: it never sits on a working picture, only on a tile
-    /// that stayed black.
-    @ViewBuilder
-    private func surfaceLimitBadge(_ shown: Bool) -> some View {
-        if shown {
-            Text(L10n.t("replay.tileLimit"))
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 3)
-                .padding(.vertical, 1)
-                .background(Color.gray.opacity(0.65))
-                .clipShape(Capsule())
+    /// A titled cluster of related deck controls. The label and the card are what
+    /// separate "what this button does" (transport, marks, speed) from the rest of
+    /// the bottom strip, which used to be one undifferentiated row of buttons.
+    private func transportCluster<Content: View>(
+        _ title: String,
+        @ViewBuilder _ content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title.uppercased())
+                .font(.system(size: 9, weight: .semibold))
+                .tracking(0.9)
+                .foregroundStyle(EivizTheme.dim)
+            HStack(spacing: 6) { content() }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8).fill(EivizTheme.panel))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(EivizTheme.stroke.opacity(0.65), lineWidth: 1))
         }
     }
 
-    private func controlGroup<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        HStack(spacing: 4) { content() }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 4).fill(Color(white: 0.1)))
+    /// A speed preset. The current rate is filled, so the row reads as one choice
+    /// instead of four identical buttons.
+    private func speedButton(_ milli: Int32, _ title: String) -> some View {
+        let selected = speedMilli == milli
+        return Button(title) { setSpeed(milli) }
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: selected ? .semibold : .regular))
+            .foregroundStyle(selected ? Color.white : EivizTheme.text)
+            .frame(width: 42, height: 26)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(selected ? EivizTheme.toggleOn : EivizTheme.button))
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(selected ? EivizTheme.toggleOn : EivizTheme.stroke, lineWidth: 1))
     }
 
     private func transportReadout(
@@ -619,6 +772,9 @@ struct ReplayView: View {
     }
 
     private var channels: [ReplayChannelInfo] { document?.channels ?? [] }
+    private var channelInfo: ReplayChannelInfo? {
+        channels.first(where: { $0.index == channel })
+    }
     private var angles: [ReplayAngleInfo] { document?.angles ?? [] }
     /// The playlist the selected channel plays. A project can hold several, and the
     /// channel is what points at one.
@@ -676,6 +832,17 @@ struct ReplayView: View {
     }
 
     private var isRecording: Bool { stats?.state == 1 }
+
+    /// Turns chase playback on or off. Only a scratch playback from the seek bar
+    /// follows the recording; a playlist clip keeps its cut point. The mode is
+    /// meaningless once the recorder stops.
+    private func setChase(_ on: Bool) {
+        let want = on && isRecording
+        guard want != chasing else { return }
+        if mixer.replayChase(channel: channel, on: want) {
+            chasing = want
+        }
+    }
 
     /// Length of the mark, or a placeholder while it is incomplete.
     private var markDuration: String {
@@ -744,10 +911,6 @@ struct ReplayView: View {
                             .stroke(selected ? Color.green : Color.gray.opacity(0.4),
                                     lineWidth: selected ? 3 : 1)
                     )
-                    .overlay {
-                        surfaceLimitBadge(angleOverLimit(angle))
-                            .allowsHitTesting(false)
-                    }
                 }
             }
         }
@@ -762,6 +925,7 @@ struct ReplayView: View {
             ReplayEventTable(
                 events: document?.events ?? [],
                 fps: fps,
+                selection: $selectedEvent,
                 rename: { renameEvent($0, $1) },
                 protect: { setEventProtected($0, $1) },
                 setRange: { id, start, end in setEventRange(id, start, end) },
@@ -1061,7 +1225,7 @@ struct ReplayView: View {
 
     private func load() {
         document = mixer.replayDocument
-        loadedValue = document?.value
+        loadedJson = document?.json ?? ""
         // A session saved before source switching cleared the unused id would keep failing
         // the core's "records an input, so it cannot name scene" check forever.
         if var current = document, current.normalizeAngleSources() {
@@ -1092,24 +1256,14 @@ struct ReplayView: View {
     /// out by its numbered tiles.
     private func ensureAngleMonitors() {
         guard let document, !mixer.isRemote else { return }
-        let reservedForDeck = (outputMonitor != 0 ? 1 : 0) + (liveMonitor != 0 ? 1 : 0)
         var monitors = angleMonitors.filter { id, _ in
             document.angles.contains { $0.id == id }
         }
         for angle in document.angles where (monitors[angle.id] ?? 0) == 0 {
-            guard FlipBudget.remaining > reservedForDeck else { break }
             monitors[angle.id] = mixer.allocateMonitorId()
         }
         if monitors != angleMonitors {
             angleMonitors = monitors
-            angleShortOfBudget = document.angles
-                .filter { (monitors[$0.id] ?? 0) == 0 }
-                .map(\.id)
-            // Saying so at the tick that lost the tile is enough; the overlay per
-            // tile stays on until its monitor exists again.
-            if !angleShortOfBudget.isEmpty {
-                status = L10n.t("replay.tileLimitStatus")
-            }
         }
     }
 
@@ -1143,14 +1297,10 @@ struct ReplayView: View {
         let snapshot = mixer.replayStatsWithAngles()
         stats = snapshot?.stats
         refreshHealth(snapshot)
-        refreshExport()
-        // The tiles are planned before the deck's other bookkeeping: budget refusals
-        // are counted at attach time, and a new count is turned into a message here.
-        ensureAngleMonitors()
-        noteBudgetRefusal()
         // What rows and the state line read this tick, copied once. A replay deck
         // with dozens of clips used to pay a mixer call per OUT cell and a disk stat
         // per recording every time the table drew.
+        ensureAngleMonitors()
         recordingUuid = mixer.isRemote ? "" : MixerFFI.replayRecordingUuid()
         var ranges: [UInt32: (first: UInt64, last: UInt64)] = [:]
         for angle in angles {
@@ -1162,9 +1312,12 @@ struct ReplayView: View {
         // The core can change the document (remote edits, the vMix API), so adopt
         // anything we did not write ourselves. The compare is structural: re-encoding
         // the host copy normalized it into a constant mismatch.
-        if let latest = mixer.replayDocument, latest.value != loadedValue {
+        if let latest = mixer.replayDocument, latest.json != loadedJson {
             document = latest
-            loadedValue = latest.value
+            loadedJson = latest.json
+            // A newly added angle needs its own monitor now; waiting for the next
+            // tick left the multiview tile black until the deck was reopened.
+            ensureAngleMonitors()
             loadDefaultTransition()
         }
         if channels.isEmpty {
@@ -1189,59 +1342,57 @@ struct ReplayView: View {
         // A channel the deck has just started is left alone for a moment: the mixer takes a
         // frame or two to report the change, and reading it too soon put the button back to
         // "Play" over a feed that was already running, so the next press paused it.
-        if let settleUntil, Date() < settleUntil {
-            // Inside the grace period after Live or Play: the deck's own answer stands.
-        } else {
-            settleUntil = nil
-            if !mixer.isRemote,
-               let state = MixerFFI.replayChannels().first(where: { $0.channel_index == channel }) {
+        //
+        // Only the play state waits. The position is not a transport answer: freezing it
+        // for the grace period made the bar and its timecode sit still after every Play,
+        // then jump to where the picture already was, and the same during a clip.
+        if !mixer.isRemote,
+           let state = MixerFFI.replayChannels().first(where: { $0.channel_index == channel }) {
+            if let settleUntil, Date() < settleUntil {
+                // Inside the grace period after Live or Play: the deck's own answer stands.
+            } else {
+                settleUntil = nil
                 transport = ReplayTransportRules.adopt(transport, mixerPlaying: state.playing != 0)
-                if state.speed_milli > 0 {
-                    speedMilli = state.speed_milli
+            }
+            if state.speed_milli > 0 {
+                speedMilli = state.speed_milli
+            }
+            playingClipUid = clips.first {
+                ReplayDeckMath.clipUidHash($0.uid) == state.clip_uid_hash
+            }?.uid
+            channelOutFrame = state.out_frame
+            syncPlayhead(reported: state.position_frame)
+            // Opening the deck on a channel parked at the live edge starts at the
+            // beginning of the recording. A channel that is already playing, or that an
+            // operator left holding a frame in the middle, is left where it is.
+            if !didInitialSeek {
+                didInitialSeek = true
+                let atEdge = state.position_frame &+ 4 >= recordingHead
+                if state.playing == 0, atEdge {
+                    parkAtRecordingStart()
                 }
-                playingClipUid = clips.first {
-                    ReplayDeckMath.clipUidHash($0.uid) == state.clip_uid_hash
-                }?.uid
-                // Only the engine's own answer may move the bar once a drag is over.
-                if scrubFrame == nil {
-                    playheadFrame = state.position_frame
-                }
-                channelOutFrame = state.out_frame
             }
         }
-        refreshWaveform()
-    }
-
-    /// The surface budget refused an attach since the last tick: the deck's pictures
-    /// are part of a whole the operator should know about. Command refusals write
-    /// into the same line; a budget note is the only thing this tick writes.
-    private func noteBudgetRefusal() {
-        let refusals = FlipBudget.refusalCount
-        guard refusals != notedBudgetRefusal else { return }
-        notedBudgetRefusal = refusals
-        status = L10n.t("replay.tileLimitStatus")
-    }
-
-    /// The waveform buckets, re-copied only when they moved: a full ring's worth of
-    /// min/max pairs used to be copied twice every tick even when nothing on screen
-    /// had changed. The store may only append at the end or evict from the front, and
-    /// both events show up in the counts.
-    private func refreshWaveform() {
-        guard !mixer.isRemote, let document, let angleId = watchAngle(document) else { return }
-        let state = MixerFFI.replayPeakCount(angleId: angleId)
-        guard state.count > 0 else {
-            if !peakMins.isEmpty {
-                peakMins = []
-                peakMaxes = []
-                peakDropped = 0
-            }
-            return
+        // Chase only means something while the recorder is writing. When it stops,
+        // the scratch clip is left at the last written frame like any other clip.
+        if !isRecording, chasing {
+            setChase(false)
         }
-        guard state.count != UInt32(peakMins.count) || state.dropped != peakDropped else { return }
-        let peaks = MixerFFI.replayPeaks(angleId: angleId)
-        peakMins = peaks.mins
-        peakMaxes = peaks.maxes
-        peakDropped = peaks.dropped
+        refreshExport()
+        // The peaks live with the recording, so a Remote has no waveform to draw.
+        if !mixer.isRemote, let document, let angleId = watchAngle(document) {
+            let peaks = MixerFFI.replayPeaks(
+                recordingUuid: waveformRecordingUuid,
+                angleId: angleId)
+            if peaks.mins.count != peakMins.count {
+                peakMins = peaks.mins
+                peakMaxes = peaks.maxes
+            } else if !peaks.mins.isEmpty {
+                peakMins = peaks.mins
+                peakMaxes = peaks.maxes
+            }
+            peakDropped = peaks.dropped
+        }
     }
 
     /// Angle whose waveform is on screen: the one the operator selected, else the
@@ -1254,24 +1405,66 @@ struct ReplayView: View {
         return document.angles.first?.id
     }
 
+    /// Recording whose waveform the deck should show: the selected clip/event,
+    /// then the clip on air, then the newest recording.
+    private var waveformRecordingUuid: String {
+        if let uid = selectedClip, let clip = clips.first(where: { $0.uid == uid }) {
+            return clip.recordingUuid
+        }
+        if let uid = playingClipUid, let clip = clips.first(where: { $0.uid == uid }) {
+            return clip.recordingUuid
+        }
+        if let id = selectedEvent,
+           let event = document?.events.first(where: { $0.id == id }) {
+            return event.recordingUuid
+        }
+        return document?.latestRecordingUuid ?? ""
+    }
+
     /// Waveform strip. Each column is the min/max of the buckets it covers, which
     /// is how a quiet gap to cut on becomes visible. The marks and the record head
     /// are drawn on it so the operator can see where the cut lands.
+    /// Frames shown by the waveform. The playhead is the centre, so the strip
+    /// scrolls under a fixed cursor while playback runs. "All" is the only mode
+    /// that cannot centre the playhead: it shows the retained recording.
+    private var waveformFrameWindow: (start: Double, end: Double) {
+        guard let document else { return (0, 1) }
+        let fps = max(1.0, ReplayTime.rate(document.fps))
+        let head = Double(displayPlayhead)
+        if waveformSeconds > 0 {
+            let width = waveformSeconds * fps
+            let start = head - width / 2
+            return (start, start + width)
+        }
+        return (seekRange.lowerBound, max(seekRange.lowerBound + 1, seekRange.upperBound))
+    }
+
     private var waveform: some View {
         Canvas { context, size in
             let buckets = peakMins.count
-            guard buckets > 0, size.width > 1, peakMaxes.count == buckets else { return }
+            guard buckets > 0, size.width > 1, peakMaxes.count == buckets,
+                  let document else { return }
+            let (windowStart, windowEnd) = waveformFrameWindow
+            let windowFrames = max(1, windowEnd - windowStart)
+            let rate = Double(MixerFFI.replayPeakRate())
+            let framesPerSecond = max(1.0, ReplayTime.rate(document.fps))
+            guard rate > 0 else { return }
+            let firstBucket = Int(peakDropped)
             let columns = Int(size.width)
             let middle = size.height / 2
             let scale = middle - 2
             for column in 0..<columns {
-                let from = buckets * column / columns
-                let to = max(from + 1, buckets * (column + 1) / columns)
+                let fromFrame = windowStart + windowFrames * Double(column) / Double(columns)
+                let toFrame = windowStart + windowFrames * Double(column + 1) / Double(columns)
+                let from = max(firstBucket, Int(fromFrame * rate / framesPerSecond))
+                let to = min(firstBucket + buckets, Int(toFrame * rate / framesPerSecond))
+                guard to > from else { continue }
                 var low = Float.greatestFiniteMagnitude
                 var high = -Float.greatestFiniteMagnitude
-                for bucket in from..<min(to, buckets) {
-                    low = min(low, peakMins[bucket])
-                    high = max(high, peakMaxes[bucket])
+                for bucket in from..<to {
+                    let index = bucket - firstBucket
+                    low = min(low, peakMins[index])
+                    high = max(high, peakMaxes[index])
                 }
                 guard low <= high else { continue }
                 var path = Path()
@@ -1281,20 +1474,15 @@ struct ReplayView: View {
             }
             // Absolute bucket numbering, so a frame maps to the same column here as
             // it does in the mixer's own bucket list.
-            let first = Int(peakDropped)
-            let last = first + buckets
-            let bucketRate = Double(MixerFFI.replayPeakRate())
-            let framesPerSecond = max(1.0, ReplayTime.rate(fps))
             let marks: [(UInt64?, Color, CGFloat)] = [
                 (inFrame, .yellow, 1),
                 (outFrame, .yellow, 1),
-                (playheadFrame, .red, 2),
+                (displayPlayhead, .red, 2),
             ]
             for (frame, color, width) in marks {
-                guard let frame, frame != 0, last > first else { continue }
-                let bucket = Int(Double(frame) * bucketRate / framesPerSecond)
-                guard bucket >= first, bucket <= last else { continue }
-                let x = CGFloat(bucket - first) / CGFloat(last - first) * size.width
+                guard let frame, frame != 0 else { continue }
+                let x = CGFloat((Double(frame) - windowStart) / windowFrames) * size.width
+                guard x >= 0, x <= size.width else { continue }
                 var path = Path()
                 path.move(to: CGPoint(x: x, y: 0))
                 path.addLine(to: CGPoint(x: x, y: size.height))
@@ -1316,15 +1504,43 @@ struct ReplayView: View {
                     .contentShape(Rectangle())
                     .gesture(
                         DragGesture(minimumDistance: 0)
-                            .onChanged { _ in
-                                if waveModifiers == nil {
-                                    waveModifiers = NSEvent.modifierFlags
+                            .onChanged { drag in
+                                // Plain drags scrub live. Shift/Control drags are
+                                // choosing a mark, so they only commit on release.
+                                let modifiers = NSEvent.modifierFlags
+                                guard !modifiers.contains(.shift),
+                                      !modifiers.contains(.control)
+                                else { return }
+                                if waveformDragStart == nil {
+                                    waveformDragStart = playheadFrame
+                                    let (start, end) = waveformFrameWindow
+                                    waveformDragWindow = max(1, end - start)
                                 }
+                                guard Date().timeIntervalSince(lastWaveformSeek) >= 0.1,
+                                      let origin = waveformDragStart
+                                else { return }
+                                lastWaveformSeek = Date()
+                                // A swipe moves the picture by the distance dragged.
+                                // Right means earlier, left means later, like a film
+                                // strip pulled under the cursor.
+                                let moved = -Double(drag.translation.width) / Double(proxy.size.width)
+                                    * waveformDragWindow
+                                let target = max(0, Double(origin) + moved)
+                                seekFromWaveform(
+                                    to: UInt64(target),
+                                    keepPlaying: transport.playing)
                             }
                             .onEnded { drag in
-                                let modifiers = waveModifiers ?? NSEvent.modifierFlags
-                                waveModifiers = nil
-                                seekOrMark(at: drag.location, size: proxy.size, modifiers: modifiers)
+                                if abs(drag.translation.width) < 3
+                                    || NSEvent.modifierFlags.contains(.shift)
+                                    || NSEvent.modifierFlags.contains(.control)
+                                {
+                                    seekOrMark(
+                                        at: drag.location,
+                                        size: proxy.size,
+                                        modifiers: NSEvent.modifierFlags)
+                                }
+                                waveformDragStart = nil
                             }
                     )
             }
@@ -1342,20 +1558,21 @@ struct ReplayView: View {
     /// The waveform draws only the buckets the store still holds, and the store may have
     /// dropped some from the front, so column zero is not frame zero: the dropped count
     /// is the offset, exactly as the drawing uses.
+    private func waveformFrame(at point: CGPoint, size: CGSize) -> UInt64? {
+        guard size.width > 1, let document else { return nil }
+        let (start, end) = waveformFrameWindow
+        let width = max(1, end - start)
+        let ratio = min(max(Double(point.x / size.width), 0), 1)
+        let frame = start + width * ratio
+        guard frame.isFinite else { return nil }
+        let fps = max(1.0, ReplayTime.rate(document.fps))
+        let range = Double(seekRange.lowerBound)...Double(seekRange.upperBound)
+        return UInt64(min(max(frame, range.lowerBound), range.upperBound))
+    }
+
     private func seekOrMark(at point: CGPoint, size: CGSize, modifiers: NSEvent.ModifierFlags) {
-        guard size.width > 1, let document else { return }
-        let buckets = peakMins.count
-        guard buckets > 0 else { return }
-        let bucketRate = Double(MixerFFI.replayPeakRate())
-        let framesPerSecond = max(1.0, ReplayTime.rate(document.fps))
-        guard bucketRate > 0 else { return }
-        let ratio = Double(point.x / size.width)
-        let frame = ReplayDeckMath.waveformFrame(
-            ratio: ratio,
-            bucketRate: bucketRate,
-            buckets: buckets,
-            dropped: peakDropped,
-            fps: framesPerSecond)
+        guard size.width > 1 else { return }
+        guard let frame = waveformFrame(at: point, size: size) else { return }
         let mark: WaveformMark? =
             modifiers.contains(.shift) ? .in : (modifiers.contains(.control) ? .out : nil)
         switch mark {
@@ -1385,41 +1602,56 @@ struct ReplayView: View {
     /// strip draws proxies from here on. It does not start or stop anything, though: an
     /// operator who was paused stays paused, and one who was playing keeps playing from the
     /// new frame. The transport was handed that play state, and the deck keeps it.
-    /// Moves the whole-recording slider. The bar parks the channel on the chosen frame:
-    /// a slider is a place to look at a picture, and a seek that kept playing made the
-    /// thumb run away from the frame the operator just picked.
-    private func seekWhole(to frame: UInt64) {
-        // A channel that is following the recording edge has no current clip, and the
-        // engine's live flag wins over a seek. Cue a scratch clip over the recorded range
-        // first, which leaves the edge, then park on the chosen frame.
-        cueScratchForSeek(target: frame)
-        let action = ReplayTransportRules.seek()
+    /// Moves the whole-recording slider. The bar spans the recording, so the seek must
+    /// be able to leave the clip that is on air; otherwise the core clamps the target
+    /// to that clip's IN/OUT and the thumb snaps back. A drag keeps the channel's play
+    /// state: paused stays paused, playing keeps playing from the new frame.
+    private func seekWhole(to frame: UInt64, keepPlaying: Bool = false) {
+        cueScratchForSeek(target: frame, force: true)
         let accepted = mixer.replayTransport(
             channel: channel,
-            playing: false,
+            playing: keepPlaying,
             speedMilli: speedMilli,
             seekFrame: Int64(frame)
         )
         if accepted {
-            transport = action.next
+            transport = keepPlaying
+                ? ReplayTransportState(live: false, playing: true)
+                : .held
             playheadFrame = frame
+            setChase(keepPlaying)
             settleUntil = Date().addingTimeInterval(0.4)
         } else {
             let detail = MixerFFI.lastErrorText()
             status = detail.isEmpty ? L10n.t("replay.seekRefused") : detail
             scrubFrame = nil
+            scrubSince = nil
         }
     }
 
-    /// Leaves live follow for a seek without disturbing a clip that is already on air.
+    /// The whole-recording bar at frame zero: the first frame the store still holds.
+    private func parkAtRecordingStart() {
+        guard let angle = activeAngle,
+              let range = mixer.replayAngleRange(angle.id),
+              range.last > range.first
+        else { return }
+        scrubFrame = nil
+        seekWhole(to: range.first)
+    }
+
+    /// Cues a scratch clip over the whole recording so a seek can land anywhere.
+    ///
+    /// `force` is for the whole-recording bar: it replaces the clip on air, because the
+    /// operator asked for a frame outside it. The waveform and step paths keep the
+    /// current clip (they are looking close to where the operator already is).
     ///
     /// A Remote cannot take the scratch cue: its protocol only cues clips its own
     /// document already holds, and "seek-scrub" is not one of them — the cue failed
     /// there and the seek with it. A live remote channel also ignores the plain seek
     /// (the rate the engine keeps for the recording edge wins), so the deck says why
     /// the drag did not move instead of letting the row go dead.
-    private func cueScratchForSeek(target: UInt64) {
-        if !transport.live, playingClipUid != nil { return }
+    private func cueScratchForSeek(target: UInt64, force: Bool = false) {
+        if !force, !transport.live, playingClipUid != nil { return }
         if mixer.isRemote {
             status = L10n.t("replay.remoteSeekLive")
             return
@@ -1428,9 +1660,15 @@ struct ReplayView: View {
               let range = mixer.replayAngleRange(angle.id),
               range.last > range.first
         else { return }
+        // During recording the store and the range belong to the recording being
+        // written, not to the newest recording in the saved document. Naming the
+        // document's older recording made the cue fail and left the channel live.
+        let liveRecording = mixer.replayRecordingUuid()
         let recorded = document?.raw["recordings"]?.arrayValue?.last?
             .objectValue?["uuid"]?.stringValue ?? ""
-        let recording = recorded.isEmpty ? MixerFFI.replayRecordingUuid() : recorded
+        let recording = isRecording && !liveRecording.isEmpty
+            ? liveRecording
+            : (recorded.isEmpty ? liveRecording : recorded)
         guard !recording.isEmpty else { return }
         let clip = ReplayClipInfo(
             uid: "seek-scrub",
@@ -1452,7 +1690,6 @@ struct ReplayView: View {
         }
     }
 
-    
     /// Writes the document back after an edit.
     ///
     /// A deletion is a decision, not an absence: the core cannot tell "the deck dropped this
@@ -1465,7 +1702,7 @@ struct ReplayView: View {
         deletedClips: [String] = []
     ) {
         document = updated
-        loadedValue = updated.value
+        loadedJson = updated.json
         if !mixer.applyReplayDeck(
             updated,
             deletedEvents: deletedEvents,
@@ -1475,7 +1712,7 @@ struct ReplayView: View {
             // than leaving the window showing something the mixer never took.
             status = L10n.t("replay.commandRefused")
             document = mixer.replayDocument
-            loadedValue = document?.value
+            loadedJson = document?.json ?? ""
         }
     }
 
@@ -1524,6 +1761,23 @@ struct ReplayView: View {
         save(current)
     }
 
+    /// Windows creates the event row at Mark In, with an open end, so the operator
+    /// can see the highlight while the action is still running. Mark Out fills this
+    /// row in rather than adding a second event.
+    private func createOpenEvent(at frame: UInt64) {
+        guard var current = document, current.autoAddToPlaylist else { return }
+        let uuid = mixer.replayRecordingUuid()
+        guard !uuid.isEmpty else { return }
+        let name = L10n.format("replay.eventName", "\(current.events.count + 1)")
+        openEventId = current.appendEvent(
+            uuid: uuid,
+            inFrame: frame,
+            outFrame: 0,
+            name: name
+        )
+        save(current)
+    }
+
     private func markIn() {
         // A failed mark leaves the old one alone instead of showing a nonsense
         // timecode.
@@ -1532,6 +1786,7 @@ struct ReplayView: View {
             // A new Mark In starts a new range: the old Mark Out no longer applies.
             outFrame = nil
             markOpen = true
+            createOpenEvent(at: mark)
             return
         }
         // A remote core keeps the mark, so this host only knows that one is open.
@@ -1552,6 +1807,7 @@ struct ReplayView: View {
         inFrame = nil
         outFrame = nil
         markOpen = false
+        openEventId = nil
     }
 
     private func markOut() {
@@ -1567,18 +1823,28 @@ struct ReplayView: View {
             inFrame = nil
             outFrame = nil
             markOpen = false
+            openEventId = nil
         case let .local(uuid, start, end):
             // Keep the range on screen after it is taken: the operator has to see
             // what was just cut, and the waveform and step buttons use the range.
             inFrame = start
             outFrame = end
             markOpen = false
-            let id = current.appendEvent(
-                uuid: uuid,
-                inFrame: start,
-                outFrame: end,
-                name: name
-            )
+            let id: UInt64
+            if let open = openEventId,
+               current.events.contains(where: { $0.id == open })
+            {
+                current.setEventRange(open, inFrame: start, outFrame: end)
+                id = open
+            } else {
+                id = current.appendEvent(
+                    uuid: uuid,
+                    inFrame: start,
+                    outFrame: end,
+                    name: name
+                )
+            }
+            openEventId = nil
             addEventClipIfNeeded(id, to: &current)
             save(current)
         }
@@ -1697,6 +1963,8 @@ struct ReplayView: View {
         save(current)
     }
 
+    /// Writes the clip gain. The mixer clamps it, so a nonsense value is refused
+    /// here rather than silently corrected.
     private func setClipGain(_ uid: String, _ db: Double) {
         guard var current = document else { return }
         guard db.isFinite, db >= -60.0, db <= 12.0 else {
@@ -1707,12 +1975,16 @@ struct ReplayView: View {
         save(current)
     }
 
+    /// Writes the pitch flag of the selected clip. Slow motion otherwise drops the
+    /// pitch along with the speed.
     private func setClipPitch(_ uid: String, _ value: Bool) {
         guard var current = document else { return }
         current.setClipPreservePitch(playlistId: playlistId, uid: uid, value: value)
         save(current)
     }
 
+    /// Writes the clip's audio source. A clip may deliberately be silent, or take
+    /// another angle's sound.
     private func setClipAudioChoice(_ uid: String, _ value: String) {
         guard var current = document else { return }
         if value.hasPrefix("Angle:") {
@@ -1742,6 +2014,12 @@ struct ReplayView: View {
     // MARK: - Playlist edits
 
     /// Points the channel at another playlist: that is what "which playlist" means.
+    private func setDecodeBackend(_ backend: String) {
+        guard var current = document else { return }
+        current.setChannelDecodeBackend(channelIndex: channel, backend: backend)
+        save(current)
+    }
+
     private func selectPlaylist(_ id: UInt64) {
         guard var current = document, id != 0 else { return }
         current.setChannelPlaylist(channelIndex: channel, playlistId: id)
@@ -1783,15 +2061,32 @@ struct ReplayView: View {
             alert.addButton(withTitle: L10n.t("dialog.cancel"))
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
-        _ = current.removePlaylist(playlistId)
+        let removed = playlistId
+        _ = current.removePlaylist(removed)
         if let next = current.playlists.first {
+            // Any channel that named the deleted playlist has to follow it to the one
+            // this deck now shows; the core does not repair a dangling reference.
+            current.repointChannels(from: removed, to: next.id)
             current.setChannelPlaylist(channelIndex: channel, playlistId: next.id)
         }
         save(current)
     }
 
-    
-    
+    private func deleteEvent() {
+        guard var current = document, let id = selectedEvent else {
+            status = L10n.t("replay.needEvent")
+            return
+        }
+        guard current.removeEventIfUnprotected(id) else {
+            status = L10n.t("replay.eventProtected")
+            return
+        }
+        // A clip keeps its own recording, range and angle, so it survives the event
+        // it came from; only the reference to an event that is gone goes away.
+        save(current, deletedEvents: [id])
+        selectedEvent = nil
+    }
+
     /// Every event path shares the auto-add rule, including the clip-order setting.
     private func addEventClipIfNeeded(_ eventId: UInt64, to current: inout ReplayDocument) {
         guard current.autoAddToPlaylist else { return }
@@ -1823,19 +2118,60 @@ struct ReplayView: View {
         save(current)
     }
 
-    
+    /// Cue the selected clip, or the newest clip when none is selected, and hold on
+    /// its first frame. The operator's next action is Play, not Cue + seek + Pause.
+    private func cueReady() {
+        let clip = selectedClip.flatMap { uid in clips.first { $0.uid == uid } }
+            ?? clips.last
+        guard let clip else {
+            status = L10n.t("replay.noClips")
+            return
+        }
+        cue(clip)
+    }
+
     private func cue(_ clip: ReplayClipInfo) {
-        if !mixer.replayCue(channel: channel, clip: clip) {
+        if mixer.replayCue(channel: channel, clip: clip) {
+            // Cue once and stop on the first frame: the next Play starts the clip
+            // without another seek. This is the operator's "ready to play" state.
+            transport = .held
+            playingClipUid = clip.uid
+            setChase(false)
+            channelOutFrame = clip.outFrame
+            // The mixer reports the same frame on the next tick; setting it here makes
+            // the bar follow the click even before that tick arrives.
+            scrubFrame = nil
+            scrubSince = nil
+            playheadFrame = clip.inFrame
+            settleUntil = Date().addingTimeInterval(1.0)
+            status = L10n.t("replay.cued")
+        } else {
             let detail = MixerFFI.lastErrorText()
             status = detail.isEmpty ? L10n.t("replay.cueRefused") : detail
         }
     }
 
-    
-    
-    /// Writes the clip's audio source. A clip may deliberately be silent, or take
-    /// another angle's sound.
-    
+    /// Clicking an event previews its range as a one-off clip: Play starts the event,
+    /// and the bar lands on its first frame now.
+    private func previewEvent(_ event: ReplayEventInfo) {
+        guard let angle = activeAngle else { return }
+        let clip = ReplayClipInfo(
+            uid: "event-preview-\(event.id)",
+            angleId: angle.id,
+            recordingUuid: event.recordingUuid,
+            inFrame: event.inFrame,
+            outFrame: event.outFrame,
+            speed: 1,
+            gainDb: 0,
+            transition: .cut,
+            tags: [],
+            preservePitch: false,
+            audioKind: "FollowAngle",
+            audioAngleId: angle.id
+        )
+        cue(clip)
+    }
+
     /// Writes the playlist default. New clips start on it, so an operator who
     /// sets "always dissolve" does not edit every clip by hand.
     private func applyDefaultTransition() {
@@ -1868,16 +2204,6 @@ struct ReplayView: View {
         defaultFrames = "\(fallback.durationFrames)"
     }
 
-    /// Writes the clip gain. The mixer clamps it, so a nonsense value is refused
-    /// here rather than silently corrected.
-    
-    /// Writes the pitch flag of the selected clip. Slow motion otherwise drops the
-    /// pitch along with the speed.
-    
-    /// Writes the tag list back to the selected clip. Commas separate tags, blank
-    /// entries are dropped, and duplicates collapse.
-    
-    
     private func record(_ on: Bool) {
         // A recorder without storage or angles writes nothing, so the reason is
         // named here instead of leaving the mixer's bare refusal on screen.
@@ -1886,13 +2212,32 @@ struct ReplayView: View {
             status = L10n.t("replay.needSetup")
             return
         }
-        if !mixer.replayEnableRecording(on) {
-            status = L10n.t(on ? "replay.recordRefused" : "replay.commandRefused")
+        if on, !checkStorageForRecording() {
+            return
         }
+        if let reason = mixer.replayEnableRecording(on) {
+            status = reason
+        }
+    }
+
+    /// Checks the configured drives before asking the Pro module to open one. The
+    /// Pro ABI only returns a code, so a permission error would otherwise reach the
+    /// deck as a bare "I/O" with no path; here the operator sees the folder and the
+    /// OS reason.
+    private func checkStorageForRecording() -> Bool {
+        guard let current = document else { return true }
+        for storage in current.storages {
+            if let problem = ReplayDocument.storageProblem(storage.path) {
+                status = problem
+                return false
+            }
+        }
+        return true
     }
 
     private func live() {
         scrubFrame = nil
+        setChase(false)
         guard mixer.replayJumpToNow(channel: channel) else {
             status = L10n.t("replay.commandRefused")
             return
@@ -1925,6 +2270,11 @@ struct ReplayView: View {
             status = L10n.t("replay.cueRefused")
             return
         }
+        // The playlist starts on the first clip; put the bar there before the first
+        // poll so the operator sees the new position immediately.
+        scrubFrame = nil
+        playheadFrame = first.inFrame
+        channelOutFrame = first.outFrame
         if mixer.replayTransport(
             channel: channel, playing: true, speedMilli: speedMilli, seekFrame: -1) {
             transport = ReplayTransportState(live: false, playing: true)
@@ -1935,6 +2285,7 @@ struct ReplayView: View {
     }
 
     private func pausePlaylist() {
+        setChase(false)
         if transport.live {
             seekHolding(to: ReplayDeckMath.liveHoldTarget(playhead: displayPlayhead, recordingHead: recordingHead), keepPlaying: false)
             return
@@ -1953,10 +2304,12 @@ struct ReplayView: View {
     }
 
     private func togglePlay() {
+        scrubFrame = nil
         let action = ReplayTransportRules.toggle(transport)
         // Pausing a live channel has to leave the edge; a live channel with playing=false
         // still follows the write head, so the picture would keep moving.
         if !action.playing && transport.live {
+            setChase(false)
             seekHolding(to: ReplayDeckMath.liveHoldTarget(playhead: displayPlayhead, recordingHead: recordingHead), keepPlaying: false)
             return
         }
@@ -1964,6 +2317,7 @@ struct ReplayView: View {
             channel: channel, playing: action.playing, speedMilli: speedMilli, seekFrame: -1)
         {
             transport = action.next
+            setChase(action.playing && !action.next.live && playingClipUid == nil)
             settleUntil = Date().addingTimeInterval(1.0)
         } else {
             // The channel never started, so the button must not say "Pause".
@@ -1988,14 +2342,15 @@ struct ReplayView: View {
     /// A waveform click or mark moves the picture without changing whether the channel
     /// is advancing. It still has to leave the live edge, or the next report puts the
     /// playhead back on the recording edge.
-    private func seekFromWaveform(to frame: UInt64) {
+    private func seekFromWaveform(to frame: UInt64, keepPlaying: Bool = false) {
         // A waveform click is a place to look at a sound or a picture before cutting;
-        // parking there is what makes the mark that follows land on the frame clicked.
-        seekHolding(to: frame, keepPlaying: false)
+        // a drag while the channel is running keeps it running from the new frame.
+        seekHolding(to: frame, keepPlaying: keepPlaying)
     }
 
     /// Leaves live follow when needed, seeks, and either holds or keeps playing.
     private func seekHolding(to frame: UInt64, keepPlaying: Bool) {
+        setChase(false)
         let target = ReplayDeckMath.clampedFrame(
             frame,
             range: UInt64(seekRange.lowerBound)...UInt64(seekRange.upperBound))
@@ -2026,6 +2381,7 @@ struct ReplayView: View {
 
     private func setSpeed(_ milli: Int32) {
         speedMilli = milli
+        scrubFrame = nil
         // A speed preset is a playback instruction. On a live channel there is no clip to
         // play, so leave the edge at the current frame and run that clip at the new rate.
         if transport.live, (stats?.last_frame ?? 0) > 0 {

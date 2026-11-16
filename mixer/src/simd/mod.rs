@@ -163,6 +163,18 @@ mod tests {
     }
 
     #[test]
+    fn uyvy_matches_scalar() {
+        let w = 48u32;
+        let h = 4u32;
+        let src = packed_yuy2(w as usize, h as usize);
+        let mut simd = vec![0u8; (w * h * 4) as usize];
+        let mut scalar_out = vec![0u8; simd.len()];
+        yuv422_to_bgra(&src, w, h, (w * 2) as usize, true, &mut simd);
+        scalar::yuv422_to_bgra(&src, w, h, (w * 2) as usize, true, &mut scalar_out);
+        assert_eq!(simd, scalar_out);
+    }
+
+    #[test]
     fn opaque_or_matches_scalar() {
         let mut simd = vec![0x11u8; 64];
         let mut scalar_out = simd.clone();

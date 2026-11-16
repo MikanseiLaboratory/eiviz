@@ -75,6 +75,7 @@ fn send_worker(
     let mut video_n = 0u32;
     let mut repeat_n = 0u32;
     let mut drop_n = 0u32;
+    let mut last_audio_drops = 0u64;
     let mut pack_sum = 0.0f32;
     let mut sdk_sum = 0.0f32;
     let mut timed_n = 0u32;
@@ -94,7 +95,14 @@ fn send_worker(
         for packet in audio.drain() {
             apply_send_cmd(&mut sender, SendCmd::Audio { packet }, &omt_gpu);
         }
-        pace.record_audio_drop(audio.drops());
+        let audio_drops = audio.drops();
+        if audio_drops != last_audio_drops {
+            last_audio_drops = audio_drops;
+            crate::diag::warn(&format!(
+                "output {output_id} audio queue dropped {audio_drops} blocks (sender stalled)"
+            ));
+        }
+        pace.record_audio_drop(audio_drops);
         cursor.set_rate(clock, Instant::now(), pace.rate());
         let now = Instant::now();
         if let Some(pts) = cursor.due(clock, now) {

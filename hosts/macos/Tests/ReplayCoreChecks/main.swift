@@ -1,3 +1,4 @@
+import EivizMixer
 @testable import EivizMac
 import Foundation
 
@@ -124,16 +125,6 @@ check("mark last refuses text", ReplayDeckMath.markLastSpan(secondsText: "about"
 check("mark last refuses empty", ReplayDeckMath.markLastSpan(secondsText: "  ", fps: (60, 1)) == nil)
 check("mark last refuses negative", ReplayDeckMath.markLastSpan(secondsText: "-5", fps: (60, 1)) == nil)
 
-// MARK: - Surface budget bookkeeping
-
-check("budget plans within its limit", FlipBudget.remaining >= 0 && FlipBudget.remaining <= FlipBudget.limit)
-FlipBudget.reset()
-let refusalsBefore = FlipBudget.refusalCount
-FlipBudget.noteRefusal()
-check("budget counts attach refusals", FlipBudget.refusalCount == refusalsBefore + 1)
-FlipBudget.reset()
-check("budget reset clears refusals", FlipBudget.refusalCount == 0)
-
 
 // MARK: - Monitor ids may not collide with ones a session already carries
 
@@ -179,6 +170,90 @@ document.sortClips(playlistId: playlist)
 let sorted = document.clips(playlistId: playlist)
 check("clips sort by timecode", sorted.first?.inFrame == 40 && sorted.last?.inFrame == 300)
 
+// MARK: - Control document adoption keeps locally added inputs
+
+let documentInputs = [
+    InputEntry(id: 1, name: "Color Red", kind: .color),
+    InputEntry(id: 2, name: "Bars", kind: .bars),
+]
+let localProbe = InputEntry(id: 9, name: "Sync Probe", kind: .color)
+let localInputs = documentInputs + [localProbe]
+let kept = MixerController.mergedInputs(document: documentInputs, local: localInputs, pending: [9])
+check("adopting the document keeps a local input", kept.inputs.map(\.id) == [1, 2, 9])
+check("a local input stays pending until published", kept.pending == [9])
+let published = MixerController.mergedInputs(
+    document: documentInputs + [localProbe], local: localInputs, pending: [9])
+check("a published input stops being pending", published.pending.isEmpty)
+check("a published input is not duplicated", published.inputs.filter { $0.id == 9 }.count == 1)
+let localRemoved = MixerController.mergedInputs(document: documentInputs, local: documentInputs, pending: [9])
+check("a deleted local input leaves no pending entry", localRemoved.pending.isEmpty)
+let documentDeleted = MixerController.mergedInputs(
+    document: [documentInputs[0]], local: [documentInputs[0], documentInputs[1]], pending: [])
+check("an input removed by the document is dropped", documentDeleted.inputs.map(\.id) == [1])
+
+// MARK: - Scene Editor Add Layer follows the Input picker
+
+let sceneEditorInputs = [
+    InputEntry(id: 1, name: "Camera", kind: .video),
+    InputEntry(id: 2, name: "Bars", kind: .bars),
+    InputEntry(id: 3, name: "Audio", kind: .audio),
+    InputEntry(id: 4, name: "Replay", kind: .replay),
+]
+check("add layer uses the picked input", SceneEditorView.layerSource(picked: 1, inputs: sceneEditorInputs) == 1)
+check("add layer accepts a replay input", SceneEditorView.layerSource(picked: 4, inputs: sceneEditorInputs) == 4)
+check("add layer rejects an audio pick", SceneEditorView.layerSource(picked: 3, inputs: sceneEditorInputs) == EIVIZ_SRC_BARS)
+check("add layer drops a stale pick", SceneEditorView.layerSource(picked: 99, inputs: sceneEditorInputs) == EIVIZ_SRC_BARS)
+check("add layer shows bars with no pick", SceneEditorView.layerSource(picked: nil, inputs: sceneEditorInputs) == EIVIZ_SRC_BARS)
+check("add layer falls back to bars with no inputs", SceneEditorView.layerSource(picked: nil, inputs: []) == EIVIZ_SRC_BARS)
+
+// MARK: - Session open is gated by the plan and the linked backends
+
+var communityCaps = EivizCapabilities()
+communityCaps.mixing_unit_limit = 4
+communityCaps.rtmp_max_width = 1280
+communityCaps.rtmp_max_height = 720
+communityCaps.rtmp_max_fps_num = 30
+communityCaps.rtmp_max_fps_den = 1
+communityCaps.rtmp_linked = 1
+
+let communitySession = MixerSessionData.default()
+check("plan adds a plain session", SessionPlanGate.issues(in: communitySession, caps: communityCaps).isEmpty)
+
+var replaySession = communitySession
+replaySession.inputs.append(InputEntry(id: 500, name: "Replay A", kind: .replay))
+check("plan blocks a replay input", !SessionPlanGate.issues(in: replaySession, caps: communityCaps).isEmpty)
+
+var decklinkSession = communitySession
+decklinkSession.inputs.append(InputEntry(id: 501, name: "DeckLink", kind: .deckLink))
+check("plan blocks a DeckLink input", !SessionPlanGate.issues(in: decklinkSession, caps: communityCaps).isEmpty)
+
+var rtmpSession = communitySession
+rtmpSession.outputs.append(OutputEntry(id: 900, name: "RTMP", transport: .rtmp))
+var unlinkedCaps = communityCaps
+unlinkedCaps.rtmp_linked = 0
+check("plan blocks RTMP when streaming is not linked", !SessionPlanGate.issues(in: rtmpSession, caps: unlinkedCaps).isEmpty)
+check("plan allows RTMP when streaming is linked", SessionPlanGate.issues(in: rtmpSession, caps: communityCaps).isEmpty)
+
+var unitSession = communitySession
+for id in UInt64(2)...UInt64(5) {
+    unitSession.units.append(MixingUnitEntry(id: id, name: "Mixing Unit \(id)"))
+}
+check("plan blocks more Mixing Units than the plan allows", !SessionPlanGate.issues(in: unitSession, caps: communityCaps).isEmpty)
+
+// MARK: - Deleting a playlist repairs the channels that named it
+
+var repointDoc = ReplayDocument.empty(format: format)
+let firstList = repointDoc.ensurePlaylist()
+let secondList = repointDoc.addPlaylist(name: "second")
+repointDoc.setChannelPlaylist(channelIndex: 0, playlistId: firstList)
+repointDoc.setChannelPlaylist(channelIndex: 1, playlistId: firstList)
+_ = repointDoc.removePlaylist(firstList)
+check("removed playlist is gone", !repointDoc.playlists.contains { $0.id == firstList })
+check("channels still name the removed playlist before repair", repointDoc.channelsUsingPlaylist(firstList) == 2)
+repointDoc.repointChannels(from: firstList, to: secondList)
+check("channels follow the deleted playlist", repointDoc.channelsUsingPlaylist(secondList) == 2)
+check("channels no longer name the deleted playlist", repointDoc.channelsUsingPlaylist(firstList) == 0)
+
 
 // MARK: - Auto add honours clip order
 
@@ -204,6 +279,17 @@ check("waveform end", ReplayDeckMath.waveformFrame(ratio: 1, bucketRate: 60, buc
 check("waveform dropped offset", ReplayDeckMath.waveformFrame(ratio: 0, bucketRate: 60, buckets: 60, dropped: 10, fps: 60) == 10)
 check("waveform clamps left", ReplayDeckMath.waveformFrame(ratio: -1, bucketRate: 60, buckets: 60, dropped: 0, fps: 60) == 0)
 check("waveform clamps right", ReplayDeckMath.waveformFrame(ratio: 2, bucketRate: 60, buckets: 60, dropped: 0, fps: 60) == 60)
+
+// MARK: - The seek bar spans the whole recording, and a seek owns it until it lands
+
+check("seek bar spans the whole recording", ReplayDeckMath.seekUpper(last: 200, playhead: 150, recordingHead: 0) == 200)
+check("seek bar grows with the recorder", ReplayDeckMath.seekUpper(last: 200, playhead: 150, recordingHead: 300) == 300)
+check("seek bar includes a clip past the last frame", ReplayDeckMath.seekUpper(last: 200, playhead: 250, recordingHead: 0) == 250)
+check("seek bar is never zero", ReplayDeckMath.seekUpper(last: 0, playhead: 0, recordingHead: 0) == 1)
+
+check("seek lands on the target", ReplayDeckMath.seekLanded(reported: 100, target: 100))
+check("seek lands within a frame", ReplayDeckMath.seekLanded(reported: 101, target: 100.4))
+check("seek has not landed", !ReplayDeckMath.seekLanded(reported: 110, target: 100))
 
 
 // MARK: - Export planning and JSON
@@ -738,6 +824,21 @@ if let source = try? String(contentsOf: l10nPath, encoding: .utf8),
         placeholders(englishValues[$0] ?? "") != placeholders(japaneseValues[$0] ?? "")
     }
     check("l10n placeholders match", mismatched.isEmpty)
+    // L10n.format only replaces {0}, {1}, ...: a printf placeholder is shown verbatim.
+    let printfStyle = englishKeys.filter {
+        (englishValues[$0] ?? "").contains("%@") || (japaneseValues[$0] ?? "").contains("%@")
+    }
+    check("l10n uses {0} placeholders", printfStyle.isEmpty)
+    if !printfStyle.isEmpty { print("printf placeholders: \(printfStyle)") }
+    // These action names are built at the call site, so the source scan cannot see them.
+    for key in [
+        "action.Replace session",
+        "action.Mutate session",
+        "action.Start stream encoder",
+        "action.Start RTMP destination",
+    ] {
+        check("dynamic action key \(key)", L10n.t(key) != key)
+    }
 } else {
     check("l10n source readable", false)
 }

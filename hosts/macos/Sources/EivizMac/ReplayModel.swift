@@ -97,6 +97,8 @@ struct ReplayChannelInfo: Identifiable, Hashable {
     let inputId: UInt64
     /// Playlist this channel plays, when it selects one.
     var playlistId: UInt64? = nil
+    /// Auto / Gpu / Cpu decoder choice for this channel.
+    var decodeBackend: String = "Auto"
 
     var id: UInt32 { index }
 
@@ -129,6 +131,20 @@ struct ReplayFormatValues {
     var fpsDen: UInt32
 }
 
+struct ReplayCapacity: Decodable {
+    var encodeFps: Double = 0
+    var encodeFpsCpu: Double = 0
+    var diskWriteMbS: Double = 0
+    var diskReadMbS: Double = 0
+    var bitrateMbps: Double = 0
+    var readbackMbS: Double = 0
+    var anglesByReadback: UInt32 = 0
+    var anglesAt60Cpu: UInt32 = 0
+    var anglesAt60: UInt32 = 0
+    var anglesByDisk: UInt32 = 0
+    var totalFps: Double = 0
+}
+
 struct ReplayAngleInfo: Identifiable, Hashable {
     let id: UInt32
     /// Name the operator sees and edits.
@@ -139,7 +155,9 @@ struct ReplayAngleInfo: Identifiable, Hashable {
     var sceneId: UInt64
     /// Input this angle records when `source` is `Input`.
     var inputId: UInt64 = 0
-    /// Mixing unit whose program mix feeds this angle. Zero means silent.
+    /// `Silent`, `Unit`, or `Source` (the recorded source's own audio follows it).
+    var audio: String = "Silent"
+    /// Mixing unit whose program mix feeds this angle when `audio` is `Unit`.
     var audioUnitId: UInt64
     /// `Gpu` encodes from the scene texture; `Cpu` reads it back first.
     var encoder: String = "Gpu"
@@ -156,6 +174,10 @@ struct ReplayAngleInfo: Identifiable, Hashable {
 struct ReplayEventInfo: Identifiable, Hashable {
     let id: UInt64
     let recordingUuid: String
+    /// Wall clock of the recording's frame 0, when the session knows it. This is what
+    /// makes an IN point readable across a pause/resume (a new recording segment has a
+    /// different frame origin); 0 means the recording predates createdMs.
+    let startedMs: UInt64
     let inFrame: UInt64
     let outFrame: UInt64
     let name: String
@@ -291,13 +313,61 @@ struct ReplayDocument {
         self.raw = raw
     }
 
+    /// Where a new Replay project records when the operator has not chosen a drive.
+    /// Without a drive the capacity button cannot measure anything, so a fresh Replay
+    /// input should still be usable.
+    static func defaultStoragePath() -> String {
+        let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Movies")
+        return movies.appendingPathComponent("eiviz-replay").path
+    }
+
+    /// Why `path` cannot receive a recording, or nil when a probe write succeeds.
+    /// The Pro module reports a permission failure as a bare `Io`; checking here lets
+    /// the deck name the folder and tell the operator what to change.
+    static func storageProblem(_ path: String) -> String? {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return L10n.t("replay.storageEmpty") }
+        let manager = FileManager.default
+        var isDirectory: ObjCBool = false
+        if manager.fileExists(atPath: trimmed, isDirectory: &isDirectory) {
+            guard isDirectory.boolValue else {
+                return L10n.format("replay.storageNotFolder", trimmed)
+            }
+        } else {
+            do {
+                try manager.createDirectory(atPath: trimmed, withIntermediateDirectories: true)
+            } catch {
+                return L10n.format("replay.storageDenied", trimmed, error.localizedDescription)
+            }
+        }
+        let probe = (trimmed as NSString).appendingPathComponent(".eiviz-write-test")
+        do {
+            try Data().write(to: URL(fileURLWithPath: probe))
+            try? manager.removeItem(atPath: probe)
+        } catch {
+            return L10n.format("replay.storageDenied", trimmed, error.localizedDescription)
+        }
+        return nil
+    }
+
     /// The document a project gets when its first Replay input is added. Replay
     /// never appears in a session without this, and it carries a recording format
     /// so the project can record without the operator opening Replay Setup first.
     static func empty(format: ReplayFormatValues) -> ReplayDocument {
-        ReplayDocument(raw: [
+        let storage = defaultStoragePath()
+        try? FileManager.default.createDirectory(
+            atPath: storage,
+            withIntermediateDirectories: true
+        )
+        return ReplayDocument(raw: [
             "enabled": .bool(false),
-            "storage": .array([]),
+            "storage": .array([
+                .object([
+                    "path": .string(storage),
+                    "angleIds": .array([]),
+                ]),
+            ]),
             "format": .object([
                 "width": .number(Double(format.width)),
                 "height": .number(Double(format.height)),
@@ -397,7 +467,8 @@ struct ReplayDocument {
                 return ReplayChannelInfo(
                     index: object["index"]?.uint32Value ?? 0,
                     inputId: object["inputId"]?.uint64Value ?? 0,
-                    playlistId: object["playlistId"]?.uint64Value
+                    playlistId: object["playlistId"]?.uint64Value,
+                    decodeBackend: object["decodeBackend"]?.stringValue ?? "Auto"
                 )
             }
             .sorted { $0.index < $1.index }
@@ -413,7 +484,8 @@ struct ReplayDocument {
                 source: object["source"]?.stringValue ?? "Scene",
                 sceneId: object["sceneId"]?.uint64Value ?? 0,
                 inputId: object["inputId"]?.uint64Value ?? 0,
-                        // Silence is the only other source, so an explicit unit id is what
+                audio: object["audio"]?.stringValue ?? "Silent",
+                // Silence is the only other source, so an explicit unit id is what
                 // matters.
                 audioUnitId: (object["audio"]?.stringValue ?? "Silent").caseInsensitiveCompare("Unit") == .orderedSame
                     ? (object["audioUnitId"]?.uint64Value ?? 0)
@@ -423,12 +495,27 @@ struct ReplayDocument {
         }
     }
 
+    /// UUID of the newest recording in the session. The deck starts on this
+    /// recording's waveform when no clip/event is selected.
+    var latestRecordingUuid: String {
+        array("recordings").last?.objectValue?["uuid"]?.stringValue ?? ""
+    }
+
     var events: [ReplayEventInfo] {
-        array("events").compactMap { item -> ReplayEventInfo? in
+        var starts: [String: UInt64] = [:]
+        for item in array("recordings") {
+            guard let object = item.objectValue,
+                  let uuid = object["uuid"]?.stringValue, !uuid.isEmpty
+            else { continue }
+            starts[uuid] = object["createdMs"]?.uint64Value ?? 0
+        }
+        return array("events").compactMap { item -> ReplayEventInfo? in
             guard let object = item.objectValue else { return nil }
+            let uuid = object["recordingUuid"]?.stringValue ?? ""
             return ReplayEventInfo(
                 id: object["id"]?.uint64Value ?? 0,
-                recordingUuid: object["recordingUuid"]?.stringValue ?? "",
+                recordingUuid: uuid,
+                startedMs: starts[uuid] ?? 0,
                 inFrame: object["inFrame"]?.uint64Value ?? 0,
                 outFrame: object["outFrame"]?.uint64Value ?? 0,
                 name: object["name"]?.stringValue ?? "",
@@ -586,6 +673,24 @@ struct ReplayDocument {
         array("channels").filter { ($0.objectValue?["playlistId"]?.uint64Value ?? 0) == playlistId }.count
     }
 
+    /// Points every channel that named `old` at `new`.
+    ///
+    /// A channel may reach a playlist without its own entry (the deck falls back to the
+    /// first one), so deleting a playlist has to repair the channels that named it
+    /// explicitly instead of leaving them pointing at an id nothing owns.
+    mutating func repointChannels(from old: UInt64, to new: UInt64) {
+        guard old != new else { return }
+        var channels = array("channels")
+        for index in channels.indices {
+            guard var entry = channels[index].objectValue,
+                  entry["playlistId"]?.uint64Value == old
+            else { continue }
+            entry["playlistId"] = .number(Double(new))
+            channels[index] = .object(entry)
+        }
+        raw["channels"] = .array(channels)
+    }
+
     /// Removes a playlist and its clips.
     mutating func removePlaylist(_ playlistId: UInt64) -> Bool {
         var playlists = array("playlists")
@@ -627,6 +732,21 @@ struct ReplayDocument {
             return angle.label
         }
         return angleId == 0 ? "-" : "\(angleId)"
+    }
+
+    /// Per-channel decoder choice. The mixer reads this when the channel decodes;
+    /// Auto falls back to the CPU path when the GPU decoder is unavailable.
+    mutating func setChannelDecodeBackend(channelIndex: UInt32, backend: String) {
+        var channels = array("channels")
+        for index in channels.indices {
+            guard var entry = channels[index].objectValue,
+                  (entry["index"]?.uint32Value ?? 0) == channelIndex
+            else { continue }
+            entry["decodeBackend"] = .string(backend)
+            channels[index] = .object(entry)
+            raw["channels"] = .array(channels)
+            return
+        }
     }
 
     mutating func setActiveAngle(_ id: UInt32) {
@@ -1105,8 +1225,12 @@ struct ReplayDocument {
                 "source": .string(angle.source),
                 "sceneId": .number(Double(sceneId)),
                 "inputId": .number(Double(inputId)),
-                "audio": .string(angle.audioUnitId == 0 ? "Silent" : "Unit"),
-                "audioUnitId": .number(Double(angle.audioUnitId)),
+                "audio": .string(
+                    angle.audio == "Unit" && angle.audioUnitId != 0
+                        ? "Unit"
+                        : angle.audio == "Source" ? "Source" : "Silent"
+                ),
+                "audioUnitId": .number(Double(angle.audio == "Unit" ? angle.audioUnitId : 0)),
                     "encoder": .string(angle.encoder),
             ])
         })
@@ -1175,6 +1299,21 @@ enum ReplayTime {
 
     static func duration(_ inFrame: UInt64, _ outFrame: UInt64, _ fps: (num: UInt32, den: UInt32)) -> String {
         timecode(outFrame > inFrame ? outFrame - inFrame : 0, fps)
+    }
+
+    /// Wall-clock date/time of a frame in a recording whose frame 0 was created at
+    /// `startedMs` (Unix milliseconds). Returns nil for a recording without a start.
+    static func wallClock(
+        startedMs: UInt64,
+        frames: UInt64,
+        fps: (num: UInt32, den: UInt32)
+    ) -> String? {
+        guard startedMs > 0 else { return nil }
+        let seconds = startedMs / 1000 + UInt64((Double(frames) / rate(fps)).rounded())
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy/MM/dd HH:mm:ss"
+        return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(seconds)))
     }
 
     /// `HH:MM:SS` for a duration in seconds.

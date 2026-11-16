@@ -476,6 +476,38 @@ struct MixerUintField: NSViewRepresentable {
     }
 }
 
+/// A numeric field with a small drag grip. Dragging up/down changes the value the
+/// way Windows' NumericDrag handles do; typing still works in the text field.
+struct DraggableUIntField: View {
+    @Binding var value: UInt32
+    var minimum: UInt32 = 0
+    var step: UInt32 = 1
+    @State private var dragStart: UInt32?
+
+    var body: some View {
+        HStack(spacing: 2) {
+            mixerUintField($value, minimum: minimum)
+            Image(systemName: "arrow.up.and.down")
+                .font(.system(size: 9))
+                .foregroundStyle(EivizTheme.dim)
+                .frame(width: 10, height: mixerFieldLineHeight)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 1)
+                        .onChanged { gesture in
+                            if dragStart == nil { dragStart = value }
+                            let base = Int(dragStart ?? value)
+                            let delta = Int((-gesture.translation.height / 4).rounded())
+                            let next = max(Int(minimum), base + delta * Int(step))
+                            value = UInt32(min(Int(UInt32.max), next))
+                        }
+                        .onEnded { _ in dragStart = nil }
+                )
+                .help(L10n.t("field.dragHint"))
+        }
+    }
+}
+
 struct MixerInt32Field: NSViewRepresentable {
     @Binding var value: Int32
 

@@ -4,6 +4,9 @@ import SwiftUI
 struct ReplayEventTable: View {
     let events: [ReplayEventInfo]
     let fps: (num: UInt32, den: UInt32)
+    /// The selected event. Clicking a row selects it, and the deck previews its
+    /// first frame so the seek bar and the picture follow the click.
+    @Binding var selection: UInt64?
     let rename: (UInt64, String) -> Void
     let protect: (UInt64, Bool) -> Void
     let setRange: (UInt64, UInt64, UInt64) -> Void
@@ -14,7 +17,7 @@ struct ReplayEventTable: View {
     let parseIssue: (ReplayDeckMath.TimecodeParseError) -> Void
 
     var body: some View {
-        Table(events) {
+        Table(events, selection: $selection) {
             TableColumn(L10n.t("replay.in")) { event in
                 TimecodeField(frames: event.inFrame, fps: fps, report: parseIssue) { value in
                     setRange(event.id, value, event.outFrame)
@@ -34,6 +37,15 @@ struct ReplayEventTable: View {
                     .font(.system(.caption, design: .monospaced))
             }
             .width(76)
+
+            TableColumn(L10n.t("replay.recordedAt")) { event in
+                Text(ReplayTime.wallClock(
+                    startedMs: event.startedMs,
+                    frames: event.inFrame,
+                    fps: fps) ?? "--")
+                    .font(.system(.caption, design: .monospaced))
+            }
+            .width(150)
 
             TableColumn(L10n.t("replay.name")) { event in
                 TextField("", text: Binding(

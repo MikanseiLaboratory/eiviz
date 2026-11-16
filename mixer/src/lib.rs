@@ -35,6 +35,7 @@ mod native_ws;
 #[cfg(any(windows, target_os = "macos"))]
 mod ndi;
 mod omt;
+mod platform;
 mod pool;
 mod present;
 mod pro;
@@ -50,6 +51,7 @@ mod replay;
 mod runtime;
 mod save;
 mod session;
+mod session_plan;
 pub mod simd;
 mod snapshot;
 mod staging;
@@ -58,7 +60,7 @@ mod thumb;
 mod upload;
 #[cfg(any(windows, target_os = "linux"))]
 mod vk_upload;
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 mod vk_video;
 mod vmix_api;
 mod vmix_tcp;
@@ -1174,6 +1176,7 @@ pub(crate) fn start_mixer(
     let render = thread::Builder::new()
         .name("eiviz-render".into())
         .spawn(move || {
+            crate::platform::set_thread_qos(crate::platform::QOS_USER_INTERACTIVE);
             let panic_telemetry = Arc::clone(&render_telemetry);
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 render_loop(
@@ -3450,6 +3453,10 @@ unsafe fn mixer_video_start_ffi(
             Ok(uploads) => uploads,
             Err(code) => return code,
         };
+        let gpu_device = match with_mixer(|mixer| mixer.surface_gpu.device.clone()) {
+            Ok(device) => device,
+            Err(code) => return code,
+        };
         return match VideoPump::start(
             id,
             path,
@@ -3460,6 +3467,7 @@ unsafe fn mixer_video_start_ffi(
             fps_den,
             uploads,
             depth,
+            Some(gpu_device),
         ) {
             Ok(pump) => insert_video(id, pump),
             Err(error) => report_io(error),
@@ -4176,7 +4184,12 @@ unsafe fn mixer_output_add_ex_ffi(
         return code;
     }
     let use_gpu = transport == OUT_OMT && use_gpu != 0;
-    let skip_idle_encode = transport == OUT_OMT && skip_idle_encode != 0;
+    // OMT/NDI have no reliable local receiver count before the first frame:
+    // gating the first frame on a subscription can leave a receiver connected
+    // but never receiving a source. Send from the first frame; the transports
+    // already drop work when their own send queues are full.
+    let _ = skip_idle_encode;
+    let skip_idle_encode = false;
     let source_id = crate::abi::resolve_output_source_id(source_kind, source_id);
     let audio_unit_id = if source_kind == SRC_KIND_MU_MULTIVIEW {
         0
@@ -4896,77 +4909,6 @@ pub unsafe extern "C" fn mixer_replay_angle_range(
     })
 }
 
-/// Recorded frame range of one angle of the named recording.
-///
-/// A session that spans several recordings has one range per recording per angle;
-/// [`mixer_replay_angle_range`] answers for the recording that was written last,
-/// which stopped being all of it the moment an operator played a second one. A
-/// recording that is not attached and not the recorder's answers 0.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn mixer_replay_angle_range_of(
-    recording_uuid: *const c_char,
-    angle_id: u32,
-    first: *mut u64,
-    last: *mut u64,
-) -> i32 {
-    ffi_guard("mixer_replay_angle_range_of", 0, || unsafe {
-        if first.is_null() || last.is_null() {
-            return 0;
-        }
-        let Some(recording_uuid) = crate::pro::cstr(recording_uuid) else {
-            return 0;
-        };
-        match crate::replay::engine().angle_range_of(recording_uuid, angle_id) {
-            Some((start, end)) => {
-                *first = start;
-                *last = end;
-                1
-            }
-            None => 0,
-        }
-    })
-}
-
-/// Copies one jog-proxy picture as UYVY from the named recording. Returns 1 when
-/// the proxy exists; a missing one returns 0 and never decodes the full-size
-/// picture in its place. The argument meanings match
-/// [`mixer_replay_copy_proxy`], with the recording named.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn mixer_replay_copy_proxy_of(
-    recording_uuid: *const c_char,
-    angle_id: u32,
-    frame: u64,
-    out: *mut u8,
-    cap: usize,
-    width: *mut u32,
-    height: *mut u32,
-    stride: *mut u32,
-) -> i32 {
-    ffi_guard("mixer_replay_copy_proxy_of", 0, || unsafe {
-        if out.is_null() || width.is_null() || height.is_null() || stride.is_null() || cap == 0 {
-            return 0;
-        }
-        let Some(recording_uuid) = crate::pro::cstr(recording_uuid) else {
-            return 0;
-        };
-        let dst = std::slice::from_raw_parts_mut(out, cap);
-        match crate::replay::engine().copy_proxy_of(recording_uuid, angle_id, frame, dst) {
-            Ok((w, h, row_bytes)) => {
-                let row_minimum = u64::from(w) * 2;
-                let extent = u64::from(row_bytes) * u64::from(h);
-                if u64::from(row_bytes) < row_minimum || extent > cap as u64 {
-                    return 0;
-                }
-                *width = w;
-                *height = h;
-                *stride = row_bytes;
-                1
-            }
-            Err(_) => 0,
-        }
-    })
-}
-
 /// Measures what this machine can sustain for one replay recording, as JSON.
 ///
 /// The Replay Setup window uses this to warn before an operator asks for more angles
@@ -4995,12 +4937,15 @@ pub unsafe extern "C" fn mixer_bench_capacity(
         match crate::bench::run(path, width, height) {
             Ok(capacity) => {
                 let json = capacity.to_json();
-                let result = write_bytes(out, cap, json.as_bytes());
-                if result >= 0 {
-                    *written = result as usize;
-                    OK
-                } else {
-                    result
+                // `written` is the size the caller needs even when the buffer was too
+                // small: the header promises a retry with that size, and returning the
+                // error without it left the host guessing.
+                *written = json.len();
+                // `write_bytes` returns the payload length; the ABI contract for this
+                // function is OK/error, and the host decodes `written` bytes itself.
+                match write_bytes(out, cap, json.as_bytes()) {
+                    length if length >= 0 => OK,
+                    error => error,
                 }
             }
             Err(error) => {
@@ -5127,6 +5072,22 @@ pub unsafe extern "C" fn mixer_replay_hold_last(channel: u32, on: u32) -> i32 {
         "mixer_replay_hold_last",
         ERR_INVALID_ARGUMENT,
         || match crate::replay::engine().set_holding_last(channel, on != 0) {
+            Ok(()) => OK,
+            Err(code) => code,
+        },
+    )
+}
+
+/// Keeps a scratch playback following the recording as it grows.
+///
+/// # Safety
+/// A plain C call: no pointers cross the boundary.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_chase(channel: u32, on: u32) -> i32 {
+    ffi_guard(
+        "mixer_replay_chase",
+        ERR_INVALID_ARGUMENT,
+        || match crate::replay::engine().set_chasing(channel, on != 0) {
             Ok(()) => OK,
             Err(code) => code,
         },
@@ -5307,29 +5268,47 @@ pub unsafe extern "C" fn mixer_replay_copy_peaks(
     })
 }
 
-/// Copies an angle's waveform of the named recording from `from`.
-///
-/// Two recordings in one session each keep their own waveform; the unnamed form
-/// answers for the recording that was written last.
+/// Peak count of one angle inside a named recording. This is the waveform API
+/// for a deck that has a clip/event selected; the older count/copy pair follows
+/// whichever live or playback store happens to be first.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mixer_replay_copy_peaks_of(
-    recording_uuid: *const c_char,
+pub unsafe extern "C" fn mixer_replay_peak_count_recording(
+    uuid: *const c_char,
+    angle_id: u32,
+    dropped: *mut u32,
+) -> u32 {
+    ffi_guard("mixer_replay_peak_count_recording", 0, || unsafe {
+        let Some(uuid) = crate::pro::cstr(uuid) else {
+            return 0;
+        };
+        let (count, dropped_buckets) =
+            crate::replay::engine().peak_count_recording(&uuid, angle_id);
+        if !dropped.is_null() {
+            *dropped = dropped_buckets;
+        }
+        count
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_replay_copy_peaks_recording(
+    uuid: *const c_char,
     angle_id: u32,
     from: u32,
     min_out: *mut f32,
     max_out: *mut f32,
     cap: u32,
 ) -> i32 {
-    ffi_guard("mixer_replay_copy_peaks_of", -1, || unsafe {
+    ffi_guard("mixer_replay_copy_peaks_recording", -1, || unsafe {
         if min_out.is_null() || max_out.is_null() || cap == 0 {
             return -ERR_INVALID_ARGUMENT;
         }
-        let Some(recording_uuid) = crate::pro::cstr(recording_uuid) else {
+        let Some(uuid) = crate::pro::cstr(uuid) else {
             return -ERR_INVALID_ARGUMENT;
         };
         let mins = std::slice::from_raw_parts_mut(min_out, cap as usize);
         let maxes = std::slice::from_raw_parts_mut(max_out, cap as usize);
-        crate::replay::engine().copy_peaks_of(recording_uuid, angle_id, from, mins, maxes) as i32
+        crate::replay::engine().copy_peaks_recording(&uuid, angle_id, from, mins, maxes) as i32
     })
 }
 
@@ -5913,9 +5892,18 @@ unsafe fn mixer_session_import_ffi(
         report_session_error("import needs a session path and a media directory");
         return -ERR_INVALID_ARGUMENT;
     }
-    match session::import_exported_session(&export_path, &session_dest, &media_dir)
-        .and_then(|document| session::to_vec(&document))
-    {
+    let document = match session::import_exported_session(&export_path, &session_dest, &media_dir) {
+        Ok(document) => document,
+        Err(error) => {
+            report_session_error(error);
+            return -ERR_INVALID_ARGUMENT;
+        }
+    };
+    if let Err(problem) = crate::session_plan::check(&document) {
+        report_session_error(problem);
+        return -ERR_NOT_SUPPORTED_PLAN;
+    }
+    match session::to_vec(&document) {
         Ok(canonical) => {
             remember_session_path(&session_dest);
             copy_bytes(&canonical, out, cap)
@@ -6002,7 +5990,18 @@ unsafe fn mixer_session_load_ffi(path: *const c_char, out: *mut u8, cap: usize) 
         report_session_error(error.to_string());
         return -ERR_IO;
     }
-    match session::read_document(&path).and_then(|document| session::to_vec(&document)) {
+    let document = match session::read_document(&path) {
+        Ok(document) => document,
+        Err(error) => {
+            report_session_error(error);
+            return -ERR_INVALID_ARGUMENT;
+        }
+    };
+    if let Err(problem) = crate::session_plan::check(&document) {
+        report_session_error(problem);
+        return -ERR_NOT_SUPPORTED_PLAN;
+    }
+    match session::to_vec(&document) {
         Ok(canonical) => {
             remember_session_path(&path);
             copy_bytes(&canonical, out, cap)
@@ -6169,7 +6168,18 @@ unsafe fn mixer_session_load_rev_ffi(
         return -ERR_INVALID_ARGUMENT;
     }
     let path = read_cstr(path);
-    match session::extract_history(&path, index).and_then(|document| session::to_vec(&document)) {
+    let document = match session::extract_history(&path, index) {
+        Ok(document) => document,
+        Err(error) => {
+            report_session_error(error);
+            return -ERR_INVALID_ARGUMENT;
+        }
+    };
+    if let Err(problem) = crate::session_plan::check(&document) {
+        report_session_error(problem);
+        return -ERR_NOT_SUPPORTED_PLAN;
+    }
+    match session::to_vec(&document) {
         Ok(canonical) => {
             remember_session_path(&path);
             copy_bytes(&canonical, out, cap)
@@ -6232,6 +6242,19 @@ unsafe fn mixer_session_mutate_ffi(json: *const u8, len: usize) -> i32 {
     }
     let bytes = unsafe { std::slice::from_raw_parts(json, len) };
     crate::runtime::mutate_session_bytes(bytes)
+}
+
+/// Adds an input whose source the caller already started. The document is updated
+/// and published; no reconcile runs, so a UVC/video source is not restarted.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_session_register_input(json: *const u8, len: usize) -> i32 {
+    ffi_guard("mixer_session_register_input", ERR_DEVICE, || unsafe {
+        if json.is_null() || len == 0 {
+            return ERR_INVALID_ARGUMENT;
+        }
+        let bytes = std::slice::from_raw_parts(json, len);
+        crate::runtime::register_input_bytes(bytes)
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -7390,6 +7413,24 @@ unsafe fn mixer_copy_runtime_stats_ffi(out: *mut MixerRuntimeStats) -> i32 {
         OK
     })
     .unwrap_or_else(|code| code)
+}
+
+/// Resets the operator-facing counters shown in the resource window.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_reset_metrics() -> i32 {
+    ffi_guard("mixer_reset_metrics", ERR_DEVICE, || {
+        crate::diag::reset_metrics();
+        with_mixer(|mixer| {
+            mixer
+                .shared
+                .lock_or_recover()
+                .uploads
+                .lock_or_recover()
+                .reset_dropped();
+            OK
+        })
+        .unwrap_or_else(|code| code)
+    })
 }
 
 #[unsafe(no_mangle)]

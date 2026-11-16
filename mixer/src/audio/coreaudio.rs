@@ -14,6 +14,7 @@ type CFTypeRef = *const c_void;
 
 const K_AUDIO_OBJECT_SYSTEM_OBJECT: AudioObjectID = 1;
 const K_AUDIO_OBJECT_PROPERTY_SCOPE_GLOBAL: u32 = 0x676c6f62; // 'glob'
+const K_AUDIO_OBJECT_PROPERTY_SCOPE_INPUT: u32 = 0x696e7074; // 'inpt'
 const K_AUDIO_OBJECT_PROPERTY_SCOPE_OUTPUT: u32 = 0x6f757470; // 'outp'
 const K_AUDIO_OBJECT_PROPERTY_ELEMENT_MAIN: u32 = 0;
 const K_AUDIO_HARDWARE_PROPERTY_DEVICES: u32 = 0x64657623; // 'dev#'
@@ -61,33 +62,54 @@ unsafe extern "C" {
 
 pub fn enumerate(dest: &mut [AudioDeviceInfo]) -> usize {
     let mut n = 0usize;
-    for (id, uid, name, channels) in output_devices() {
-        if n >= dest.len() {
-            break;
+    // Input devices come first so an Audio Input picker can show microphones
+    // without walking past the render devices. The direction is carried in the
+    // device record; both hosts filter on it.
+    for (scope, direction) in [
+        (
+            K_AUDIO_OBJECT_PROPERTY_SCOPE_INPUT,
+            super::info::AUDIO_DIR_CAPTURE,
+        ),
+        (
+            K_AUDIO_OBJECT_PROPERTY_SCOPE_OUTPUT,
+            super::info::AUDIO_DIR_RENDER,
+        ),
+    ] {
+        for (uid, name, channels) in devices(scope) {
+            if n >= dest.len() {
+                return n;
+            }
+            dest[n] = AudioDeviceInfo {
+                kind: DEVICE_COREAUDIO,
+                channels,
+                id: write_fixed(&uid),
+                name: write_fixed(&name),
+                direction,
+                caps: 0,
+            };
+            n += 1;
         }
-        dest[n] = AudioDeviceInfo {
-            kind: DEVICE_COREAUDIO,
-            channels,
-            id: write_fixed(&uid),
-            name: write_fixed(&name),
-            direction: super::info::AUDIO_DIR_RENDER,
-            caps: 0,
-        };
-        let _ = id;
-        n += 1;
     }
     n
 }
 
 pub fn channel_count(device_id: &str) -> i32 {
-    output_devices()
+    channel_count_for(device_id, K_AUDIO_OBJECT_PROPERTY_SCOPE_OUTPUT)
+}
+
+pub fn input_channel_count(device_id: &str) -> i32 {
+    channel_count_for(device_id, K_AUDIO_OBJECT_PROPERTY_SCOPE_INPUT)
+}
+
+fn channel_count_for(device_id: &str, scope: u32) -> i32 {
+    devices(scope)
         .into_iter()
-        .find(|(_, uid, _, _)| uid == device_id)
-        .map(|(_, _, _, ch)| ch as i32)
+        .find(|(uid, _, _)| uid == device_id)
+        .map(|(_, _, ch)| ch as i32)
         .unwrap_or(0)
 }
 
-fn output_devices() -> Vec<(AudioDeviceID, String, String, u32)> {
+fn devices(scope: u32) -> Vec<(String, String, u32)> {
     let mut out = Vec::new();
     let address = AudioObjectPropertyAddress {
         selector: K_AUDIO_HARDWARE_PROPERTY_DEVICES,
@@ -124,7 +146,7 @@ fn output_devices() -> Vec<(AudioDeviceID, String, String, u32)> {
         return out;
     }
     for id in ids {
-        let channels = output_channels(id);
+        let channels = channels(id, scope);
         if channels == 0 {
             continue;
         }
@@ -133,15 +155,15 @@ fn output_devices() -> Vec<(AudioDeviceID, String, String, u32)> {
         if uid.is_empty() {
             continue;
         }
-        out.push((id, uid, name, channels));
+        out.push((uid, name, channels));
     }
     out
 }
 
-fn output_channels(id: AudioDeviceID) -> u32 {
+fn channels(id: AudioDeviceID, scope: u32) -> u32 {
     let address = AudioObjectPropertyAddress {
         selector: K_AUDIO_DEVICE_PROPERTY_STREAM_CONFIGURATION,
-        scope: K_AUDIO_OBJECT_PROPERTY_SCOPE_OUTPUT,
+        scope,
         element: K_AUDIO_OBJECT_PROPERTY_ELEMENT_MAIN,
     };
     let mut size = 0u32;

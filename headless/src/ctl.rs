@@ -943,9 +943,7 @@ async fn replay_cmd(session: &ControlSession, cmd: ReplayCmd) -> Result<CmdResul
             session.replay_jump_to_now(channel).await.map_err(map_err)?;
             ok_live(session, json!({ "channel": channel })).await
         }
-        ReplayCmd::Delete => {
-            mutate(session, SessionMutation::DeleteReplay, None, false).await
-        }
+        ReplayCmd::Delete => mutate(session, SessionMutation::DeleteReplay, None, false).await,
         ReplayCmd::State => {
             let json = session.replay_state().await.map_err(map_err)?;
             Ok(CmdResult {

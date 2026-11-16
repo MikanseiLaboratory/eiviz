@@ -114,8 +114,16 @@ struct Angle {
     format: wgpu::TextureFormat,
 }
 
-/// One encoder thread's work list.
-type Pending = Arc<(Mutex<VecDeque<Job>>, Condvar)>;
+/// One encoder thread's work list. `stop` lets a mixer generation retire the
+/// lanes; the thread owns a clone of the old device, so it must exit rather than
+/// wait forever after New/Open.
+struct Pending {
+    jobs: Mutex<VecDeque<Job>>,
+    wake: Condvar,
+    stop: AtomicBool,
+}
+
+type PendingRef = Arc<Pending>;
 
 /// The ring depth the operator asked for; zero means "the default for this angle count".
 /// Set by the engine when a configuration is applied, read where the ring is built.
@@ -127,17 +135,10 @@ static ANGLES: Mutex<Option<HashMap<u32, Angle>>> = Mutex::new(None);
 ///
 /// Each lane carries its own clones of the device and queue it was spawned with, so a
 /// lane that belongs to a mixer generation that has already been destroyed holds that
-/// dead device alive — and every texture it would touch lives in that foreign hub. A
-/// lane therefore also carries the stop flag `reset_device` sets, so a device swap can
-/// drain the lanes and let the old device go.
-static QUEUES: OnceLock<Mutex<Vec<Lane>>> = OnceLock::new();
-
-/// One encoder lane: its work list, wake, device clones and drop switch.
-#[derive(Clone)]
-struct Lane {
-    pending: Pending,
-    stop: Arc<AtomicBool>,
-}
+/// dead device alive — and every texture it would touch lives in that foreign hub. The
+/// stop flag inside `Pending` is what `reset_device` sets, so a device swap can drain
+/// the lanes and let the old device go.
+static QUEUES: OnceLock<Mutex<Vec<PendingRef>>> = OnceLock::new();
 
 /// The replay format's profile code (0 high, 1 standard, 2 low) as the codec's preset.
 fn profile_of(code: u32) -> Profile {
@@ -264,10 +265,12 @@ pub fn dispatch(angle_id: u32, job: CopyJob) -> bool {
             return false;
         }
         let index = angle_id as usize % guard.len();
-        guard[index].pending.clone()
+        Arc::clone(&guard[index])
     };
-    let (list, wake) = &*queue;
-    let mut pending = list.lock().unwrap_or_else(|error| error.into_inner());
+    if queue.stop.load(Ordering::Acquire) {
+        return false;
+    }
+    let mut pending = queue.jobs.lock().unwrap_or_else(|error| error.into_inner());
     let cap = queue_for(
         ANGLES
             .lock()
@@ -289,7 +292,7 @@ pub fn dispatch(angle_id: u32, job: CopyJob) -> bool {
         pts: job.pts,
     });
     drop(pending);
-    wake.notify_one();
+    queue.wake.notify_one();
     true
 }
 
@@ -340,25 +343,25 @@ fn ensure_encoder(device: &wgpu::Device, queue: &wgpu::Queue, angles: usize) {
     let wanted = angles.clamp(1, MAX_THREADS);
     let mut guard = lanes.lock().unwrap_or_else(|error| error.into_inner());
     while guard.len() < wanted {
-        let entry: Pending = Arc::new((Mutex::new(VecDeque::new()), Condvar::new()));
-        let stop = Arc::new(AtomicBool::new(false));
+        let entry: PendingRef = Arc::new(Pending {
+            jobs: Mutex::new(VecDeque::new()),
+            wake: Condvar::new(),
+            stop: AtomicBool::new(false),
+        });
+        let index = guard.len();
         let device = device.clone();
         let queue = queue.clone();
-        let spawned = entry.clone();
-        let lane_stop = Arc::clone(&stop);
+        let spawned = Arc::clone(&entry);
         if std::thread::Builder::new()
-            .name(format!("eiviz-replay-encode-{}", guard.len()))
-            .spawn(move || encode_loop(spawned, device, queue, lane_stop))
+            .name(format!("eiviz-replay-encode-{index}"))
+            .spawn(move || encode_loop(spawned, device, queue))
             .is_err()
         {
             // Out of threads on this machine: keep what we have rather than failing a
             // recording over it.
             break;
         }
-        guard.push(Lane {
-            pending: entry,
-            stop,
-        });
+        guard.push(entry);
     }
 }
 
@@ -371,30 +374,38 @@ fn ensure_encoder(device: &wgpu::Device, queue: &wgpu::Queue, angles: usize) {
 /// with those rings would copy into a foreign hub and panic inside wgpu, so a device
 /// swap drains the work and lets the old device go. The next `prepare` call respawns
 /// lanes on the current device.
+///
+/// Retires all GPU encode state when the mixer is destroyed or its wgpu Instance
+/// changes. Rings and lanes hold the old device; keeping them across New/Open
+/// produces TextureViewId mismatches in the current renderer.
 pub fn reset_device() {
-    let stopped: Vec<Lane> = match QUEUES.get() {
-        None => return,
-        Some(lanes) => lanes
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .drain(..)
-            .collect(),
+    *ANGLES.lock().unwrap_or_else(|error| error.into_inner()) = None;
+    let Some(lanes) = QUEUES.get() else {
+        return;
     };
+    let stopped: Vec<PendingRef> = lanes
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .drain(..)
+        .collect();
     for lane in stopped {
         // Wake the lane out of its queue wait; its loop sees the flag and exits,
         // dropping its own device and queue clones with it.
         lane.stop.store(true, Ordering::Release);
-        let (list, wake) = &*lane.pending;
-        if let Ok(mut pending) = list.lock() {
+        if let Ok(mut pending) = lane.jobs.lock() {
             // Jobs still queued hold ring textures; drop them here rather than
             // presenting or encoding from a stopped lane.
             pending.clear();
-            wake.notify_all();
         }
+        lane.wake.notify_all();
     }
-    // The rings carry the textures this device produced; the render loop copies
-    // into them, so rings from a dead hub must not survive a device swap.
-    *ANGLES.lock().unwrap_or_else(|error| error.into_inner()) = None;
+}
+
+/// Same retirement under the name the mixer teardown calls. Two entry points
+/// for one state: the mixer is destroyed and render loops rebind to a different
+/// generator, and both want lanes and rings gone.
+pub fn reset() {
+    reset_device();
 }
 
 /// Test and health access: lanes currently alive. Zero after a reset until the next
@@ -420,20 +431,22 @@ pub fn ring_count() -> usize {
         .map_or(0, |angles| angles.len())
 }
 
-fn encode_loop(pending: Pending, device: wgpu::Device, queue: wgpu::Queue, stop: Arc<AtomicBool>) {
+fn encode_loop(pending: PendingRef, device: wgpu::Device, queue: wgpu::Queue) {
     let mut codecs: HashMap<u32, Codec> = HashMap::new();
     let mut packet = vec![0u8; 1024 * 1024];
-    let (list, wake) = &*pending;
     loop {
         let job = {
-            let mut guard = list.lock().unwrap_or_else(|error| error.into_inner());
-            while guard.is_empty() {
-                if stop.load(Ordering::Relaxed) {
-                    return;
-                }
-                guard = wake.wait(guard).unwrap_or_else(|error| error.into_inner());
+            let mut guard = pending
+                .jobs
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            while guard.is_empty() && !pending.stop.load(Ordering::Acquire) {
+                guard = pending
+                    .wake
+                    .wait(guard)
+                    .unwrap_or_else(|error| error.into_inner());
             }
-            if stop.load(Ordering::Relaxed) {
+            if pending.stop.load(Ordering::Acquire) {
                 return;
             }
             guard.pop_front()

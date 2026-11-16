@@ -40,6 +40,14 @@ cp -R "$REMOTE" "$ROOT/Applications/eiviz-remote.app"
 cp "$CTL" "$ROOT/usr/local/bin/eivizctl"
 cp "$HEADLESS" "$ROOT/usr/local/bin/eiviz-headless"
 chmod 755 "$ROOT/usr/local/bin/eivizctl" "$ROOT/usr/local/bin/eiviz-headless"
+# eiviz-headless links libndi and loads the Pro module next to its executable.
+# Keep them beside the CLI so the installed headless works without DYLD_LIBRARY_PATH
+# and can run Replay/RTMP instead of silently falling back to Community.
+for runtime in libndi.dylib libndi.6.dylib libeiviz_pro.dylib libeiviz_pro.dylib.manifest eiviz-pro.required; do
+  if [[ -f "$DIR/$runtime" ]]; then
+    cp "$DIR/$runtime" "$ROOT/usr/local/bin/"
+  fi
+done
 if [[ -f "$EXAMPLE_ENV" ]]; then
   mkdir -p "$ROOT/usr/local/share/eiviz"
   cp "$EXAMPLE_ENV" "$ROOT/usr/local/share/eiviz/"

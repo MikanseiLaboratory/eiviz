@@ -10,7 +10,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::abi::MixerVideoInfo;
-use crate::upload::{AudioPacket, CpuFormat, UploadStore, ingest_audio_clocked, ingest_audio_live};
+use crate::upload::{
+    AudioPacket, CpuFormat, GpuVideoFrame, UploadStore, ingest_audio_clocked, ingest_audio_live,
+};
 
 const KIND_VIDEO: i32 = 1;
 const KIND_AUDIO: i32 = 2;
@@ -30,6 +32,8 @@ struct AvSample {
     pts_hns: i64,
     data: *const u8,
     bytes: u32,
+    texture: *mut std::ffi::c_void,
+    pixel_buffer: *mut std::ffi::c_void,
 }
 
 enum AvPump {}
@@ -42,7 +46,7 @@ struct AvCaptureInfo {
 }
 
 unsafe extern "C" {
-    fn eiviz_av_open_file(path: *const c_char, start_hns: i64) -> *mut AvPump;
+    fn eiviz_av_open_file(path: *const c_char, start_hns: i64, mode: i32) -> *mut AvPump;
     fn eiviz_av_open_capture(
         device_id: *const c_char,
         width: u32,
@@ -59,6 +63,9 @@ unsafe extern "C" {
     fn eiviz_av_close(pump: *mut AvPump);
     fn eiviz_av_duration_hns(pump: *const AvPump) -> i64;
     fn eiviz_av_next(pump: *mut AvPump, out: *mut AvSample) -> i32;
+    fn eiviz_av_next_audio(pump: *mut AvPump, out: *mut AvSample) -> i32;
+    fn eiviz_av_set_metal(pump: *mut AvPump, device: *mut std::ffi::c_void);
+    fn CFRelease(value: *const std::ffi::c_void);
 }
 
 fn cstr_field(bytes: &[u8]) -> Option<String> {
@@ -113,9 +120,9 @@ struct NativePump {
 unsafe impl Send for NativePump {}
 
 impl NativePump {
-    fn open_file(path: &str, start_hns: i64) -> Result<Self, String> {
+    fn open_file(path: &str, start_hns: i64, mode: i32) -> Result<Self, String> {
         let c_path = CString::new(path).map_err(|_| "invalid video path".to_string())?;
-        let ptr = unsafe { eiviz_av_open_file(c_path.as_ptr(), start_hns) };
+        let ptr = unsafe { eiviz_av_open_file(c_path.as_ptr(), start_hns, mode) };
         if ptr.is_null() {
             return Err(format!("could not open video file: {path}"));
         }
@@ -141,6 +148,38 @@ impl NativePump {
         unsafe { eiviz_av_duration_hns(self.ptr) }
     }
 
+    fn set_metal(&self, device: &wgpu::Device) {
+        if let Some(hal) = unsafe { device.as_hal::<wgpu::hal::api::Metal>() } {
+            let raw = hal.raw_device();
+            let pointer = objc2::rc::Retained::as_ptr(raw) as *mut std::ffi::c_void;
+            unsafe { eiviz_av_set_metal(self.ptr, pointer) };
+        }
+    }
+
+    fn next_audio(&mut self) -> Result<Option<AvSample>, bool> {
+        let mut sample = AvSample {
+            kind: 0,
+            width: 0,
+            height: 0,
+            stride: 0,
+            sample_rate: 0,
+            channels: 0,
+            frames: 0,
+            pts_hns: 0,
+            data: std::ptr::null(),
+            bytes: 0,
+            texture: std::ptr::null_mut(),
+            pixel_buffer: std::ptr::null_mut(),
+        };
+        let code = unsafe { eiviz_av_next_audio(self.ptr, &mut sample) };
+        match code {
+            NEXT_OK => Ok(Some(sample)),
+            NEXT_RETRY => Ok(None),
+            NEXT_EOF => Err(true),
+            _ => Err(false),
+        }
+    }
+
     fn next(&mut self) -> Result<Option<AvSample>, bool> {
         let mut sample = AvSample {
             kind: 0,
@@ -153,6 +192,8 @@ impl NativePump {
             pts_hns: 0,
             data: std::ptr::null(),
             bytes: 0,
+            texture: std::ptr::null_mut(),
+            pixel_buffer: std::ptr::null_mut(),
         };
         let code = unsafe { eiviz_av_next(self.ptr, &mut sample) };
         match code {
@@ -180,8 +221,10 @@ pub struct VideoPump {
     seek_hns: Arc<AtomicI64>,
     position_hns: Arc<AtomicI64>,
     duration_hns: Arc<AtomicI64>,
+    audio_seek_hns: Arc<AtomicI64>,
     is_file: bool,
     join: Option<JoinHandle<()>>,
+    audio_join: Option<JoinHandle<()>>,
 }
 
 impl VideoPump {
@@ -195,6 +238,7 @@ impl VideoPump {
         fps_den: u32,
         uploads: Arc<Mutex<UploadStore>>,
         frame_buffer_frames: u32,
+        gpu_device: Option<wgpu::Device>,
     ) -> Result<Self, String> {
         if !capture && !std::path::Path::new(&path).is_file() {
             return Err(format!("video file not found: {path}"));
@@ -213,28 +257,58 @@ impl VideoPump {
         let dur_t = Arc::clone(&duration_hns);
         let depth = frame_buffer_frames.clamp(1, 8);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let audio_path = path.clone();
+        let audio_uploads = Arc::clone(&uploads);
         let join = thread::Builder::new()
             .name(format!("eiviz-av-{source_id}"))
             .spawn(move || {
+                crate::platform::set_thread_qos(crate::platform::QOS_USER_INITIATED);
                 if let Err(error) = run_loop(
                     source_id, path, capture, width, height, fps_num, fps_den, uploads, depth,
-                    stop_t, playing_t, looping_t, seek_t, pos_t, dur_t, ready_tx,
+                    gpu_device, stop_t, playing_t, looping_t, seek_t, pos_t, dur_t, ready_tx,
                 ) {
                     eprintln!("eiviz video: {error}");
                 }
             })
             .map_err(|error| error.to_string())?;
         match wait_ready(ready_rx) {
-            Ok(()) => Ok(Self {
-                stop,
-                playing,
-                looping,
-                seek_hns,
-                position_hns,
-                duration_hns,
-                is_file: !capture,
-                join: Some(join),
-            }),
+            Ok(()) => {
+                let audio_seek = Arc::new(AtomicI64::new(-1));
+                let audio_join = if capture {
+                    None
+                } else {
+                    let audio_stop = Arc::clone(&stop);
+                    let audio_playing = Arc::clone(&playing);
+                    let audio_looping = Arc::clone(&looping);
+                    let audio_seek_t = Arc::clone(&audio_seek);
+                    thread::Builder::new()
+                        .name(format!("eiviz-av-audio-{source_id}"))
+                        .spawn(move || {
+                            run_audio_loop(
+                                audio_path,
+                                source_id,
+                                audio_uploads,
+                                audio_stop,
+                                audio_playing,
+                                audio_looping,
+                                audio_seek_t,
+                            );
+                        })
+                        .ok()
+                };
+                Ok(Self {
+                    stop,
+                    playing,
+                    looping,
+                    seek_hns,
+                    position_hns,
+                    duration_hns,
+                    audio_seek_hns: audio_seek,
+                    is_file: !capture,
+                    join: Some(join),
+                    audio_join,
+                })
+            }
             Err(error) => {
                 stop.store(true, Ordering::Relaxed);
                 let _ = join.join();
@@ -253,6 +327,7 @@ impl VideoPump {
 
     pub fn seek(&self, hns: i64) {
         self.seek_hns.store(hns.max(0), Ordering::Relaxed);
+        self.audio_seek_hns.store(hns.max(0), Ordering::Relaxed);
         self.position_hns.store(hns.max(0), Ordering::Relaxed);
     }
 
@@ -284,6 +359,9 @@ impl Drop for VideoPump {
         if let Some(join) = self.join.take() {
             crate::diag::join_timeout(join, Duration::from_secs(2), "av-video");
         }
+        if let Some(join) = self.audio_join.take() {
+            crate::diag::join_timeout(join, Duration::from_secs(2), "av-audio");
+        }
     }
 }
 
@@ -297,6 +375,7 @@ fn run_loop(
     fps_den: u32,
     uploads: Arc<Mutex<UploadStore>>,
     depth: u32,
+    gpu_device: Option<wgpu::Device>,
     stop: Arc<AtomicBool>,
     playing: Arc<AtomicBool>,
     looping: Arc<AtomicBool>,
@@ -314,7 +393,7 @@ fn run_loop(
         let opened = if capture {
             NativePump::open_capture(&path, width, height, fps_num, fps_den)
         } else {
-            NativePump::open_file(&path, 0)
+            NativePump::open_file(&path, 0, 1)
         };
         let mut native = match opened {
             Ok(pump) => pump,
@@ -324,6 +403,9 @@ fn run_loop(
             }
         };
         duration_hns.store(native.duration_hns(), Ordering::Relaxed);
+        if let Some(device) = gpu_device.as_ref() {
+            native.set_metal(device);
+        }
         send_ready(&mut ready, Ok(()));
         let live_depth = depth;
         let file_prefetch = depth.max(3) as usize;
@@ -339,10 +421,13 @@ fn run_loop(
             }
             let seek = seek_hns.swap(-1, Ordering::Relaxed);
             if seek >= 0 && !capture {
-                native = match NativePump::open_file(&path, seek) {
+                native = match NativePump::open_file(&path, seek, 1) {
                     Ok(pump) => pump,
                     Err(error) => return Err(error),
                 };
+                if let Some(device) = gpu_device.as_ref() {
+                    native.set_metal(device);
+                }
                 duration_hns.store(native.duration_hns(), Ordering::Relaxed);
                 prefetch.clear();
                 {
@@ -385,7 +470,7 @@ fn run_loop(
             }
             if !capture && prefetch.len() >= file_prefetch && !need_frame {
                 if let Some(front) = prefetch.front() {
-                    let wait = pts_wait(front.pts, clock_pts, clock_start);
+                    let wait = pts_wait(front.pts(), clock_pts, clock_start);
                     if wait > Duration::ZERO && wait < Duration::from_secs(2) {
                         thread::sleep(wait.min(Duration::from_millis(8)));
                     }
@@ -415,17 +500,6 @@ fn run_loop(
                 Err(false) => continue,
             };
             match sample.kind {
-                KIND_AUDIO => {
-                    if is_playing {
-                        if let Some(packet) = audio_packet(&sample) {
-                            if capture {
-                                ingest_audio_live(&uploads, source_id, packet);
-                            } else {
-                                ingest_audio_clocked(&uploads, source_id, packet);
-                            }
-                        }
-                    }
-                }
                 KIND_VIDEO => {
                     let preview = need_frame;
                     let pts = sample.pts_hns;
@@ -434,10 +508,26 @@ fn run_loop(
                         clock_start = Instant::now();
                     }
                     position_hns.store(seek_base + (pts - clock_pts).max(0), Ordering::Relaxed);
-                    match copy_video(&sample) {
+                    let decoded = if !sample.texture.is_null() {
+                        gpu_device
+                            .as_ref()
+                            .ok_or_else(|| "Metal device is unavailable".to_string())
+                            .and_then(|device| import_video(&sample, device))
+                            .map(DecodedFrame::Gpu)
+                    } else {
+                        copy_video(&sample).map(DecodedFrame::Cpu)
+                    };
+                    match decoded {
                         Ok(frame) => {
                             if capture {
-                                push_live_cpu(&uploads, source_id, &frame, live_depth);
+                                match frame {
+                                    DecodedFrame::Cpu(frame) => {
+                                        push_live_cpu(&uploads, source_id, &frame, live_depth)
+                                    }
+                                    DecodedFrame::Gpu(frame) => {
+                                        push_live_gpu(&uploads, source_id, frame, live_depth)
+                                    }
+                                }
                                 need_frame = false;
                             } else {
                                 prefetch.push_back(frame);
@@ -475,6 +565,67 @@ fn send_ready(ready: &mut Option<mpsc::SyncSender<Result<(), String>>>, value: R
     }
 }
 
+fn run_audio_loop(
+    path: String,
+    source_id: u64,
+    uploads: Arc<Mutex<UploadStore>>,
+    stop: Arc<AtomicBool>,
+    playing: Arc<AtomicBool>,
+    looping: Arc<AtomicBool>,
+    seek_hns: Arc<AtomicI64>,
+) {
+    let mut native = match NativePump::open_file(&path, 0, 2) {
+        Ok(pump) => pump,
+        Err(_) => return,
+    };
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let seek = seek_hns.swap(-1, Ordering::Relaxed);
+        if seek >= 0 {
+            match NativePump::open_file(&path, seek, 2) {
+                Ok(pump) => {
+                    native = pump;
+                    uploads.lock_or_recover().flush_audio(source_id);
+                }
+                Err(_) => {
+                    thread::sleep(Duration::from_millis(16));
+                    continue;
+                }
+            }
+        }
+        if !playing.load(Ordering::Relaxed) {
+            thread::sleep(Duration::from_millis(16));
+            continue;
+        }
+        match native.next_audio() {
+            Ok(Some(sample)) => {
+                if let Some(packet) = audio_packet(&sample) {
+                    for chunk in split_audio_packet(packet, 960) {
+                        ingest_audio_clocked(&uploads, source_id, chunk);
+                    }
+                }
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(2)),
+            Err(true) => {
+                if looping.load(Ordering::Relaxed) {
+                    match NativePump::open_file(&path, 0, 2) {
+                        Ok(pump) => {
+                            native = pump;
+                            uploads.lock_or_recover().flush_audio(source_id);
+                        }
+                        Err(_) => return,
+                    }
+                } else {
+                    thread::sleep(Duration::from_millis(16));
+                }
+            }
+            Err(false) => thread::sleep(Duration::from_millis(16)),
+        }
+    }
+}
+
 fn audio_packet(sample: &AvSample) -> Option<AudioPacket> {
     if sample.data.is_null() || sample.frames <= 0 || sample.channels <= 0 {
         return None;
@@ -496,6 +647,49 @@ fn audio_packet(sample: &AvSample) -> Option<AudioPacket> {
         samples_per_channel: sample.frames,
         pcm_planar_f32: pcm,
     })
+}
+
+fn split_audio_packet(packet: AudioPacket, max_frames: usize) -> Vec<AudioPacket> {
+    let frames = packet.samples_per_channel.max(0) as usize;
+    let channels = packet.channels.max(1) as usize;
+    let max_frames = max_frames.max(1);
+    if frames <= max_frames || packet.sample_rate <= 0 {
+        return vec![packet];
+    }
+    let hns_per_frame = 10_000_000i64 / i64::from(packet.sample_rate.max(1));
+    let mut out = Vec::with_capacity(frames.div_ceil(max_frames));
+    let mut start = 0usize;
+    while start < frames {
+        let count = max_frames.min(frames - start);
+        let mut pcm = Vec::with_capacity(count * channels);
+        for channel in 0..channels {
+            let base = channel * frames + start;
+            pcm.extend_from_slice(&packet.pcm_planar_f32[base..base + count]);
+        }
+        out.push(AudioPacket {
+            timestamp: packet.timestamp + start as i64 * hns_per_frame,
+            sample_rate: packet.sample_rate,
+            channels: packet.channels,
+            samples_per_channel: count as i32,
+            pcm_planar_f32: pcm,
+        });
+        start += count;
+    }
+    out
+}
+
+enum DecodedFrame {
+    Cpu(CpuFrame),
+    Gpu(GpuVideoFrame),
+}
+
+impl DecodedFrame {
+    fn pts(&self) -> i64 {
+        match self {
+            Self::Cpu(frame) => frame.pts,
+            Self::Gpu(frame) => frame.pts,
+        }
+    }
 }
 
 struct CpuFrame {
@@ -522,7 +716,7 @@ fn pts_wait(pts: i64, clock_pts: i64, clock_start: Instant) -> Duration {
 fn present_due_file(
     uploads: &Mutex<UploadStore>,
     source_id: u64,
-    prefetch: &mut std::collections::VecDeque<CpuFrame>,
+    prefetch: &mut std::collections::VecDeque<DecodedFrame>,
     clock_pts: &mut i64,
     clock_start: &mut Instant,
     seek_base: i64,
@@ -534,7 +728,7 @@ fn present_due_file(
         return;
     }
     while let Some(front) = prefetch.front() {
-        let pts = front.pts;
+        let pts = front.pts();
         if *clock_pts < 0 {
             *clock_pts = pts;
             *clock_start = Instant::now();
@@ -544,11 +738,80 @@ fn present_due_file(
         }
         let frame = prefetch.pop_front().expect("front");
         position_hns.store(seek_base + (pts - *clock_pts).max(0), Ordering::Relaxed);
-        push_file_cpu(uploads, source_id, &frame);
+        match frame {
+            DecodedFrame::Cpu(frame) => push_file_cpu(uploads, source_id, &frame),
+            DecodedFrame::Gpu(frame) => push_file_gpu(uploads, source_id, frame),
+        }
         if force {
             break;
         }
     }
+}
+
+fn import_video(sample: &AvSample, device: &wgpu::Device) -> Result<GpuVideoFrame, String> {
+    if sample.texture.is_null() {
+        return Err("AVFoundation did not supply a Metal texture".into());
+    }
+    let width = (sample.width as u32).max(2);
+    let height = (sample.height as u32).max(2);
+    let raw = unsafe {
+        objc2::rc::Retained::from_raw(
+            sample.texture as *mut objc2::runtime::ProtocolObject<dyn objc2_metal::MTLTexture>,
+        )
+    }
+    .ok_or("invalid Metal texture")?;
+    let pixel_buffer = sample.pixel_buffer as usize;
+    let release_pixels = Box::new(move || {
+        if pixel_buffer != 0 {
+            unsafe { CFRelease(pixel_buffer as *const std::ffi::c_void) };
+        }
+    });
+    let hal_texture = unsafe {
+        wgpu::hal::metal::Device::texture_from_raw(
+            raw,
+            wgpu::TextureFormat::Bgra8Unorm,
+            objc2_metal::MTLTextureType::Type2D,
+            1,
+            1,
+            wgpu::hal::CopyExtent {
+                width,
+                height,
+                depth: 1,
+            },
+            Some(release_pixels),
+        )
+    };
+    let texture = unsafe {
+        device.create_texture_from_hal::<wgpu::hal::api::Metal>(
+            hal_texture,
+            &wgpu::TextureDescriptor {
+                label: Some("eiviz av metal"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            },
+            wgpu::TextureUses::RESOURCE | wgpu::TextureUses::COPY_SRC,
+        )
+    };
+    let view = texture.create_view(&Default::default());
+    Ok(GpuVideoFrame {
+        pts: sample.pts_hns,
+        width,
+        height,
+        packed: false,
+        bgra: true,
+        texture,
+        view,
+        lease: Some(Arc::new(())),
+    })
 }
 
 fn copy_video(sample: &AvSample) -> Result<CpuFrame, String> {
@@ -573,8 +836,109 @@ fn push_live_cpu(uploads: &Mutex<UploadStore>, source_id: u64, frame: &CpuFrame,
     let _ = store.push_playout_cpu(source_id, &frame.pixels, frame.stride, frame.pts);
 }
 
+fn push_live_gpu(uploads: &Mutex<UploadStore>, source_id: u64, frame: GpuVideoFrame, depth: u32) {
+    let mut store = uploads.lock_or_recover();
+    store.ensure_playout(
+        source_id,
+        frame.width.max(2),
+        frame.height.max(2),
+        CpuFormat::GpuRgba,
+        depth,
+    );
+    // The frame buffer is part of the input contract on every other capture path;
+    // a zero-copy AVFoundation frame must queue behind it the same way.
+    let _ = store.push_playout_gpu(source_id, frame);
+}
+
+fn push_file_gpu(uploads: &Mutex<UploadStore>, source_id: u64, frame: GpuVideoFrame) {
+    let mut store = uploads.lock_or_recover();
+    store.ensure_playout(
+        source_id,
+        frame.width.max(2),
+        frame.height.max(2),
+        CpuFormat::GpuRgba,
+        1,
+    );
+    let _ = store.push_playout_gpu(source_id, frame);
+}
+
 fn push_file_cpu(uploads: &Mutex<UploadStore>, source_id: u64, frame: &CpuFrame) {
     let mut store = uploads.lock_or_recover();
     store.ensure_playout(source_id, frame.width, frame.height, CpuFormat::Bgra, 1);
     let _ = store.push(source_id, &frame.pixels, frame.stride, frame.pts);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::device::{BackendRequest, GpuDevice};
+
+    #[test]
+    fn avfoundation_file_decodes_into_a_metal_texture() {
+        let path = std::env::var_os("EIVIZ_MP4_FIXTURE")
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| {
+                format!("{}/tests/fixtures/av_metal.mp4", env!("CARGO_MANIFEST_DIR"))
+            });
+        let gpu = GpuDevice::with_backend(BackendRequest::Metal).expect("Metal device");
+        let mut pump = NativePump::open_file(&path, 0, 1).expect("video pump");
+        pump.set_metal(&gpu.device);
+        for _ in 0..60 {
+            match pump.next() {
+                Ok(Some(sample)) if sample.kind == KIND_VIDEO => {
+                    assert!(
+                        !sample.texture.is_null(),
+                        "AVFoundation should decode straight into a Metal texture"
+                    );
+                    let frame = import_video(&sample, &gpu.device).expect("import texture");
+                    assert_eq!(frame.width, sample.width as u32);
+                    assert_eq!(frame.height, sample.height as u32);
+                    assert!(frame.bgra && !frame.packed);
+                    return;
+                }
+                Ok(Some(_)) | Ok(None) => {}
+                Err(_) => break,
+            }
+        }
+        panic!("no video frame reached the Metal path");
+    }
+
+    #[test]
+    fn file_pump_publishes_a_gpu_frame_without_a_cpu_copy() {
+        let path = std::env::var_os("EIVIZ_MP4_FIXTURE")
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| {
+                format!("{}/tests/fixtures/av_metal.mp4", env!("CARGO_MANIFEST_DIR"))
+            });
+        let gpu = GpuDevice::with_backend(BackendRequest::Metal).expect("Metal device");
+        let uploads = Arc::new(Mutex::new(UploadStore::default()));
+        let pump = VideoPump::start(
+            77,
+            path,
+            false,
+            0,
+            0,
+            30_000,
+            1_001,
+            Arc::clone(&uploads),
+            3,
+            Some(gpu.device.clone()),
+        )
+        .expect("video pump");
+        for _ in 0..300 {
+            if let Some(frame) = uploads
+                .lock_or_recover()
+                .get(77)
+                .and_then(|ring| ring.gpu.as_ref())
+            {
+                assert!(frame.width >= 2 && frame.height >= 2);
+                assert!(frame.bgra && !frame.packed);
+                drop(pump);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(pump);
+        panic!("the file pump did not publish a GPU frame");
+    }
 }

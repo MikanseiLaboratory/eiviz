@@ -169,7 +169,7 @@ pub const OUT_RTMP: u32 = 3;
 pub const QUOTA_UNLIMITED: u32 = u32::MAX;
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct MixerCapabilities {
     pub plan: u32,
     pub mixing_unit_limit: u32,
