@@ -279,7 +279,8 @@ jobs:
         run: |
           cd hosts/macos
           swift build -c debug --product replay-core-checks
-          swift run -c debug --product replay-core-checks
+          # swift run on the CI image lacks --product; the executable name is unambiguous here.
+          swift run -c debug replay-core-checks
 
   control-api:
     name: Control and API (Ubuntu, no GPU)
