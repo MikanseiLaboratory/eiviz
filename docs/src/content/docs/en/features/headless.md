@@ -5,7 +5,7 @@ description: Run the mixer without a GUI, then operate it from eivizctl or Remot
 
 `eiviz-headless` is the mixer daemon with no host UI. It loads a session file (`.eivz` or `.eivzx`), runs compose, and opens a Protobuf WebSocket. The default is loopback port 9400. `run` without `--session` writes a dated default `.eivz` under the OS `eiviz/sessions` directory and uses that file.
 
-Linux ships in this form today. Windows and macOS releases include the same binaries. Operate it with `eivizctl` on the same machine, or with `Eiviz.Remote.exe` / `eiviz-remote.app` on another PC. Protocol details are in [eiviz API](/eiviz/en/developers/api/). Remote UI steps are in [Remote connection](/eiviz/en/features/remote/).
+`eiviz-headless` runs on Windows, macOS, and Linux. Linux currently ships headless only because its GUI host is not implemented; Windows and macOS releases include the GUI host and the same binaries. Operate it with `eivizctl` on the same machine, or with `Eiviz.Remote.exe` / `eiviz-remote.app` on another PC. Protocol details are in [eiviz API](/eiviz/en/developers/api/). Remote UI steps are in [Remote connection](/eiviz/en/features/remote/).
 
 Read Start through Connect from Remote once. Come back to the listen keys and REPL commands when you need them.
 
@@ -23,7 +23,7 @@ Use the `eiviz-headless` and `eivizctl` binaries from a release, or build them i
 cargo build -p eiviz-headless --locked --release --bins
 ```
 
-The binaries land at `target/release/eiviz-headless` and `target/release/eivizctl`. An example session is `headless/tests/fixtures/bars.eivz`.
+The binaries land at `target/release/eiviz-headless` and `target/release/eivizctl`. An example session is `hosts/headless/tests/fixtures/bars.eivz`.
 
 ```bash
 eiviz-headless validate --session show.eivz
@@ -133,7 +133,7 @@ Preview and Program live video come from an NDI or OMT output on the destination
 
 ## Environment
 
-`headless/eiviz-headless.example.env` is the template. Do not put tokens on the command line or in the session file.
+`hosts/headless/eiviz-headless.example.env` is the template. Do not put tokens on the command line or in the session file.
 
 | Variable | Use |
 | --- | --- |

@@ -24,7 +24,7 @@ Push-Location $root
 try {
     # The public key is read by option_env!, so cargo does not rebuild when it changes.
     # Touching the file that reads it is what makes the cached build pick the key up.
-    (Get-Item "mixer/src/pro_load.rs").LastWriteTime = Get-Date
+    (Get-Item "crates/eiviz-mixer/src/pro_load.rs").LastWriteTime = Get-Date
     cargo build -p eiviz_mixer --release --locked
     if ($LASTEXITCODE -ne 0) { throw "mixer build failed" }
 

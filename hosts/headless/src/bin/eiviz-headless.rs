@@ -434,13 +434,7 @@ fn run_daemon_runtime(
                     EXIT_OTHER
                 })
                 .map(|store| Arc::new(store) as Arc<dyn eiviz_api::MediaStorage>)?;
-        let config = ServerConfig {
-            bind: ws_addr,
-            auth,
-            idle_timeout: std::time::Duration::from_secs(60),
-            max_clients: 32,
-            media: Some(media),
-        };
+        let config = ServerConfig::new(ws_addr, auth, Some(media));
         let control: Arc<dyn eiviz_control::ControlFacade> = Arc::new(eiviz_mixer::MixerFacade);
         let mut handle = listen(config, control).await.map_err(|error| {
             eprintln!("eiviz-headless error=bind {error}");

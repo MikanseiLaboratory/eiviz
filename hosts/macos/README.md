@@ -55,7 +55,7 @@ swift run -c release replay-core-checks
 ```bash
 cargo build -p eiviz-headless --locked --release --bins
 env -u DYLD_LIBRARY_PATH ./target/release/eiviz-headless validate \
-  --session headless/tests/fixtures/bars.eivz
+  --session hosts/headless/tests/fixtures/bars.eivz
 ```
 
 ## Packaging
@@ -77,7 +77,7 @@ below.
 
 - `Library not loaded: @rpath/libndi.dylib`: build through `build.sh`, or add
   `-Wl,-rpath,@executable_path` and keep `libndi.dylib` next to the binary.
-  `headless/build.rs` does this for `eiviz-headless`.
+  `hosts/headless/build.rs` does this for `eiviz-headless`.
 - Camera, microphone, or system/application audio does not open: allow the app
   in System Settings → Privacy & Security. Output loopback and Application Audio
   use Core Audio process taps and need macOS 14.4 or later. For a reset, use

@@ -7,23 +7,24 @@
 
 ## eiviz
 
-映像オペレーターが作った、次世代のプロダクション向けグラフィックオペレーションツール・映像スイッチャーソフトウェアです。  
+次世代のプロダクション向けグラフィックオペレーションツール・映像スイッチャーソフトウェアです。  
 PCの性能が許す限り無限にM/Eを追加可能で、既存のソフトウェアスイッチャーを凌駕する圧倒的な自由度を提供します。  
 
-eivizは、最新のモダンな技術アーキテクチャを採用することにより、既存のツールやソフトウェアでは実現が難しかった機能やクロスプラットフォーム対応を実現し、高い機能性と拡張性を提供しています。  
+最新のモダンな技術アーキテクチャを採用することにより、既存のツールやソフトウェアでは実現が難しかった機能やクロスプラットフォーム対応を実現し、高い機能性と拡張性を提供しています。  
 また、既存のソフトウェアスイッチャーの扱いづらさや反省を基に、より扱いやすく、アマチュア配信からプロの現場まで幅広く活躍できるソフトウェアとしてデザインされています。
-
-eivizは特定の企業ではなく、メインメンテナとコミュニティのサポートにより開発・運営されています。
 
 [ドキュメント](https://mikanseilaboratory.github.io/eiviz/ja/) · [English](README.md)
 
 <img width="480" height="258" alt="eiviz" src="https://raw.githubusercontent.com/MikanseiLaboratory/eiviz/main/docs/src/assets/branding/png/eiviz-07-I1-frameless-text-right.png" />
 
-| 環境 | 描画 | 状態 |
-| --- | --- | --- |
-| Windows x64 | Direct3D 12またはVulkan | 対応済み |
-| macOS | Metal | 対応済み（Apple Silicon、M3で検証） |
-| Linux | Vulkan | headlessのみ |
+| 環境 | 描画API | Supported | Tested |
+| --- | --- | --- | --- | 
+| Windows x64 | Direct3D 12 or Vulkan | ✅ | ✅ |
+| Windows Arm | Direct3D 12 or Vulkan | ❌ | ❌ |
+| macOS | Metal | ✅ | ✅ |
+| Linux | Vulkan | CLIのみ | ❌ | ❌ |
+
+`eiviz-headless`はWindows/macOS/Linuxで利用できます。
 
 ## インストール
 
@@ -37,56 +38,14 @@ eivizは特定の企業ではなく、メインメンテナとコミュニティ
 
 `eiviz-*-macos-arm64.pkg`を実行します。
 
-macOS 14以降のApple Siliconがサポート対象です。公証の資格情報がリリースに入るまでは
-ad-hoc署名のため、Gatekeeperに止められた場合はpkgを右クリックして「開く」を選ぶか、
-インストール後に`xattr -dr com.apple.quarantine /Applications/eiviz.app`を実行してください。
-
-macOSのDeckLink入出力は非対応です。DeckLinkを使う場合はWindowsを使用してください。macOS版ProモジュールはRTMP・Replay・ライセンスを提供します。
-
-### macOS Intel（`macos-x64`）
-
-手順は同じです。`macos-x64`のpkgを使います。
-
-
 ### Linux 
 
-現在CLI(headless)モードのみ対応しています。ソースコードをビルドし、`eiviz-headless`を実行してください。手順は[headless](https://mikanseilaboratory.github.io/eiviz/ja/features/headless/)です。
-パフォーマンスの観点から、Releaseビルドで実行することを強く推奨します。
-
-## 開発
-
-実行ファイルと同じディレクトリに`eiviz-pro.required`が存在しない場合はOSS版として動作します。Proモジュールは探索せず、Communityプランの上限のみで起動します。
-
-Rust 1.97が必要です。Windowsホストのビルドには.NET 10とNDI SDK 6ランタイムDLLが必要です。
-
-```bat
-cargo test --workspace --locked
-dotnet build hosts\win32\Eiviz.Host.csproj
-```
-
-`dotnet build`を実行すると、構成に関係なくRelease版の`eiviz_mixer.dll`が生成され、ホストの出力先へコピーされます。
-
-```bat
-hosts\win32\bin\Debug\net10.0-windows\Eiviz.Host.exe
-```
-
-Release構成の出力先は`hosts\win32\bin\Release\net10.0-windows\Eiviz.Host.exe`です。
-
-ヘッドレス（CLI）はGPUを初期化し、制御APIの接続を待機します。
-
-```bat
-cargo run -p eiviz-headless --features runtime --release --locked -- run
-```
-
-macOSホストは`hosts/macos`で`swift build -c release`を実行し、生成された`eiviz-mac`を起動します。成果物の配置先は`swift build --show-bin-path`で確認できます。
+現在CLI(headless)モードのみ対応しています。ソースコードをビルドし、`eiviz-headless`を実行してください。手順は[headless](https://mikanseilaboratory.github.io/eiviz/ja/features/headless/)を参照ください。
 
 ## 開発のAI利用について
 
 本ツールは開発にAI/LLMを使用しています。
-
-Vibe codingアプリケーションではなく、開発の要所・必要なタスクの支援にツールとして活用しており、LLMが開発を主導したものではありません。
-
-ソフトウェア本体のアーキテクチャや実装はコアメンテナが責任を持って行い、実装コードもメンテナがレビューを通過したもののみ採用しています。
+AIが開発を主導したVibe codingなアプリケーションではなく、開発の要所・必要なタスクの支援にツールとして活用しており、ソフトウェア本体のアーキテクチャや実装はコアメンテナが責任を持って行い、実装コードもメンテナがレビューを通過したもののみ採用しています。
 
 ## ライセンス
 
@@ -98,4 +57,4 @@ Vibe codingアプリケーションではなく、開発の要所・必要なタ
 
 ### クレジット
 
-ロゴ: Guleruun (https://twitter.com/guleruun)
+ロゴ: Guleruun (https://x.com/guleruun)

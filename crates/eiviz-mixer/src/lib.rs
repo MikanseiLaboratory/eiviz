@@ -8529,7 +8529,9 @@ mod tests {
     #[test]
     fn session_file_codec_keeps_json_abi() {
         use std::ffi::CString;
-        let eivz = include_bytes!("../../headless/tests/fixtures/bars.eivz");
+        let document = eiviz_control::session::default_document();
+        let eivz = eiviz_control::session::encode_file(&document).expect("encode default session");
+        assert!(eivz.starts_with(b"EIVZ"), "sample session is an eivz file");
         let dir = std::env::temp_dir().join(format!("eiviz-session-abi-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let src_path = dir.join("bars.eivz");

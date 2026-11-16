@@ -66,7 +66,7 @@ jobs:
         run: cargo build -p eiviz-headless --locked --release --bins
 
       - name: Validate sample session
-        run: .\target\release\eiviz-headless.exe validate --session headless\tests\fixtures\bars.eivz
+        run: .\target\release\eiviz-headless.exe validate --session hosts\headless\tests\fixtures\bars.eivz
 
       # windows-latest exposes WARP/DX12, not a Vulkan adapter. Vulkan exit is linux-vulkan.
       - name: Run headless Bars session and confirm process exit
@@ -88,7 +88,7 @@ jobs:
           function Combined-Log { "$(Read-SharedLog $out)$(Read-SharedLog $err)" }
           $proc = Start-Process -FilePath ".\target\release\eiviz-headless.exe" -ArgumentList @(
             "run",
-            "--session", "headless\tests\fixtures\bars.eivz",
+            "--session", "hosts\headless\tests\fixtures\bars.eivz",
             "--bind", "127.0.0.1:0",
             "--renderer", "dx12"
           ) -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -NoNewWindow
@@ -208,7 +208,7 @@ jobs:
         run: cargo build -p eiviz-headless --locked --release --bins
 
       - name: Validate sample session
-        run: ./target/release/eiviz-headless validate --session headless/tests/fixtures/bars.eivz
+        run: ./target/release/eiviz-headless validate --session hosts/headless/tests/fixtures/bars.eivz
 
       - name: Run headless on Metal without DYLD_LIBRARY_PATH
         # The NDI setup action exports DYLD_LIBRARY_PATH, which hid a missing LC_RPATH
@@ -219,7 +219,7 @@ jobs:
           out="$(mktemp)"
           err="$(mktemp)"
           env -u DYLD_LIBRARY_PATH ./target/release/eiviz-headless run \
-            --session headless/tests/fixtures/bars.eivz \
+            --session hosts/headless/tests/fixtures/bars.eivz \
             --bind 127.0.0.1:0 --renderer metal >"$out" 2>"$err" &
           pid=$!
           ws=""
@@ -333,8 +333,8 @@ jobs:
 
       - name: Validate sample session
         run: |
-          ./target/debug/eiviz-headless validate --session headless/tests/fixtures/bars.eivz
-          ./target/debug/eiviz-headless canonicalize --session headless/tests/fixtures/bars.eivz > /tmp/bars.canonical.json
+          ./target/debug/eiviz-headless validate --session hosts/headless/tests/fixtures/bars.eivz
+          ./target/debug/eiviz-headless canonicalize --session hosts/headless/tests/fixtures/bars.eivz > /tmp/bars.canonical.json
 
   linux-vulkan:
     name: Headless Vulkan (Ubuntu)
@@ -387,13 +387,13 @@ jobs:
         run: cargo build -p eiviz-headless --locked --release --bins
 
       - name: Validate sample session
-        run: ./target/release/eiviz-headless validate --session headless/tests/fixtures/bars.eivz
+        run: ./target/release/eiviz-headless validate --session hosts/headless/tests/fixtures/bars.eivz
 
       - name: Run headless Bars session on Vulkan
         run: |
           set -euo pipefail
           ./target/release/eiviz-headless run \
-            --session headless/tests/fixtures/bars.eivz \
+            --session hosts/headless/tests/fixtures/bars.eivz \
             --bind 127.0.0.1:0 > /tmp/eiviz-headless.log 2>&1 &
           pid=$!
           for _ in $(seq 1 40); do

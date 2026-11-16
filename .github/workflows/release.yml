@@ -159,7 +159,7 @@ jobs:
           }
           Copy-Item "${{ github.workspace }}\target\release\eiviz-headless.exe" "${{ github.workspace }}\publish\win-x64\"
           Copy-Item "${{ github.workspace }}\target\release\eivizctl.exe" "${{ github.workspace }}\publish\win-x64\"
-          Copy-Item "${{ github.workspace }}\headless\eiviz-headless.example.env" "${{ github.workspace }}\publish\win-x64\"
+          Copy-Item "${{ github.workspace }}\hosts\headless\eiviz-headless.example.env" "${{ github.workspace }}\publish\win-x64\"
           Copy-Item "${{ github.workspace }}\LICENSE" "${{ github.workspace }}\publish\win-x64\" -ErrorAction SilentlyContinue
           Copy-Item "${{ github.workspace }}\NOTICE" "${{ github.workspace }}\publish\win-x64\" -ErrorAction SilentlyContinue
 
@@ -276,7 +276,7 @@ jobs:
           cp pro-module/eiviz-pro.required "$STAGING/"
           cp target/aarch64-apple-darwin/release/eiviz-headless "$STAGING/"
           cp target/aarch64-apple-darwin/release/eivizctl "$STAGING/"
-          cp headless/eiviz-headless.example.env "$STAGING/"
+          cp hosts/headless/eiviz-headless.example.env "$STAGING/"
           file -b "$STAGING/eiviz-mac" | grep -q "arm64"
           file -b "$STAGING/eiviz-headless" | grep -q "arm64"
           if [ -f "$BIN/libndi.dylib" ]; then
@@ -388,7 +388,7 @@ jobs:
           cp pro-module/eiviz-pro.required "$STAGING/"
           cp target/x86_64-apple-darwin/release/eiviz-headless "$STAGING/"
           cp target/x86_64-apple-darwin/release/eivizctl "$STAGING/"
-          cp headless/eiviz-headless.example.env "$STAGING/"
+          cp hosts/headless/eiviz-headless.example.env "$STAGING/"
           file -b "$STAGING/eiviz-mac" | grep -q "x86_64"
           file -b "$STAGING/eiviz-headless" | grep -q "x86_64"
           if [ -f "$BIN/libndi.dylib" ]; then

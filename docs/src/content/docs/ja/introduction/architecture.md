@@ -12,6 +12,8 @@ eivizは、映像・音声合成を担うバックエンド「Mixer」と、各O
 - **Mixer（Rust + wgpu）**: 映像合成、音声ミックス、入力取り込み、ネットワーク送出、セッション管理を担います。
 - **ホストUI**: 操作インターフェースの提供やプレビュー描画領域の確保を行い、内部のC ABIを通じてMixerと通信します。
 
+実行入口は`hosts/`に集約しており、GUIを持たない`hosts/headless`も同じ制御契約を使います。共有するRustクレートは`crates/`にあります。
+
 外部からの制御（vMix互換HTTP/TCP、Protobuf WebSocket）はMixer内の`ControlService`が一元的に受け付け、ディスパッチャを経由して処理されます。
 
 ```mermaid
