@@ -160,6 +160,10 @@ final class MixerController: ObservableObject {
         syncedSessionRevision = MixerFFI.sessionRevision()
         updateStatus()
         openPendingSession()
+        // The Pro module finished loading (or refused) after the scene's onAppear drew
+        // the title, which at that moment had only the plan the empty capability probe
+        // reported. Draw it again now that the plan is known.
+        AppChrome.applyTitle()
     }
 
     private func prepareProModule() -> Bool {

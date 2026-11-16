@@ -1336,6 +1336,10 @@ extension MixerController {
     }
 
     func presentError(_ message: String, title: String) {
+        // A modal that runs during boot can vanish behind a window the app cannot yet
+        // raise (a bare-executable process may not be able to activate at all), so the
+        // message also lands in the host log where the operator can still find it.
+        HostLog.write("WARN", "\(title): \(message)")
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
