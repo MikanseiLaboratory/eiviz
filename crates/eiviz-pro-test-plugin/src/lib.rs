@@ -506,6 +506,10 @@ fn base_api() -> ProApi {
         // The test store stores raw pictures; it encodes one into a VMX1 packet
         // on demand so the mixer's GPU playback path is exercised too.
         replay_read_packet: Some(replay_read_packet),
+        // The jog proxy of a test store is the full-size frame, scaled by
+        // nothing: the tiles only need the "something played here" evidence.
+        replay_decode_proxy: Some(replay_decode_proxy),
+        replay_set_protect_from: Some(replay_set_protect_from),
     }
 }
 
@@ -985,6 +989,25 @@ fn encode_replay_packet(angle_id: u32, frame: &ReplayFrame) -> Option<Vec<u8>> {
             Err(_) => packet.resize(packet.len().saturating_mul(2).max(1024), 0),
         }
     }
+}
+
+unsafe extern "C" fn replay_decode_proxy(
+    handle: *mut c_void,
+    angle_id: u32,
+    frame_index: u64,
+    dst: *mut u8,
+    dst_cap: usize,
+    out: *mut ProReplayDecoded,
+) -> ProStatus {
+    // A stand-in has no separate proxy stream, so the proxy reads the same
+    // stored frame. A mixer sized its buffer for a proxy and would refuse this
+    // as short, which is the honest answer for a store without real proxies.
+    unsafe { replay_decode(handle, angle_id, frame_index, dst, dst_cap, out) }
+}
+
+unsafe extern "C" fn replay_set_protect_from(_handle: *mut c_void, _frame: u64) -> ProStatus {
+    // The stand-in never evicts, so there is no protection boundary to move.
+    ProStatus::ok()
 }
 
 unsafe extern "C" fn replay_read_packet(
