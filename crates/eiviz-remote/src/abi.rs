@@ -1,4 +1,4 @@
-//! ABI status codes. Keep these aligned with `mixer/src/abi.rs`.
+//! ABI status codes. Keep these aligned with `crates/eiviz-mixer/src/abi.rs`.
 
 pub const OK: i32 = 0;
 pub const ERR_NOT_CREATED: i32 = 2;

@@ -75,13 +75,7 @@ pub fn configure_owned(
     let media = eiviz_api::FileMediaStorage::new(eiviz_api::MediaStorageConfig::new(media_path))
         .ok()
         .map(|store| std::sync::Arc::new(store) as std::sync::Arc<dyn eiviz_api::MediaStorage>);
-    let config = ServerConfig {
-        bind: addr,
-        auth,
-        idle_timeout: Duration::from_secs(60),
-        max_clients: 32,
-        media,
-    };
+    let config = ServerConfig::new(addr, auth, media);
     let control = Arc::new(MixerFacade);
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);

@@ -25,6 +25,8 @@ eivizは特定の企業ではなく、メインメンテナとコミュニティ
 | macOS | Metal | 対応済み（Apple Silicon、M3で検証） |
 | Linux | Vulkan | headlessのみ |
 
+`eiviz-headless`はWindows/macOS/Linuxで利用できます。LinuxはGUIホストが未実装のためCLIのみです。
+
 ## インストール
 
 [最新版ダウンロード](https://github.com/MikanseiLaboratory/eiviz/releases/latest) · [過去のバージョン](https://github.com/MikanseiLaboratory/eiviz/releases)

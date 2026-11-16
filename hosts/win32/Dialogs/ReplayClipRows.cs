@@ -16,7 +16,7 @@ internal static class ReplayClipRows
     /// <summary>
     /// FNV-1a 64 of a clip uid, which is how the mixer names the clip a channel is playing.
     ///
-    /// The same function as `clip_uid_hash` in `mixer/src/replay/mod.rs`: the deck has to
+    /// The same function as `clip_uid_hash` in `crates/eiviz-mixer/src/replay/mod.rs`: the deck has to
     /// answer "is this row on air" from what the mixer reports, and a uid string is the only
     /// thing that tells two clips of the same range and angle apart.
     /// </summary>

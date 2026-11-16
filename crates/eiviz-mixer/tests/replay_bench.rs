@@ -1,5 +1,5 @@
 //! Replay stage-0 bench. Ignored by default. Release:
-//! `cargo test --manifest-path mixer/Cargo.toml --release --test replay_bench -- --ignored --nocapture`
+//! `cargo test -p eiviz_mixer --release --test replay_bench -- --ignored --nocapture`
 //!
 //! Optional `EIVIZ_REPLAY_BENCH_DIR` selects the disk target. Results decide
 //! `segment_frames` (default 120), profile SQ, encode queue 6, and write buffer 512 MiB.

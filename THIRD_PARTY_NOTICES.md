@@ -8,7 +8,7 @@ Those components stay under their own terms. Permissive licenses (MIT,
 Apache-2.0, Zlib) allow use inside a more restrictive application as long
 as copyright and permission notices are preserved.
 
-## Direct Rust dependencies (`mixer/Cargo.toml`)
+## Direct Rust dependencies (`crates/eiviz-mixer/Cargo.toml`)
 
 | Crate | License | Source |
 | --- | --- | --- |
@@ -27,7 +27,7 @@ as copyright and permission notices are preserved.
 | windows | MIT OR Apache-2.0 | https://crates.io/crates/windows |
 
 Transitive crates pulled by the above (for example naga, png, parking_lot)
-are also MIT and/or Apache-2.0. Full versions are pinned in `mixer/Cargo.lock`.
+are also MIT and/or Apache-2.0. Full versions are pinned in `crates/eiviz-mixer/Cargo.lock`.
 
 Official Open Media Transport libraries that those git crates independently
 reimplement (`libomtnet`, `libomt`, `libvmx`) are MIT as well. They are not

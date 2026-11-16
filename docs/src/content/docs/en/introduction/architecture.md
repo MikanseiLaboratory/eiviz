@@ -8,7 +8,7 @@ eiviz system architecture. The shape is largely the same across platforms.
 ## Shape
 
 eiviz compositing runs as one mixer process.  
-The video and audio state machine is the mixer (Rust + wgpu). Each OS host talks to it over an internal C ABI. Host code lives in `hosts/win32` (WPF), `hosts/macos` (SwiftUI), and `hosts/linux` (in development).
+The video and audio state machine is the mixer (Rust + wgpu). Each OS host talks to it over an internal C ABI. Host code lives in `hosts/win32` (WPF), `hosts/macos` (SwiftUI), `hosts/linux` (in development), and `hosts/headless` (the GUI-less host shared by all three OSes). The shared Rust crates live under `crates/`; `hosts/` contains only executable entry points.
 
 The host owns windows, interaction, and preview surfaces.  
 Compose, audio, I/O, and session data live in the mixer. Keeping that work off the UI is how the stack stays fast and portable.
@@ -299,7 +299,7 @@ Detail is in [Settings](/eiviz/en/introduction/settings/) → Outputs and [NDI /
 
 ## Hosts
 
-Per-OS hosts live in `hosts/win32`, `hosts/macos`, and `hosts/linux`. Live Preview/Program, an open Multiview, Scene Editor, the Overlay window, and a switcher’s Preview/Program are drawn by the mixer into a native surface. Windows uses a child HWND; macOS uses an NSView with a Metal layer from wgpu.
+Per-OS hosts live in `hosts/win32`, `hosts/macos`, and `hosts/linux`. The GUI-less host lives in `hosts/headless`; it links the mixer rlib directly and serves the same `ControlService` over Protobuf WebSocket on Windows, macOS, and Linux. Live Preview/Program, an open Multiview, Scene Editor, the Overlay window, and a switcher’s Preview/Program are drawn by the mixer into a native surface. Windows uses a child HWND; macOS uses an NSView with a Metal layer from wgpu.
 
 On a remote connection those live surfaces sample NDI/OMT receivers. Operator steps are in [Remote connection](/eiviz/en/features/remote/). A Mix Input is a delayed alias of a Mixing Unit bus or a session Multiview; it reads the FrameDelay ring and uses the same thumbnail path.
 

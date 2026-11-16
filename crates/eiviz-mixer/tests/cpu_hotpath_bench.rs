@@ -1,5 +1,5 @@
 //! Micro-benches for CPU hot paths. Ignored by default; run Release:
-//! `cargo test --manifest-path mixer/Cargo.toml --release --test cpu_hotpath_bench -- --ignored --nocapture`
+//! `cargo test -p eiviz_mixer --release --test cpu_hotpath_bench -- --ignored --nocapture`
 
 use std::thread;
 use std::time::{Duration, Instant};

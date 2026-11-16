@@ -14,6 +14,9 @@ A cross-platform vision mixer with unlimited M/E. eiviz / 映像(eizou) + visual
 | macOS | Metal | Supported (Apple Silicon; verified on M3) |
 | Linux | Vulkan | CLI Only |
 
+`eiviz-headless` is available on Windows, macOS, and Linux. The Linux entry is CLI
+only because its GUI host is not implemented yet.
+
 [Documentation](https://mikanseilaboratory.github.io/eiviz/en/) · [日本語](README.ja.md)
 
 ## Install

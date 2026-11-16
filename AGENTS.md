@@ -8,6 +8,12 @@ vMix, OBS-Studio, Panasonic Kairos, Viz/NewTek TriCaster のようなソフト�
 レポジトリは以下です。
 https://github.com/MikanseiLaboratory/eiviz
 
+### リポジトリ構成
+
+- `crates/`: 複数の実行入口から共有するRustクレート。`eiviz-mixer`が映像・音声合成のコア、`eiviz-control`が制御契約、`eiviz-api`がProtobuf/APIサーバー、`eiviz-replay`と`eiviz-pro-api`が境界クレートです。
+- `hosts/`: 実行入口。`win32`（WPF）、`macos`（SwiftUI）、`linux`（GUIは開発中）のGUIホストと、GUIを持たない`hosts/headless`（Rust、全OS対応のデーモンと`eivizctl`）があります。
+- `packaging/`: インストーラとパッケージ用スクリプト。`scripts/`: 検証・ベンチマーク。`docs/`: 公式ドキュメント。
+
 ### キーとなる技術要素
 
 本プロジェクトでは、高いパフォーマンスを保ちつつクロスプラットフォームに対応するため、以下の技術が採用されています。
@@ -19,7 +25,7 @@ https://github.com/MikanseiLaboratory/eiviz
   - 特にGPUテキスチャをUIに表示する機能は、1920x1080の高画質なデータを毎秒60枚スムーズに転送されることが求められるため、可能な限りボトルネックを排除しプラットフォーム毎の最適化を使用する必要があります。
   - しかし、クロスプラットフォームの保守性を優先するため、traitなどの抽象化は正しく使い、Rustのゼロコスト抽象化は出来る限り活用する必要があります。
 - UI部分/ホスト部
-  - GUI/操作面は「ホスト」や「UI」と呼ばれており、OSごとに`hosts/`へ分かれています。
+  - GUI/操作面は「ホスト」や「UI」と呼ばれており、OSごとに`hosts/`へ分かれています。GUIを持たない`hosts/headless`（Rust、全OS対応のデーモンと`eivizctl`）も同じ`hosts/`にあります。
   - Windowsは`hosts/win32`（C# 14 + WPF）、macOSは`hosts/macos`（Swift 6 + SwiftUI）、Linuxは`hosts/linux`（開発中。Rust、gtk4-rsとVulkanを予定）。
   - 映像合成に関する処理や、操作・表示 に関係しない処理をここにおいてはいけません。headlessモードや分離に影響が出てパフォーマンスが悪化する恐れがある為です。
     - Windows
@@ -52,7 +58,7 @@ eivizは上記のソフトウェア群から影響を受けており、共通の
 
 - 現在のメイン開発ターゲットはReBARに対応したWindows x64 + DX12環境です。 サブターゲットとして、ReBAR非対応のWindowsと、macOSがあります。
 - Apple Silicon搭載のmacOSでは非常にパフォーマンスが向上するポテンシャルを秘めています。現在はApple M3 MacBook Air / macOS 27で開発・実機確認を行っています。macOS 14以降のApple Siliconを対象とし、Intel Macはビルド確認のみです。
-- macOSの変更では、`hosts/macos/README.md`の手順でビルド・テストしてください。`eiviz-headless`は`DYLD_LIBRARY_PATH`なしで起動できること（`headless/build.rs`の`@executable_path` rpath）を確認してください。CIは`macos-26`（arm64）を使い、`macos-latest`の暗黙のアーキテクチャに依存しません。
+- macOSの変更では、`hosts/macos/README.md`の手順でビルド・テストしてください。`eiviz-headless`は`DYLD_LIBRARY_PATH`なしで起動できること（`hosts/headless/build.rs`の`@executable_path` rpath）を確認してください。CIは`macos-26`（arm64）を使い、`macos-latest`の暗黙のアーキテクチャに依存しません。
 - 
 - 一部のクレート(openmediatransport-rs, vmix-rsなど)は同じ開発者がメンテナンスするクレートです。新機能や不具合修正が必要な場合、ブランチを切って修正し、そのバージョンに切り替えることも可能です。
 - 現在映像処理の抽象化と、音回りの安定化が難航しています。新規の実装内容はこちらに留意してください。

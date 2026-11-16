@@ -33,15 +33,24 @@ pub struct ServerConfig {
     pub media: Option<Arc<dyn MediaStorage>>,
 }
 
+const CONTROL_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const CONTROL_MAX_CLIENTS: usize = 32;
+
 impl ServerConfig {
-    pub fn loopback(port: u16, auth: AuthConfig) -> Self {
+    /// Shared control-server defaults. Hosts choose the bind address, auth policy,
+    /// and media directory; the idle timeout and client cap stay the same.
+    pub fn new(bind: SocketAddr, auth: AuthConfig, media: Option<Arc<dyn MediaStorage>>) -> Self {
         Self {
-            bind: SocketAddr::from(([127, 0, 0, 1], port)),
+            bind,
             auth,
-            idle_timeout: Duration::from_secs(60),
-            max_clients: 32,
-            media: None,
+            idle_timeout: CONTROL_IDLE_TIMEOUT,
+            max_clients: CONTROL_MAX_CLIENTS,
+            media,
         }
+    }
+
+    pub fn loopback(port: u16, auth: AuthConfig) -> Self {
+        Self::new(SocketAddr::from(([127, 0, 0, 1], port)), auth, None)
     }
 }
 
@@ -1167,6 +1176,21 @@ mod tests {
             max_clients: 4,
             media: None,
         }
+    }
+
+    #[test]
+    fn control_config_uses_shared_server_defaults() {
+        let config = ServerConfig::new(
+            "127.0.0.1:9400".parse().unwrap(),
+            AuthConfig {
+                token: String::new(),
+                require_auth: false,
+                max_role: Role::Read,
+            },
+            None,
+        );
+        assert_eq!(config.idle_timeout, CONTROL_IDLE_TIMEOUT);
+        assert_eq!(config.max_clients, CONTROL_MAX_CLIENTS);
     }
 
     #[tokio::test]

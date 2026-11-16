@@ -3,7 +3,7 @@
 # Usage: scripts/macos-bench.sh [session.eivz] [seconds]
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SESSION="${1:-$ROOT/headless/tests/fixtures/bars.eivz}"
+SESSION="${1:-$ROOT/hosts/headless/tests/fixtures/bars.eivz}"
 SECONDS_TO_RUN="${2:-60}"
 OUT="$ROOT/target/macos-bench/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$OUT"
