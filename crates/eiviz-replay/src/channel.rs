@@ -603,9 +603,10 @@ impl Transport {
                     };
                     if (self.hold_last || self.chasing)
                         && self.last_frame > 0
-                        && self.current.as_ref().is_some_and(|clip| {
-                            clip.speed < 0.0 || self.last_frame > base_out
-                        })
+                        && self
+                            .current
+                            .as_ref()
+                            .is_some_and(|clip| clip.speed < 0.0 || self.last_frame > base_out)
                     {
                         let reverse = self.current.as_ref().is_some_and(|clip| clip.speed < 0.0);
                         if self.held_out == 0 {

@@ -1938,7 +1938,10 @@ mod encoder_apply_tests {
         let empty = encoder_doc("");
         assert_eq!(stream_encoder_apply(&empty.stream_encoders[0]).encoder, 0);
         let openh264 = encoder_doc("OpenH264");
-        assert_eq!(stream_encoder_apply(&openh264.stream_encoders[0]).encoder, 0);
+        assert_eq!(
+            stream_encoder_apply(&openh264.stream_encoders[0]).encoder,
+            0
+        );
         let videotoolbox = encoder_doc("VideoToolbox");
         assert_eq!(
             stream_encoder_apply(&videotoolbox.stream_encoders[0]).encoder,

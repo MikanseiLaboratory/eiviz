@@ -2851,8 +2851,7 @@ impl ReplayEngine {
             .spawn({
                 let stop_workers = Arc::clone(&self.stop_workers);
                 move || channel_loop(stop_workers)
-            })
-        {
+            }) {
             Ok(handle) => workers.push(handle),
             Err(error) => crate::diag::error(&format!("replay channel thread: {error}")),
         }
@@ -3495,16 +3494,22 @@ impl ChannelDecoder {
         if !wants_secondary(plan) {
             return DecodedGpu::Frame(outgoing, outgoing_substituted);
         }
-        let (incoming, incoming_substituted) =
-            match self.decode_one(store, store_key, second_angle, second_frame, device, queue, true)
-            {
-                DecodedGpu::Frame(frame, substituted) => (frame, substituted),
-                // No packet source at all: the CPU path owns this channel.
-                DecodedGpu::Unsupported => return DecodedGpu::Unsupported,
-                // The incoming frame did not decode. Showing the outgoing one is
-                // what the CPU path does, so a bad clip boundary is not black.
-                DecodedGpu::Failed => return DecodedGpu::Frame(outgoing, outgoing_substituted),
-            };
+        let (incoming, incoming_substituted) = match self.decode_one(
+            store,
+            store_key,
+            second_angle,
+            second_frame,
+            device,
+            queue,
+            true,
+        ) {
+            DecodedGpu::Frame(frame, substituted) => (frame, substituted),
+            // No packet source at all: the CPU path owns this channel.
+            DecodedGpu::Unsupported => return DecodedGpu::Unsupported,
+            // The incoming frame did not decode. Showing the outgoing one is
+            // what the CPU path does, so a bad clip boundary is not black.
+            DecodedGpu::Failed => return DecodedGpu::Frame(outgoing, outgoing_substituted),
+        };
         let crate::upload::GpuVideoFrame {
             pts: outgoing_pts,
             texture: _outgoing_texture,
@@ -3982,7 +3987,9 @@ impl ChannelPlayout {
             let owed = late.max(1);
             let (take, _) = catch_up_split(self.ahead.len(), late);
             let mut catch_up: Vec<AheadFrame> = Vec::with_capacity(take);
-            while catch_up.len() < take && let Some(pending) = self.ahead.pop_front() {
+            while catch_up.len() < take
+                && let Some(pending) = self.ahead.pop_front()
+            {
                 catch_up.push(pending);
             }
             let shortfall = owed.saturating_sub(catch_up.len() as u32);
@@ -4403,9 +4410,7 @@ fn channel_loop(stop: Arc<AtomicBool>) {
                         Ok(handle) => workers.push((index, handle)),
                         Err(error) => {
                             // The channel is retried on its own on the next wake.
-                            crate::diag::error(&format!(
-                                "replay channel {index} thread: {error}"
-                            ));
+                            crate::diag::error(&format!("replay channel {index} thread: {error}"));
                             failed.push(index);
                         }
                     }
@@ -4417,8 +4422,9 @@ fn channel_loop(stop: Arc<AtomicBool>) {
             let retry = std::mem::take(&mut failed);
             let mut still_failed = Vec::new();
             for index in retry {
-                let Some((_, source_id, audio)) =
-                    channels.iter().find(|(channel_index, ..)| channel_index == &index)
+                let Some((_, source_id, audio)) = channels
+                    .iter()
+                    .find(|(channel_index, ..)| channel_index == &index)
                 else {
                     // The channel left the setup; the next change rebuilds it.
                     continue;
@@ -5249,7 +5255,8 @@ impl ReplayStore for FfiReplayStore {
         angle_id: u32,
         frame_index: u64,
         out: &mut Vec<u8>,
-    ) -> eiviz_pro_api::ProResult<ReplayPacket> {        let Some(read) = self.api.replay_read_packet else {
+    ) -> eiviz_pro_api::ProResult<ReplayPacket> {
+        let Some(read) = self.api.replay_read_packet else {
             return Err(eiviz_pro_api::ProError::unavailable(
                 "this replay module cannot hand out packets",
             ));
@@ -6599,9 +6606,7 @@ mod playback_store_tests {
         }
     }
 
-    fn counting(
-        closes: &Arc<Mutex<u32>>,
-    ) -> Arc<Mutex<Box<dyn ReplayStore>>> {
+    fn counting(closes: &Arc<Mutex<u32>>) -> Arc<Mutex<Box<dyn ReplayStore>>> {
         let store: Box<dyn ReplayStore> = Box::new(CountingStore {
             closes: Arc::clone(closes),
         });
@@ -6622,7 +6627,8 @@ mod playback_store_tests {
             stores.insert("rec-kept".into(), counting(&closes));
             stores.insert("rec-stale".into(), counting(&closes));
         }
-        let keep: std::collections::HashSet<String> = ["rec-kept".to_string()].into_iter().collect();
+        let keep: std::collections::HashSet<String> =
+            ["rec-kept".to_string()].into_iter().collect();
         engine.reap_playback_stores(&keep);
         assert_eq!(
             *closes.lock().unwrap_or_else(|error| error.into_inner()),
@@ -6831,7 +6837,10 @@ mod gpu_device_tests {
         let playbacks_before = engine().playback_generation.load(Ordering::Acquire);
         engine().set_gpu(&older.device, &older.queue);
         let generation_once = engine().gpu_generation();
-        assert!(generation_once >= 1, "the first set_gpu must bump the generation");
+        assert!(
+            generation_once >= 1,
+            "the first set_gpu must bump the generation"
+        );
 
         // A warmed decoder built on the old device must not survive the swap.
         let codec = vmx::Codec::new(vmx::Config {
@@ -6957,9 +6966,7 @@ mod gpu_device_tests {
 
         // The live hub keeps its own views: six of them, so slot 4 is occupied by
         // epoch 1 — the composer's long-lived views in the real mixer.
-        let live_textures = (0..6)
-            .map(|_| texture(&current.device))
-            .collect::<Vec<_>>();
+        let live_textures = (0..6).map(|_| texture(&current.device)).collect::<Vec<_>>();
         let live_views = live_textures
             .iter()
             .map(|tex| tex.create_view(&wgpu::TextureViewDescriptor::default()))
@@ -6968,9 +6975,7 @@ mod gpu_device_tests {
         // The stale hub had recycled its view slot before the swap: create, drop and
         // recreate so the surviving view's id carries an older epoch at the index the
         // live hub gave to its own epoch-1 view.
-        let stale_textures = (0..5)
-            .map(|_| texture(&older.device))
-            .collect::<Vec<_>>();
+        let stale_textures = (0..5).map(|_| texture(&older.device)).collect::<Vec<_>>();
         let mut stale_views = stale_textures
             .iter()
             .map(|tex| tex.create_view(&wgpu::TextureViewDescriptor::default()))
@@ -6980,8 +6985,7 @@ mod gpu_device_tests {
         // live hub keeps epoch 1 — the exact id pair of the session's real panic.
         let freed = stale_views.swap_remove(4);
         drop(freed);
-        let recycled = stale_textures[0]
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let recycled = stale_textures[0].create_view(&wgpu::TextureViewDescriptor::default());
 
         let layout = current
             .device

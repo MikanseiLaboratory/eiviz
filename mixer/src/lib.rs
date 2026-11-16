@@ -4461,9 +4461,7 @@ fn stream_encoder_add_ffi(
         // what makes VideoToolbox reachable, and the module refuses a code it cannot
         // build, so an unusable ask is refused at stream start, not silently
         // switched to OpenH264.
-        eiviz_pro_api::STREAM_ENCODER_VIDEOTOOLBOX => {
-            eiviz_pro_api::VideoEncoderKind::VideoToolbox
-        }
+        eiviz_pro_api::STREAM_ENCODER_VIDEOTOOLBOX => eiviz_pro_api::VideoEncoderKind::VideoToolbox,
         _ => eiviz_pro_api::VideoEncoderKind::OpenH264,
     };
     let started = backend.start_stream(&eiviz_pro_api::StreamEncodeConfig {

@@ -645,11 +645,7 @@ mod tests {
         let size = grow_until_fit(
             |buf| {
                 asks += 1;
-                if asks < 3 {
-                    None
-                } else {
-                    Some(buf.len() - 2)
-                }
+                if asks < 3 { None } else { Some(buf.len() - 2) }
             },
             &mut packet,
         );

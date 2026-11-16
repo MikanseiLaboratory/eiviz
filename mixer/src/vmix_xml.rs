@@ -693,9 +693,21 @@ mod tests {
     #[test]
     fn replay_input_publishes_the_vmix_replay_node() {
         let doc = replay_doc();
-        let input_id = doc.inputs.iter().find(|i| i.kind == InputKind::Replay).map(|i| i.id).unwrap();
+        let input_id = doc
+            .inputs
+            .iter()
+            .find(|i| i.kind == InputKind::Replay)
+            .map(|i| i.id)
+            .unwrap();
         let mut live = replay_live_snapshot();
-        live.units.insert(999, UnitLive { program_source: input_id, preview_source: 0, overlay_sources: Vec::new() });
+        live.units.insert(
+            999,
+            UnitLive {
+                program_source: input_id,
+                preview_source: 0,
+                overlay_sources: Vec::new(),
+            },
+        );
         let xml = render_xml(&doc, &live).expect("xml");
         let parsed =
             vmix_core::from_str(&xml).unwrap_or_else(|error| panic!("parse {error}: {xml}"));
@@ -708,7 +720,10 @@ mod tests {
         let node = replay_input.expect("the Replay input carries <replay>");
         // Recording is live, speed is half, one event, and the A timecode runs at
         // the format's frame count (59 at 59.94).
-        assert!(matches!(node.recording.as_deref(), Some("True")), "{node:?}");
+        assert!(
+            matches!(node.recording.as_deref(), Some("True")),
+            "{node:?}"
+        );
         assert_eq!(node.events, "1");
         assert_eq!(node.speed_a, "0.5");
         assert_eq!(node.camera_a, "1");

@@ -572,7 +572,12 @@ impl ControlService {
                 .flat_map(|list| list.clips.iter())
                 .map(|clip| clip.recording_uuid.clone()),
         );
-        uuids.extend(replay.events.iter().map(|event| event.recording_uuid.clone()));
+        uuids.extend(
+            replay
+                .events
+                .iter()
+                .map(|event| event.recording_uuid.clone()),
+        );
         uuids.retain(|uuid| !uuid.trim().is_empty());
         uuids.sort();
         uuids.dedup();
@@ -1130,18 +1135,8 @@ impl ControlService {
                 .find(|item| item.index == channel)
                 .and_then(|item| item.playlist_id);
             let on_channel = channel_playlist
-                .and_then(|playlist_id| {
-                    replay
-                        .playlists
-                        .iter()
-                        .find(|list| list.id == playlist_id)
-                })
-                .and_then(|list| {
-                    list.clips
-                        .iter()
-                        .find(|clip| clip.uid == clip_uid)
-                        .cloned()
-                });
+                .and_then(|playlist_id| replay.playlists.iter().find(|list| list.id == playlist_id))
+                .and_then(|list| list.clips.iter().find(|clip| clip.uid == clip_uid).cloned());
             on_channel
                 .or_else(|| {
                     replay
@@ -1816,10 +1811,7 @@ mod tests {
                 ];
             }
             let fake = FakeMixer::default();
-            *fake
-                .replay_uuid
-                .lock()
-                .expect("fake mixer state") = "rec-new".into();
+            *fake.replay_uuid.lock().expect("fake mixer state") = "rec-new".into();
             let mut svc = ControlService::new(fake);
             svc.replace_session(doc, None, "1").unwrap();
             svc.execute(
@@ -1919,22 +1911,20 @@ mod tests {
             let mut doc = replay_doc();
             if let Some(replay) = doc.replay.as_mut() {
                 use crate::session::replay::{ClipDto, PlaylistDto};
-                replay
-                    .playlists
-                    .push(PlaylistDto {
-                        id: 8,
-                        name: "Other".into(),
-                        revision: 1,
-                        clips: vec![ClipDto {
-                            uid: "clip-9".into(),
-                            angle_id: 1,
-                            recording_uuid: "rec-8".into(),
-                            in_frame: 900,
-                            out_frame: 950,
-                            ..ClipDto::default()
-                        }],
-                        default_transition: crate::session::replay::ClipTransitionDto::default(),
-                    });
+                replay.playlists.push(PlaylistDto {
+                    id: 8,
+                    name: "Other".into(),
+                    revision: 1,
+                    clips: vec![ClipDto {
+                        uid: "clip-9".into(),
+                        angle_id: 1,
+                        recording_uuid: "rec-8".into(),
+                        in_frame: 900,
+                        out_frame: 950,
+                        ..ClipDto::default()
+                    }],
+                    default_transition: crate::session::replay::ClipTransitionDto::default(),
+                });
             }
             let fake = FakeMixer::default();
             let probe = fake.clone();
@@ -1986,7 +1976,10 @@ mod tests {
             let mut svc = ControlService::new(fake);
             svc.replace_session(replay_doc(), None, "1").unwrap();
             assert!(
-                !probe.ops().iter().any(|op| op.starts_with("replay_protect")),
+                !probe
+                    .ops()
+                    .iter()
+                    .any(|op| op.starts_with("replay_protect")),
                 "a plain overwrite sends no boundary: {ops:?}",
                 ops = probe.ops()
             );
