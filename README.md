@@ -7,12 +7,12 @@
 
 A cross-platform vision mixer with unlimited M/E. eiviz / 映像(eizou) + visual.
 
-| Platform | Graphics | Status |
-| --- | --- | --- |
-| Windows x64 | Direct3D 12 or Vulkan | Supported |
-| Windows Arm | Direct3D 12 or Vulkan | Under Development |
-| macOS | Metal | Supported (Apple Silicon; verified on M3) |
-| Linux | Vulkan | CLI Only |
+| Platform | Graphics | Supported | Tested |
+| --- | --- | --- | --- | 
+| Windows x64 | Direct3D 12 or Vulkan | ✅ | ✅ |
+| Windows Arm | Direct3D 12 or Vulkan | ❌ | ❌ |
+| macOS | Metal | ✅ | ✅ |
+| Linux | Vulkan | CLI Only | ❌ | ❌ |
 
 `eiviz-headless` is available on Windows, macOS, and Linux. The Linux entry is CLI
 only because its GUI host is not implemented yet.
