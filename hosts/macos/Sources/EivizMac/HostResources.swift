@@ -12,7 +12,13 @@ enum HostResources {
 
     static func ramBytes() -> UInt64 { sampleRamBytes() }
 
-    static func hud(renderMs: Float, budgetMs: Float) -> (text: String, warn: String) {
+    /// `skipRate` is the share of composed frames the mixer dropped or skipped since
+    /// the last tick. It warns on missing frames rather than on the raw render time: a
+    /// Fifo present waits for the next vsync slot inside the render loop, so the raw
+    /// ms can sit near the budget while the show is entirely in sync.
+    static func hud(
+        renderMs: Float, budgetMs: Float, skipRate: Double, lastRenderMs: Float
+    ) -> (text: String, warn: String) {
         let cpu = sampleCpu()
         let ram = sampleRam()
         let vram = sampleVram()
@@ -26,8 +32,10 @@ enum HostResources {
         if let gpu, gpu >= 85 { hits.append(String(format: "GPU %.0f%%", gpu)) }
         if ram >= 85 { hits.append(String(format: "RAM %.0f%%", ram)) }
         if vram >= 85 { hits.append(String(format: "VRAM %.0f%%", vram)) }
-        if budgetMs > 0 && renderMs >= budgetMs * 0.85 {
-            hits.append(String(format: "Render %.1f ms", renderMs))
+        // Two late frames in the last tick window mean the picture actually fell
+        // behind; the wait itself is not a fault.
+        if skipRate >= 0.02 {
+            hits.append(String(format: "Late %.0f%% (Render %.1f ms)", skipRate * 100, lastRenderMs))
         }
         return (text, hits.isEmpty ? "" : "High load: " + hits.joined(separator: "  "))
     }

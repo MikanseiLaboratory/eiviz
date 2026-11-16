@@ -7259,6 +7259,8 @@ unsafe fn mixer_copy_stats_ffi(out: *mut MixerStats) -> i32 {
                 compose_vram_bytes: tel.last_compose_vram,
                 delay_vram_bytes: tel.last_delay_vram,
                 surface_lost: crate::diag::surface_lost(),
+                frames_rendered: crate::diag::frames_rendered(),
+                frames_skipped: crate::diag::render_skipped(),
             };
         }
         OK

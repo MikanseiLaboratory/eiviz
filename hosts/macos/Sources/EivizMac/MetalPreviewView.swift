@@ -5,6 +5,10 @@ import SwiftUI
 final class MetalSurfaceView: NSView {
     var presentInterval: UInt32 = 1
     var surfaceEpoch: UInt64 = 0
+    /// The largest surface the mixer should render. The master format is the
+    /// picture's own size: a bigger layer only enlarges the present draw and the
+    /// backing store while CoreAnimation scales the layer for display anyway.
+    var maxSurfaceSize = CGSize(width: 1920, height: 1080)
     var role: SurfaceRole = .unit(unitId: 1, kind: EIVIZ_OUTPUT_PROGRAM) {
         didSet {
             if role != oldValue {
@@ -176,9 +180,21 @@ final class MetalSurfaceView: NSView {
 
     private func pixelSize() -> (UInt32, UInt32) {
         let scale = window?.backingScaleFactor ?? 2
-        let width = UInt32(max(2, (bounds.width * scale).rounded()))
-        let height = UInt32(max(2, (bounds.height * scale).rounded()))
-        return (width, height)
+        var width = Double(max(2, (bounds.width * scale).rounded()))
+        var height = Double(max(2, (bounds.height * scale).rounded()))
+        // The flip draws the master-format texture into this surface: past the
+        // picture's own size the draw and the backing store only get bigger while
+        // CoreAnimation would scale the presented layer for display anyway. Measured
+        // on the reference machine at fullscreen the raw present cost grew 2-4x with
+        // the layer size, which is what pushed the render loop past its budget.
+        let maxW = max(2, maxSurfaceSize.width)
+        let maxH = max(2, maxSurfaceSize.height)
+        if width > maxW || height > maxH {
+            let shrink = max(width / maxW, height / maxH)
+            width = (width / shrink).rounded(.down)
+            height = (height / shrink).rounded(.down)
+        }
+        return (UInt32(width), UInt32(height))
     }
 }
 
@@ -246,6 +262,10 @@ struct MetalPreviewRepresentable: NSViewRepresentable {
     @Environment(\.mixerSurfaceEpoch) private var surfaceEpoch
     let role: SurfaceRole
     var presentInterval: UInt32 = 1
+    /// Read once per makeNSView from the mixer's own session, so a master format
+    /// change (resolutions are editable) reaches new surfaces without plumbing. The
+    /// environment object lives on the class; the struct reads a static per-app copy.
+    var maxSurfaceSize: CGSize = EivizSurfaceCap.shared.size
     var onClick: (() -> Void)? = nil
     var onDoubleClick: (() -> Void)? = nil
 
@@ -267,6 +287,7 @@ struct MetalPreviewRepresentable: NSViewRepresentable {
         let surface = MetalSurfaceView(frame: .zero)
         surface.autoresizingMask = [.width, .height]
         surface.presentInterval = presentInterval
+        surface.maxSurfaceSize = maxSurfaceSize
         surface.role = role
         host.addSubview(surface)
         return host
@@ -283,6 +304,9 @@ struct MetalPreviewRepresentable: NSViewRepresentable {
         }
         if surface.presentInterval != presentInterval {
             surface.presentInterval = presentInterval
+        }
+        if surface.maxSurfaceSize != maxSurfaceSize {
+            surface.maxSurfaceSize = maxSurfaceSize
         }
         if surface.surfaceEpoch != surfaceEpoch {
             surface.surfaceEpoch = surfaceEpoch

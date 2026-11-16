@@ -128,6 +128,9 @@ final class MixerController: ObservableObject {
         session.units.first { $0.id == selectedUnitId } ?? session.units[0]
     }
 
+    /// The last render counters, so tick can compute the skip rate between samples.
+    var lastRenderCounters = (rendered: UInt64(0), skipped: UInt64(0))
+
     func boot() {
         guard !booted else { return }
         isRemote = HostRole.isRemote
@@ -554,6 +557,9 @@ final class MixerController: ObservableObject {
 
     func publishSession() {
         if isRemote { return }
+        // New surfaces read the cap from here, so a master-format change in the
+        // settings reaches the flip size without needing to re-create controllers.
+        EivizSurfaceCap.shared.update(width: session.settings.defaultWidth, height: session.settings.defaultHeight)
         replaceRuntime()
     }
 

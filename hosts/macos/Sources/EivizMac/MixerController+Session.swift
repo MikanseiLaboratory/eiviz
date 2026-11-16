@@ -503,6 +503,10 @@ extension MixerController {
         fail(mixer_set_frame_buffer(min(8, max(1, session.settings.frameBufferFrames))), "Set frame buffer")
         fail(mixer_set_rebar_optimization(session.settings.rebarOptimizationEnabled ? 1 : 0), "Set ReBAR optimization")
         fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
+        EivizSurfaceCap.shared.update(
+            width: session.settings.defaultWidth,
+            height: session.settings.defaultHeight
+        )
         FlipBudget.configure(session.settings.flipSwapchainLimit)
         applyBusColors()
         applySession()
@@ -1162,8 +1166,24 @@ extension MixerController {
         var stats = MixerFFI.zeroed() as EivizMixerStats
         _ = mixer_copy_stats(&stats)
         FlipBudget.observeLost(stats.surface_lost)
+        // The skip rate needs two samples: how many of the composed frames the mixer
+        // dropped since the last tick, not the raw render time which carries a
+        // vsync wait every Fifo present pays.
+        let deltas = lastRenderCounters
+        var skipRate = 0.0
+        if stats.frames_rendered != deltas.rendered {
+            let late = Double(stats.frames_skipped) - Double(deltas.skipped)
+            let frames = Double(stats.frames_rendered) - Double(deltas.rendered)
+            if frames > 0, late > 0 { skipRate = late / frames }
+        }
+        lastRenderCounters = (rendered: stats.frames_rendered, skipped: stats.frames_skipped)
         if stats.frame_budget_ms > 0 {
-            let hud = HostResources.hud(renderMs: stats.render_ms, budgetMs: stats.frame_budget_ms)
+            let hud = HostResources.hud(
+                renderMs: stats.render_ms,
+                budgetMs: stats.frame_budget_ms,
+                skipRate: skipRate,
+                lastRenderMs: stats.render_ms
+            )
             resourceText = hud.text
             warnText = hud.warn
         }
