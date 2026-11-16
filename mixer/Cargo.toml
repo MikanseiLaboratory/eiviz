@@ -29,7 +29,7 @@ tokio.workspace = true
 bytemuck = { version = "1.25", features = ["derive"] }
 fontdue = "0.9"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatransport-rs", rev = "9f88abac09d18c0e7cd56cbcfc2318c521413222", features = ["wgpu"] }
+openmediatransport = { version = "0.2", features = ["wgpu"] }
 pollster = "0.4"
 arc-swap = "1.9"
 raw-window-handle = "0.6"
@@ -40,7 +40,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tiny_http = "0.12"
 vmix-core = { git = "https://github.com/MikanseiLaboratory/vmix-rs", features = ["xml", "std"] }
-vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs", rev = "b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3", features = ["wgpu"] }
+vmx = { version = "0.2", features = ["wgpu"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot"] }
 naga = { version = "30.0.1", default-features = false, features = ["wgsl-in"] }
 
@@ -49,7 +49,7 @@ ash = "0.38"
 cpal = { version = "0.18.2", features = ["asio"] }
 grafton-ndi = { version = "1.0", default-features = false }
 rsac = { git = "https://github.com/Codeseys-Labs/rust-crossplat-audio-capture", rev = "eac70568d0cde68c64572a57f4f184889273c872", default-features = false, features = ["feat_windows"] }
-gpu-video = { git = "https://github.com/software-mansion/smelter", rev = "604595d04f1fa88d4dcb55facb2604ce98d660c9" }
+gpu-video = { git = "https://github.com/software-mansion/smelter", rev = "7c904324916adfbb90034b7fadc119390eb43fcb" }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot", "dx12", "vulkan"] }
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D11on12", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Media_Audio", "Win32_Media_MediaFoundation", "Win32_Devices_FunctionDiscovery", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_Variant", "Win32_UI_Shell_PropertiesSystem"] }
 windows-core = "0.62.2"
@@ -60,11 +60,12 @@ dispatch2 = "0.3"
 grafton-ndi = { version = "1.0", default-features = false }
 objc2 = "0.6.4"
 objc2-metal = { version = "0.3.2", default-features = false, features = ["std", "MTLDevice", "MTLPixelFormat", "MTLResource", "MTLTexture", "MTLTypes"] }
+gpu-video = { git = "https://github.com/software-mansion/smelter", rev = "7c904324916adfbb90034b7fadc119390eb43fcb" }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot", "metal"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ash = "0.38"
-gpu-video = { git = "https://github.com/software-mansion/smelter", rev = "604595d04f1fa88d4dcb55facb2604ce98d660c9" }
+gpu-video = { git = "https://github.com/software-mansion/smelter", rev = "7c904324916adfbb90034b7fadc119390eb43fcb" }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot", "vulkan"] }
 
 [build-dependencies]
@@ -81,4 +82,4 @@ sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png"] }
 pollster = "0.4"
 serial_test = "3"
-vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs", rev = "b9a0fd19226e3e2ebf4041a2b119b855e71d9ca3", features = ["wgpu"] }
+vmx = { version = "0.2", features = ["wgpu"] }

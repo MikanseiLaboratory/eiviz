@@ -32,7 +32,11 @@ The target is **macOS 14 or later on Apple Silicon**.
 Intel Macs and external GPUs are out of scope.
 
 :::note
-Nobody on the current team uses an Apple Silicon Mac day to day, so those performance claims are unverified. Development machines are Intel-generation MacBooks.
+Verified on an Apple M3 MacBook Air running macOS 27. The supported target is
+macOS 14 or later on Apple Silicon. Intel Macs and external GPUs remain out of
+scope. Audio Input, RTMP output, Replay export, and the Replay capacity measurement are
+available on macOS. DeckLink I/O on macOS is not supported; use Windows for DeckLink hardware.
+The macOS Pro module still provides RTMP, Replay, and licensing.
 :::
 
 ## Linux

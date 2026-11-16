@@ -5,6 +5,10 @@ import SwiftUI
 final class ThumbImageView: NSView {
     var autoSizeFromBounds = false
 
+    /// The image fills the host view. If this view took the click, the host's
+    /// `mouseUp` (which previews the scene) never ran; let the hit fall through.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
     private let imageView = NSImageView()
     private var sourceId: UInt64 = 0
     private var width: UInt32 = 176
@@ -91,7 +95,15 @@ final class ThumbImageView: NSView {
         let n = scratch.withUnsafeMutableBufferPointer { ptr in
             mixer_thumb_read(sourceId, ptr.baseAddress, ptr.count, &w, &h, &stride)
         }
-        guard n > 0, w > 0, h > 0 else { return }
+        guard n > 0, w > 0, h > 0 else {
+            // The Scene List is built before mixer_create() finishes on app
+            // launch. The first mixer_thumb_set is refused with NOT_CREATED and
+            // used to be forgotten, leaving every scene thumbnail black after a
+            // restart while PRV/PGM kept working. Retry the subscription until
+            // the mixer can accept it.
+            ThumbSubscriptions.refresh(sourceId)
+            return
+        }
         let hash = Self.hashPixels(scratch, length: Int(n))
         if lastBytes == Int(n), lastW == w, lastH == h, lastHash == hash, imageView.image != nil {
             return
@@ -214,6 +226,10 @@ enum ThumbSubscriptions {
         if current.isEmpty {
             live.removeValue(forKey: sourceId)
         }
+    }
+
+    static func refresh(_ sourceId: UInt64) {
+        push(sourceId)
     }
 
     private static func push(_ sourceId: UInt64) {

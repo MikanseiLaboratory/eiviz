@@ -30,7 +30,6 @@ final class AppPrefs: ObservableObject {
 
     @Published var language: AppLanguage
     @Published var theme: AppThemeMode
-    @Published var renderer: GpuRenderer
     @Published var recentSessions: [String]
     @Published var recentRemotes: [String]
     @Published var recentStills: [String]
@@ -77,7 +76,6 @@ final class AppPrefs: ObservableObject {
         let loaded = Self.load()
         language = loaded.language
         theme = loaded.theme
-        renderer = loaded.renderer
         recentSessions = loaded.recentSessions
         recentRemotes = loaded.recentRemotes
         recentStills = loaded.recentStills
@@ -103,7 +101,6 @@ final class AppPrefs: ObservableObject {
         var dto = Dto()
         dto.language = language
         dto.theme = theme
-        dto.renderer = renderer
         dto.recentSessions = recentSessions
         dto.recentRemotes = recentRemotes
         dto.recentStills = recentStills
@@ -177,7 +174,6 @@ final class AppPrefs: ObservableObject {
     private struct Dto: Codable {
         var language: AppLanguage = .systemDefault
         var theme: AppThemeMode = .dark
-        var renderer: GpuRenderer = .auto
         var recentSessions: [String] = []
         var recentRemotes: [String] = []
         var recentStills: [String] = []
@@ -204,7 +200,6 @@ final class AppPrefs: ObservableObject {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             language = try container.decodeIfPresent(AppLanguage.self, forKey: .language) ?? .systemDefault
             theme = try container.decodeIfPresent(AppThemeMode.self, forKey: .theme) ?? .dark
-            renderer = try container.decodeIfPresent(GpuRenderer.self, forKey: .renderer) ?? .auto
             recentSessions = try container.decodeIfPresent([String].self, forKey: .recentSessions) ?? []
             recentRemotes = try container.decodeIfPresent([String].self, forKey: .recentRemotes) ?? []
             recentStills = try container.decodeIfPresent([String].self, forKey: .recentStills) ?? []

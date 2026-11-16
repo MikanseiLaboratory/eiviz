@@ -12,7 +12,6 @@ pub(crate) fn render_loop(
     stop: Arc<AtomicBool>,
 ) {
     // The capacity measurement needs the device, and this is where it becomes known.
-    crate::bench::remember(&device.device, &device.queue);
     // Replay playback decodes packets on this same device, so a decoded picture can
     // go straight to the compositor instead of through a CPU frame.
     crate::replay::engine().set_gpu(&device.device, &device.queue);
@@ -613,6 +612,27 @@ pub(crate) fn render_loop(
             frame_delay.consume_display(false);
             composer.set_bus_colors(bus_colors.preview, bus_colors.program, bus_colors.inactive);
             composer.sync_scenes(&device, &scene_specs, &scene_labels, &scene_cameras);
+            // Layers that read a unit/multiview picture change without a source
+            // upload, so their scenes are never cached.
+            // Angle and recording scenes feed Replay, which reads their textures on
+            // its own cadence; keep them freshly composed.
+            let dynamic_scenes: HashSet<u64> = crate::replay::engine()
+                .live_angle_scene_ids()
+                .into_iter()
+                .chain(crate::replay::engine().replay_scene_ids())
+                .collect();
+            let mut dynamic_sources: HashSet<u64> = mix_inputs.keys().copied().collect();
+            for (_, _, _, layers, _) in &scene_specs {
+                for layer in layers.iter() {
+                    if crate::abi::is_multiview(layer.source_id)
+                        || (eiviz_control::ids::REPLAY_CHANNEL_BASE
+                            ..eiviz_control::ids::REPLAY_CHANNEL_BASE + 0x1_0000)
+                            .contains(&layer.source_id)
+                    {
+                        dynamic_sources.insert(layer.source_id);
+                    }
+                }
+            }
             let mut encoder =
                 device
                     .device
@@ -631,9 +651,14 @@ pub(crate) fn render_loop(
                 );
             }
             let scenes_started = Instant::now();
-            if let Err(error) =
-                composer.render_scenes(&device, &used_scenes, &mut encoder, &tallies)
-            {
+            if let Err(error) = composer.render_scenes(
+                &device,
+                &used_scenes,
+                &mut encoder,
+                &tallies,
+                &dynamic_sources,
+                &dynamic_scenes,
+            ) {
                 set_error(&telemetry, error);
             }
             let scenes_ms = scenes_started.elapsed().as_secs_f32() * 1000.0;

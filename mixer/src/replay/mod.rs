@@ -36,6 +36,7 @@ use crate::abi::{
     REPLAY_RECORD_BASE, REPLAY_STATE_IDLE, REPLAY_STATE_RECORDING, REPLAY_STATE_STOPPED,
     REPLAY_STOP_FPS_CHANGED, REPLAY_STOP_NONE, REPLAY_STOP_USER,
 };
+use crate::guard::LockExt;
 use crate::upload::CpuFormat;
 
 pub use health::{HealthMemory, HealthSample, step as health_step};
@@ -394,14 +395,24 @@ pub struct ReplayEngine {
     stop_record: Arc<AtomicBool>,
     stop_workers: Arc<AtomicBool>,
     workers: Mutex<Vec<JoinHandle<()>>>,
-    /// The render device, shared with the playout decoder. Set once when the
-    /// renderer starts; the channel worker can then decode packets on the GPU.
-    gpu: OnceLock<(wgpu::Device, wgpu::Queue)>,
+    /// The render device, shared with the playout decoder. The binding carries
+    /// the mixer generation: New/Open creates a new wgpu::Instance, and IDs from
+    /// the previous instance cannot be resolved by the new renderer.
+    gpu: Mutex<Option<GpuBinding>>,
+    /// Whether playout may decode on the GPU. The binding is generation-checked,
+    /// so New/Open no longer needs to disable vmx's Metal decoder on macOS.
+    gpu_decode: AtomicBool,
     /// Decoders whose GPU pipelines were built before playback needed them. The
     /// first vmx decode builds shader pipelines and can take a second on a debug
     /// build; doing that in front of the first clip would freeze playout.
     prepared: Mutex<HashMap<u32, PreparedDecoder>>,
     warming: AtomicBool,
+}
+
+struct GpuBinding {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    generation: u64,
 }
 
 struct PreparedDecoder {
@@ -444,6 +455,15 @@ pub struct RecordTarget {
 pub fn engine() -> &'static ReplayEngine {
     static ENGINE: OnceLock<ReplayEngine> = OnceLock::new();
     ENGINE.get_or_init(ReplayEngine::new)
+}
+
+fn store_range(store: &Arc<Mutex<Box<dyn ReplayStore>>>, angle_id: u32) -> Option<(u64, u64)> {
+    store
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .range(angle_id)
+        .ok()
+        .flatten()
 }
 
 impl ReplayEngine {
@@ -494,7 +514,8 @@ impl ReplayEngine {
             stop_record: Arc::new(AtomicBool::new(true)),
             stop_workers: Arc::new(AtomicBool::new(false)),
             workers: Mutex::new(Vec::new()),
-            gpu: OnceLock::new(),
+            gpu: Mutex::new(None),
+            gpu_decode: AtomicBool::new(true),
             prepared: Mutex::new(HashMap::new()),
             warming: AtomicBool::new(false),
         };
@@ -523,12 +544,42 @@ impl ReplayEngine {
     /// Remembers the render device so a channel can decode a packet on the GPU.
     /// Called once, when the render loop starts.
     pub fn set_gpu(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let _ = self.gpu.set((device.clone(), queue.clone()));
-        self.warm_decoders();
+        let generation = crate::lifecycle::generation();
+        {
+            let mut slot = self.gpu.lock_or_recover();
+            if slot
+                .as_ref()
+                .is_some_and(|binding| binding.generation == generation)
+            {
+                return;
+            }
+            // Pipelines, decoders and encoder rings built on the old device are
+            // tied to the old wgpu::Instance. Drop them before warming again.
+            self.prepared.lock_or_recover().clear();
+            self.warming.store(false, Ordering::Release);
+            let replaced = slot.is_some();
+            *slot = Some(GpuBinding {
+                device: device.clone(),
+                queue: queue.clone(),
+                generation,
+            });
+            if replaced {
+                crate::diag::info(&format!(
+                    "replay GPU rebinding to mixer generation {generation}"
+                ));
+            }
+        }
+        crate::replay::gpu_encode::reset();
+        if self.gpu_decode.load(Ordering::Relaxed) {
+            self.warm_decoders();
+        }
     }
 
     fn gpu_device(&self) -> Option<(wgpu::Device, wgpu::Queue)> {
-        self.gpu.get().cloned()
+        let generation = crate::lifecycle::generation();
+        let slot = self.gpu.lock_or_recover();
+        let binding = slot.as_ref()?;
+        (binding.generation == generation).then(|| (binding.device.clone(), binding.queue.clone()))
     }
 
     /// Builds each channel's GPU decoder before playout needs it. The first vmx
@@ -1260,6 +1311,10 @@ impl ReplayEngine {
             let _ = worker.join();
         }
         self.stop_workers.store(false, Ordering::Relaxed);
+        *self.gpu.lock_or_recover() = None;
+        self.prepared.lock_or_recover().clear();
+        self.warming.store(false, Ordering::Release);
+        crate::replay::gpu_encode::reset();
     }
 
     pub fn note_fps(&self, fps_num: u32, fps_den: u32) {
@@ -1645,22 +1700,68 @@ impl ReplayEngine {
     }
 
     pub fn peak_count(&self, angle_id: u32) -> u32 {
-        let inner = self.lock();
-        inner
-            .peaks
-            .get(&angle_id)
-            .map(eiviz_pro_api::PeakAccumulator::bucket_count)
-            .unwrap_or(0)
+        let live = {
+            let inner = self.lock();
+            inner
+                .peaks
+                .get(&angle_id)
+                .map(eiviz_pro_api::PeakAccumulator::bucket_count)
+                .unwrap_or(0)
+        };
+        if live > 0 {
+            return live;
+        }
+        self.stored_peaks(angle_id).0
     }
 
     /// Buckets evicted from the front of an angle's ring.
     pub fn peak_dropped(&self, angle_id: u32) -> u32 {
-        let inner = self.lock();
-        inner
-            .peaks
-            .get(&angle_id)
-            .map(eiviz_pro_api::PeakAccumulator::dropped_buckets)
-            .unwrap_or(0)
+        let live = {
+            let inner = self.lock();
+            inner
+                .peaks
+                .get(&angle_id)
+                .map(eiviz_pro_api::PeakAccumulator::dropped_buckets)
+                .unwrap_or(0)
+        };
+        if live > 0 {
+            return live;
+        }
+        self.stored_peaks(angle_id).1
+    }
+
+    /// Counts and front-drop for an angle in an already recorded store. The live
+    /// accumulator only exists while this process records; a session opened from
+    /// disk has its waveform in the playback store instead.
+    fn stored_peaks(&self, angle_id: u32) -> (u32, u32) {
+        let record = self
+            .record_store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        if let Some(store) = record
+            && let Ok(mut store) = store.lock()
+            && let Ok((count, dropped)) = store.peak_count(angle_id)
+            && count > 0
+        {
+            return (count, dropped);
+        }
+        let stores: Vec<_> = self
+            .playback_stores
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .cloned()
+            .collect();
+        for store in stores {
+            if let Ok(mut store) = store.lock()
+                && let Ok((count, dropped)) = store.peak_count(angle_id)
+                && count > 0
+            {
+                return (count, dropped);
+            }
+        }
+        (0, 0)
     }
 
     /// Copies an angle's waveform. Returns how many buckets were written.
@@ -1688,6 +1789,59 @@ impl ReplayEngine {
             .unwrap_or_else(|error| error.into_inner())
             .clone()
         else {
+            return 0;
+        };
+        let recorded = store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .copy_peaks(angle_id, from, min_out, max_out)
+            .unwrap_or(0);
+        if recorded > 0 {
+            return recorded;
+        }
+        let stores: Vec<_> = self
+            .playback_stores
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .cloned()
+            .collect();
+        for store in stores {
+            let copied = store
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .copy_peaks(angle_id, from, min_out, max_out)
+                .unwrap_or(0);
+            if copied > 0 {
+                return copied;
+            }
+        }
+        0
+    }
+
+    /// Waveform counts for one recording, selected by the recording UUID. A
+    /// session can hold several recordings with the same angle id; this keeps a
+    /// deck showing the waveform of the clip it is actually looking at.
+    pub fn peak_count_recording(&self, uuid: &str, angle_id: u32) -> (u32, u32) {
+        let Some(store) = self.playback_store(uuid) else {
+            return (0, 0);
+        };
+        store
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .peak_count(angle_id)
+            .unwrap_or((0, 0))
+    }
+
+    pub fn copy_peaks_recording(
+        &self,
+        uuid: &str,
+        angle_id: u32,
+        from: u32,
+        min_out: &mut [f32],
+        max_out: &mut [f32],
+    ) -> u32 {
+        let Some(store) = self.playback_store(uuid) else {
             return 0;
         };
         store
@@ -1933,7 +2087,13 @@ impl ReplayEngine {
         }
         if seek_frame >= 0 {
             let target = seek_frame as u64;
-            if slot.transport.source_frame() != target {
+            // An explicit seek leaves the edge even when the target happens to be the
+            // live frame: the operator moved the bar, so LIVE must not reclaim it on
+            // the next poll.
+            if slot.transport.source_frame() != target
+                || slot.transport.is_live()
+                || slot.transport.is_chasing()
+            {
                 slot.transport.seek_source(target);
                 changed = true;
             }
@@ -1941,6 +2101,20 @@ impl ReplayEngine {
         if changed {
             slot.touch_transport();
         }
+        Ok(())
+    }
+
+    /// Keeps a scratch playback following the recording as it grows. Used by the
+    /// deck when playback starts from the seek bar while the recorder is still
+    /// writing; a playlist clip keeps its own cut point.
+    pub fn set_chasing(&self, channel: u32, on: bool) -> Result<(), i32> {
+        let mut inner = self.lock();
+        let slot = inner
+            .channels
+            .iter_mut()
+            .find(|slot| slot.index == channel)
+            .ok_or(ERR_INVALID_ARGUMENT)?;
+        slot.transport.set_chasing(on);
         Ok(())
     }
 
@@ -2097,19 +2271,40 @@ impl ReplayEngine {
         Ok((decoded.width, decoded.height, decoded.stride))
     }
 
-    /// Recorded frame range of one angle, for the export UI.
+    /// Recorded frame range of one angle, for the seek bar and the export UI.
+    ///
+    /// A loaded session opens its recordings as playback stores; the recorder's store is
+    /// only present while this process records. Reading only `record_store` therefore
+    /// answered "no range" for every recording loaded from a file, which made the deck
+    /// fall back to a one-frame bar. The recorder is preferred when it has frames, and
+    /// the attached playback stores answer otherwise.
     pub fn angle_range(&self, angle_id: u32) -> Option<(u64, u64)> {
-        let store = self
+        let record = self
             .record_store
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .clone()?;
-        store
+            .clone();
+        if let Some(store) = record
+            && let Some(range) = store_range(&store, angle_id)
+            && range.1 > range.0
+        {
+            return Some(range);
+        }
+        let stores: Vec<_> = self
+            .playback_stores
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .range(angle_id)
-            .ok()
-            .flatten()
+            .values()
+            .cloned()
+            .collect();
+        for store in stores {
+            if let Some(range) = store_range(&store, angle_id)
+                && range.1 > range.0
+            {
+                return Some(range);
+            }
+        }
+        None
     }
 
     /// Installs a channel's clips without going through the session gate. Test
@@ -3372,7 +3567,15 @@ impl ChannelPlayout {
         // The cue tables come along with the transport: the cue that belongs to this tick's
         // source frame is decided in the same moment, and reading them separately meant
         // taking the same lock twice per channel per frame.
-        let (mut transport, transport_revision, revision, last_frame, playback_generation, cues) = {
+        let (
+            mut transport,
+            transport_revision,
+            revision,
+            last_frame,
+            playback_generation,
+            cues,
+            decode_backend,
+        ) = {
             let inner = engine.lock();
             let Some(slot) = inner.channels.iter().find(|slot| slot.index == index) else {
                 return;
@@ -3387,6 +3590,13 @@ impl ChannelPlayout {
                     inner.config.timeline_cues.clone(),
                     inner.config.playlists.clone(),
                 ),
+                inner
+                    .config
+                    .channels
+                    .iter()
+                    .find(|item| item.index == index)
+                    .map(|item| item.decode_backend)
+                    .unwrap_or_default(),
             )
         };
         let gpu = engine.gpu_device();
@@ -3464,7 +3674,14 @@ impl ChannelPlayout {
         // transition pass blends the two textures, where the CPU path would have
         // copied both frames back for a blend and an upload.
         let transitioning = wants_secondary(&plan);
-        if let Some((device, queue)) = gpu.as_ref() {
+        let use_gpu = match decode_backend {
+            eiviz_control::session::replay::DecodeBackend::Gpu => true,
+            eiviz_control::session::replay::DecodeBackend::Cpu => false,
+            eiviz_control::session::replay::DecodeBackend::Auto => {
+                engine.gpu_decode.load(Ordering::Relaxed)
+            }
+        };
+        if let Some((device, queue)) = gpu.as_ref().filter(|_| use_gpu) {
             let decoder = &mut self.decoder;
             let ready = if decoder.has_codec() {
                 true
@@ -4896,6 +5113,9 @@ pub fn open_ffi_store(
         .map(|item| ProReplayAngle {
             angle_id: item.angle_id,
             storage_index: item.storage_index,
+            // A GPU angle's packets arrive already encoded, so the store has no
+            // reason to keep an idle CPU codec (a thread and its ring) around.
+            gpu_encoded: u32::from(item.gpu_encoded),
         })
         .collect();
     let raw = ProReplayConfig {
@@ -4922,7 +5142,13 @@ pub fn open_ffi_store(
     let mut handle = std::ptr::null_mut();
     let status = unsafe { open(module, &raw, &mut handle) };
     if status.code != 0 || handle.is_null() {
-        return Err(eiviz_pro_api::ProError::io("replay open failed"));
+        let detail = crate::pro_load::last_error_text(&api, module);
+        let message = if detail.is_empty() {
+            format!("replay open failed ({})", status.code)
+        } else {
+            format!("replay open failed: {detail}")
+        };
+        return Err(eiviz_pro_api::ProError::io(message));
     }
     Ok(Box::new(FfiReplayStore { api, handle }))
 }
@@ -4944,7 +5170,13 @@ pub fn attach_ffi(
     let mut handle = std::ptr::null_mut();
     let status = unsafe { attach(module, path.as_ptr(), path.len(), &mut handle) };
     if status.code != 0 || handle.is_null() {
-        return Err(eiviz_pro_api::ProError::io("replay attach failed"));
+        let detail = crate::pro_load::last_error_text(&api, module);
+        let message = if detail.is_empty() {
+            format!("replay attach failed ({})", status.code)
+        } else {
+            format!("replay attach failed: {detail}")
+        };
+        return Err(eiviz_pro_api::ProError::io(message));
     }
     Ok(Box::new(FfiReplayStore { api, handle }))
 }
@@ -5303,6 +5535,60 @@ mod animation_action_tests {
         inner.channels.clear();
     }
 }
+#[cfg(test)]
+mod angle_range_tests {
+    use super::*;
+
+    /// A playback store with one angle, enough to exercise the range lookup.
+    struct RangeStore;
+
+    impl ReplayStore for RangeStore {
+        fn write_video(
+            &mut self,
+            _angle_id: u32,
+            _frame_index: u64,
+            _frame: &VideoFrame,
+        ) -> Result<WriteOutcome, eiviz_pro_api::ProError> {
+            Err(eiviz_pro_api::ProError::unavailable("test store"))
+        }
+
+        fn decode(
+            &mut self,
+            _angle_id: u32,
+            _frame_index: u64,
+            _dst: &mut [u8],
+        ) -> Result<eiviz_pro_api::DecodedFrame, eiviz_pro_api::ProError> {
+            Err(eiviz_pro_api::ProError::unavailable("test store"))
+        }
+
+        fn range(&self, angle_id: u32) -> Result<Option<(u64, u64)>, eiviz_pro_api::ProError> {
+            Ok((angle_id == 9999).then_some((0, 600)))
+        }
+
+        fn stats(&self) -> ReplayStats {
+            ReplayStats::default()
+        }
+
+        fn close(&mut self) -> Result<(), eiviz_pro_api::ProError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    #[serial_test::serial(mixer)]
+    fn a_loaded_recording_reports_its_range_without_a_record_store() {
+        let engine = engine();
+        engine.playback_stores.lock().unwrap().insert(
+            "test-range".into(),
+            Arc::new(Mutex::new(Box::new(RangeStore) as Box<dyn ReplayStore>)),
+        );
+        // The recorder's store has no angle 9999, so this must answer from the
+        // playback store opened for a session loaded from disk.
+        assert_eq!(engine.angle_range(9999), Some((0, 600)));
+        engine.playback_stores.lock().unwrap().remove("test-range");
+    }
+}
+
 #[cfg(test)]
 mod channel_audio_tests {
     use super::*;

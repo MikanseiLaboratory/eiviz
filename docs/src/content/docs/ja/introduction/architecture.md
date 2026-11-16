@@ -125,13 +125,69 @@ sequenceDiagram
   Clock->>Out: 音声
 ```
 
+## 段階ごとのハードウェアアクセラレーション
+
+GPUフレーム型とアップロード／取り込みの契約は全プラットフォームで共通で、異なるのは
+プラットフォーム固有のimport処理だけです。起動時に`accel ...`として選択中の経路を
+ログへ出すため、性能報告では実際の経路を特定できます。
+
+| 段階 | Windows | macOS | Linux |
+|---|---|---|---|
+| ファイル／UVCデコード | Media Foundation（ハードウェアトランスフォーム、D3Dマネージャー） | AVFoundation／VideoToolboxから`CVMetalTextureCache`へ | Vulkan Video |
+| フレームアップロード | ReBARまたはVulkan host-visible ring | Unified Memoryの共有`MTLTexture` ring | Vulkan staging／host-visible |
+| NDI取り込み | ReBAR／Vulkan ingest ring | lease付きUnified Memory ring | Vulkan ingest ring |
+| MP4書き出し | Media FoundationのハードウェアH.264/HEVC | AVAssetWriter／VideoToolboxのH.264/HEVC | 非対応 |
+| RTMPライブ映像 | OpenH264（ソフトウェア） | VideoToolbox H.264（OpenH264フォールバック） | OpenH264（ソフトウェア） |
+| Replayエンコード | VMX1 CPUエンコーダー。GPU ringは画素コピー | VMX1 CPUエンコーダー。GPU ringは画素コピー | VMX1 CPUエンコーダー |
+| DeckLink入出力 | Proモジュール＋ハードウェア | 非対応 | Proモジュール＋ハードウェア |
+
+macOSはWindowsがハードウェアデコードを使う場面でソフトウェアデコードに落ちている
+わけではありません。デコードはVideoToolboxで、デコード済みサーフェスをCPUコピー
+なしでMetalへimportします。MP4書き出しもプラットフォームのメディアエンジンを使います。
+macOSのRTMPライブはVideoToolbox H.264を使い、ハードウェアエンコードが使えない場合だけOpenH264へフォールバックします。Replayは引き続き全OSでソフトウェアです。
+macOSの主な性能トレードオフは、大きなWindowsディスクリートGPUに対するGPUスループットで
+あり、コピーやデコード経路のアーキテクチャ上の不利ではありません。
+
+macOSはVideoToolbox H.264の経路をRTMPモジュール内に閉じ込め、クロスプラットフォームの
+エンコーダーインターフェースを強制していません。RTMPマルチプレクサはすでにAVCCと
+SPS/PPSシーケンスヘッダーを扱うため、macOS側はワイヤーフォーマットを変えずにOpenH264を
+迂回できます。VideoToolboxのハードウェアエンコードが使えない場合はOpenH264へ
+フォールバックします。Replayは引き続きH.264ではなくVMX1コーデックです。
+
+### M3 MacBook Airでの実測
+
+16GB M3 MacBook AirのMetalヘッドレスセッションで、1080p59.94のMixing Unit 4台、9ペイン
+Multiview、4Kスチル、1080pファイル、内蔵カメラ、ネットワーク出力2系統を動かしました。
+`eiviz stats`は5秒ごとに`render_ms`、フレーム予算、RSS/VRAM、`surface_lost`を出します。
+
+| シナリオ | プロセスCPU | `render_ms` | 備考 |
+|---|---|---|---|
+| Unit 4台＋Multiview＋スチル | 約22% | 1.3〜1.7ms | RSS 1.0GB、VRAM 654MB |
+| ファイル＋カメラを追加 | 約31% | 1.3〜1.9ms | NV12デコード＋VideoToolbox変換 |
+| OMT＋NDI出力を追加 | スイッチング中 約130% | 1.3〜2.9ms | NDIのCPU SpeedHQエンコードが支配的 |
+| 出力を無効化 | 約45% | 1.3〜2.0ms | 同じファイル／カメラ負荷 |
+
+59.94Hzの予算は16.68msなので、合成そのものには6〜12倍の余裕があります。`surface_lost`は
+0のままで、フレーム期限の未達もありませんでした。Unit 4台でRSSは約1.35GB、VRAMは約682MB
+でした。最大のコストはNDI SDKのソフトウェアエンコーダーで、これは全OSでCPUです。OMTは
+受信者がいないときエンコードを省略できます。ファイル／カメラはNV12で受け取り、`VTPixelTransferSession`でBGRAへ変換してから
+zero-copyでMetalへimportする。これによりAVFoundationのBGRA変換がCPUパスから外れ、
+ファイル＋カメラのケースは約47%から31%へ下がりました。
+
+ARM64の`yuv422_to_bgra`はスカラー実装でしたが、NEON版で1080pが5.21msから1.51msへ
+約3.5倍高速化しました。このカーネルはCPUでYUV 4:2:2を変換する経路で使われ、macOSの
+AVFoundation経路はNV12＋VideoToolbox変換を使います。
+
+この数値は1台・1プリセットの実測で、Windowsとの直接比較ではありません。ヘッドレス
+セッションと`eivizctl`の操作で再現でき、`eiviz stats`は通常実行でもソーク実行でも出ます。
+
 ## GPU最適化
 
 映像パイプラインはwgpuをベースとしつつ、プラットフォーム固有の高速化を行っています。
 
 - **Windows**: Direct3D 12を使用。Resizable BAR（ReBAR）対応環境ではCPUからVRAMへ直接書き込みを行うことで、システムメモリ経由のコピーを削減します。
 - **macOS**: Metalを使用。Apple Silicon環境ではUnified Memoryを活かし、共有メモリ領域経由で効率的な転送を行います。
-- ファイル再生やUVC入力は可能な限りGPUデコーダーを活用し、CPU負荷を低減します。
+- ファイル再生やUVC入力は`CVMetalTextureCache`を使い、デコード済みの`CVPixelBuffer`をCPUコピーなしでMetalテクスチャへ渡します。NDI取り込みもlease付き共有テクスチャ環で同じUnified Memory経路を使います。
 
 ## 音声パイプライン
 
@@ -144,3 +200,25 @@ DeckLink入出力やRTMP配信、有料プランに応じた上限制御は署�
 現在のプランで許可されていない呼び出しには`ERR_NOT_SUPPORTED_PLAN`、機能実装がリンクされていない場合は`ERR_IO`を返します（判定時はプランの有効確認が優先されます）。ホストUIは`mixer_capabilities`の取得結果に基づいてDeckLinkやRTMPの表示を制御し、ホスト側のコンパイル時Proフラグには依存しません。
 
 有料プランの認証には署名付きチケットを使用します。Proモジュール内に埋め込まれたEd25519公開鍵で検証を行い、OSの現在時刻と保存された最終確認時刻の進んでいる方を基準に有効期限を判定します。ハードウェア情報から生成したソルト付きマシンフィンガープリントの過半数が一致した場合に同一マシンと識別します。ホストUIはチケットの読み込みとステータス表示のみを担当し、プラン判定ロジックは持ちません。各プランの上限は[プラン](/eiviz/ja/introduction/plans/)にまとめています。
+
+### macOS動画エンコード監査
+
+`scripts/macos-video-encoders.swift`でVideoToolboxのエンコーダー一覧を確認できる。M3実機では
+H.264（`com.apple.videotoolbox.videoencoder.ave.avc`）、HEVC
+（`com.apple.videotoolbox.videoencoder.ave.hevc`）、ProResのハードウェアエンコードと、
+H.264/HEVC/AV1のハードウェアデコードが利用できる。VideoToolboxに**AV1エンコーダーはなく**、
+macOSにVulkan Videoもない。Metal＋VideoToolboxが正道となる。
+
+| コーデック | ハードウェアEncode | ハードウェアDecode | 現在のeivizでの用途 |
+|---|---|---|---|
+| H.264 | あり | あり | MP4書き出し。RTMPはVideoToolbox（OpenH264フォールバック） |
+| HEVC | あり | あり | MP4書き出し |
+| AV1 | なし | あり | 未使用 |
+| ProRes | あり | — | 未使用 |
+
+RTMPのH.264バックエンドは`VTCompressionSession`（リアルタイム、Bフレームなし、短いGOP）
+を使い、NV12を直接入力して既存muxerへ渡す。次に小さい候補はReplayで、VMX1が既に
+GPU FDCT/量子化を使っているため、ハードウェアHEVC化はクリップシークのための
+All-Intra／短GOPのトレードオフを伴う。AV1のソフトウェアエンコードはファンレスM3の
+ライブ1080p60には不向きで、AV1ハードウェアデコードは既に利用可能。Vulkan Videoは
+macOSでは選択肢にならない。

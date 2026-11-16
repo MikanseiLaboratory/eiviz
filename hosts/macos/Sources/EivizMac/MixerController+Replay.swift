@@ -92,7 +92,7 @@ extension MixerController {
                 .environment(\.mixerSurfaceEpoch, surfaceEpoch)
         )
         let window = SwitcherHostWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1240, height: 780),
+            contentRect: NSRect(x: 0, y: 0, width: 1440, height: 820),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -100,6 +100,9 @@ extension MixerController {
         window.title = L10n.t("replay.windowTitle")
         window.identifier = NSUserInterfaceItemIdentifier("replay")
         window.contentViewController = host
+        // This is a deck, not another tab of the main window. macOS otherwise groups
+        // same-process windows into a tab bar.
+        window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
         window.appearance = NSApp.appearance
         window.backgroundColor = EivizTheme.nsBackground
@@ -109,6 +112,16 @@ extension MixerController {
         }
         window.delegate = replayCloser
         window.makeKeyAndOrderFront(nil)
+        // SwiftUI resizes a hosting window to its fitting size, which is the minimum
+        // width. Put it back to the size the deck is read at, inside the visible screen.
+        if let visible = NSScreen.main?.visibleFrame {
+            let width = min(1440, visible.width - 16)
+            let height = min(820, visible.height - 8)
+            window.setContentSize(NSSize(width: width, height: height))
+            window.setFrameOrigin(NSPoint(
+                x: visible.midX - width / 2,
+                y: visible.midY - height / 2))
+        }
         replayWindow = window
     }
 
@@ -131,7 +144,7 @@ extension MixerController {
                 .environment(\.mixerSurfaceEpoch, surfaceEpoch)
         )
         let window = SwitcherHostWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 640),
+            contentRect: NSRect(x: 0, y: 0, width: 1140, height: 800),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -139,6 +152,9 @@ extension MixerController {
         window.title = L10n.t("replay.setupTitle")
         window.identifier = NSUserInterfaceItemIdentifier("replay-setup")
         window.contentViewController = host
+        // This is a deck, not another tab of the main window. macOS otherwise groups
+        // same-process windows into a tab bar.
+        window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
         window.appearance = NSApp.appearance
         window.backgroundColor = EivizTheme.nsBackground
@@ -148,6 +164,9 @@ extension MixerController {
         }
         window.delegate = replaySettingsCloser
         window.makeKeyAndOrderFront(nil)
+        // SwiftUI fits the window to the view's minimum, which is shorter than the
+        // settings need. Open tall enough that the first read shows every section.
+        window.setContentSize(NSSize(width: 1140, height: 800))
         replaySettingsWindow = window
     }
 
@@ -266,15 +285,67 @@ extension MixerController {
         return replayDocument?.angles.first { $0.audioUnitId == unitId }
     }
 
+    /// Starts or stops the recorder. Returns nil on success, or the reason the
+    /// mixer/Pro module gave for refusing it. The deck shows that reason instead of
+    /// a generic "recording could not start" that hides a permission or storage error.
     @discardableResult
-    func replayEnableRecording(_ on: Bool) -> Bool {
+    func replayEnableRecording(_ on: Bool) -> String? {
         if isRemote {
             return MixerRemoteReplay.record(handle: remoteHandle, on: on) == 0
+                ? nil
+                : L10n.t(on ? "replay.recordRefused" : "replay.commandRefused")
         }
-        if let document = replayDocument {
-            _ = MixerFFI.replayConfigure(document.json)
+        if on {
+            if let document = replayDocument {
+                let configured = MixerFFI.replayConfigure(document.json)
+                if configured != EIVIZ_OK {
+                    return replayRefusal(L10n.t("replay.recordRefused"))
+                }
+            }
+            let started = MixerFFI.replayRecord(true)
+            guard started == EIVIZ_OK else {
+                return replayRefusal(L10n.t("replay.recordRefused"))
+            }
+            if var document = replayDocument {
+                let uuid = MixerFFI.replayRecordingUuid()
+                if !uuid.isEmpty {
+                    document.linkRecording(
+                        uuid: uuid,
+                        storage: document.storages.first?.path ?? "",
+                        angles: document.angles.map(\.id),
+                        format: document.formatValues,
+                        createdMs: UInt64(Date().timeIntervalSince1970 * 1000)
+                    )
+                    session.replay = document.value
+                    publishSession()
+                }
+            }
+            return nil
         }
-        return MixerFFI.replayRecord(on) == 0
+        let stopped = MixerFFI.replayRecord(false)
+        if stopped != EIVIZ_OK {
+            return replayRefusal(L10n.t("replay.commandRefused"))
+        }
+        if var document = replayDocument {
+            let uuid = MixerFFI.replayRecordingUuid()
+            if !uuid.isEmpty, let stats = MixerFFI.replayStats() {
+                document.setRecordingRange(
+                    uuid: uuid,
+                    first: stats.first_frame,
+                    last: stats.last_frame
+                )
+                session.replay = document.value
+                publishSession()
+            }
+        }
+        return nil
+    }
+
+    /// The mixer's own explanation when it has one, so the deck can show why a
+    /// command was refused (storage permission, missing angle, Pro module error).
+    private func replayRefusal(_ fallback: String) -> String {
+        let detail = MixerFFI.lastErrorText()
+        return detail.isEmpty ? fallback : detail
     }
 
     /// Returns the mark-in frame when the host owns it. The remote core keeps the
@@ -356,6 +427,12 @@ extension MixerController {
     func replayHoldLast(channel: UInt32, on: Bool) -> Bool {
         if isRemote { return false }
         return MixerFFI.replayHoldLast(channel: channel, on: on) == 0
+    }
+
+    /// Keeps a scratch playback following the recording as it is written.
+    func replayChase(channel: UInt32, on: Bool) -> Bool {
+        if isRemote { return false }
+        return MixerFFI.replayChase(channel: channel, on: on) == 0
     }
 
     func replayStats() -> EivizReplayStats? {

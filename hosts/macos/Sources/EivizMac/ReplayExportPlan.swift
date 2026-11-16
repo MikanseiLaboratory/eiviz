@@ -7,6 +7,23 @@ import Foundation
 /// that needs SwiftUI, and keeping it apart is what lets it be tested and what keeps the
 /// window from growing again.
 enum ReplayExportPlan {
+    /// The MP4 the exporter writes. A path without an extension would otherwise be
+    /// handed to the writer without a container name at all; the save panel normally adds
+    /// one, but a typed path does not have to.
+    static func outputPath(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ext = (trimmed as NSString).pathExtension
+        return ext.isEmpty ? trimmed + ".mp4" : trimmed
+    }
+
+    /// The file for one angle of an all-angles export. A path with no extension must not
+    /// grow a trailing dot, and an extension stays on the new name.
+    static func anglePath(_ path: String, angleId: UInt32) -> String {
+        let base = (path as NSString).deletingPathExtension
+        let ext = (path as NSString).pathExtension
+        return ext.isEmpty ? "\(base)-angle\(angleId)" : "\(base)-angle\(angleId).\(ext)"
+    }
+
     /// The modes the operator can choose, in the order the picker shows them.
     enum Mode: String, CaseIterable {
         case clip = "Clip"
@@ -49,7 +66,11 @@ enum ReplayExportPlan {
             }
             return [(clip, nil)]
         case Mode.playlistWithTransitions.rawValue:
-            return clips.map { ($0, $0.transition) }
+            // A range that does not advance has no frames to write, and the writer would
+            // either refuse the whole export or write a zero-length clip.
+            return clips
+                .filter { $0.outFrame > $0.inFrame }
+                .map { ($0, $0.transition) }
         default:
             return []
         }
@@ -69,14 +90,16 @@ enum ReplayExportPlan {
     ) -> [(UInt32, UInt64, UInt64)] {
         switch mode {
         case Mode.playlist.rawValue:
-            return clips.map { ($0.angleId, $0.inFrame, $0.outFrame) }
+            return clips
+                .filter { $0.outFrame > $0.inFrame }
+                .map { ($0.angleId, $0.inFrame, $0.outFrame) }
         case Mode.angle.rawValue, Mode.allAngles.rawValue:
             let ordered = active == 0
                 ? angles
                 : angles.sorted { ($0.id == active ? 0 : 1) < ($1.id == active ? 0 : 1) }
             var result: [(UInt32, UInt64, UInt64)] = []
             for angle in ordered {
-                if let bounds = range(angle.id) {
+                if let bounds = range(angle.id), bounds.last > bounds.first {
                     result.append((angle.id, bounds.first, bounds.last))
                 }
                 if mode == Mode.angle.rawValue {

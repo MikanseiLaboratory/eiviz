@@ -32,16 +32,19 @@ enum EivizTheme {
     }
 
     static func applyAppAppearance() {
+        // `NSApp` is still nil while SwiftUI calls `App.init()` on macOS 27, so ask for the
+        // shared application instead of using the implicitly unwrapped global.
+        let app = NSApplication.shared
         switch AppPrefs.shared.theme {
         case .dark:
-            NSApp.appearance = NSAppearance(named: .darkAqua)
+            app.appearance = NSAppearance(named: .darkAqua)
         case .light:
-            NSApp.appearance = NSAppearance(named: .aqua)
+            app.appearance = NSAppearance(named: .aqua)
         case .system:
-            NSApp.appearance = nil
+            app.appearance = nil
         }
-        for window in NSApp.windows {
-            window.appearance = NSApp.appearance
+        for window in app.windows {
+            window.appearance = app.appearance
         }
     }
 
@@ -469,6 +472,38 @@ struct MixerUintField: NSViewRepresentable {
             } else {
                 field.stringValue = String(parent.value)
             }
+        }
+    }
+}
+
+/// A numeric field with a small drag grip. Dragging up/down changes the value the
+/// way Windows' NumericDrag handles do; typing still works in the text field.
+struct DraggableUIntField: View {
+    @Binding var value: UInt32
+    var minimum: UInt32 = 0
+    var step: UInt32 = 1
+    @State private var dragStart: UInt32?
+
+    var body: some View {
+        HStack(spacing: 2) {
+            mixerUintField($value, minimum: minimum)
+            Image(systemName: "arrow.up.and.down")
+                .font(.system(size: 9))
+                .foregroundStyle(EivizTheme.dim)
+                .frame(width: 10, height: mixerFieldLineHeight)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 1)
+                        .onChanged { gesture in
+                            if dragStart == nil { dragStart = value }
+                            let base = Int(dragStart ?? value)
+                            let delta = Int((-gesture.translation.height / 4).rounded())
+                            let next = max(Int(minimum), base + delta * Int(step))
+                            value = UInt32(min(Int(UInt32.max), next))
+                        }
+                        .onEnded { _ in dragStart = nil }
+                )
+                .help(L10n.t("field.dragHint"))
         }
     }
 }

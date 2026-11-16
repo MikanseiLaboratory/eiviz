@@ -179,6 +179,16 @@ fn is_builtin_source(id: u64) -> bool {
     matches!(id, SRC_COLOR | SRC_BLACK | SRC_BLUE | SRC_BARS)
 }
 
+/// Escape hatch for A/B benchmarks: `EIVIZ_SCENE_CACHE=0` composes every scene.
+fn scene_cache_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("EIVIZ_SCENE_CACHE")
+            .map(|value| value != "0")
+            .unwrap_or(true)
+    })
+}
+
 struct SourceGpu {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
@@ -266,6 +276,8 @@ pub struct Composer {
     mix_aliases: HashMap<u64, wgpu::TextureView>,
     color_group: wgpu::BindGroup,
     gpu_epoch: u64,
+    /// Scene tallies as of the last compose; a change invalidates cached scenes.
+    last_tallies: Vec<(u64, u64)>,
     scene_gpu_pct: HashMap<u64, f32>,
     uploader: Option<crate::rebar::FrameUploader>,
 }
@@ -508,6 +520,7 @@ impl Composer {
             mix_aliases: HashMap::new(),
             color_group,
             gpu_epoch: 1,
+            last_tallies: Vec::new(),
             scene_gpu_pct: HashMap::new(),
             uploader: crate::rebar::FrameUploader::new(device),
         })
@@ -780,7 +793,16 @@ impl Composer {
         // The pass needs a target that is neither input: the source texture is that
         // target, and the compositor samples it as usual.
         let recreate = self.sources.get(&id).is_none_or(|gpu| {
-            gpu.width != tex_w || gpu.height != height || gpu.packed != packed || gpu.bgra != bgra
+            gpu.width != tex_w
+                || gpu.height != height
+                || gpu.packed != packed
+                || gpu.bgra != bgra
+                // A source uploaded for sampling has no render attachment; the
+                // transition pass needs one. Rebuild it for this frame.
+                || !gpu
+                    .texture
+                    .usage()
+                    .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
         });
         if recreate {
             self.blit_groups.remove(&id);
@@ -972,7 +994,7 @@ impl Composer {
             let pixels = snap.pixels.as_slice();
             if direct_sample {
                 if let Some(uploader) = self.uploader.as_mut() {
-                    if let Some(Ok((texture, view))) = uploader.upload_direct(
+                    if let Some(Ok((texture, view, lease))) = uploader.upload_direct(
                         device,
                         id,
                         pixels,
@@ -1000,7 +1022,7 @@ impl Composer {
                                 uploaded_pts: snap.last_pts,
                                 direct: true,
                                 owned: true,
-                                lease: None,
+                                lease: Some(lease),
                             },
                         );
                         continue;
@@ -1086,6 +1108,7 @@ impl Composer {
         self.preview_rgb = preview;
         self.program_rgb = program;
         self.inactive_rgb = inactive;
+        self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
         self.tally_red = None;
         self.tally_green = None;
         self.blit_groups.remove(&KEY_TALLY_RED);
@@ -1138,20 +1161,39 @@ impl Composer {
                 .get(id)
                 .copied()
                 .unwrap_or(crate::abi::EivizSceneCamera::IDENTITY);
+            let mut same_size = false;
+            let mut changed = false;
             if let Some(existing) = self.scenes.get_mut(id) {
-                existing.label_size = style.size;
-                existing.label_percent = style.percent;
-                existing.label_top = style.top;
-                existing.camera = camera;
+                if existing.label_size != style.size
+                    || existing.label_percent != style.percent
+                    || existing.label_top != style.top
+                {
+                    existing.label_size = style.size;
+                    existing.label_percent = style.percent;
+                    existing.label_top = style.top;
+                    changed = true;
+                }
+                if existing.camera != camera {
+                    existing.camera = camera;
+                    changed = true;
+                }
                 if existing.width == *width && existing.height == *height {
+                    same_size = true;
                     if !Arc::ptr_eq(&existing.layers, layers) {
                         existing.layers = Arc::clone(layers);
+                        changed = true;
                     }
                     if !Arc::ptr_eq(&existing.labels, &scene_labels) {
-                        existing.labels = scene_labels;
+                        existing.labels = Arc::clone(&scene_labels);
+                        changed = true;
                     }
-                    continue;
                 }
+            }
+            if changed {
+                self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
+            }
+            if same_size {
+                continue;
             }
             self.define_scene(
                 device,
@@ -1200,6 +1242,7 @@ impl Composer {
                 label_size: style.size,
                 label_percent: style.percent,
                 label_top: style.top,
+                cache_epoch: 0,
             },
         );
     }
@@ -1210,16 +1253,43 @@ impl Composer {
         used: &HashSet<u64>,
         encoder: &mut wgpu::CommandEncoder,
         tallies: &[(u64, u64)],
+        dynamic_sources: &HashSet<u64>,
+        dynamic_scenes: &HashSet<u64>,
     ) -> Result<(), String> {
+        // The tally border is drawn into the scene texture, so a cut has to redraw
+        // even when the scene itself did not change.
+        if self.last_tallies.as_slice() != tallies {
+            self.last_tallies = tallies.to_vec();
+            self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
+        }
         let mut order = Vec::new();
         let mut visited = HashSet::new();
         for id in used {
             self.visit_scene(*id, used, &mut visited, &mut order);
         }
         self.bake_generators(device, encoder);
+        let cache_epoch = self.gpu_epoch;
+        let cache_enabled = scene_cache_enabled();
         let mut weights = Vec::with_capacity(order.len());
         for id in order {
+            let cached = cache_enabled
+                && !dynamic_scenes.contains(&id)
+                && self.scenes.get(&id).is_some_and(|scene| {
+                    scene.cache_epoch == cache_epoch
+                        && !scene
+                            .layers
+                            .iter()
+                            .any(|layer| dynamic_sources.contains(&layer.source_id))
+                });
+            if cached {
+                weights.push((id, 0));
+                continue;
+            }
             let weight = self.draw_scene(device, encoder, id, tallies)?;
+            if let Some(scene) = self.scenes.get_mut(&id) {
+                // `draw_scene` can bake a label or a generator and bump the epoch.
+                scene.cache_epoch = self.gpu_epoch;
+            }
             weights.push((id, weight));
         }
         let total = weights

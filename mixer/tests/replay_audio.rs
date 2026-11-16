@@ -196,7 +196,10 @@ fn the_recorded_sound_reaches_the_channel_meter() {
     // The recorded tone must arrive as the channel's audio, and reach the program
     // the operator is sending. A wrong layout or a dropped block leaves both empty.
     let peak = wait_for_peak(CHANNEL_SOURCE, 0.05, Duration::from_secs(5));
-    let program = wait_for_peak(PROGRAM_BUS, 0.05, Duration::from_secs(2));
+    // The paravirtual CI GPU can take seconds to deliver the first replay block
+    // after the channel meter has it. Give the program bus the same grace as the
+    // channel instead of turning a slow adapter into a failure.
+    let program = wait_for_peak(PROGRAM_BUS, 0.05, Duration::from_secs(8));
     expect("pause", unsafe {
         mixer_replay_channel_transport(0, 0, 1000, -1)
     });

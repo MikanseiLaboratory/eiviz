@@ -17,7 +17,7 @@
 //! every frame and the encoder's finite throughput is shared evenly.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use vmx::{Codec, ColorSpace, Config, Profile};
@@ -106,8 +106,16 @@ struct Angle {
     format: wgpu::TextureFormat,
 }
 
-/// One encoder thread's work list.
-type Pending = Arc<(Mutex<VecDeque<Job>>, Condvar)>;
+/// One encoder thread's work list. `stop` lets a mixer generation retire the
+/// lanes; the thread owns a clone of the old device, so it must exit rather than
+/// wait forever after New/Open.
+struct Pending {
+    jobs: Mutex<VecDeque<Job>>,
+    wake: Condvar,
+    stop: AtomicBool,
+}
+
+type PendingRef = Arc<Pending>;
 
 /// The ring depth the operator asked for; zero means "the default for this angle count".
 /// Set by the engine when a configuration is applied, read where the ring is built.
@@ -116,7 +124,7 @@ static ASKED_RING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 static ANGLES: Mutex<Option<HashMap<u32, Angle>>> = Mutex::new(None);
 /// The encoder lanes. Built once and then extended as angles are added, because the pool has
 /// to follow the session and not the frame it first saw.
-static QUEUES: OnceLock<Mutex<Vec<Pending>>> = OnceLock::new();
+static QUEUES: OnceLock<Mutex<Vec<PendingRef>>> = OnceLock::new();
 
 /// The replay format's profile code (0 high, 1 standard, 2 low) as the codec's preset.
 fn profile_of(code: u32) -> Profile {
@@ -243,8 +251,10 @@ pub fn dispatch(angle_id: u32, job: CopyJob) -> bool {
         let index = angle_id as usize % guard.len();
         Arc::clone(&guard[index])
     };
-    let (list, wake) = &*queue;
-    let mut pending = list.lock().unwrap_or_else(|error| error.into_inner());
+    if queue.stop.load(Ordering::Acquire) {
+        return false;
+    }
+    let mut pending = queue.jobs.lock().unwrap_or_else(|error| error.into_inner());
     let cap = queue_for(
         ANGLES
             .lock()
@@ -266,7 +276,7 @@ pub fn dispatch(angle_id: u32, job: CopyJob) -> bool {
         pts: job.pts,
     });
     drop(pending);
-    wake.notify_one();
+    queue.wake.notify_one();
     true
 }
 
@@ -290,7 +300,11 @@ fn ensure_encoder(device: &wgpu::Device, queue: &wgpu::Queue, angles: usize) {
     let wanted = angles.clamp(1, MAX_THREADS);
     let mut guard = lanes.lock().unwrap_or_else(|error| error.into_inner());
     while guard.len() < wanted {
-        let entry: Pending = Arc::new((Mutex::new(VecDeque::new()), Condvar::new()));
+        let entry: PendingRef = Arc::new(Pending {
+            jobs: Mutex::new(VecDeque::new()),
+            wake: Condvar::new(),
+            stop: AtomicBool::new(false),
+        });
         let index = guard.len();
         let device = device.clone();
         let queue = queue.clone();
@@ -308,15 +322,23 @@ fn ensure_encoder(device: &wgpu::Device, queue: &wgpu::Queue, angles: usize) {
     }
 }
 
-fn encode_loop(pending: Pending, device: wgpu::Device, queue: wgpu::Queue) {
+fn encode_loop(pending: PendingRef, device: wgpu::Device, queue: wgpu::Queue) {
     let mut codecs: HashMap<u32, Codec> = HashMap::new();
     let mut packet = vec![0u8; 1024 * 1024];
-    let (list, wake) = &*pending;
     loop {
         let job = {
-            let mut guard = list.lock().unwrap_or_else(|error| error.into_inner());
-            while guard.is_empty() {
-                guard = wake.wait(guard).unwrap_or_else(|error| error.into_inner());
+            let mut guard = pending
+                .jobs
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            while guard.is_empty() && !pending.stop.load(Ordering::Acquire) {
+                guard = pending
+                    .wake
+                    .wait(guard)
+                    .unwrap_or_else(|error| error.into_inner());
+            }
+            if pending.stop.load(Ordering::Acquire) {
+                return;
             }
             guard.pop_front()
         };
@@ -404,6 +426,21 @@ pub fn ring_bytes(config: &eiviz_control::session::replay::ReplayDto) -> u64 {
     let ring = ring_for(angles) as u64;
     let frame = u64::from(config.format.width.max(1)) * u64::from(config.format.height.max(1)) * 4;
     angles as u64 * ring * frame
+}
+
+/// Retires all GPU encode state when the mixer is destroyed or its wgpu
+/// Instance changes. Rings and lanes hold the old device; keeping them across
+/// New/Open produces TextureViewId mismatches in the current renderer.
+pub fn reset() {
+    *ANGLES.lock().unwrap_or_else(|error| error.into_inner()) = None;
+    let Some(lanes) = QUEUES.get() else {
+        return;
+    };
+    let mut guard = lanes.lock().unwrap_or_else(|error| error.into_inner());
+    for lane in guard.drain(..) {
+        lane.stop.store(true, Ordering::Release);
+        lane.wake.notify_all();
+    }
 }
 
 #[cfg(test)]

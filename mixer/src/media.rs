@@ -1582,18 +1582,73 @@ impl Nv12Flight {
     }
 }
 
+/// gpu-video returns either one NV12 texture or separate Y/UV planes. The
+/// converter samples one NV12 texture, so pack the separated form once.
+fn video_texture_to_nv12(
+    video: &gpu_video::VideoTexture,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> Option<wgpu::Texture> {
+    if let Some(texture) = video.nv12_texture() {
+        return Some(texture.clone());
+    }
+    let size = video.size();
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("eiviz-vt-nv12"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::NV12,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let y = video.y_plane();
+    let uv = video.uv_plane();
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("eiviz-vt-pack"),
+    });
+    for (plane, aspect) in [
+        (y, wgpu::TextureAspect::Plane0),
+        (uv, wgpu::TextureAspect::Plane1),
+    ] {
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: plane.texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: plane.aspect(),
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect,
+            },
+            plane.size(),
+        );
+    }
+    queue.submit(Some(encoder.finish()));
+    Some(texture)
+}
+
 fn submit_vulkan_frame(
     converter: &crate::convert::Nv12Converter,
     ingest: &GpuIngest,
     gpu_ring: &mut crate::convert::VideoGpuRing,
     flight: &Nv12Flight,
-    nv12: wgpu::Texture,
+    nv12: gpu_video::VideoTexture,
     width: u32,
     height: u32,
     pts: i64,
     prefetch: &mut std::collections::VecDeque<Prefetched>,
     ring_vram: &mut u64,
 ) {
+    let Some(nv12) = video_texture_to_nv12(&nv12, &ingest.device, &ingest.queue) else {
+        return;
+    };
     flight.acquire(&ingest.device);
     match converter.convert_nv12_texture(
         &ingest.device,
@@ -1641,9 +1696,7 @@ fn run_vulkan_h264_file(
     }
     let (layout_w, layout_h, prefix, nal_format) =
         configure_h264_compressed(&reader, width, height, fps_num, fps_den)?;
-    let mut decoder = vulkan
-        .create_wgpu_textures_decoder_h264(gpu_video::parameters::DecoderParameters::default())
-        .map_err(|error| error.to_string())?;
+    let mut decoder = crate::vk_video::H264Decoder::new(vulkan, &ingest.queue)?;
     let audio = match configure_audio(&reader) {
         Ok(layout) => Some(layout),
         Err(_) => {
@@ -1683,11 +1736,7 @@ fn run_vulkan_h264_file(
                 store.flush_audio(source_id);
                 store.flush_video(source_id);
             }
-            decoder = vulkan
-                .create_wgpu_textures_decoder_h264(
-                    gpu_video::parameters::DecoderParameters::default(),
-                )
-                .map_err(|error| error.to_string())?;
+            decoder = crate::vk_video::H264Decoder::new(vulkan, &ingest.queue)?;
             sent_prefix = false;
             clock_pts = -1;
             seek_base = seek;
@@ -1743,11 +1792,7 @@ fn run_vulkan_h264_file(
             }
             let _ = unsafe { reader.Flush(stream(MF_SOURCE_READER_ANY_STREAM)) };
             seek_to(&reader, 0);
-            decoder = vulkan
-                .create_wgpu_textures_decoder_h264(
-                    gpu_video::parameters::DecoderParameters::default(),
-                )
-                .map_err(|error| error.to_string())?;
+            decoder = crate::vk_video::H264Decoder::new(vulkan, &ingest.queue)?;
             sent_prefix = false;
             clock_pts = -1;
             seek_base = 0;
@@ -1837,12 +1882,10 @@ fn run_vulkan_h264_file(
                 if annexb.is_empty() {
                     continue;
                 }
-                let frames = decoder
-                    .decode(gpu_video::EncodedInputChunk {
-                        data: &annexb,
-                        pts: Some(pts.max(0) as u64),
-                    })
-                    .map_err(|error| error.to_string())?;
+                let frames = decoder.decode(gpu_video::EncodedInputChunk {
+                    data: &annexb,
+                    pts: Some(pts.max(0) as u64),
+                })?;
                 for frame in frames {
                     let size = frame.data.size();
                     let w = if size.width > 0 { size.width } else { layout_w };
@@ -2058,9 +2101,8 @@ mod tests {
         let device = crate::device::GpuDevice::with_backend(crate::device::BackendRequest::Vulkan)
             .expect("vulkan device");
         let vulkan = device.vulkan.as_ref().expect("vulkan video device");
-        let mut decoder = vulkan
-            .create_wgpu_textures_decoder_h264(gpu_video::parameters::DecoderParameters::default())
-            .expect("h264 decoder");
+        let mut decoder =
+            crate::vk_video::H264Decoder::new(vulkan, &device.queue).expect("h264 decoder");
         let converter = crate::convert::Nv12Converter::new(&device.device);
         let mut ring = VideoGpuRing::new(2);
         let mut annexb = Vec::new();
@@ -2092,13 +2134,17 @@ mod tests {
                 .unwrap_or_else(|error| panic!("decode: {error}"));
             if let Some(frame) = frames.into_iter().next() {
                 let size = frame.data.size();
+                let Some(nv12) = video_texture_to_nv12(&frame.data, &device.device, &device.queue)
+                else {
+                    panic!("video texture could not be packed to NV12");
+                };
                 let (done_tx, done_rx) = mpsc::sync_channel(1);
                 converter
                     .convert_nv12_texture(
                         &device.device,
                         &device.queue,
                         &mut ring,
-                        frame.data,
+                        nv12,
                         if size.width > 0 { size.width } else { width },
                         if size.height > 0 { size.height } else { height },
                         sample.0,

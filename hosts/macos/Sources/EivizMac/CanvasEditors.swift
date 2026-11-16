@@ -37,6 +37,7 @@ struct SceneEditorView: View {
                                 toggleLayer(layer.id, \.audioFollow)
                             }
                             .buttonStyle(OnOffButtonStyle(on: layer.audioFollow, compact: true))
+                            .help(L10n.t("audio.follow"))
                             Button(layer.locked ? "🔒" : "🔓") {
                                 toggleLayer(layer.id, \.locked)
                             }
@@ -80,7 +81,7 @@ struct SceneEditorView: View {
                 }
                 Button("Save preset") { savePreset() }
                 Picker("Input", selection: Binding(
-                    get: { mixer.selectedInputId ?? EIVIZ_SRC_BARS },
+                    get: { layerInput },
                     set: { mixer.selectedInputId = $0 }
                 )) {
                     ForEach(mixer.session.inputs.filter(\.kind.hasVideo)) { input in
@@ -231,7 +232,10 @@ struct SceneEditorView: View {
             } else {
                 mixer.pushScene(scene)
                 mixer.pushSceneAnim(scene)
-                mixer.publishSession()
+                // Send the one scene that changed. Replacing the whole host session
+                // here also sent every input/output the host had, rolling back edits
+                // another client made while this window was open.
+                _ = mixer.mutateLocal(MixerRemote.upsertScene(scene))
             }
         }
     }
@@ -287,15 +291,48 @@ struct SceneEditorView: View {
     }
 
     private func addLayer() {
+        // A selected id can outlive the session that contained it (New/Load, or a
+        // failed add). A layer pointing at such an id draws nothing, so fall back to
+        // an input that has a picture instead of recording a dead source.
+        let source = layerInput
         mutate { scene in
             scene.assignLayerIds()
             let next = (scene.layers.map(\.layerId).max() ?? 0) + 1
             let z = scene.layers.map(\.z).max().map { $0 + 1 } ?? 0
-            let layer = SceneLayer(inputId: mixer.selectedInputId ?? EIVIZ_SRC_BARS, z: z, layerId: next)
+            let layer = SceneLayer(inputId: source, z: z, layerId: next)
             scene.layers.append(layer)
             selectedLayer = layer.id
         }
         push()
+    }
+
+    /// Source of the layer Add Layer creates.
+    ///
+    /// The Input picker above the button is the explicit choice, matching the
+    /// Windows editor's InputPick. The layer list selection only chooses the layer
+    /// to edit: preferring that layer's input made Add Layer ignore the picker and
+    /// duplicate whatever was already selected.
+    ///
+    /// A pick can outlive the session that contained it (New/Load, or a failed
+    /// add). A layer pointing at such an id draws nothing, so only ids that still
+    /// name a video input are accepted.
+    static func layerSource(picked: UInt64?, inputs: [InputEntry]) -> UInt64 {
+        if let picked, inputs.contains(where: { $0.id == picked && $0.kind.hasVideo }) {
+            return picked
+        }
+        // With nothing picked the editor shows bars, so Add Layer adds bars too.
+        if inputs.contains(where: { $0.id == EIVIZ_SRC_BARS && $0.kind.hasVideo }) {
+            return EIVIZ_SRC_BARS
+        }
+        if let first = inputs.first(where: { $0.kind.hasVideo }) {
+            return first.id
+        }
+        return EIVIZ_SRC_BARS
+    }
+
+    /// What the Input picker shows and what Add Layer adds.
+    private var layerInput: UInt64 {
+        Self.layerSource(picked: mixer.selectedInputId, inputs: mixer.session.inputs)
     }
 
     private func deleteLayer() {
@@ -396,7 +433,7 @@ struct SceneEditorView: View {
             held = nil
             mixer.pushScene(scene)
             mixer.pushSceneAnim(scene)
-            mixer.publishSession()
+            _ = mixer.mutateLocal(MixerRemote.upsertScene(scene))
             releaseDraft()
             return
         }
@@ -418,7 +455,7 @@ struct SceneEditorView: View {
         }
         mixer.pushScene(held)
         mixer.pushSceneAnim(held)
-        mixer.publishSession()
+        _ = mixer.mutateLocal(MixerRemote.upsertScene(held))
     }
 
     private func ensureDraft() {

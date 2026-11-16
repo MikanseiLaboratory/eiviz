@@ -101,31 +101,40 @@ struct ReplayClipTable: View {
                             Text(L10n.t("replay.transitionPush")).tag("Push")
                         }
                         .labelsHidden()
-                        Picker("", selection: Binding(
-                            get: { clip.transition.direction },
-                            set: { handlers.transitionDirection(clip.uid, $0) }
-                        )) {
-                            Text(L10n.t("replay.directionLeft")).tag("Left")
-                            Text(L10n.t("replay.directionRight")).tag("Right")
-                            Text(L10n.t("replay.directionUp")).tag("Up")
-                            Text(L10n.t("replay.directionDown")).tag("Down")
+                        // A cut has no direction, timing or length. A dissolve/dip
+                        // has no direction. Only wipe/slide/push use all four fields.
+                        if clip.transition.kind == "Wipe"
+                            || clip.transition.kind == "Slide"
+                            || clip.transition.kind == "Push"
+                        {
+                            Picker("", selection: Binding(
+                                get: { clip.transition.direction },
+                                set: { handlers.transitionDirection(clip.uid, $0) }
+                            )) {
+                                Text(L10n.t("replay.directionLeft")).tag("Left")
+                                Text(L10n.t("replay.directionRight")).tag("Right")
+                                Text(L10n.t("replay.directionUp")).tag("Up")
+                                Text(L10n.t("replay.directionDown")).tag("Down")
+                            }
+                            .labelsHidden()
+                            .help(L10n.t("replay.directionHelp"))
                         }
-                        .labelsHidden()
-                        .help(L10n.t("replay.directionHelp"))
-                        Picker("", selection: Binding(
-                            get: { clip.transition.timing },
-                            set: { handlers.transitionTiming(clip.uid, $0) }
-                        )) {
-                            Text(L10n.t("replay.timingOverwrap")).tag("Overwrap")
-                            Text(L10n.t("replay.timingAdditive")).tag("Additive")
+                        if clip.transition.kind != "Cut" {
+                            Picker("", selection: Binding(
+                                get: { clip.transition.timing },
+                                set: { handlers.transitionTiming(clip.uid, $0) }
+                            )) {
+                                Text(L10n.t("replay.timingOverwrap")).tag("Overwrap")
+                                Text(L10n.t("replay.timingAdditive")).tag("Additive")
+                            }
+                            .labelsHidden()
+                            .help(L10n.t("replay.timingHelp"))
+                            TextField("", value: Binding(
+                                get: { clip.transition.durationFrames },
+                                set: { handlers.transitionFrames(clip.uid, $0) }
+                            ), format: .number)
+                            .frame(width: 48)
                         }
-                        .labelsHidden()
-                        .help(L10n.t("replay.timingHelp"))
-                        TextField("", value: Binding(
-                            get: { clip.transition.durationFrames },
-                            set: { handlers.transitionFrames(clip.uid, $0) }
-                        ), format: .number)
-                        .frame(width: 48)
                     }
                 }
                 .width(380)
@@ -194,7 +203,7 @@ struct ReplayClipTable: View {
                 }
                 .width(70)
             }
-            .frame(minHeight: 140)
+            .frame(minHeight: 100)
             if clips.isEmpty {
                 Text(L10n.t("replay.noClips"))
                     .font(.caption)

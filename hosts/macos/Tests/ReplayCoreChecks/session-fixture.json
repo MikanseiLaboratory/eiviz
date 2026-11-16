@@ -1,0 +1,627 @@
+{
+ "headphone": {
+  "deviceId": "",
+  "deviceKind": "None",
+  "mapLeft": 0,
+  "mapRight": 1
+ },
+ "headphoneCopyMonitor": false,
+ "headphoneListenId": 0,
+ "headphoneListenKind": 0,
+ "inputTags": [],
+ "inputs": [
+  {
+   "audioCaptureMode": "Mic",
+   "audioDeviceId": "",
+   "audioDeviceKind": "CoreAudio",
+   "audioMapLeft": 0,
+   "audioMapRight": 1,
+   "audioProcessAumid": "",
+   "audioProcessExe": "",
+   "audioUnits": [
+    1
+   ],
+   "bandwidthSave": "NotOnPreviewOrProgram",
+   "captureFpsDen": 0,
+   "captureFpsNum": 0,
+   "captureHeight": 0,
+   "captureWidth": 0,
+   "colorB": 0.0,
+   "colorG": 0.0,
+   "colorR": 1.0,
+   "decklinkMode": "",
+   "frameBufferFrames": 1,
+   "gain": 1.0,
+   "guid": "3271F5DB-EAF4-410E-AA15-B9426E7F003D",
+   "id": 1,
+   "keepFullOnMultiview": false,
+   "kind": "Color",
+   "mixSource": "MuProgram",
+   "mixTargetId": 0,
+   "mute": false,
+   "name": "Color Red",
+   "ndiBandwidth": "Highest",
+   "omtQuality": "Default",
+   "pathOrAddress": null,
+   "scroll": false,
+   "tags": [],
+   "toneHz": 0.0,
+   "toneLevelDbfs": -20.0,
+   "useGpu": false,
+   "videoLoop": true,
+   "videoPauseWhen": "Never",
+   "videoPlayWhen": "Never",
+   "videoRestartWhen": "Never"
+  },
+  {
+   "audioCaptureMode": "Mic",
+   "audioDeviceId": "",
+   "audioDeviceKind": "CoreAudio",
+   "audioMapLeft": 0,
+   "audioMapRight": 1,
+   "audioProcessAumid": "",
+   "audioProcessExe": "",
+   "audioUnits": [
+    1
+   ],
+   "bandwidthSave": "NotOnPreviewOrProgram",
+   "captureFpsDen": 0,
+   "captureFpsNum": 0,
+   "captureHeight": 0,
+   "captureWidth": 0,
+   "colorB": 0.0,
+   "colorG": 0.0,
+   "colorR": 1.0,
+   "decklinkMode": "",
+   "frameBufferFrames": 1,
+   "gain": 1.0,
+   "guid": "19D9BBD7-FBEA-4B20-A718-C5FB60BC12FA",
+   "id": 2,
+   "keepFullOnMultiview": false,
+   "kind": "Bars",
+   "mixSource": "MuProgram",
+   "mixTargetId": 0,
+   "mute": false,
+   "name": "SMPTE HD Bars",
+   "ndiBandwidth": "Highest",
+   "omtQuality": "Default",
+   "pathOrAddress": null,
+   "scroll": true,
+   "tags": [],
+   "toneHz": 1000.0,
+   "toneLevelDbfs": -20.0,
+   "useGpu": false,
+   "videoLoop": true,
+   "videoPauseWhen": "Never",
+   "videoPlayWhen": "Never",
+   "videoRestartWhen": "Never"
+  },
+  {
+   "audioCaptureMode": "Mic",
+   "audioDeviceId": "",
+   "audioDeviceKind": "CoreAudio",
+   "audioMapLeft": 0,
+   "audioMapRight": 1,
+   "audioProcessAumid": "",
+   "audioProcessExe": "",
+   "audioUnits": [
+    1
+   ],
+   "bandwidthSave": "NotOnPreviewOrProgram",
+   "captureFpsDen": 0,
+   "captureFpsNum": 0,
+   "captureHeight": 0,
+   "captureWidth": 0,
+   "colorB": 0.0,
+   "colorG": 0.0,
+   "colorR": 0.0,
+   "decklinkMode": "",
+   "frameBufferFrames": 1,
+   "gain": 1.0,
+   "guid": "4B796C84-0C4F-46D1-A162-BDD663A6A6DA",
+   "id": 3,
+   "keepFullOnMultiview": false,
+   "kind": "Black",
+   "mixSource": "MuProgram",
+   "mixTargetId": 0,
+   "mute": false,
+   "name": "Black",
+   "ndiBandwidth": "Highest",
+   "omtQuality": "Default",
+   "pathOrAddress": null,
+   "scroll": false,
+   "tags": [],
+   "toneHz": 0.0,
+   "toneLevelDbfs": -20.0,
+   "useGpu": false,
+   "videoLoop": true,
+   "videoPauseWhen": "Never",
+   "videoPlayWhen": "Never",
+   "videoRestartWhen": "Never"
+  },
+  {
+   "audioCaptureMode": "Mic",
+   "audioDeviceId": "",
+   "audioDeviceKind": "CoreAudio",
+   "audioMapLeft": 0,
+   "audioMapRight": 1,
+   "audioProcessAumid": "",
+   "audioProcessExe": "",
+   "audioUnits": [
+    1
+   ],
+   "bandwidthSave": "NotOnPreviewOrProgram",
+   "captureFpsDen": 0,
+   "captureFpsNum": 0,
+   "captureHeight": 0,
+   "captureWidth": 0,
+   "colorB": 1.0,
+   "colorG": 0.0,
+   "colorR": 0.0,
+   "decklinkMode": "",
+   "frameBufferFrames": 1,
+   "gain": 1.0,
+   "guid": "64754FB0-1CAD-44C3-9E72-852E72A7C171",
+   "id": 4,
+   "keepFullOnMultiview": false,
+   "kind": "Color",
+   "mixSource": "MuProgram",
+   "mixTargetId": 0,
+   "mute": false,
+   "name": "Blue",
+   "ndiBandwidth": "Highest",
+   "omtQuality": "Default",
+   "pathOrAddress": null,
+   "scroll": false,
+   "tags": [],
+   "toneHz": 0.0,
+   "toneLevelDbfs": -20.0,
+   "useGpu": false,
+   "videoLoop": true,
+   "videoPauseWhen": "Never",
+   "videoPlayWhen": "Never",
+   "videoRestartWhen": "Never"
+  },
+  {
+   "audioCaptureMode": "Mic",
+   "audioDeviceId": "",
+   "audioDeviceKind": "None",
+   "audioMapLeft": 0,
+   "audioMapRight": 1,
+   "audioProcessAumid": "",
+   "audioProcessExe": "",
+   "audioUnits": [],
+   "bandwidthSave": "NotOnPreviewOrProgram",
+   "captureFpsDen": 0,
+   "captureFpsNum": 0,
+   "captureHeight": 0,
+   "captureWidth": 0,
+   "colorB": 0.0,
+   "colorG": 0.0,
+   "colorR": 0.0,
+   "decklinkMode": "",
+   "frameBufferFrames": 1,
+   "gain": 1.0,
+   "guid": "replay-80001",
+   "id": 524289,
+   "keepFullOnMultiview": false,
+   "kind": "Replay",
+   "mixSource": "MuProgram",
+   "mixTargetId": 0,
+   "mute": false,
+   "name": "Replay A",
+   "ndiBandwidth": "Highest",
+   "omtQuality": "Default",
+   "pathOrAddress": null,
+   "scroll": false,
+   "tags": [],
+   "toneHz": 0.0,
+   "toneLevelDbfs": -20.0,
+   "useGpu": false,
+   "videoLoop": false,
+   "videoPauseWhen": "Never",
+   "videoPlayWhen": "Never",
+   "videoRestartWhen": "Never"
+  }
+ ],
+ "multiviews": [],
+ "nextInputId": 10,
+ "nextMultiviewId": 1,
+ "nextOutputId": 101,
+ "nextOverlayId": 1,
+ "nextSceneId": 3,
+ "nextStreamEncoderId": 1,
+ "nextUnitId": 2,
+ "outputs": [
+  {
+   "audioUnitId": 1,
+   "decklinkDevice": "",
+   "decklinkExternalKey": false,
+   "decklinkMode": "",
+   "enabled": true,
+   "fpsDen": 1001,
+   "fpsNum": 60000,
+   "height": 1080,
+   "id": 100,
+   "name": "eiviz-pgm",
+   "rtmpSecretRef": "",
+   "rtmpUrl": "",
+   "skipEncodeWhenNoReceivers": true,
+   "sourceId": 0,
+   "sourceKind": "MuProgram",
+   "streamEncoderId": 0,
+   "transport": "Omt",
+   "unitId": 1,
+   "useGpu": false,
+   "width": 1920
+  }
+ ],
+ "overlays": [],
+ "replay": {
+  "activeAngleId": 2,
+  "angles": [
+   {
+    "audio": "Silent",
+    "audioUnitId": 0,
+    "encoder": "Cpu",
+    "id": 1,
+    "inputId": 0,
+    "name": "Scene 1",
+    "sceneId": 1,
+    "source": "Scene"
+   },
+   {
+    "audio": "Silent",
+    "audioUnitId": 0,
+    "encoder": "Cpu",
+    "id": 2,
+    "inputId": 0,
+    "name": "Scene 2",
+    "sceneId": 2,
+    "source": "Scene"
+   }
+  ],
+  "autoAddToPlaylist": false,
+  "buffering": {
+   "encodeQueueFrames": 6,
+   "encoderRingBudgetMb": 0,
+   "encoderRingFrames": 0,
+   "overflowPolicy": "DropFrames",
+   "reserveMb": 0,
+   "writeBufferMb": 64
+  },
+  "channels": [
+   {
+    "index": 0,
+    "inputId": 524289,
+    "playlistId": null
+   }
+  ],
+  "decodeAhead": true,
+  "enabled": true,
+  "events": [],
+  "format": {
+   "fpsDen": 1001,
+   "fpsNum": 60000,
+   "height": 1080,
+   "profile": "Sq",
+   "segmentFrames": 120,
+   "width": 1920
+  },
+  "nextAngleId": 3,
+  "nextEventId": 1,
+  "nextPlaylistId": 1,
+  "playlists": [],
+  "profiling": false,
+  "recordings": [
+   {
+    "angles": [
+     1,
+     2
+    ],
+    "createdMs": 1794332601812,
+    "firstFrame": 0,
+    "fpsDen": 1001,
+    "fpsNum": 60000,
+    "height": 1080,
+    "lastFrame": 9567,
+    "storage": "/Users/user/eiviz-projects/.cache/replay-media",
+    "uuid": "rec-1794332601812",
+    "width": 1920
+   },
+   {
+    "angles": [
+     1,
+     2
+    ],
+    "createdMs": 1794332818694,
+    "firstFrame": 0,
+    "fpsDen": 1001,
+    "fpsNum": 60000,
+    "height": 1080,
+    "lastFrame": 7994,
+    "storage": "/Users/user/eiviz-projects/.cache/replay-media",
+    "uuid": "rec-1794332818444",
+    "width": 1920
+   }
+  ],
+  "retention": "StopWhenFull",
+  "storage": [
+   {
+    "angleIds": [
+     1,
+     2
+    ],
+    "path": "/Users/user/eiviz-projects/.cache/replay-media"
+   }
+  ],
+  "timelineCues": [],
+  "warnings": {
+   "remainingAlertSecs": 300,
+   "remainingCriticalSecs": 60,
+   "remainingWarnSecs": 600
+  }
+ },
+ "replayTags": [],
+ "scenePresets": [],
+ "sceneTags": [],
+ "scenes": [
+  {
+   "camera": {
+    "x": 0.5,
+    "y": 0.5,
+    "zoom": 1.0
+   },
+   "guid": "84EEC936-0996-4FF0-BB25-CDEA321E418E",
+   "id": 1,
+   "layers": [
+    {
+     "audioFollow": true,
+     "cropHeight": 1.0,
+     "cropWidth": 1.0,
+     "cropX": 0.0,
+     "cropY": 0.0,
+     "height": 1.0,
+     "hidden": false,
+     "inputId": 2,
+     "layerId": 1,
+     "locked": false,
+     "opacity": 1.0,
+     "sizeLinked": true,
+     "width": 1.0,
+     "x": 0.0,
+     "y": 0.0,
+     "z": 0
+    },
+    {
+     "audioFollow": true,
+     "cropHeight": 1.0,
+     "cropWidth": 1.0,
+     "cropX": 0.0,
+     "cropY": 0.0,
+     "height": 0.16,
+     "hidden": false,
+     "inputId": 4,
+     "layerId": 2,
+     "locked": false,
+     "opacity": 1.0,
+     "sizeLinked": true,
+     "width": 0.22,
+     "x": 0.72,
+     "y": 0.06,
+     "z": 1
+    }
+   ],
+   "name": "Scene 1",
+   "previewCollapsed": false,
+   "sequences": [
+    {
+     "id": 1,
+     "name": "Lower third",
+     "steps": [
+      {
+       "holdFrames": 20,
+       "stateId": 1
+      },
+      {
+       "holdFrames": 20,
+       "stateId": 2
+      }
+     ]
+    }
+   ],
+   "states": [
+    {
+     "enter": {
+      "durationFrames": 45,
+      "easing": 2
+     },
+     "id": 1,
+     "layers": [
+      {
+       "geom": {
+        "cropHeight": 1.0,
+        "cropWidth": 1.0,
+        "cropX": 0.0,
+        "cropY": 0.0,
+        "height": 0.2,
+        "opacity": 1.0,
+        "width": 0.55,
+        "x": 0.06,
+        "y": 0.72,
+        "z": 1
+       },
+       "layerId": 2
+      }
+     ],
+     "name": "Lower third"
+    },
+    {
+     "enter": {
+      "durationFrames": 30,
+      "easing": 3
+     },
+     "id": 2,
+     "layers": [
+      {
+       "geom": {
+        "cropHeight": 1.0,
+        "cropWidth": 1.0,
+        "cropX": 0.0,
+        "cropY": 0.0,
+        "height": 0.16,
+        "opacity": 1.0,
+        "width": 0.22,
+        "x": 0.72,
+        "y": 0.06,
+        "z": 1
+       },
+       "layerId": 2
+      }
+     ],
+     "name": "Bug"
+    }
+   ],
+   "tags": []
+  },
+  {
+   "camera": {
+    "x": 0.5,
+    "y": 0.5,
+    "zoom": 1.0
+   },
+   "guid": "E0155C0C-C6E2-4A66-9A6B-066AC8D83F12",
+   "id": 2,
+   "layers": [
+    {
+     "audioFollow": true,
+     "cropHeight": 1.0,
+     "cropWidth": 1.0,
+     "cropX": 0.0,
+     "cropY": 0.0,
+     "height": 1.0,
+     "hidden": false,
+     "inputId": 1,
+     "layerId": 1,
+     "locked": false,
+     "opacity": 1.0,
+     "sizeLinked": true,
+     "width": 1.0,
+     "x": 0.0,
+     "y": 0.0,
+     "z": 0
+    }
+   ],
+   "name": "Scene 2",
+   "previewCollapsed": false,
+   "sequences": [],
+   "states": [],
+   "tags": []
+  }
+ ],
+ "selectedUnitId": 1,
+ "settings": {
+  "defaultHeight": 1080,
+  "defaultMultiviewUnitId": 1,
+  "defaultPresentInterval": 3,
+  "defaultWidth": 1920,
+  "flipSwapchainLimit": 0,
+  "frameBufferFrames": 3,
+  "inactiveColor": {
+   "b": 64,
+   "g": 64,
+   "r": 64
+  },
+  "internalColorFormat": "Uyvy",
+  "lastSessionPath": null,
+  "masterFpsDen": 1001,
+  "masterFpsNum": 60000,
+  "multiviewLabelAnchor": "Bottom",
+  "multiviewLabelSize": 18.0,
+  "multiviewLabelUnit": "Px",
+  "nativeApiEnabled": true,
+  "nativeApiPort": 9400,
+  "ndiGpuUpload": true,
+  "previewColor": {
+   "b": 0,
+   "g": 255,
+   "r": 0
+  },
+  "programColor": {
+   "b": 0,
+   "g": 0,
+   "r": 255
+  },
+  "rebarDirectSample": false,
+  "rebarOptimization": true,
+  "renderer": "Auto",
+  "replayPresentInterval": 0,
+  "theme": "Charcoal",
+  "vmixApiEnabled": true,
+  "vmixApiPassword": "",
+  "vmixApiPort": 8088,
+  "vmixApiUser": "",
+  "vmixTcpEnabled": true
+ },
+ "streamEncoders": [],
+ "transitions": [
+  {
+   "dipA": 1.0,
+   "dipB": 0.0,
+   "dipG": 0.0,
+   "dipR": 0.0,
+   "direction": 0,
+   "durationUnit": 0,
+   "durationValue": 1,
+   "easing": 0,
+   "keepPreview": true,
+   "kind": 0,
+   "label": "Cut",
+   "param": 0.0,
+   "softness": 0.02,
+   "swap": true
+  },
+  {
+   "dipA": 1.0,
+   "dipB": 0.0,
+   "dipG": 0.0,
+   "dipR": 0.0,
+   "direction": 0,
+   "durationUnit": 0,
+   "durationValue": 30,
+   "easing": 0,
+   "keepPreview": true,
+   "kind": 1,
+   "label": "Fade",
+   "param": 0.0,
+   "softness": 0.02,
+   "swap": true
+  }
+ ],
+ "units": [
+  {
+   "alwaysOnTop": true,
+   "audio": {
+    "deviceId": "",
+    "deviceKind": "None",
+    "gain": 1.0,
+    "mapLeft": 0,
+    "mapRight": 1,
+    "mute": false
+   },
+   "audioLink": "Follow",
+   "fpsDen": 1001,
+   "fpsNum": 60000,
+   "height": 1080,
+   "id": 1,
+   "name": "Mixing Unit 1",
+   "overlaysOnAir": [],
+   "previewSceneId": 1,
+   "programSceneId": 2,
+   "switcherSceneFilter": "All",
+   "switcherSceneIds": [],
+   "width": 1920
+  }
+ ],
+ "version": 2
+}
