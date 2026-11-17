@@ -465,6 +465,18 @@ pub(crate) enum OutputHandle {
 }
 
 impl OutputHandle {
+    /// Names the transport in send-error lines. Every output shares the same
+    /// send loop, so a stream failure used to be logged as an OMT one.
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Omt(_) => "omt",
+            #[cfg(any(windows, target_os = "macos"))]
+            Self::Ndi(_) => "ndi",
+            Self::Pro(_) => "output",
+            Self::Stream(_) => "stream",
+        }
+    }
+
     fn pump(&mut self) -> Result<bool, String> {
         match self {
             Self::Omt(sender) => {
