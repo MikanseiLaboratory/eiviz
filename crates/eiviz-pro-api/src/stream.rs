@@ -2,16 +2,22 @@ use crate::error::ProResult;
 use crate::media::{MediaOutput, OutputStats};
 
 /// `ProStreamConfig.encoder` codes. The module refuses a code it does not know,
-/// and `VIDEOTOOLBOX` only ever builds on macOS, so a mismatch is an error at
-/// stream start rather than a silently different stream.
+/// and `VIDEOTOOLBOX` only builds on macOS while `MEDIAFOUNDATION` only builds
+/// on Windows, so a mismatch is an error at stream start rather than a silently
+/// different stream.
 pub const STREAM_ENCODER_OPENH264: u32 = 0;
 pub const STREAM_ENCODER_VIDEOTOOLBOX: u32 = 1;
+pub const STREAM_ENCODER_MEDIAFOUNDATION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VideoEncoderKind {
     OpenH264,
     /// Apple VideoToolbox. Only macOS builds can create this encoder.
     VideoToolbox,
+    /// Windows Media Foundation. An uncreated encoder is an error at stream
+    /// start; Windows itself always ships a Media Foundation H.264 encoder, so
+    /// no other kind quietly takes over.
+    MediaFoundation,
 }
 
 #[derive(Clone, Debug)]

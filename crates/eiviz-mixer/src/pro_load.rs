@@ -33,6 +33,9 @@ use crate::abi::ERR_IO;
 fn encoder_code(kind: eiviz_pro_api::VideoEncoderKind) -> u32 {
     match kind {
         eiviz_pro_api::VideoEncoderKind::VideoToolbox => eiviz_pro_api::STREAM_ENCODER_VIDEOTOOLBOX,
+        eiviz_pro_api::VideoEncoderKind::MediaFoundation => {
+            eiviz_pro_api::STREAM_ENCODER_MEDIAFOUNDATION
+        }
         eiviz_pro_api::VideoEncoderKind::OpenH264 => eiviz_pro_api::STREAM_ENCODER_OPENH264,
     }
 }

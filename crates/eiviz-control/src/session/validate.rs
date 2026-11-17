@@ -210,14 +210,16 @@ pub fn validate(doc: &Document) -> Result<(), ValidationError> {
     if !valid_rate(doc.settings.master_fps_num, doc.settings.master_fps_den) {
         return Err(ValidationError::new("master fps is invalid"));
     }
-    // One encoder a session can name: OpenH264 is linked everywhere,
-    // VideoToolbox on macOS builds, where the module is the one that builds it.
-    // Everything else would reach the mixer and stop the stream at start, so the
-    // document says so here, with the encoder named.
+    // A stream encoder the session names must be one every build knows; whether
+    // the OS can build it is the module's business at stream start (the doc
+    // itself is portable), so the list stays platform independent.
     for encoder in &doc.stream_encoders {
-        if !matches!(encoder.encoder.as_str(), "" | "OpenH264" | "VideoToolbox") {
+        if !matches!(
+            encoder.encoder.as_str(),
+            "" | "OpenH264" | "VideoToolbox" | "MediaFoundation"
+        ) {
             return Err(ValidationError::new(format!(
-                "stream encoder {} names encoder {:?}; the session knows OpenH264 and VideoToolbox",
+                "stream encoder {} names encoder {:?}; the session knows OpenH264, VideoToolbox and MediaFoundation",
                 encoder.id, encoder.encoder
             )));
         }
@@ -345,7 +347,26 @@ fn valid_rate(num: u32, den: u32) -> bool {
 }
 
 pub fn validate_for_apply(doc: &Document) -> Result<(), ValidationError> {
-    validate(doc)
+    validate(doc)?;
+    // Publishes-RTMP outputs must reference an encoder the session defines. A
+    // dangling reference would attach a destination to an encoder the mixer has
+    // never seen and retry it forever, so it stops here with the reason. A
+    // session that merely carries a dangling reference still loads for editing.
+    for output in &doc.outputs {
+        if output.transport == OutputTransport::Rtmp
+            && output.enabled
+            && !doc
+                .stream_encoders
+                .iter()
+                .any(|encoder| encoder.id == output.stream_encoder_id)
+        {
+            return Err(ValidationError::new(format!(
+                "output {} publishes RTMP with stream encoder {}, which the session does not define",
+                output.id, output.stream_encoder_id
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn unique_ids(ids: impl Iterator<Item = u64>, kind: &str) -> Result<(), ValidationError> {
@@ -1548,11 +1569,43 @@ mod encoder_validation_tests {
         validate(&encoder_doc("OpenH264")).unwrap();
         validate(&encoder_doc("VideoToolbox"))
             .expect("VideoToolbox is a named encoder of the macOS module");
+        validate(&encoder_doc("MediaFoundation"))
+            .expect("MediaFoundation is a named encoder of the Windows module");
         let error = validate(&encoder_doc("Av1")).unwrap_err();
         assert!(
             error.message.contains("Av1"),
             "the unknown encoder is named: {}",
             error.message
         );
+    }
+
+    /// A live RTMP output must name an encoder the session defines. A dangling
+    /// reference would attach a destination to an encoder the mixer never had,
+    /// so `validate_for_apply` stops it with the reason while the session
+    /// itself still loads for editing.
+    #[test]
+    fn an_enabled_rtmp_output_needs_a_defined_encoder() {
+        let text = r#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "Bars", "kind": "Bars" }],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }],
+          "streamEncoders": [{ "id": 1, "name": "YT", "sourceKind": "MuProgram", "unitId": 1 }],
+          "outputs": [{ "id": 100, "name": "YT", "transport": "Rtmp", "enabled": true,
+                        "streamEncoderId": 1, "rtmpUrl": "rtmp://example/live" }]
+        }"#;
+        let doc = parse(text.as_bytes()).unwrap();
+        validate_for_apply(&doc).unwrap();
+        validate(&doc).unwrap();
+
+        // Same document with a dangling reference: refuse applying it, keep
+        // loading it, and refuse it only while the output publishes.
+        let mut broken = doc.clone();
+        broken.outputs[0].stream_encoder_id = 9;
+        let error = validate_for_apply(&broken).unwrap_err();
+        assert!(error.message.contains("9"), "{}", error.message);
+        validate(&broken).unwrap();
+        broken.outputs[0].enabled = false;
+        validate_for_apply(&broken).unwrap();
     }
 }

@@ -82,7 +82,9 @@ pub use abi::{
     OutputRuntimeStats, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM,
     SCENE_BASE, SCENE_SEQ_PLAY, SCENE_SEQ_REVERSE, SCENE_SEQ_STOP, SRC_BARS, SRC_BLACK, SRC_BLUE,
     SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
-    SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
+    SRC_KIND_SCENE, SourceUsage, STREAM_ENCODER_BIT_MEDIAFOUNDATION,
+    STREAM_ENCODER_BIT_OPENH264, STREAM_ENCODER_BIT_VIDEOTOOLBOX, TRANSITION_ADDITIVE,
+    TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
     TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
     TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DATAMOSH,
     TRANSITION_DIAMOND, TRANSITION_DIP, TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT,
@@ -4408,6 +4410,45 @@ pub unsafe extern "C" fn mixer_stream_encoder_add(
     })
 }
 
+/// Last stream-encoder add result per encoder id. A destination attach reports
+/// it next to "stream encoder is not running", so the operator sees why the
+/// encoder is absent instead of scrolling for an earlier diagnostic.
+enum StreamEncoderState {
+    Running,
+    Failed(String),
+}
+
+static STREAM_ENCODER_STATES: OnceLock<Mutex<HashMap<u64, StreamEncoderState>>> = OnceLock::new();
+
+fn stream_encoder_states() -> &'static Mutex<HashMap<u64, StreamEncoderState>> {
+    STREAM_ENCODER_STATES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn record_stream_encoder_result(encoder_id: u64, state: StreamEncoderState) {
+    if let Ok(mut states) = stream_encoder_states().lock() {
+        states.insert(encoder_id, state);
+    }
+}
+
+/// Human note for a destination attach that found no running encoder.
+fn stream_encoder_note(encoder_id: u64) -> String {
+    stream_encoder_note_or(encoder_id)
+        .unwrap_or_else(|| "no add was ever attempted".to_string())
+}
+
+/// Human note for a destination attach that found no running encoder, when a
+/// previous add is known.
+fn stream_encoder_note_or(encoder_id: u64) -> Option<String> {
+    let states = stream_encoder_states();
+    let states = states.lock().unwrap_or_else(|poison| poison.into_inner());
+    states.get(&encoder_id).map(|state| match state {
+        StreamEncoderState::Running => {
+            "the last add succeeded; it has since been removed or stopped".to_string()
+        }
+        StreamEncoderState::Failed(message) => format!("the last add failed: {message}"),
+    })
+}
+
 fn stream_encoder_add_ffi(
     encoder_id: u64,
     source_kind: u32,
@@ -4435,33 +4476,53 @@ fn stream_encoder_add_ffi(
     audio_delay_ms: u32,
 ) -> i32 {
     if (width == 0) != (height == 0) || (fps_num == 0) != (fps_den == 0) {
+        // This used to be a silent reject; the destination attach then reported
+        // only "stream encoder is not running" and the loop was invisible.
+        let message = format!(
+            "stream encoder needs both sides of the picture size and frame rate: {width}x{height} at {fps_num}/{fps_den}; fill both or leave both at auto"
+        );
+        crate::diag::error(&format!("stream encoder id={encoder_id}: {message}"));
+        record_stream_encoder_result(encoder_id, StreamEncoderState::Failed(message.clone()));
+        let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
         return ERR_INVALID_ARGUMENT;
     }
     let extras = crate::pro::OutputExtras::default();
     if let Some(code) = gate_pro_output(
         encoder_id, OUT_RTMP, unit_id, width, height, fps_num, fps_den, &extras,
     ) {
+        // The gate put its reason into the telemetry. Keep it for the next
+        // destination attach, which otherwise reports only "not running".
+        let message = with_mixer(|mixer| {
+            mixer.telemetry.lock_or_recover().last_error.clone()
+        })
+        .unwrap_or_else(|_| "the stream encoder was refused".to_string());
+        record_stream_encoder_result(encoder_id, StreamEncoderState::Failed(message));
         return code;
     }
     let (width, height, fps_num, fps_den) = picture_of(unit_id, width, height, fps_num, fps_den);
     let Some(backend) = crate::pro::module().streaming() else {
         let message = "RTMP is not linked in this build";
         crate::diag::error(&format!("stream encoder id={encoder_id}: {message}"));
+        record_stream_encoder_result(encoder_id, StreamEncoderState::Failed(message.into()));
         let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
         return ERR_IO;
     };
-    if encoder > eiviz_pro_api::STREAM_ENCODER_VIDEOTOOLBOX {
-        let message = "video encoder is not available";
+    if encoder > eiviz_pro_api::STREAM_ENCODER_MEDIAFOUNDATION {
+        let message = format!("video encoder {encoder} is not available in this build");
         crate::diag::error(&format!("stream encoder id={encoder_id}: {message}"));
+        record_stream_encoder_result(encoder_id, StreamEncoderState::Failed(message.clone()));
         let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
         return ERR_INVALID_ARGUMENT;
     }
     let encoder_kind = match encoder {
         // The codes are the module's StreamEncoder codes: passing the ask through is
-        // what makes VideoToolbox reachable, and the module refuses a code it cannot
-        // build, so an unusable ask is refused at stream start, not silently
-        // switched to OpenH264.
+        // what makes VideoToolbox and MediaFoundation reachable, and the module
+        // refuses a code it cannot build, so an unusable ask is refused at stream
+        // start, not silently switched to OpenH264.
         eiviz_pro_api::STREAM_ENCODER_VIDEOTOOLBOX => eiviz_pro_api::VideoEncoderKind::VideoToolbox,
+        eiviz_pro_api::STREAM_ENCODER_MEDIAFOUNDATION => {
+            eiviz_pro_api::VideoEncoderKind::MediaFoundation
+        }
         _ => eiviz_pro_api::VideoEncoderKind::OpenH264,
     };
     let started = backend.start_stream(&eiviz_pro_api::StreamEncodeConfig {
@@ -4503,6 +4564,10 @@ fn stream_encoder_add_ffi(
                 "stream encoder id={encoder_id}: {}",
                 error.message
             ));
+            record_stream_encoder_result(
+                encoder_id,
+                StreamEncoderState::Failed(error.message.clone()),
+            );
             let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error.message));
             return code;
         }
@@ -4595,6 +4660,7 @@ fn stream_encoder_add_ffi(
             },
         );
         mixer.send_workers.insert(encoder_id, worker);
+        record_stream_encoder_result(encoder_id, StreamEncoderState::Running);
         crate::diag::info(&format!(
             "stream encoder id={encoder_id} {width}x{height} {fps_num}/{fps_den}"
         ));
@@ -4647,7 +4713,10 @@ pub unsafe extern "C" fn mixer_stream_destination_add(
         }) {
             Ok(Some(stream)) => stream,
             Ok(None) => {
-                let message = "stream encoder is not running";
+                let message = format!(
+                    "stream encoder is not running ({})",
+                    stream_encoder_note(encoder_id)
+                );
                 crate::diag::error(&format!(
                     "stream destination id={destination_id} encoder={encoder_id}: {message}"
                 ));
@@ -4818,6 +4887,7 @@ unsafe fn mixer_capabilities_ffi(out: *mut MixerCapabilities) -> i32 {
         replay_angle_limit: 0,
         replay_channel_limit: 0,
         replay_linked: 0,
+        stream_encoder_mask: 0,
     };
     crate::pro::fill_capabilities(&mut caps);
     unsafe { *out = caps };

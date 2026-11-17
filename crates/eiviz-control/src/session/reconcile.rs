@@ -76,6 +76,13 @@ pub enum ReconcileOp {
         encoder_id: u64,
         id: u64,
     },
+    /// A documented destination names a stream encoder the document never
+    /// defines. Attaching it would fail on every reconcile, so report it as a
+    /// final state instead of a retriable one.
+    FailOutput {
+        id: u64,
+        message: String,
+    },
     AudioInput {
         id: u64,
         units: Vec<u64>,
@@ -649,6 +656,10 @@ fn apply_live<P: crate::port::MixerPort + ?Sized>(
         ),
         ReconcileOp::RemoveStreamDestination { encoder_id, id } => {
             port.stream_destination_remove(*encoder_id, *id)
+        }
+        ReconcileOp::FailOutput { id, message } => {
+            statuses.push(failed(crate::ids::ResourceKind::Output, *id, message));
+            Ok(())
         }
         ReconcileOp::AudioInput {
             id,
@@ -1362,7 +1373,33 @@ fn diff_streams(previous: Option<&Document>, next: &Document, ops: &mut Vec<Reco
                 .iter()
                 .any(|encoder| encoder.id == output.stream_encoder_id)
         {
-            ops.push(ReconcileOp::AddStreamDestination(destination_apply(output)));
+            // The mixer has no such encoder and nothing ever retries the
+            // dangling reference, so report it as a final failure instead of
+            // attaching a destination that keeps failing on every publish.
+            // An earlier document that already carried the same dangling
+            // reference already reported it.
+            let previously_dangling = previous
+                .map(|prev| {
+                    prev.outputs.iter().any(|prev_output| {
+                        rtmp_destination(prev_output)
+                            && prev_output.id == output.id
+                            && prev_output.stream_encoder_id == output.stream_encoder_id
+                            && !prev
+                                .stream_encoders
+                                .iter()
+                                .any(|prev_encoder| prev_encoder.id == prev_output.stream_encoder_id)
+                    })
+                })
+                .unwrap_or(false);
+            if !previously_dangling {
+                ops.push(ReconcileOp::FailOutput {
+                    id: output.id,
+                    message: format!(
+                        "output {} needs stream encoder {}, which the session does not define",
+                        output.id, output.stream_encoder_id
+                    ),
+                });
+            }
         }
     }
 }
@@ -1420,11 +1457,14 @@ fn stream_encoder_apply(encoder: &StreamEncoderDto) -> StreamEncoderApply {
         buffer_ms: encoder.buffer_ms,
         encoder: match encoder.encoder.as_str() {
             "" | "OpenH264" => 0,
-            // `STREAM_ENCODER_VIDEOTOOLBOX` in eiviz-pro-api. The code goes through
-            // unchanged: the module refuses one it cannot build (VideoToolbox is
-            // macOS only), so a mismatch is an error at stream start rather than a
-            // quietly different encoder doing the work.
+            // `STREAM_ENCODER_VIDEOTOOLBOX` / `STREAM_ENCODER_MEDIAFOUNDATION`
+            // in eiviz-pro-api. The code goes through unchanged: the module
+            // refuses one it cannot build (VideoToolbox is macOS only,
+            // MediaFoundation is Windows only), so a mismatch is an error at
+            // stream start rather than a quietly different encoder doing the
+            // work.
             "VideoToolbox" => 1,
+            "MediaFoundation" => 2,
             _ => u32::MAX,
         },
         complexity: encoder.complexity,
@@ -1440,7 +1480,9 @@ fn stream_encoder_apply(encoder: &StreamEncoderDto) -> StreamEncoderApply {
 
 /// A failed attach is otherwise skipped forever: the next document compares equal
 /// and `plan` emits nothing. Re-issue destination adds, and rebuild an encoder
-/// whose last attempt never started.
+/// whose last attempt never started — either because its own row is not ready,
+/// whatever the reason it recorded, or because a destination still reports a
+/// missing encoder.
 pub fn reinforce_streams(
     previous: &[crate::live::ResourceStatus],
     next: &Document,
@@ -1465,7 +1507,7 @@ pub fn reinforce_streams(
         if dests.is_empty() {
             continue;
         }
-        let encoder_down = trouble(encoder.id).is_some_and(needs_encoder)
+        let encoder_down = trouble(encoder.id).is_some()
             || dests
                 .iter()
                 .any(|dest| trouble(dest.id).is_some_and(needs_encoder));
@@ -1892,6 +1934,107 @@ mod tests {
             ops.iter().any(|op| {
                 matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102)
             })
+        );
+    }
+
+    #[test]
+    fn an_encoder_failure_for_any_reason_is_rebuilt_on_the_next_publish() {
+        let doc = rtmp_doc("youtube", "rtmp://example/live");
+        let mut ops = plan(Some(&doc), &doc);
+        let failed = vec![crate::live::ResourceStatus {
+            kind: crate::ids::ResourceKind::Output,
+            id: 1,
+            phase: crate::live::ResourcePhase::Retrying,
+            message: "stream encoder needs both sides of the picture size and frame rate: 1920x0 at 60x0; fill both or leave both at auto".into(),
+        }];
+        reinforce_streams(&failed, &doc, &mut ops);
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                ReconcileOp::RemoveStreamEncoder { id: 1 }
+            )),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(
+                |op| matches!(op, ReconcileOp::AddStreamEncoder(spec) if spec.id == 1)
+            ),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102)
+            }),
+            "{ops:?}"
+        );
+    }
+
+    #[test]
+    fn a_mediafoundation_encoder_maps_to_the_mediafoundation_code() {
+        let mut doc = rtmp_doc("youtube", "rtmp://example/live");
+        doc.stream_encoders[0].encoder = "MediaFoundation".into();
+        let ops = plan(None, &doc);
+        assert!(
+            ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamEncoder(spec) if spec.encoder == 2)
+            }),
+            "{ops:?}"
+        );
+    }
+
+    #[test]
+    fn a_destination_without_an_encoder_fails_once_instead_of_retrying() {
+        let mut doc = rtmp_doc("youtube", "rtmp://example/live");
+        doc.outputs[0].stream_encoder_id = 9;
+        let ops = plan(None, &doc);
+        assert!(
+            ops.iter().any(
+                |op| matches!(op, ReconcileOp::FailOutput { id: 102, .. })
+            ),
+            "{ops:?}"
+        );
+        assert!(
+            !ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102)
+            }),
+            "{ops:?}"
+        );
+        let ops = plan(Some(&doc), &doc);
+        assert!(
+            !ops.iter().any(|op| matches!(
+                op,
+                ReconcileOp::FailOutput { id: 102, .. }
+            )),
+            "{ops:?}"
+        );
+        assert!(
+            !ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102)
+            }),
+            "{ops:?}"
+        );
+        // Naming a defined encoder again restores the ordinary attach, and the
+        // stale reference is removed first so the mixer never holds both.
+        let ops = plan(Some(&doc), &rtmp_doc("youtube", "rtmp://example/live"));
+        assert!(
+            ops.iter().any(
+                |op| matches!(op, ReconcileOp::RemoveStreamDestination { id: 102, .. })
+            ),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamDestination(spec)
+                        if spec.id == 102 && spec.encoder_id == 1)
+            }),
+            "{ops:?}"
+        );
+        assert!(
+            !ops.iter().any(|op| matches!(
+                op,
+                ReconcileOp::FailOutput { .. }
+            )),
+            "{ops:?}"
         );
     }
 

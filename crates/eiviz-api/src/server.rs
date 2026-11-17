@@ -1019,6 +1019,7 @@ fn proto_snapshot(snapshot: eiviz_control::Snapshot, request_id: String) -> Prot
                 replay_angle_limit: capabilities.replay_angle_limit,
                 replay_channel_limit: capabilities.replay_channel_limit,
                 replay_linked: capabilities.replay_linked,
+                stream_encoder_mask: capabilities.stream_encoder_mask,
             }),
         })),
     }

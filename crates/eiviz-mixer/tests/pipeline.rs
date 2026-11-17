@@ -1376,6 +1376,7 @@ fn scene_compose_overlay_after_mix_multiview_and_tbar_take() {
             replay_angle_limit: 0,
             replay_channel_limit: 0,
             replay_linked: 0,
+            stream_encoder_mask: eiviz_mixer::STREAM_ENCODER_BIT_OPENH264,
         };
         assert_eq!(mixer_capabilities(&mut caps), OK);
         assert_eq!(caps.plan, 0);

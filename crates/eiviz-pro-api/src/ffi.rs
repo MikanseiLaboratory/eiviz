@@ -165,7 +165,8 @@ pub struct ProStreamConfig {
     pub encoder_threads: u32,
     /// `0` sends immediately. Otherwise hold this many milliseconds, then release at 1x.
     pub buffer_ms: u32,
-    /// `0` is OpenH264. Any other value is rejected.
+    /// Streams use the module's `StreamEncoder` codes: 0 is OpenH264, 1
+    /// VideoToolbox, 2 MediaFoundation. Any other value is rejected.
     pub encoder: u32,
     /// `0` low, `1` medium, `2` high.
     pub complexity: u32,

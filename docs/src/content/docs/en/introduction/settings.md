@@ -80,6 +80,10 @@ One thread is assigned per output. Detail is in [NDI / OMT](/eiviz/en/features/o
 
 Windows applies when you press OK. macOS can also Apply per row.
 
+### Streaming (RTMP) diagnostics
+
+When a stream does not start and the log says `stream destination id=…: stream encoder is not running (…)`, first check that the session defines a stream encoder with that name and that the ingest URL and its secret are set. The text in parentheses is the result of the latest encoder add (for example `the last add failed: ...`). When the encoder add itself fails, an earlier `stream encoder id=…` line names the reason: picture size or frame rate, the plan limit, or a build without the Pro streaming module. The encoder picker lists OpenH264 plus Media Foundation on Windows (the OS encoder; NVIDIA/AMD/Intel hardware when the GPU driver provides it) and OpenH264 plus VideoToolbox on macOS.
+
 ## Multiview
 
 <img src="/eiviz/images/en/introduction/settings/multiview.jpg" alt="Screenshot of the Multiview settings" style="max-width: 100%; height: auto;" />

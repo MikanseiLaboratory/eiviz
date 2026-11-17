@@ -43,6 +43,10 @@ description: セッションに保存される設定ウィンドウの項目
   - **GPU**: GPU負荷を活用する補助エンコーダー。Multiviewなどの監視用途に適しています。
   - ※NDIは常にCPUでエンコードされます。
 
+### 配信 (RTMP) の診断
+
+配信が始まらず、ログに `stream destination id=…: stream encoder is not running (…)` と出る場合は、まず同じ名前のストリームエンコーダがセッションに定義され、URLの接続先とシークレットが設定済みかを確認します。括弧内は直近のエンコーダ追加の結果です（例: `the last add failed: ...`）。エンコーダの追加自体が失敗しているときは、その直前に `stream encoder id=…` のエラー行が出力され、解像度・フレームレート・プラン上限・Proモジュールの有無など理由が書かれています。エンコーダーの選択肢は、WindowsではOpenH264とMedia Foundation（OS側のエンコーダー。ドライバーが対応していればNVIDIA/AMD/Intelのハードウェアを使用）、macOSではOpenH264とVideoToolboxが表示されます。
+
 ## Multiview
 
 マルチビュー機能の動作を設定します。詳細は[Multiviews](/eiviz/ja/concepts/multiviews/)を参照してください。

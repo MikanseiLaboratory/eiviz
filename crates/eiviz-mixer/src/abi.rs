@@ -168,6 +168,13 @@ pub const OUT_RTMP: u32 = 3;
 #[allow(dead_code)]
 pub const QUOTA_UNLIMITED: u32 = u32::MAX;
 
+/// Availability bits for [`MixerCapabilities`]. Bit `n` is ON when encoder
+/// code `n` in `ProStreamConfig.encoder` can start a stream on this build:
+/// `1 << 0` OpenH264, `1 << 1` VideoToolbox, `1 << 2` MediaFoundation.
+pub const STREAM_ENCODER_BIT_OPENH264: u32 = 1;
+pub const STREAM_ENCODER_BIT_VIDEOTOOLBOX: u32 = 1 << 1;
+pub const STREAM_ENCODER_BIT_MEDIAFOUNDATION: u32 = 1 << 2;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MixerCapabilities {
@@ -187,6 +194,10 @@ pub struct MixerCapabilities {
     pub replay_angle_limit: u32,
     pub replay_channel_limit: u32,
     pub replay_linked: u32,
+    /// Available stream encoder kinds. A mixer without the Pro streaming
+    /// module reports nothing, and the host then offers only the encoder it
+    /// knows anyway.
+    pub stream_encoder_mask: u32,
 }
 
 #[repr(C)]

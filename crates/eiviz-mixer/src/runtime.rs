@@ -490,6 +490,7 @@ impl MixerPort for ProcessMixer {
             replay_angle_limit: 0,
             replay_channel_limit: 0,
             replay_linked: 0,
+            stream_encoder_mask: 0,
         };
         if unsafe { mixer_capabilities(&mut raw) } != crate::abi::OK {
             return eiviz_control::query::Capabilities::default();
@@ -511,6 +512,7 @@ impl MixerPort for ProcessMixer {
             replay_angle_limit: raw.replay_angle_limit,
             replay_channel_limit: raw.replay_channel_limit,
             replay_linked: raw.replay_linked != 0,
+            stream_encoder_mask: raw.stream_encoder_mask,
             ..eiviz_control::query::Capabilities::default()
         }
     }
