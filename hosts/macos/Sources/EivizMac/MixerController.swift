@@ -86,6 +86,7 @@ final class MixerController: ObservableObject {
     var mixTimer: Timer?
     var sessionSyncTimer: Timer?
     var streamTimer: Timer?
+    private var streamLogAt: Date?
     /// Live state of each RTMP destination, for the strips beside the deck.
     @Published var streamStats: [UInt64: MixerFFI.StreamDestinationStats] = [:]
     /// Revision of the control session whose Replay document the host has already adopted.
@@ -297,7 +298,23 @@ final class MixerController: ObservableObject {
                 next[output.id] = state
             }
         }
-        streamStats = next
+        if next != streamStats {
+            streamStats = next
+        }
+        // A stream that is enabled but sending nothing is the case support needs to
+        // see; one line every couple of seconds names the numbers.
+        if !next.isEmpty {
+            let now = Date()
+            if streamLogAt.map({ now.timeIntervalSince($0) >= 2 }) ?? true {
+                streamLogAt = now
+                for (id, state) in next {
+                    HostLog.write(
+                        "INFO",
+                        "stream stats dest=\(id) connected=\(state.connected) frames=\(state.frames) dropped=\(state.dropped) fps=\(Double(state.fpsMilli) / 1000) bitrate=\(state.bitrate) lag=\(state.lagMs) message=\(state.message)"
+                    )
+                }
+            }
+        }
     }
 
     private func startTimers() {

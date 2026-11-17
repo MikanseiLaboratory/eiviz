@@ -69,7 +69,8 @@ struct StreamStripsView: View {
                 // another input) is what tells the operator what to change.
                 return (amber, state.message.isEmpty ? slow : "\(slow)\n\(state.message)")
             }
-            return (green, state.message.isEmpty ? L10n.t("chrome.stream") : state.message)
+            let detail = "\(Int(Double(state.fpsMilli) / 1000)) fps / \(state.bitrate / 1000) kbps / frames \(state.frames)"
+            return (green, state.message.isEmpty ? detail : "\(detail)\n\(state.message)")
         }
         // A destination takes a moment to connect; only call it a fault after
         // three seconds or when the core reports a reason.

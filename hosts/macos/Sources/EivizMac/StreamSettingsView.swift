@@ -401,7 +401,9 @@ private struct EncodeProfileCard: View {
     private var encoderPicker: some View {
         Picker("", selection: $encoder.encoder) {
             ForEach(encoderOptions, id: \.self) { kind in
-                Text(kind).tag(kind)
+                // The stored tag stays the module's name; the label is what the
+                // operator knows the encoder by.
+                Text(kind == "VideoToolbox" ? "Apple VideoToolbox" : kind).tag(kind)
             }
         }
         .labelsHidden()

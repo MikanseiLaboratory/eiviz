@@ -339,7 +339,7 @@ enum MixerFFI {
         mixer_stream_destination_remove(encoderId, destinationId)
     }
 
-    struct StreamDestinationStats {
+    struct StreamDestinationStats: Equatable {
         var connected: Bool
         var frames: UInt64
         var dropped: UInt64
