@@ -82,10 +82,9 @@ pub use abi::{
     OutputRuntimeStats, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM,
     SCENE_BASE, SCENE_SEQ_PLAY, SCENE_SEQ_REVERSE, SCENE_SEQ_STOP, SRC_BARS, SRC_BLACK, SRC_BLUE,
     SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
-    SRC_KIND_SCENE, SourceUsage, STREAM_ENCODER_BIT_MEDIAFOUNDATION,
-    STREAM_ENCODER_BIT_OPENH264, STREAM_ENCODER_BIT_VIDEOTOOLBOX, TRANSITION_ADDITIVE,
-    TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
-    TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
+    SRC_KIND_SCENE, STREAM_ENCODER_BIT_MEDIAFOUNDATION, STREAM_ENCODER_BIT_OPENH264,
+    STREAM_ENCODER_BIT_VIDEOTOOLBOX, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR,
+    TRANSITION_BLINDS, TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
     TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DATAMOSH,
     TRANSITION_DIAMOND, TRANSITION_DIP, TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT,
     TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP, TRANSITION_DISPLACE, TRANSITION_FADE,
@@ -4446,8 +4445,7 @@ fn record_stream_encoder_result(encoder_id: u64, state: StreamEncoderState) {
 
 /// Human note for a destination attach that found no running encoder.
 fn stream_encoder_note(encoder_id: u64) -> String {
-    stream_encoder_note_or(encoder_id)
-        .unwrap_or_else(|| "no add was ever attempted".to_string())
+    stream_encoder_note_or(encoder_id).unwrap_or_else(|| "no add was ever attempted".to_string())
 }
 
 /// Human note for a destination attach that found no running encoder, when a
@@ -4507,10 +4505,8 @@ fn stream_encoder_add_ffi(
     ) {
         // The gate put its reason into the telemetry. Keep it for the next
         // destination attach, which otherwise reports only "not running".
-        let message = with_mixer(|mixer| {
-            mixer.telemetry.lock_or_recover().last_error.clone()
-        })
-        .unwrap_or_else(|_| "the stream encoder was refused".to_string());
+        let message = with_mixer(|mixer| mixer.telemetry.lock_or_recover().last_error.clone())
+            .unwrap_or_else(|_| "the stream encoder was refused".to_string());
         record_stream_encoder_result(encoder_id, StreamEncoderState::Failed(message));
         return code;
     }
@@ -7462,8 +7458,7 @@ fn stream_pace(targets: &[PaceTarget]) -> StreamPace {
         let target_fps_milli = target.target_fps_milli;
         // sent_fps_milli stays 0 until the first one-second window closes.
         let fps_low = stats.sent_fps_milli > 0
-            && stats.sent_fps_milli.saturating_mul(100)
-                < target_fps_milli.saturating_mul(85);
+            && stats.sent_fps_milli.saturating_mul(100) < target_fps_milli.saturating_mul(85);
         let behind = stats.connected && target.warmed && (stats.media_lag_ms >= 400 || fps_low);
         if behind || stats.media_lag_ms >= pace.lag_ms {
             pace.lag_ms = stats.media_lag_ms;

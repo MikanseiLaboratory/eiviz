@@ -686,7 +686,13 @@ impl StreamBackend for LoadedPro {
         // fixed limit caps the list.
         let mut needed = 0usize;
         let status = unsafe {
-            enumerate(self.module, encoder_code(kind), std::ptr::null_mut(), 0, &mut needed)
+            enumerate(
+                self.module,
+                encoder_code(kind),
+                std::ptr::null_mut(),
+                0,
+                &mut needed,
+            )
         };
         if needed == 0 {
             let _ = status;
@@ -694,8 +700,15 @@ impl StreamBackend for LoadedPro {
         }
         let mut buffer = vec![0u8; needed];
         let mut written = 0usize;
-        let status =
-            unsafe { enumerate(self.module, encoder_code(kind), buffer.as_mut_ptr(), buffer.len(), &mut written) };
+        let status = unsafe {
+            enumerate(
+                self.module,
+                encoder_code(kind),
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                &mut written,
+            )
+        };
         if !status.is_ok() {
             return Vec::new();
         }

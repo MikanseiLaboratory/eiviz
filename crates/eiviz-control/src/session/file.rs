@@ -2595,6 +2595,9 @@ mod tests {
                 output.fps_den
             );
         }
-        println!("validate_for_apply: {:?}", crate::session::validate_for_apply(&doc));
+        println!(
+            "validate_for_apply: {:?}",
+            crate::session::validate_for_apply(&doc)
+        );
     }
 }

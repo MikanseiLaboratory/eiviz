@@ -22,9 +22,8 @@ use crate::{
     mixer_set_live_save, mixer_set_master_fps, mixer_set_mv_label, mixer_set_ndi_gpu_upload,
     mixer_set_rebar_optimization, mixer_snapshot, mixer_stream_destination_add,
     mixer_stream_destination_remove, mixer_stream_encoder_add, mixer_stream_encoder_devices,
-    mixer_stream_encoder_remove,
-    mixer_unit_configure, mixer_video_seek, mixer_video_set_loop, mixer_video_set_playing,
-    mixer_video_start,
+    mixer_stream_encoder_remove, mixer_unit_configure, mixer_video_seek, mixer_video_set_loop,
+    mixer_video_set_playing, mixer_video_start,
 };
 
 pub(crate) fn control() -> &'static Mutex<ControlService> {
@@ -634,9 +633,8 @@ impl MixerPort for ProcessMixer {
 
     fn stream_encoder_devices(&mut self, kind: u32) -> ControlResult<String> {
         let mut needed = 0usize;
-        let code = unsafe {
-            mixer_stream_encoder_devices(kind, std::ptr::null_mut(), 0, &mut needed)
-        };
+        let code =
+            unsafe { mixer_stream_encoder_devices(kind, std::ptr::null_mut(), 0, &mut needed) };
         if code != crate::abi::ERR_BUFFER_TOO_SMALL || needed == 0 {
             map_abi(code)?;
             return Ok("[]".to_string());

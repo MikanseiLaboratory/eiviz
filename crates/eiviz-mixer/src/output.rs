@@ -331,10 +331,9 @@ pub(crate) fn apply_send_cmd(sender: &mut OutputHandle, cmd: SendCmd, omt_gpu: &
                 sender.send_video_uyvy(width, height, stride, pts, data, fps_n, fps_d)
             })) {
                 Ok(Ok(())) => {}
-                Ok(Err(error)) => crate::diag::error_throttled(&format!(
-                    "{} send video: {error}",
-                    sender.kind()
-                )),
+                Ok(Err(error)) => {
+                    crate::diag::error_throttled(&format!("{} send video: {error}", sender.kind()))
+                }
                 Err(_) => crate::diag::mark_fatal("send video panicked"),
             }
         }
@@ -375,10 +374,9 @@ pub(crate) fn apply_send_cmd(sender: &mut OutputHandle, cmd: SendCmd, omt_gpu: &
                 sender.send_audio(&packet)
             })) {
                 Ok(Ok(())) => {}
-                Ok(Err(error)) => crate::diag::error_throttled(&format!(
-                    "{} send audio: {error}",
-                    sender.kind()
-                )),
+                Ok(Err(error)) => {
+                    crate::diag::error_throttled(&format!("{} send audio: {error}", sender.kind()))
+                }
                 Err(_) => crate::diag::mark_fatal("send audio panicked"),
             }
         }

@@ -1399,10 +1399,9 @@ fn diff_streams(previous: Option<&Document>, next: &Document, ops: &mut Vec<Reco
                         rtmp_destination(prev_output)
                             && prev_output.id == output.id
                             && prev_output.stream_encoder_id == output.stream_encoder_id
-                            && !prev
-                                .stream_encoders
-                                .iter()
-                                .any(|prev_encoder| prev_encoder.id == prev_output.stream_encoder_id)
+                            && !prev.stream_encoders.iter().any(|prev_encoder| {
+                                prev_encoder.id == prev_output.stream_encoder_id
+                            })
                     })
                 })
                 .unwrap_or(false);
@@ -1968,9 +1967,9 @@ mod tests {
         let encoder = ops
             .iter()
             .position(|op| matches!(op, ReconcileOp::AddStreamEncoder(spec) if spec.id == 1));
-        let destination = ops.iter().position(|op| {
-            matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102)
-        });
+        let destination = ops
+            .iter()
+            .position(|op| matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102));
         assert!(encoder.is_some(), "{ops:?}");
         assert!(destination.is_some(), "{ops:?}");
         assert!(
@@ -2021,16 +2020,13 @@ mod tests {
         }];
         reinforce_streams(&failed, &doc, &mut ops);
         assert!(
-            ops.iter().any(|op| matches!(
-                op,
-                ReconcileOp::RemoveStreamEncoder { id: 1 }
-            )),
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::RemoveStreamEncoder { id: 1 })),
             "{ops:?}"
         );
         assert!(
-            ops.iter().any(
-                |op| matches!(op, ReconcileOp::AddStreamEncoder(spec) if spec.id == 1)
-            ),
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::AddStreamEncoder(spec) if spec.id == 1)),
             "{ops:?}"
         );
         assert!(
@@ -2060,9 +2056,8 @@ mod tests {
         doc.outputs[0].stream_encoder_id = 9;
         let ops = plan(None, &doc);
         assert!(
-            ops.iter().any(
-                |op| matches!(op, ReconcileOp::FailOutput { id: 102, .. })
-            ),
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::FailOutput { id: 102, .. })),
             "{ops:?}"
         );
         assert!(
@@ -2073,10 +2068,8 @@ mod tests {
         );
         let ops = plan(Some(&doc), &doc);
         assert!(
-            !ops.iter().any(|op| matches!(
-                op,
-                ReconcileOp::FailOutput { id: 102, .. }
-            )),
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::FailOutput { id: 102, .. })),
             "{ops:?}"
         );
         assert!(
@@ -2089,9 +2082,8 @@ mod tests {
         // stale reference is removed first so the mixer never holds both.
         let ops = plan(Some(&doc), &rtmp_doc("youtube", "rtmp://example/live"));
         assert!(
-            ops.iter().any(
-                |op| matches!(op, ReconcileOp::RemoveStreamDestination { id: 102, .. })
-            ),
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::RemoveStreamDestination { id: 102, .. })),
             "{ops:?}"
         );
         assert!(
@@ -2102,10 +2094,8 @@ mod tests {
             "{ops:?}"
         );
         assert!(
-            !ops.iter().any(|op| matches!(
-                op,
-                ReconcileOp::FailOutput { .. }
-            )),
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::FailOutput { .. })),
             "{ops:?}"
         );
     }

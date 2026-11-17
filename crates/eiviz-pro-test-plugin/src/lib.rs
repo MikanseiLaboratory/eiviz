@@ -10,8 +10,7 @@ use std::sync::{Mutex, OnceLock};
 
 use eiviz_pro_api::{
     ABI_MAJOR, Entitlements, FEATURE_DECKLINK, FEATURE_LICENSE, FEATURE_RTMP, LAYOUT_BGRA,
-    LAYOUT_UYVY, PRO_BUSY, PRO_DEVICE, PRO_INVALID, PRO_OK, PRO_UNAVAILABLE, ProApi,
-    ProAudioView,
+    LAYOUT_UYVY, PRO_BUSY, PRO_DEVICE, PRO_INVALID, PRO_OK, PRO_UNAVAILABLE, ProApi, ProAudioView,
     ProCaptureCallbacks, ProCaptureStatsAbi, ProEntitlementsAbi, ProLicenseStatusAbi,
     ProOutputStatsAbi, ProPlayoutConfig, ProReplayConfig, ProReplayDecoded, ProReplayEstimateAbi,
     ProReplayPacket, ProReplayStatsAbi, ProStatus, ProStreamConfig, ProVideoView,
