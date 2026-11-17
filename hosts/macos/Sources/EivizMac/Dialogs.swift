@@ -1458,6 +1458,7 @@ struct AddInputView: View {
             Text("Frame buffer (1–8) holds decoded camera frames, same as NDI/OMT.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
+            decodePicker
         case "DeckLink":
             Button("Refresh devices") { refreshDeckLink() }
             if !decklinkError.isEmpty {
