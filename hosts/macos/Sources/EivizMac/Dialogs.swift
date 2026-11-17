@@ -2052,7 +2052,12 @@ struct RtmpKeyEditor: View {
                 // Write-only on purpose: reading the stored key back into this field made
                 // macOS ask for the login keychain password, because a development build is
                 // not in the item's access list (the prompt is the keychain's, not ours).
-                SecureField(L10n.t("settings.streamKey"), text: $key)
+                // A stored key is never read back, but an empty field looked like the
+                // key had been lost; the masked prompt says one is in use.
+                SecureField(
+                    stored ? L10n.t("settings.streamKeyStoredMask") : L10n.t("settings.streamKey"),
+                    text: $key
+                )
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 180)
                     .help(L10n.t("settings.streamKeyStored"))

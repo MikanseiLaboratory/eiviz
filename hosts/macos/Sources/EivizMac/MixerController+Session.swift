@@ -484,6 +484,20 @@ extension MixerController {
         bumpSurfaceEpoch()
     }
 
+    /// A document never carries a running stream into a launch or a load.
+    ///
+    /// An enabled RTMP destination in the saved document would start encoding and
+    /// connecting before the operator sees the deck. Every destination starts from the
+    /// deck's stream strip instead.
+    static func stoppedStreams(_ document: MixerSessionData) -> MixerSessionData {
+        var stopped = document
+        for index in stopped.outputs.indices
+        where stopped.outputs[index].transport == .rtmp {
+            stopped.outputs[index].enabled = false
+        }
+        return stopped
+    }
+
     /// Applies a loaded session: windows first (the deck's Metal surfaces hold handles
     /// into the mixer now being destroyed — a session reload that left the deck open
     /// would freeze it black, the way every other attached window goes when its mixer
@@ -504,7 +518,7 @@ extension MixerController {
         FlipBudget.reset()
         mixer_destroy()
         invalidateApiRequest()
-        session = loaded
+        session = Self.stoppedStreams(loaded)
         pendingInputAdds.removeAll()
         selectedUnitId = loaded.selectedUnitId == 0 ? 1 : loaded.selectedUnitId
         // A selection is an id into the previous session. Keeping it after New/Load
