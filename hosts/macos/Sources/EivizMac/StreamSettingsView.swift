@@ -101,6 +101,11 @@ private struct EncodeProfileCard: View {
 
     private var meters: EncodeMeters { EncodeMeters(encoder) }
 
+    /// What the selected encoder actually honours. VideoToolbox accepts only the
+    /// automatic thread count and refuses presets it cannot express; Media
+    /// Foundation has no switches for complexity, entropy or the four toggles.
+    private var support: EncoderSupport { EncoderSupport.of(encoder.encoder) }
+
     var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 8) {
             GridRow {
@@ -145,7 +150,7 @@ private struct EncodeProfileCard: View {
             }
 
             GridRow {
-                metered(L10n.t("settings.threads"), meters.threads, L10n.t("settings.threadsHint")) {
+                metered(L10n.t("settings.threads"), meters.threads, L10n.t("settings.threadsHint"), fixedByEncoder: !support.threads) {
                     threadsPicker
                 }
                 metered(L10n.t("settings.sendBuffer"), meters.buffer, L10n.t("settings.sendBufferHint")) {
@@ -164,10 +169,10 @@ private struct EncodeProfileCard: View {
                 metered(L10n.t("settings.encoder"), meters.encoder, encoderHint) {
                     encoderPicker
                 }
-                metered(L10n.t("settings.complexity"), meters.complexity, L10n.t("settings.complexityHint")) {
+                metered(L10n.t("settings.complexity"), meters.complexity, L10n.t("settings.complexityHint"), fixedByEncoder: !support.complexity) {
                     complexityPicker
                 }
-                metered(L10n.t("settings.refFrames"), meters.refs, L10n.t("settings.refFramesHint")) {
+                metered(L10n.t("settings.refFrames"), meters.refs, L10n.t("settings.refFramesHint"), fixedByEncoder: !support.refFrames) {
                     refFramesPicker
                 }
             }
@@ -183,17 +188,17 @@ private struct EncodeProfileCard: View {
                     )
                     .disabled(locked)
                 }
-                metered(L10n.t("settings.entropy"), meters.entropy, L10n.t("settings.entropyHint")) {
+                metered(L10n.t("settings.entropy"), meters.entropy, L10n.t("settings.entropyHint"), fixedByEncoder: !support.entropy) {
                     entropyPicker
                 }
             }
 
             GridRow {
                 VStack(alignment: .leading, spacing: 6) {
-                    meteredToggle(L10n.t("settings.deblock"), meters.deblock, L10n.t("settings.deblockHint"), $encoder.deblock)
-                    meteredToggle(L10n.t("settings.backgroundDetect"), meters.background, L10n.t("settings.backgroundDetectHint"), $encoder.backgroundDetection)
-                    meteredToggle(L10n.t("settings.adaptiveQuant"), meters.quant, L10n.t("settings.adaptiveQuantHint"), $encoder.adaptiveQuant)
-                    meteredToggle(L10n.t("settings.sceneChange"), meters.scene, L10n.t("settings.sceneChangeHint"), $encoder.sceneChange)
+                    meteredToggle(L10n.t("settings.deblock"), meters.deblock, L10n.t("settings.deblockHint"), $encoder.deblock, enabled: support.deblock)
+                    meteredToggle(L10n.t("settings.backgroundDetect"), meters.background, L10n.t("settings.backgroundDetectHint"), $encoder.backgroundDetection, enabled: support.background)
+                    meteredToggle(L10n.t("settings.adaptiveQuant"), meters.quant, L10n.t("settings.adaptiveQuantHint"), $encoder.adaptiveQuant, enabled: support.adaptiveQuant)
+                    meteredToggle(L10n.t("settings.sceneChange"), meters.scene, L10n.t("settings.sceneChangeHint"), $encoder.sceneChange, enabled: support.sceneChange)
                     // macOS streams video only until AudioToolbox AAC is linked, so this
                     // switch is not in the Windows page.
                     Toggle(L10n.t("settings.videoOnly"), isOn: $encoder.videoOnly)
@@ -208,6 +213,21 @@ private struct EncodeProfileCard: View {
             Rectangle()
                 .stroke(Color(white: 0.27), lineWidth: 1)
         )
+        .onAppear { applyEncoderSupport() }
+        .onChange(of: encoder.encoder) { _, _ in applyEncoderSupport() }
+    }
+
+    /// Locks the values the selected encoder cannot express. VideoToolbox only
+    /// takes the automatic thread count and a preset with deblocking and
+    /// background detection on, adaptive quantization and scene change off; it
+    /// refuses anything else at start, so the card shows the accepted shape.
+    private func applyEncoderSupport() {
+        let support = support
+        if let threads = support.threadsValue { encoder.encoderThreads = threads }
+        if let value = support.deblockValue { encoder.deblock = value }
+        if let value = support.backgroundValue { encoder.backgroundDetection = value }
+        if let value = support.adaptiveQuantValue { encoder.adaptiveQuant = value }
+        if let value = support.sceneChangeValue { encoder.sceneChange = value }
     }
 
     private var encoderHint: String {
@@ -338,7 +358,7 @@ private struct EncodeProfileCard: View {
         }
         .labelsHidden()
         .frame(maxWidth: 120)
-        .disabled(locked)
+        .disabled(locked || !support.threads)
     }
 
     /// Encoder kinds follow the mixer's mask: bit 1 OpenH264, 2 VideoToolbox,
@@ -375,7 +395,7 @@ private struct EncodeProfileCard: View {
         }
         .labelsHidden()
         .frame(maxWidth: 120)
-        .disabled(locked)
+        .disabled(locked || !support.complexity)
     }
 
     private var refFramesPicker: some View {
@@ -389,7 +409,7 @@ private struct EncodeProfileCard: View {
         }
         .labelsHidden()
         .frame(maxWidth: 80)
-        .disabled(locked)
+        .disabled(locked || !support.refFrames)
     }
 
     private var entropyPicker: some View {
@@ -405,7 +425,7 @@ private struct EncodeProfileCard: View {
         }
         .labelsHidden()
         .frame(maxWidth: 120)
-        .disabled(locked)
+        .disabled(locked || !support.entropy)
     }
 
     // MARK: - Layout helpers
@@ -415,6 +435,7 @@ private struct EncodeProfileCard: View {
         _ level: Int,
         _ hint: String,
         count: Int = 5,
+        fixedByEncoder: Bool = false,
         @ViewBuilder control: () -> Control
     ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -424,7 +445,7 @@ private struct EncodeProfileCard: View {
                 ImpactGauge(level: level, count: count)
             }
             control()
-            Text(hint)
+            Text(fixedByEncoder ? "\(hint)\n\(L10n.t("settings.encoderLockedHint"))" : hint)
                 .font(.caption2)
                 .foregroundStyle(Color(white: 0.5))
                 .fixedSize(horizontal: false, vertical: true)
@@ -435,17 +456,18 @@ private struct EncodeProfileCard: View {
         _ label: String,
         _ level: Int,
         _ hint: String,
-        _ value: Binding<Bool>
+        _ value: Binding<Bool>,
+        enabled: Bool
     ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Toggle(label, isOn: value)
                     .toggleStyle(.checkbox)
-                    .disabled(locked)
+                    .disabled(locked || !enabled)
                 Spacer(minLength: 4)
                 ImpactGauge(level: level)
             }
-            Text(hint)
+            Text(enabled ? hint : "\(hint)\n\(L10n.t("settings.encoderLockedHint"))")
                 .font(.caption2)
                 .foregroundStyle(Color(white: 0.5))
                 .fixedSize(horizontal: false, vertical: true)
@@ -708,5 +730,55 @@ struct StreamCaps {
         if num == 0 || den == 0 { return true }
         guard maxFpsNum != 0, maxFpsDen != 0 else { return false }
         return UInt64(num) * UInt64(maxFpsDen) <= UInt64(maxFpsNum) * UInt64(den)
+    }
+}
+
+/// Which encode-profile controls the selected encoder honours.
+struct EncoderSupport {
+    var threads = true
+    var complexity = true
+    var refFrames = true
+    var entropy = true
+    var deblock = true
+    var background = true
+    var adaptiveQuant = true
+    var sceneChange = true
+    /// Values the encoder requires; nil keeps whatever the operator chose.
+    var threadsValue: UInt32?
+    var deblockValue: Bool?
+    var backgroundValue: Bool?
+    var adaptiveQuantValue: Bool?
+    var sceneChangeValue: Bool?
+
+    static func of(_ encoder: String) -> EncoderSupport {
+        switch encoder {
+        case "VideoToolbox":
+            // `vt_preset_supported` in the module: automatic threads and the
+            // OpenH264-shaped preset only. It refuses a pinned count and any
+            // other combination at stream start.
+            return EncoderSupport(
+                threads: false, complexity: true, refFrames: true, entropy: true,
+                deblock: false, background: false, adaptiveQuant: false, sceneChange: false,
+                threadsValue: 0, deblockValue: true, backgroundValue: true,
+                adaptiveQuantValue: false, sceneChangeValue: false
+            )
+        case "MediaFoundation":
+            // The MFT has no switches for these; it honours threads and reference
+            // frames only.
+            return EncoderSupport(
+                threads: true, complexity: false, refFrames: true, entropy: false,
+                deblock: false, background: false, adaptiveQuant: false, sceneChange: false,
+                threadsValue: nil, deblockValue: nil, backgroundValue: nil,
+                adaptiveQuantValue: nil, sceneChangeValue: nil
+            )
+        default:
+            // OpenH264 implements every switch.
+            return EncoderSupport(
+                threads: true, complexity: true, refFrames: true, entropy: true,
+                deblock: true, background: true, adaptiveQuant: true, sceneChange: true,
+                threadsValue: nil, deblockValue: nil, backgroundValue: nil,
+                adaptiveQuantValue: nil, sceneChangeValue: nil
+            )
+        }
     }
 }
