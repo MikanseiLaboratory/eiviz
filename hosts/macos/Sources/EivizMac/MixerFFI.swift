@@ -241,9 +241,12 @@ enum MixerFFI {
     }
 
     static func streamEncoderAdd(_ encoder: StreamEncoderEntry, sourceKind: UInt32, sourceId: UInt64) -> Int32 {
-        let threads = encoder.encoderThreads == 0
-            ? UInt32(max(1, min(4, ProcessInfo.processInfo.activeProcessorCount)))
-            : encoder.encoderThreads
+        // Pass "automatic" through as 0. VideoToolbox only accepts the automatic
+        // thread count (it picks its own workers) and refuses a pinned one, so
+        // resolving 0 here made every default VideoToolbox stream fail with
+        // "the selected preset needs OpenH264". The module resolves 0 for the
+        // OpenH264 path itself.
+        let threads = encoder.encoderThreads
         return mixer_stream_encoder_add(
             encoder.id,
             sourceKind,

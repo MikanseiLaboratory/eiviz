@@ -936,7 +936,14 @@ extension MixerController {
             }
             let code = MixerFFI.streamEncoderAdd(encoder, sourceKind: entry.sourceKind.rawValueU32, sourceId: sourceId)
             guard code == 0 else {
-                _ = fail(code, "Start stream encoder")
+                // The module names the reason (for example a preset VideoToolbox
+                // cannot express). The numeric code alone reads as "invalid
+                // argument", which tells the operator nothing.
+                let detail = MixerFFI.lastErrorText()
+                presentError(
+                    detail.isEmpty ? L10n.error("Start stream encoder", code) : detail,
+                    title: L10n.t("action.Start stream encoder")
+                )
                 return
             }
             // Starting the encoder drops every destination registered on the profile,
