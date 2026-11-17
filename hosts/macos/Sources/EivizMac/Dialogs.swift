@@ -1248,6 +1248,10 @@ struct PreferencesView: View {
                     if mixer.isRemote, remoteOmtUseGpu != originalRemoteOmtUseGpu {
                         mixer.reconnectRemoteVideo()
                     }
+                    // Bind address, port, token, and media directory belong to the host,
+                    // and this is where they change. The call does nothing when none of
+                    // them moved.
+                    if !mixer.isRemote { mixer.applyVmixApi() }
                     dismiss()
                 }
                 Button(L10n.t("dialog.cancel")) {

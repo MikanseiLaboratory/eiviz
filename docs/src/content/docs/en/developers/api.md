@@ -92,7 +92,7 @@ Exit codes: 2 arguments/read, 3 session, 4 GPU/runtime, 5 bind, 6 other runtime 
 
 ## Operations
 
-- Rotate tokens with `eivizctl prefs set token` (headless) or the listen token in Preferences, then restart
+- Rotate tokens with `eivizctl prefs set token` (headless, then restart `eiviz-headless`) or the listen token in Preferences, which applies as soon as the dialog closes
 - Non-loopback bind requires authentication. This release is authenticated `ws://` on a trusted LAN or VPN only; put TLS in front if you need it
 - `--media-directory` / `EIVIZ_MEDIA_DIRECTORY` sets the host upload root. When unset, the OS local-app-data `eiviz/media` directory is used
 - Logs are structured-enough text on stderr

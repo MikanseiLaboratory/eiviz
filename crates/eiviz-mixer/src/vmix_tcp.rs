@@ -34,6 +34,12 @@ fn tcp_slot() -> &'static Mutex<TcpState> {
 }
 
 pub fn configure(enabled: bool) -> i32 {
+    // The accept thread is either up or down; asking for the state it is already in has
+    // nothing to do. Stopping and rebinding anyway would only open a window where
+    // another process can take 8099.
+    if tcp_slot().lock_or_recover().stop.is_some() == enabled {
+        return OK;
+    }
     stop_worker();
     if !enabled {
         crate::diag::http_info("tcp disabled");
@@ -900,5 +906,30 @@ mod tests {
             changed_lines("", new),
             vec!["ACTS OK Input 1 0", "ACTS OK Input 2 0"]
         );
+    }
+
+    /// Asking for the API that is already listening must keep the connection that is
+    /// open on it: stopping and rebinding would drop the client and free the port for
+    /// another process to take.
+    #[test]
+    fn configure_keeps_the_open_connection() {
+        if configure(true) != OK {
+            // Something else owns 8099 on this machine (vMix, normally). Nothing to test.
+            eprintln!("port {TCP_PORT} is busy; skipping");
+            return;
+        }
+        let mut stream = TcpStream::connect(("127.0.0.1", TCP_PORT)).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("read timeout");
+        assert_eq!(configure(true), OK);
+        stream.write_all(b"SUBSCRIBE TALLY\r\n").expect("write");
+        let mut reply = [0u8; 32];
+        let read = stream.read(&mut reply).expect("reply after reconfigure");
+        assert!(
+            String::from_utf8_lossy(&reply[..read]).starts_with("SUBSCRIBE OK TALLY"),
+            "the open connection did not survive a repeated configure"
+        );
+        assert_eq!(configure(false), OK);
     }
 }

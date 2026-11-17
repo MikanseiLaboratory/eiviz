@@ -1289,6 +1289,11 @@ public partial class MainWindow
             BindMainVideo();
             app.Backend.SyncPublishedVideo();
         }
+        // Bind address, port, token, and media directory are host-owned; Preferences is
+        // where they change, so this is where they take effect. The call is a no-op when
+        // none of them moved.
+        if (!HostRole.IsRemote)
+            App.ApplyVmixApi();
     }
 
     private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettings(0);

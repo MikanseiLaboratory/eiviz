@@ -503,6 +503,7 @@ extension MixerController {
         closeReplayWindows()
         FlipBudget.reset()
         mixer_destroy()
+        invalidateApiRequest()
         session = loaded
         pendingInputAdds.removeAll()
         selectedUnitId = loaded.selectedUnitId == 0 ? 1 : loaded.selectedUnitId

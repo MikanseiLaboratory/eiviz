@@ -224,6 +224,11 @@ final class MixerController: ObservableObject {
         fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
         FlipBudget.configure(session.settings.flipSwapchainLimit)
         applyBusColors()
+        // Whether the API is on belongs to the session; prefs only carries it from run to
+        // run. A bind failure used to leave "off" in prefs, and the listener then never
+        // came back on its own, so read the session's answer before starting it.
+        AppPrefs.shared.nativeApiEnabled = session.settings.nativeApiEnabled
+        AppPrefs.shared.save()
         applySession()
         bumpSurfaceEpoch()
         startTimers()
@@ -537,10 +542,47 @@ final class MixerController: ObservableObject {
         refreshRemoteWarn()
     }
 
-    func applyVmixApi() {
+    /// The API configuration the listeners were last configured with. A settings change
+    /// that does not touch the API leaves them alone: stopping and rebinding drops every
+    /// client, and the port can still look taken while the old socket closes.
+    private var appliedApiRequest: String?
+
+    /// `force` is for a mixer that was just created: nothing is listening yet, so the
+    /// cached request describes an earlier mixer.
+    func applyVmixApi(force: Bool = false) {
+        if !force, apiRequest() == appliedApiRequest { return }
         applyHttpApi()
         applyTcpApi()
         applyNativeApi()
+        // Keep what was actually configured, not what was asked for: a busy HTTP port is
+        // moved to the next free one, and asking for the moved port again is not a change.
+        appliedApiRequest = apiRequest()
+    }
+
+    /// Everything the three listeners are configured from, so an apply that would not
+    /// change one of them can be skipped.
+    private func apiRequest() -> String {
+        let settings = session.settings
+        let prefs = AppPrefs.shared
+        return [
+            "\(settings.vmixApiEnabled)",
+            "\(settings.vmixApiPort)",
+            settings.vmixApiUser,
+            settings.vmixApiPassword,
+            "\(settings.vmixTcpEnabled)",
+            "\(prefs.nativeApiEnabled)",
+            "\(prefs.nativeApiPort)",
+            prefs.nativeApiBind,
+            prefs.nativeApiRole,
+            prefs.resolvedMediaDirectory,
+            KeychainStore.load(account: "listen")
+        ].joined(separator: "\u{1F}")
+    }
+
+    /// The mixer is gone, so its listeners went with it; the next apply has to configure
+    /// them even though the request has not changed.
+    func invalidateApiRequest() {
+        appliedApiRequest = nil
     }
 
     private func applyHttpApi() {
@@ -662,11 +704,9 @@ final class MixerController: ObservableObject {
         }
         let ownerText = MixerFFI.wsListenOwnerText()
         let owner = ownerText.isEmpty ? nil : ownerText
-        prefs.nativeApiEnabled = false
-        prefs.save()
-        _ = MixerFFI.withCString(host) { hostPtr in
-            mixer_ws_configure_owned(0, hostPtr, port, "", "", "")
-        }
+        // The configured state stays as it is. Switching the API off here would hide a
+        // port conflict - one the operator can clear, or that a restart clears by
+        // itself - behind a setting nobody changed.
         if let owner {
             HostLog.write("WARN", "Protobuf WebSocket API listen failed on port \(port); in use by \(owner); disabled")
         } else {
