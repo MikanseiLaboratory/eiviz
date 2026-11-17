@@ -34,6 +34,12 @@ pub(crate) fn spawn_output_worker(
     let join = thread::Builder::new()
         .name(format!("eiviz-send-{output_id}"))
         .spawn(move || {
+            // The Pro module builds its VideoToolbox session on this thread and
+            // wait-bounded delivers its output. A session whose service connection
+            // inherits a low QOS class lagged minutes behind the pipeline (the
+            // hardware encoder itself stayed instant in fresh processes); the
+            // interactive class keeps the encoder service at the pipeline's pace.
+            crate::platform::set_thread_qos(crate::platform::QOS_USER_INTERACTIVE);
             send_worker(
                 output_id,
                 ctrl_rx,
