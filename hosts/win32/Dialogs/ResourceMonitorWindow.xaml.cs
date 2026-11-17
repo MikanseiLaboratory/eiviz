@@ -8,6 +8,7 @@ namespace Eiviz.Host.Dialogs;
 public partial class ResourceMonitorWindow : Window
 {
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(400) };
+    private string _stage = "start";
 
     public ResourceMonitorWindow()
     {
@@ -23,8 +24,24 @@ public partial class ResourceMonitorWindow : Window
 
     private void Refresh()
     {
+        // This window is a diagnostic: whatever it trips over is logged with the section it
+        // was reading, and the previous table stays on screen. Before this, an exception here
+        // escaped to the dispatcher's crash handler and the window never opened at all.
+        try
+        {
+            RefreshCore();
+        }
+        catch (Exception ex)
+        {
+            HostLog.Write("WARN", $"resource monitor failed during '{_stage}': {ex}");
+            SummaryText.Text = $"{Loc.T("resources.unmeasured")}: {ex.Message}";
+        }
+    }
+
+    private void RefreshCore()
+    {
         var app = (App)Application.Current;
-        var session = app.Session;
+        var session = app.Session ?? throw new InvalidOperationException("no session is open");
         var usages = new Dictionary<ulong, SourceUsage>();
         var buffer = new SourceUsage[128];
         unsafe
@@ -74,6 +91,7 @@ public partial class ResourceMonitorWindow : Window
         var ramText = FormatBytes(processRam);
         var vramText = trackedVram == 0 ? Loc.T("resources.unmeasured") : FormatBytes(trackedVram);
 
+        _stage = "inputs";
         var rows = new List<Row>();
         foreach (var input in session.Inputs)
         {
@@ -93,6 +111,7 @@ public partial class ResourceMonitorWindow : Window
                 FormatBytes(ram),
                 FormatBytes(vram)));
         }
+        _stage = "scenes";
         foreach (var scene in session.Scenes)
         {
             usages.TryGetValue(scene.GpuId, out var usage);
@@ -107,6 +126,7 @@ public partial class ResourceMonitorWindow : Window
                 "—",
                 FormatBytes(usage.VramBytes)));
         }
+        _stage = "outputs";
         foreach (var output in session.Outputs)
         {
             var live = outputs.FirstOrDefault(item => item.OutputId == output.Id);
@@ -122,6 +142,7 @@ public partial class ResourceMonitorWindow : Window
                 "—",
                 "—"));
         }
+        _stage = "summary";
         UsageList.ItemsSource = rows;
         var extra = stats.ComposeVramBytes > 0 || stats.DelayVramBytes > 0
             ? $"    Compose {FormatBytes(stats.ComposeVramBytes)}    Delay {FormatBytes(stats.DelayVramBytes)}"

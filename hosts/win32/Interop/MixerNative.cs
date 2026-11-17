@@ -9,6 +9,32 @@ internal static partial class MixerNative
 {
     private const string LibraryName = "eiviz_mixer";
 
+    /// <summary>
+    /// The mixer fills these structs whole, so a host struct that is smaller than the native
+    /// one has its stack written past the end. That fails later in unrelated code (it is how
+    /// the resource monitor started crashing), so the sizes are checked once, up front.
+    /// Keep these in step with `crates/eiviz-mixer/src/abi.rs`.
+    /// </summary>
+    static MixerNative()
+    {
+        ExpectSize<MixerStats>(64);
+        ExpectSize<MixerRuntimeStats>(80);
+        ExpectSize<InputRuntimeStats>(24);
+        ExpectSize<OutputRuntimeStats>(32);
+        ExpectSize<SourceUsage>(40);
+        ExpectSize<MixerRebarInfo>(160);
+    }
+
+    private static unsafe void ExpectSize<T>(int bytes) where T : unmanaged
+    {
+        var actual = sizeof(T);
+        if (actual != bytes)
+        {
+            throw new TypeLoadException(
+                $"{typeof(T).Name} is {actual} bytes; the mixer writes {bytes} bytes");
+        }
+    }
+
     internal const ulong Color = 1;
     internal const ulong Bars = 2;
     internal const ulong Black = 3;
@@ -1462,6 +1488,14 @@ internal struct MixerStats
     public ulong ComposeVramBytes;
     public ulong DelayVramBytes;
     public ulong SurfaceLost;
+    /// <summary>
+    /// Appended after the first layout. The native side writes the whole struct, so these
+    /// must be present even when the host never reads them: leaving them out made
+    /// mixer_copy_stats write 16 bytes past the caller's struct, which corrupted the stack
+    /// of whatever ran next (the resource monitor crashed on an unrelated line).
+    /// </summary>
+    public ulong FramesRendered;
+    public ulong FramesSkipped;
 }
 
 [StructLayout(LayoutKind.Sequential)]
