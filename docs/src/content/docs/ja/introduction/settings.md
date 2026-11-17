@@ -45,7 +45,7 @@ description: セッションに保存される設定ウィンドウの項目
 
 ### 配信 (RTMP) の診断
 
-配信が始まらず、ログに `stream destination id=…: stream encoder is not running (…)` と出る場合は、まず同じ名前のストリームエンコーダがセッションに定義され、URLの接続先とシークレットが設定済みかを確認します。括弧内は直近のエンコーダ追加の結果です（例: `the last add failed: ...`）。エンコーダの追加自体が失敗しているときは、その直前に `stream encoder id=…` のエラー行が出力され、解像度・フレームレート・プラン上限・Proモジュールの有無など理由が書かれています。エンコーダーの選択肢は、WindowsではOpenH264とMedia Foundation（OS側のエンコーダー。ドライバーが対応していればNVIDIA/AMD/Intelのハードウェアを使用）、macOSではOpenH264とVideoToolboxが表示されます。Media Foundationを選ぶと**エンコーダーデバイス**の選択欄が現れ、このマシンで利用できるMedia FoundationのH.264エンコーダー（GPUベンダーのハードウェアやOSのソフトウェアエンコーダー）を名前で明示的に選べます。「自動」はミキサーの既定順（NVIDIA→AMD→Intel→その他→ソフトウェア）に従います。選択したデバイスが使えない場合はそのまま配信開始がエラーになり、別のデバイスへ黙って切り替わることはありません。
+配信が始まらず、ログに `stream destination id=…: stream encoder is not running (…)` と出る場合は、まず同じ名前のストリームエンコーダがセッションに定義され、URLの接続先とシークレットが設定済みかを確認します。括弧内は直近のエンコーダ追加の結果です（例: `the last add failed: ...`）。エンコーダの追加自体が失敗しているときは、その直前に `stream encoder id=…` のエラー行が出力され、解像度・フレームレート・プラン上限・Proモジュールの有無など理由が書かれています。エンコーダーの選択肢は、WindowsではOpenH264とMedia Foundation（OS側のエンコーダー。ドライバーが対応していればNVIDIA/AMD/Intelのハードウェアを使用）、macOSではOpenH264とVideoToolboxが表示されます。WindowsでMedia Foundationを選ぶと**エンコーダーデバイス**の選択欄が現れ、このマシンで利用できるMedia FoundationのH.264エンコーダー（GPUベンダーのハードウェアやOSのソフトウェアエンコーダー）を名前で明示的に選べます。「自動」はミキサーの既定順（NVIDIA→AMD→Intel→その他→ソフトウェア）に従います。選択したデバイスが使えない場合はそのまま配信開始がエラーになり、別のデバイスへ黙って切り替わることはありません。
 
 ## Multiview
 
