@@ -708,24 +708,8 @@ extension MixerController {
             return
         }
         if isRemote { return }
-        if output.transport == .rtmp, output.streamEncoderId != 0 {
-            // Destinations are separate from encode profiles: removing a row keeps the
-            // profile in the document. Stop the profile only when nothing else is
-            // publishing through it.
-            _ = MixerFFI.streamDestinationRemove(
-                encoderId: output.streamEncoderId,
-                destinationId: output.id
-            )
-            let stillShared = session.outputs.contains {
-                $0.id != output.id
-                    && $0.transport == .rtmp
-                    && $0.streamEncoderId == output.streamEncoderId
-                    && $0.enabled
-            }
-            if !stillShared {
-                _ = MixerFFI.streamEncoderRemove(output.streamEncoderId)
-            }
-        }
+        // The row leaving the document is what stops a destination: the control
+        // service removes its stream encoder when nothing enabled still names it.
         if output.transport == .rtmp, !output.rtmpSecretRef.isEmpty {
             // The key belongs to the row: leaving it in the Keychain after the row is
             // gone keeps a live credential around with nothing that uses it.
@@ -733,7 +717,9 @@ extension MixerController {
         }
         _ = mixer_output_remove(output.id)
         session.outputs.removeAll { $0.id == output.id }
-        if output.transport != .rtmp {
+        if output.transport == .rtmp {
+            publishSession()
+        } else {
             _ = mutateLocal(MixerRemote.deleteOutput(output.id))
         }
     }
@@ -762,7 +748,10 @@ extension MixerController {
         encoder.videoBitrate = 6_000_000
         encoder.audioBitrate = 128_000
         encoder.keyint = 120
-        encoder.encoder = "OpenH264"
+        // VideoToolbox is the hardware encoder this OS ships with. OpenH264 needs a
+        // libopenh264 dylib beside the executable or OPENH264_PATH, which the bundle
+        // does not carry, so it is not the default here.
+        encoder.encoder = StreamCaps.read().encoderMask & 2 != 0 ? "VideoToolbox" : "OpenH264"
         session.nextStreamEncoderId = max(session.nextStreamEncoderId, id + 1)
         session.streamEncoders.append(encoder)
         publishSession()
@@ -805,26 +794,46 @@ extension MixerController {
         publishSession()
     }
 
-    /// Rebuilds every running RTMP profile after the settings sheet is applied, so an
-    /// edited profile reaches a live stream without pressing each destination: the
-    /// same outcome as editing a profile on the Windows page.
-    func restartRunningStreams() {
+    /// Starts or stops one RTMP destination from the deck strip. The document change
+    /// is what starts the stream, so the encoder and destination ids stay the ones the
+    /// control service assigned.
+    func setStreamEnabled(_ output: OutputEntry, enabled: Bool) {
         if isRemote { return }
-        var seen = Set<UInt64>()
-        for output in session.outputs where output.transport == .rtmp && output.enabled {
-            guard !seen.contains(output.streamEncoderId) else { continue }
-            seen.insert(output.streamEncoderId)
-            addOutput(output)
+        guard !OnAirLock.active else {
+            presentError(L10n.t("msg.onAirLock"), title: L10n.t("chrome.stream"))
+            return
         }
+        var entry = output
+        entry.enabled = enabled
+        if enabled {
+            guard session.streamEncoders.contains(where: { $0.id == entry.streamEncoderId }) else {
+                presentInputError(L10n.t("settings.encodeNeeded"), editing: false)
+                return
+            }
+            guard !KeychainStore.load(account: "rtmp/" + entry.rtmpSecretRef).isEmpty else {
+                presentInputError(L10n.t("settings.streamKeyMissing"), editing: false)
+                return
+            }
+        }
+        if let index = session.outputs.firstIndex(where: { $0.id == entry.id }) {
+            session.outputs[index] = entry
+        } else {
+            session.outputs.append(entry)
+        }
+        publishSession()
     }
 
-    /// Stops the profile only when no enabled destination still publishes through it.
-    private func stopSharedEncoderIfIdle(_ encoderId: UInt64) {
-        let stillShared = session.outputs.contains {
-            $0.transport == .rtmp && $0.streamEncoderId == encoderId && $0.enabled
-        }
-        if !stillShared {
-            _ = MixerFFI.streamEncoderRemove(encoderId)
+    /// Pushes every enabled destination's key into the module before the document is
+    /// reconciled, so a stream that starts during the replace can resolve its secret.
+    func syncRtmpSecrets() {
+        for output in session.outputs where output.transport == .rtmp && output.enabled {
+            let key = KeychainStore.load(account: "rtmp/" + output.rtmpSecretRef)
+            guard !key.isEmpty else { continue }
+            MixerFFI.withCString(output.rtmpSecretRef) { name in
+                MixerFFI.withCString(key) { value in
+                    _ = mixer_secret_set(name, value)
+                }
+            }
         }
     }
 
@@ -861,116 +870,44 @@ extension MixerController {
         if entry.transport == .rtmp, entry.rtmpSecretRef.isEmpty {
             entry.rtmpSecretRef = "stream-\(entry.id)"
         }
-        // The encoder this row is already running (the row is bound to the session,
-        // so `streamEncoderId` is the one to stop), but stop it only once the new
-        // request is known to be startable: a missing key used to tear down a live
-        // stream and then refuse to start its replacement.
-        let previousEncoder = session.outputs.first { $0.id == entry.id }?.streamEncoderId ?? 0
-        var rtmpKey = ""
-        if entry.transport == .rtmp, entry.enabled {
-            // An encoding profile is a setting the operator creates, not
-            // something a destination conjures up: refuse and say so instead of
-            // quietly starting an encoder the session never showed.
-            guard session.streamEncoders.contains(where: { $0.id == entry.streamEncoderId }) else {
-                // Keep the row, but off: an enabled destination without a
-                // profile would be a document the mixer has to refuse.
-                var blocked = entry
-                blocked.enabled = false
-                if let index = session.outputs.firstIndex(where: { $0.id == blocked.id }) {
-                    session.outputs[index] = blocked
-                } else {
-                    session.outputs.append(blocked)
-                }
-                presentInputError(L10n.t("settings.encodeNeeded"), editing: false)
-                return
-            }
-            guard !entry.rtmpSecretRef.isEmpty else {
-                presentInputError(L10n.t("settings.streamKeyMissing"), editing: false)
-                return
-            }
-            rtmpKey = KeychainStore.load(account: "rtmp/" + entry.rtmpSecretRef)
-            guard !rtmpKey.isEmpty else {
-                presentInputError(L10n.t("settings.streamKeyMissing"), editing: false)
-                return
-            }
-        }
-        if let index = session.outputs.firstIndex(where: { $0.id == entry.id }) {
-            session.outputs[index] = entry
-        } else {
-            session.outputs.append(entry)
-        }
         if entry.transport == .rtmp {
-            guard entry.enabled else {
-                // Turning a destination off stops that destination; the profile stays
-                // in the document and keeps serving the others.
-                _ = MixerFFI.streamDestinationRemove(
-                    encoderId: entry.streamEncoderId,
-                    destinationId: entry.id
-                )
-                stopSharedEncoderIfIdle(entry.streamEncoderId)
-                return
-            }
-            if previousEncoder != 0, previousEncoder != entry.streamEncoderId {
-                _ = MixerFFI.streamEncoderRemove(previousEncoder)
-            }
-            let key = rtmpKey
-            // The profile owns the picture (size, frame rate, name); the destination
-            // only points the profile at this row's source. The Windows page splits
-            // them the same way, so editing a destination cannot silently retune the
-            // encode profile another destination is sharing.
-            var encoder = session.streamEncoders.first { $0.id == entry.streamEncoderId }
-                ?? StreamEncoderEntry(id: entry.streamEncoderId)
-            encoder.sourceKind = entry.sourceKind
-            encoder.sourceId = entry.sourceId
-            encoder.unitId = entry.unitId
-            encoder.audioUnitId = entry.audioUnitId
-            let sourceId = entry.sourceId
-            entry.streamEncoderId = encoder.id
-            if let index = session.streamEncoders.firstIndex(where: { $0.id == encoder.id }) {
-                session.streamEncoders[index] = encoder
-            } else {
-                session.streamEncoders.append(encoder)
+            // A destination is part of the session document; the control service
+            // reconciles it into a stream encoder and destination, exactly like the
+            // Windows host. Starting one by hand here registered a second stream under
+            // an id the strips and the stats cannot read.
+            if entry.enabled {
+                guard session.streamEncoders.contains(where: { $0.id == entry.streamEncoderId }) else {
+                    var blocked = entry
+                    blocked.enabled = false
+                    if let index = session.outputs.firstIndex(where: { $0.id == blocked.id }) {
+                        session.outputs[index] = blocked
+                    } else {
+                        session.outputs.append(blocked)
+                    }
+                    presentInputError(L10n.t("settings.encodeNeeded"), editing: false)
+                    return
+                }
+                guard !KeychainStore.load(account: "rtmp/" + entry.rtmpSecretRef).isEmpty else {
+                    var blocked = entry
+                    blocked.enabled = false
+                    if let index = session.outputs.firstIndex(where: { $0.id == blocked.id }) {
+                        session.outputs[index] = blocked
+                    } else {
+                        session.outputs.append(blocked)
+                    }
+                    presentInputError(L10n.t("settings.streamKeyMissing"), editing: false)
+                    return
+                }
             }
             if let index = session.outputs.firstIndex(where: { $0.id == entry.id }) {
                 session.outputs[index] = entry
+            } else {
+                session.outputs.append(entry)
             }
-            let code = MixerFFI.streamEncoderAdd(encoder, sourceKind: entry.sourceKind.rawValueU32, sourceId: sourceId)
-            guard code == 0 else {
-                // The module names the reason (for example a preset VideoToolbox
-                // cannot express). The numeric code alone reads as "invalid
-                // argument", which tells the operator nothing.
-                let detail = MixerFFI.lastErrorText()
-                presentError(
-                    detail.isEmpty ? L10n.error("Start stream encoder", code) : detail,
-                    title: L10n.t("action.Start stream encoder")
-                )
-                return
-            }
-            // Starting the encoder drops every destination registered on the profile,
-            // so reconnect them all. The Windows page does the same when an encode
-            // profile is applied: the profile is shared, the destinations are not.
-            let shared = session.outputs.filter {
-                $0.transport == .rtmp && $0.streamEncoderId == encoder.id && $0.enabled
-            }
-            for destination in shared {
-                let destinationKey = destination.id == entry.id
-                    ? key
-                    : KeychainStore.load(account: "rtmp/" + destination.rtmpSecretRef)
-                guard !destinationKey.isEmpty else { continue }
-                MixerFFI.withCString(destination.rtmpSecretRef) { name in
-                    MixerFFI.withCString(destinationKey) { value in
-                        _ = mixer_secret_set(name, value)
-                    }
-                }
-                _ = MixerFFI.streamDestinationAdd(
-                    encoderId: encoder.id,
-                    destinationId: destination.id,
-                    url: destination.rtmpUrl,
-                    secretRef: destination.rtmpSecretRef
-                )
-            }
+            publishSession()
             return
         }
+
         _ = mixer_output_remove(entry.id)
         guard entry.enabled else {
             // Keep the disabled row in the document so another client sees the same

@@ -650,6 +650,7 @@ struct ContentView: View {
                         }
                         .toggleStyle(OnOffToggleStyle())
                     }
+                    StreamStripsView()
                 }
                 .frame(minWidth: 80)
             }
@@ -665,6 +666,11 @@ struct ContentView: View {
                 }
             } label: {
                 Text(L10n.t("chrome.multiview"))
+            }
+            .buttonStyle(MixerButtonStyle())
+            Button(L10n.t("chrome.stream")) {
+                mixer.settingsCategory = 3
+                mixer.showSettings = true
             }
             .buttonStyle(MixerButtonStyle())
             Button(L10n.t("chrome.overlay")) { mixer.openOverlay() }

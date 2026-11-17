@@ -85,6 +85,9 @@ final class MixerController: ObservableObject {
     var meterTimer: Timer?
     var mixTimer: Timer?
     var sessionSyncTimer: Timer?
+    var streamTimer: Timer?
+    /// Live state of each RTMP destination, for the strips beside the deck.
+    @Published var streamStats: [UInt64: MixerFFI.StreamDestinationStats] = [:]
     /// Revision of the control session whose Replay document the host has already adopted.
     var syncedSessionRevision: UInt64 = 0
     /// Inputs created locally that the control document has not seen yet. The sync
@@ -276,12 +279,37 @@ final class MixerController: ObservableObject {
         return text
     }
 
+    /// Reads each enabled RTMP destination's state. The control service registers the
+    /// stream encoder under the gpu id namespace, which is what the stats call expects.
+    func refreshStreamStats() {
+        guard !isRemote else { return }
+        var next: [UInt64: MixerFFI.StreamDestinationStats] = [:]
+        for output in session.outputs
+        where output.transport == .rtmp && output.enabled {
+            let encoderId = output.streamEncoderId >= 0x0006_0000
+                ? output.streamEncoderId
+                : 0x0006_0000 | output.streamEncoderId
+            if let state = MixerFFI.streamDestinationStats(
+                encoderId: encoderId,
+                destinationId: output.id
+            ) {
+                next[output.id] = state
+            }
+        }
+        streamStats = next
+    }
+
     private func startTimers() {
         // The vMix API and eivizctl edit the mixer's session, not this host's copy. Poll the
         // revision and adopt the Replay document so marks and clips made from a Stream Deck
         // appear in the deck.
         sessionSyncTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.syncReplayFromMixer() }
+        }
+        // One shared poll feeds every stream strip; a timer owned by a view would be
+        // rebuilt by the meter updates that redraw the deck dozens of times a second.
+        streamTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshStreamStats() }
         }
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -743,6 +771,9 @@ final class MixerController: ObservableObject {
 
     func publishSession() {
         if isRemote { return }
+        // The core reconciles RTMP destinations from this document, so the module must
+        // already know each destination's key when the replace runs.
+        syncRtmpSecrets()
         // New surfaces read the cap from here, so a master-format change in the
         // settings reaches the flip size without needing to re-create controllers.
         EivizSurfaceCap.shared.update(width: session.settings.defaultWidth, height: session.settings.defaultHeight)

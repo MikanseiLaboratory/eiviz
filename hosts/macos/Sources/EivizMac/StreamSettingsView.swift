@@ -528,21 +528,9 @@ private struct StreamDestinationCard: View {
             }
 
             HStack(spacing: 12) {
-                Button(L10n.t("settings.apply")) {
-                    mixer.addOutput(output)
-                }
-                .disabled(locked)
-
-                Toggle(L10n.t("settings.enabled"), isOn: Binding(
-                    get: { output.enabled },
-                    set: { value in
-                        output.enabled = value
-                        mixer.addOutput(output)
-                    }
-                ))
-                .toggleStyle(.checkbox)
-                .disabled(locked)
-
+                // Starting and stopping lives on the deck's stream strip, like the
+                // Windows host. The document is applied on OK, so the strip is the
+                // one place a live stream is switched.
                 // macOS picks a source per destination; the Windows page keeps the
                 // same source fields on the profile, so this stays here without
                 // changing the profile fields above.

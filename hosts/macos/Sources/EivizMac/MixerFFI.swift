@@ -302,6 +302,54 @@ enum MixerFFI {
         mixer_stream_destination_remove(encoderId, destinationId)
     }
 
+    struct StreamDestinationStats {
+        var connected: Bool
+        var frames: UInt64
+        var dropped: UInt64
+        var bitrate: UInt32
+        var lagMs: UInt32
+        var fpsMilli: UInt32
+        var message: String
+    }
+
+    /// Live state of one RTMP destination, for the strip beside the deck.
+    static func streamDestinationStats(encoderId: UInt64, destinationId: UInt64) -> StreamDestinationStats? {
+        var connected: UInt32 = 0
+        var frames: UInt64 = 0
+        var dropped: UInt64 = 0
+        var bitrate: UInt32 = 0
+        var threads: UInt32 = 0
+        var lag: UInt32 = 0
+        var fps: UInt32 = 0
+        var message = [UInt8](repeating: 0, count: 256)
+        let code = message.withUnsafeMutableBufferPointer { buffer in
+            mixer_stream_destination_stats(
+                encoderId,
+                destinationId,
+                &connected,
+                &frames,
+                &dropped,
+                &bitrate,
+                &threads,
+                &lag,
+                &fps,
+                buffer.baseAddress,
+                buffer.count
+            )
+        }
+        guard code == EIVIZ_OK else { return nil }
+        let text = String(bytes: message.prefix { $0 != 0 }, encoding: .utf8) ?? ""
+        return StreamDestinationStats(
+            connected: connected != 0,
+            frames: frames,
+            dropped: dropped,
+            bitrate: bitrate,
+            lagMs: lag,
+            fpsMilli: fps,
+            message: text
+        )
+    }
+
     static func replayCapacity(path: String, width: UInt32, height: UInt32) -> (ReplayCapacity?, String) {
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         var written = 0

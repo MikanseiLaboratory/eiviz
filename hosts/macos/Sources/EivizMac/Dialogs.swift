@@ -124,10 +124,6 @@ struct SettingsView: View {
     @EnvironmentObject private var mixer: MixerController
     @Environment(\.dismiss) private var dismiss
     @State private var category = 0
-    /// Encode profiles as they were when the sheet opened. The Windows page rebuilds
-    /// a running encoder the moment its profile changes; this host applies the
-    /// document on OK, so the rebuild happens after the document lands.
-    @State private var encoderSnapshot: [StreamEncoderEntry] = []
     @State private var selectedMultiviewId: UInt64?
     @State private var decklinkDevices: [DeckLinkDeviceInfo] = []
     @State private var decklinkModes: [String: [DeckLinkModeInfo]] = [:]
@@ -200,7 +196,6 @@ struct SettingsView: View {
                         AppPrefs.shared.save()
                         mixer.applyVmixApi()
                         mixer.publishSession()
-                        restartChangedStreamProfiles()
                         dismiss()
                     }
                     Button("Cancel") { dismiss() }
@@ -213,18 +208,8 @@ struct SettingsView: View {
         .foregroundStyle(EivizTheme.text)
         .onAppear {
             category = mixer.settingsCategory
-            encoderSnapshot = mixer.session.streamEncoders
         }
         .sheet(isPresented: $mixer.showMultiviewSlots) { MultiviewSlotsView() }
-    }
-
-    private func restartChangedStreamProfiles() {
-        guard let before = try? JSONEncoder().encode(encoderSnapshot),
-              let after = try? JSONEncoder().encode(mixer.session.streamEncoders)
-        else { return }
-        if before != after {
-            mixer.restartRunningStreams()
-        }
     }
 
     private var display: some View {
@@ -2056,31 +2041,46 @@ struct MixingUnitView: View {
 struct RtmpKeyEditor: View {
     @Binding var output: OutputEntry
     @State private var key = ""
+    /// A key already lives in the Keychain for this row. The value itself is not
+    /// read back (that would ask for the login password), so the field only says
+    /// that a stored key is in use.
+    @State private var stored = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            // Write-only on purpose: reading the stored key back into this field made
-            // macOS ask for the login keychain password, because a development build is
-            // not in the item's access list (the prompt is the keychain's, not ours).
-            SecureField(L10n.t("settings.streamKey"), text: $key)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 180)
-                .help(L10n.t("settings.streamKeyStored"))
-                .onAppear {
-                    if output.rtmpSecretRef.isEmpty {
-                        output.rtmpSecretRef = "stream-\(output.id)"
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                // Write-only on purpose: reading the stored key back into this field made
+                // macOS ask for the login keychain password, because a development build is
+                // not in the item's access list (the prompt is the keychain's, not ours).
+                SecureField(L10n.t("settings.streamKey"), text: $key)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 180)
+                    .help(L10n.t("settings.streamKeyStored"))
+                    .onAppear {
+                        if output.rtmpSecretRef.isEmpty {
+                            output.rtmpSecretRef = "stream-\(output.id)"
+                        }
+                        stored = KeychainStore.exists(account: "rtmp/" + output.rtmpSecretRef)
                     }
+                    .onChange(of: key) { _, value in
+                        guard !value.isEmpty else { return }
+                        KeychainStore.save(account: "rtmp/" + output.rtmpSecretRef, token: value)
+                        stored = true
+                    }
+                Button(L10n.t("settings.streamKeyClear")) {
+                    KeychainStore.save(account: "rtmp/" + output.rtmpSecretRef, token: "")
+                    key = ""
+                    stored = false
                 }
-                .onChange(of: key) { _, value in
-                    guard !value.isEmpty else { return }
-                    KeychainStore.save(account: "rtmp/" + output.rtmpSecretRef, token: value)
-                }
-            Button(L10n.t("settings.streamKeyClear")) {
-                KeychainStore.save(account: "rtmp/" + output.rtmpSecretRef, token: "")
-                key = ""
+                .controlSize(.small)
+                .help(L10n.t("settings.streamKeyStored"))
             }
-            .controlSize(.small)
-            .help(L10n.t("settings.streamKeyStored"))
+            if stored && key.isEmpty {
+                Text(L10n.t("settings.streamKeySaved"))
+                    .font(.caption2)
+                    .foregroundStyle(Color(white: 0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
