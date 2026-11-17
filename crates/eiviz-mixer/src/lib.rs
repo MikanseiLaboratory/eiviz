@@ -4663,7 +4663,10 @@ fn stream_encoder_add_ffi(
     // video - so an audio submit never queues behind a frame encode, and the audio
     // scheduler only pushes into a mailbox instead of waiting for OpenH264.
     let source_id = crate::abi::resolve_output_source_id(source_kind, source_id);
-    let audio_unit_id = if source_kind == SRC_KIND_MU_MULTIVIEW {
+    // A video-only encoder rejects audio at the module boundary, and the audio
+    // scheduler would keep feeding it every block. Zero means "no audio route", so
+    // the stream never sees an audio packet it must refuse.
+    let audio_unit_id = if source_kind == SRC_KIND_MU_MULTIVIEW || video_only != 0 {
         0
     } else {
         audio_unit_id

@@ -327,6 +327,16 @@ pub(crate) fn apply_send_cmd(sender: &mut OutputHandle, cmd: SendCmd, omt_gpu: &
             fps_n,
             fps_d,
         } => {
+            if matches!(sender, OutputHandle::Stream(_)) {
+                static FRAMES: std::sync::atomic::AtomicU64 =
+                    std::sync::atomic::AtomicU64::new(0);
+                let n = FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if n % 600 == 0 {
+                    crate::diag::info(&format!(
+                        "stream video frames sent to worker: {n} ({width}x{height} pts={pts})"
+                    ));
+                }
+            }
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 sender.send_video_uyvy(width, height, stride, pts, data, fps_n, fps_d)
             })) {
