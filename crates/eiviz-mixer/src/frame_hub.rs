@@ -7,7 +7,10 @@ use crate::clock::{PlayoutCursor, Rate};
 use crate::output::release_send_cmd;
 use crate::upload::AudioPacket;
 
-const AUDIO_CAP: usize = 16;
+/// Audio blocks a sender may hold while it is busy with a frame. The stream output
+/// submits video and audio from one thread, so a keyframe or a stalled socket parks
+/// this many blocks - at 10 ms each, half a second - before the oldest is dropped.
+const AUDIO_CAP: usize = 48;
 
 #[derive(Debug, Default)]
 pub struct OutputStats {

@@ -4577,30 +4577,10 @@ fn stream_encoder_add_ffi(
         }
     };
     let shared = Arc::new(Mutex::new(output));
-    // The audio scheduler must not wait on OpenH264. A blocked 10 ms tick
-    // skips samples, which is a click even on a generated 1 kHz tone.
-    let (audio_tx, audio_rx) = std::sync::mpsc::sync_channel(64);
-    let audio_output = Arc::clone(&shared);
-    let audio_thread = thread::Builder::new()
-        .name(format!("eiviz-rtmp-aac-{encoder_id}"))
-        .spawn(move || {
-            while let Ok(packet) = audio_rx.recv() {
-                if let Err(error) =
-                    lock_stream(&audio_output).submit_audio(crate::pro::audio_frame(&packet))
-                {
-                    crate::diag::error_throttled(&format!("stream send audio: {}", error.message));
-                }
-            }
-        });
-    if let Err(error) = audio_thread {
-        crate::diag::error(&format!("stream audio thread: {error}"));
-        return ERR_DEVICE;
-    }
-    let audio_send: Arc<dyn Fn(AudioPacket) + Send + Sync> = Arc::new(move |packet| {
-        if audio_tx.try_send(packet).is_err() {
-            crate::diag::error_throttled("stream audio queue is full");
-        }
-    });
+    // Audio reaches the stream through the output worker's mailbox, like every other
+    // transport. The stream mutex then has one owner - the worker that also submits
+    // video - so an audio submit never queues behind a frame encode, and the audio
+    // scheduler only pushes into a mailbox instead of waiting for OpenH264.
     let source_id = crate::abi::resolve_output_source_id(source_kind, source_id);
     let audio_unit_id = if source_kind == SRC_KIND_MU_MULTIVIEW {
         0
@@ -4660,7 +4640,7 @@ fn stream_encoder_add_ffi(
                 bytes_per_pixel: 2,
                 tx: worker.tx.clone(),
                 pace: Arc::clone(&worker.tx.pace),
-                audio_send: Some(audio_send),
+                audio_send: None,
             },
         );
         mixer.send_workers.insert(encoder_id, worker);
