@@ -307,15 +307,34 @@ jobs:
           if [ -f "$STAGING/libndi.6.dylib" ]; then
             codesign --force --sign - --timestamp=none "$STAGING/libndi.6.dylib"
           fi
-          if [ -f "$STAGING/libeiviz_pro.dylib" ]; then
-            codesign --force --sign - --timestamp=none "$STAGING/libeiviz_pro.dylib"
-          fi
+          # The Pro module carries a manifest whose SHA-256 the mixer checks. The Pro release signs
+          # it before writing that manifest, so nothing here may re-sign it: `--deep` would.
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-remote"
           codesign --force --sign - --timestamp=none "$STAGING/eivizctl"
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-headless"
-          codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-mac.app"
-          codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-remote.app"
+          for app in "$STAGING/eiviz-mac.app" "$STAGING/eiviz-remote.app"; do
+            name="$(basename "$app" .app)"
+            dir="$app/Contents/MacOS"
+            for lib in libeiviz_mixer.dylib libeiviz_remote.dylib libndi.dylib libndi.6.dylib; do
+              if [ -f "$dir/$lib" ]; then
+                codesign --force --sign - --timestamp=none "$dir/$lib"
+              fi
+            done
+            codesign --force --sign - --timestamp=none "$dir/$name"
+            codesign --force --sign - --timestamp=none "$app"
+          done
+          # The app must ship the module its manifest describes, or every Mac boots as Community.
+          for app in "$STAGING/eiviz-mac.app" "$STAGING/eiviz-remote.app"; do
+            dir="$app/Contents/MacOS"
+            [ -f "$dir/libeiviz_pro.dylib" ] || continue
+            expected="$(sed -n 's/.*"sha256":"\([0-9a-f]*\)".*/\1/p' "$dir/libeiviz_pro.dylib.manifest")"
+            actual="$(openssl dgst -sha256 "$dir/libeiviz_pro.dylib" | awk '{print $NF}')"
+            if [ "$expected" != "$actual" ]; then
+              echo "$app ships a Pro module the manifest does not describe ($actual != $expected)" >&2
+              exit 1
+            fi
+          done
           chmod +x packaging/macos/package-pkg.sh
           EIVIZ_VERSION="${{ needs.meta.outputs.version }}" \
             packaging/macos/package-pkg.sh "$STAGING" "${STAGING}.pkg"
@@ -419,15 +438,34 @@ jobs:
           if [ -f "$STAGING/libndi.6.dylib" ]; then
             codesign --force --sign - --timestamp=none "$STAGING/libndi.6.dylib"
           fi
-          if [ -f "$STAGING/libeiviz_pro.dylib" ]; then
-            codesign --force --sign - --timestamp=none "$STAGING/libeiviz_pro.dylib"
-          fi
+          # The Pro module carries a manifest whose SHA-256 the mixer checks. The Pro release signs
+          # it before writing that manifest, so nothing here may re-sign it: `--deep` would.
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-mac"
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-remote"
           codesign --force --sign - --timestamp=none "$STAGING/eivizctl"
           codesign --force --sign - --timestamp=none "$STAGING/eiviz-headless"
-          codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-mac.app"
-          codesign --force --sign - --timestamp=none --deep "$STAGING/eiviz-remote.app"
+          for app in "$STAGING/eiviz-mac.app" "$STAGING/eiviz-remote.app"; do
+            name="$(basename "$app" .app)"
+            dir="$app/Contents/MacOS"
+            for lib in libeiviz_mixer.dylib libeiviz_remote.dylib libndi.dylib libndi.6.dylib; do
+              if [ -f "$dir/$lib" ]; then
+                codesign --force --sign - --timestamp=none "$dir/$lib"
+              fi
+            done
+            codesign --force --sign - --timestamp=none "$dir/$name"
+            codesign --force --sign - --timestamp=none "$app"
+          done
+          # The app must ship the module its manifest describes, or every Mac boots as Community.
+          for app in "$STAGING/eiviz-mac.app" "$STAGING/eiviz-remote.app"; do
+            dir="$app/Contents/MacOS"
+            [ -f "$dir/libeiviz_pro.dylib" ] || continue
+            expected="$(sed -n 's/.*"sha256":"\([0-9a-f]*\)".*/\1/p' "$dir/libeiviz_pro.dylib.manifest")"
+            actual="$(openssl dgst -sha256 "$dir/libeiviz_pro.dylib" | awk '{print $NF}')"
+            if [ "$expected" != "$actual" ]; then
+              echo "$app ships a Pro module the manifest does not describe ($actual != $expected)" >&2
+              exit 1
+            fi
+          done
           chmod +x packaging/macos/package-pkg.sh
           EIVIZ_VERSION="${{ needs.meta.outputs.version }}" \
             packaging/macos/package-pkg.sh "$STAGING" "${STAGING}.pkg"
