@@ -2144,18 +2144,30 @@ private struct RtmpKeyEditor: View {
     @State private var key = ""
 
     var body: some View {
-        SecureField(L10n.t("settings.streamKey"), text: $key)
-            .textFieldStyle(.roundedBorder)
-            .frame(width: 180)
-            .onAppear {
-                if output.rtmpSecretRef.isEmpty {
-                    output.rtmpSecretRef = "stream-\(output.id)"
+        HStack(spacing: 6) {
+            // Write-only on purpose: reading the stored key back into this field made
+            // macOS ask for the login keychain password, because a development build is
+            // not in the item's access list (the prompt is the keychain's, not ours).
+            SecureField(L10n.t("settings.streamKey"), text: $key)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 180)
+                .help(L10n.t("settings.streamKeyStored"))
+                .onAppear {
+                    if output.rtmpSecretRef.isEmpty {
+                        output.rtmpSecretRef = "stream-\(output.id)"
+                    }
                 }
-                key = KeychainStore.load(account: "rtmp/" + output.rtmpSecretRef)
+                .onChange(of: key) { _, value in
+                    guard !value.isEmpty else { return }
+                    KeychainStore.save(account: "rtmp/" + output.rtmpSecretRef, token: value)
+                }
+            Button(L10n.t("settings.streamKeyClear")) {
+                KeychainStore.save(account: "rtmp/" + output.rtmpSecretRef, token: "")
+                key = ""
             }
-            .onChange(of: key) { _, value in
-                KeychainStore.save(account: "rtmp/" + output.rtmpSecretRef, token: value)
-            }
+            .controlSize(.small)
+            .help(L10n.t("settings.streamKeyStored"))
+        }
     }
 }
 
