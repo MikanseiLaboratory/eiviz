@@ -598,10 +598,16 @@ struct SettingsView: View {
             HStack {
                 Button(L10n.t("settings.licenseInstall")) {
                     let ticket = licenseTicket.trimmingCharacters(in: .whitespacesAndNewlines)
-                    ticket.withCString { ptr in
-                        _ = mixer_license_install(ptr)
+                    let code = ticket.withCString { ptr in
+                        mixer_license_install(ptr)
                     }
                     refreshLicense()
+                    // The plan is read once, when the mixer starts: until the
+                    // app restarts, the Outputs settings still refuse an RTMP
+                    // destination even though the ticket is now valid.
+                    if code == 0 {
+                        promptRestartForPlan()
+                    }
                 }
                 Button(L10n.t("settings.licenseClear")) {
                     _ = mixer_license_clear()
@@ -702,6 +708,25 @@ struct SettingsView: View {
         #endif
     }
 
+    /// Asks for the restart the new plan needs, then relaunches this app with
+    /// the same arguments instead of leaving the operator to find the app again.
+    private func promptRestartForPlan() {
+        let alert = NSAlert()
+        alert.messageText = L10n.t("settings.restartNeededTitle")
+        alert.informativeText = L10n.t("settings.restartNeeded")
+        alert.addButton(withTitle: L10n.t("settings.restartNow"))
+        alert.addButton(withTitle: L10n.t("settings.restartLater"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let bundle = Bundle.main.bundlePath
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        task.arguments = ["-n", "-a", bundle, "--args"] + arguments
+        try? task.run()
+        task.waitUntilExit()
+        NSApplication.shared.terminate(nil)
+    }
+
     private static func rtmpAllowed() -> Bool {
         var caps = EivizCapabilities()
         guard mixer_capabilities(&caps) == 0 else { return false }
@@ -743,6 +768,28 @@ struct SettingsView: View {
                 if output.wrappedValue.transport == .rtmp {
                     mixerTextField(output.rtmpUrl, placeholder: L10n.t("settings.rtmpUrl"))
                     RtmpKeyEditor(output: output)
+                    // Which encoding profile this destination publishes. The
+                    // profiles are created in the Encoding settings, on their
+                    // own, so a destination picks one here.
+                    HStack(spacing: 8) {
+                        Text(L10n.t("settings.useEncode"))
+                        Picker("", selection: output.streamEncoderId) {
+                            if mixer.session.streamEncoders.isEmpty {
+                                Text(L10n.t("settings.encodingEmptyShort")).tag(UInt64(0))
+                            }
+                            ForEach(mixer.session.streamEncoders) { encoder in
+                                Text(encoder.name.isEmpty ? L10n.t("settings.encodeName") : encoder.name)
+                                    .tag(encoder.id)
+                            }
+                            let current = output.wrappedValue.streamEncoderId
+                            if current != 0
+                                && !mixer.session.streamEncoders.contains(where: { $0.id == current }) {
+                                Text(L10n.t("settings.encodeMissing")).tag(current)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 200)
+                    }
                 }
                 if output.wrappedValue.transport == .deckLink {
                     deckLinkOutputFields(output)
