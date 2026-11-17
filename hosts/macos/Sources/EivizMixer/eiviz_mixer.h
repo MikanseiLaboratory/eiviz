@@ -126,6 +126,9 @@ typedef struct EivizCapabilities {
     uint32_t replay_angle_limit;
     uint32_t replay_channel_limit;
     uint32_t replay_linked;
+    // Bit n is ON when stream encoder code n can start: 1 OpenH264,
+    // 2 VideoToolbox, 4 MediaFoundation.
+    uint32_t stream_encoder_mask;
 } EivizCapabilities;
 
 typedef struct EivizReplayStats {

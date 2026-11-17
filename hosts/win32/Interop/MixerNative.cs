@@ -1296,6 +1296,9 @@ internal struct MixerCapabilities
     public uint ReplayAngleLimit;
     public uint ReplayChannelLimit;
     public uint ReplayLinked;
+    // Bit n is ON when stream encoder code n can start: 1 OpenH264,
+    // 2 VideoToolbox, 4 MediaFoundation.
+    public uint StreamEncoderMask;
 }
 
 /// <summary>

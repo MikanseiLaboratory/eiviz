@@ -481,7 +481,16 @@ struct SettingsView: View {
                         Text(L10n.t("settings.encoder"))
                         Picker("", selection: $mixer.session.streamEncoders[index].encoder) {
                             Text("OpenH264").tag("OpenH264")
-                            Text("VideoToolbox").tag("VideoToolbox")
+                            if Self.streamEncoderMask() & 2 != 0 {
+                                Text("VideoToolbox").tag("VideoToolbox")
+                            }
+                            if Self.streamEncoderMask() & 4 != 0 {
+                                Text("MediaFoundation").tag("MediaFoundation")
+                            }
+                            let saved = mixer.session.streamEncoders[index].encoder
+                            if saved != "OpenH264" && saved != "VideoToolbox" && saved != "MediaFoundation" && !saved.isEmpty {
+                                Text(saved).tag(saved)
+                            }
                         }
                         .labelsHidden()
                         .frame(width: 190)
@@ -676,6 +685,15 @@ struct SettingsView: View {
         var caps = EivizCapabilities()
         guard mixer_capabilities(&caps) == 0 else { return false }
         return caps.rtmp_linked != 0 && caps.rtmp_max_width != 0
+    }
+
+    /// Bit mask of the stream encoders the mixer can start. 1 OpenH264,
+    /// 2 VideoToolbox, 4 MediaFoundation. A mixer that cannot report it
+    /// answers 0, and the picker falls back to OpenH264 plus the saved value.
+    private static func streamEncoderMask() -> UInt32 {
+        var caps = EivizCapabilities()
+        guard mixer_capabilities(&caps) == 0 else { return 0 }
+        return caps.stream_encoder_mask
     }
 
     private func outputRow(_ output: Binding<OutputEntry>) -> some View {

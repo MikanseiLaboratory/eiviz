@@ -29,6 +29,21 @@ internal static class PlanGate
         return true;
     }
 
+    /// <summary>
+    /// Stream encoders the mixer can start: bit 1 OpenH264, 2 VideoToolbox,
+    /// 4 MediaFoundation. Remote mode cannot read them yet, so it answers
+    /// false and the caller keeps the single encoder it has always offered
+    /// (plus the session's saved value, whatever that names).
+    /// </summary>
+    public static bool TryStreamEncoderMask(out uint mask)
+    {
+        mask = 0;
+        if (HostRole.IsRemote || !MixerNative.TryQueryCapabilities(out var caps))
+            return false;
+        mask = caps.StreamEncoderMask;
+        return true;
+    }
+
     public static bool CanAddMixingUnit(int existing) =>
         RemoteOr(caps => caps.MixingUnitLimit == uint.MaxValue || (uint)existing < caps.MixingUnitLimit);
 
