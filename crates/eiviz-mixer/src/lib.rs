@@ -7419,7 +7419,44 @@ struct StreamPace {
     dropped: u64,
 }
 
-fn stream_pace(shared: &Shared) -> StreamPace {
+/// One stream output the pace indicator reads: what the slot knows, gathered under the
+/// slot, and the sender asked afterwards.
+struct PaceTarget {
+    output_id: u64,
+    stream: SharedStream,
+    target_fps_milli: u32,
+    warmed: bool,
+}
+
+/// The last statistics a reader managed to take, per output. The indicator asks every few
+/// hundred milliseconds; the sender owns the stream while a frame goes out to a slow
+/// socket, and waiting for it there would stall compose and audio with it.
+fn stream_stats(output_id: u64, stream: &SharedStream) -> eiviz_pro_api::OutputStats {
+    use std::sync::TryLockError;
+    match stream.try_lock() {
+        Ok(output) => {
+            let stats = output.stats();
+            if let Ok(mut cache) = stream_stats_cache().lock() {
+                cache.insert(output_id, stats.clone());
+            }
+            stats
+        }
+        // Busy sender: report what the last successful read saw rather than wait.
+        Err(TryLockError::WouldBlock) => stream_stats_cache()
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&output_id).cloned())
+            .unwrap_or_default(),
+        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner().stats(),
+    }
+}
+
+fn stream_stats_cache() -> &'static Mutex<HashMap<u64, eiviz_pro_api::OutputStats>> {
+    static CACHE: OnceLock<Mutex<HashMap<u64, eiviz_pro_api::OutputStats>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn stream_pace(targets: &[PaceTarget]) -> StreamPace {
     let mut pace = StreamPace {
         slow: 0,
         lag_ms: 0,
@@ -7427,25 +7464,19 @@ fn stream_pace(shared: &Shared) -> StreamPace {
         target_fps_milli: 0,
         dropped: 0,
     };
-    for output in shared.outputs.values() {
-        if output.transport != OUT_RTMP {
-            continue;
-        }
-        let Some(stream) = &output.stream else {
-            continue;
-        };
-        let stats = lock_stream(stream).stats();
+    for target in targets {
+        let stats = stream_stats(target.output_id, &target.stream);
         pace.dropped = pace.dropped.saturating_add(stats.dropped);
-        let target = fps_times_1000(output.fps_num, output.fps_den);
-        let warmed = output.started_at.elapsed() >= std::time::Duration::from_secs(3);
+        let target_fps_milli = target.target_fps_milli;
         // sent_fps_milli stays 0 until the first one-second window closes.
         let fps_low = stats.sent_fps_milli > 0
-            && stats.sent_fps_milli.saturating_mul(100) < target.saturating_mul(85);
-        let behind = stats.connected && warmed && (stats.media_lag_ms >= 400 || fps_low);
+            && stats.sent_fps_milli.saturating_mul(100)
+                < target_fps_milli.saturating_mul(85);
+        let behind = stats.connected && target.warmed && (stats.media_lag_ms >= 400 || fps_low);
         if behind || stats.media_lag_ms >= pace.lag_ms {
             pace.lag_ms = stats.media_lag_ms;
             pace.fps_milli = stats.sent_fps_milli;
-            pace.target_fps_milli = target;
+            pace.target_fps_milli = target_fps_milli;
         }
         if behind {
             pace.slow = 1;
@@ -7486,7 +7517,11 @@ unsafe fn mixer_copy_runtime_stats_ffi(out: *mut MixerRuntimeStats) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
-    with_mixer(|mixer| {
+    // Take what the slot knows first, then ask the senders outside it. A sender can hold
+    // its stream for as long as a socket write blocks, and waiting there inside the slot
+    // stops compose, audio, and uploads for the same seconds - which is how a slow RTMP
+    // peer turned into "mixer_slot held 1600ms" and a full audio queue.
+    let snapshot = match with_mixer(|mixer| {
         let shared = mixer.shared.lock_or_recover();
         let uploads = shared.uploads.lock_or_recover();
         let input_queue_dropped = uploads.runtime_rows().map(|(_, _, dropped)| dropped).sum();
@@ -7511,28 +7546,66 @@ unsafe fn mixer_copy_runtime_stats_ffi(out: *mut MixerRuntimeStats) -> i32 {
                 _ => {}
             }
         }
-        let pace = stream_pace(&shared);
-        unsafe {
-            *out = MixerRuntimeStats {
-                uptime_ms: elapsed_ms(shared.clock.epoch()),
-                render_skipped: crate::diag::render_skipped(),
-                frames_rendered: crate::diag::frames_rendered(),
-                input_queue_dropped,
-                output_omt,
-                output_ndi,
-                output_decklink,
-                output_omt_subscribed,
-                output_ndi_connections,
-                stream_slow: pace.slow,
-                stream_lag_ms: pace.lag_ms,
-                stream_fps_milli: pace.fps_milli,
-                stream_target_fps_milli: pace.target_fps_milli,
-                stream_dropped: pace.dropped,
-            };
+        let targets = shared
+            .outputs
+            .iter()
+            .filter(|(_, output)| output.transport == OUT_RTMP)
+            .filter_map(|(&output_id, output)| {
+                let stream = output.stream.as_ref()?;
+                Some(PaceTarget {
+                    output_id,
+                    stream: Arc::clone(stream),
+                    target_fps_milli: fps_times_1000(output.fps_num, output.fps_den),
+                    warmed: output.started_at.elapsed() >= std::time::Duration::from_secs(3),
+                })
+            })
+            .collect::<Vec<_>>();
+        RuntimeSnapshot {
+            uptime_ms: elapsed_ms(shared.clock.epoch()),
+            input_queue_dropped,
+            output_omt,
+            output_ndi,
+            output_decklink,
+            output_omt_subscribed,
+            output_ndi_connections,
+            targets,
         }
-        OK
-    })
-    .unwrap_or_else(|code| code)
+    }) {
+        Ok(snapshot) => snapshot,
+        Err(code) => return code,
+    };
+    let pace = stream_pace(&snapshot.targets);
+    unsafe {
+        *out = MixerRuntimeStats {
+            uptime_ms: snapshot.uptime_ms,
+            render_skipped: crate::diag::render_skipped(),
+            frames_rendered: crate::diag::frames_rendered(),
+            input_queue_dropped: snapshot.input_queue_dropped,
+            output_omt: snapshot.output_omt,
+            output_ndi: snapshot.output_ndi,
+            output_decklink: snapshot.output_decklink,
+            output_omt_subscribed: snapshot.output_omt_subscribed,
+            output_ndi_connections: snapshot.output_ndi_connections,
+            stream_slow: pace.slow,
+            stream_lag_ms: pace.lag_ms,
+            stream_fps_milli: pace.fps_milli,
+            stream_target_fps_milli: pace.target_fps_milli,
+            stream_dropped: pace.dropped,
+        };
+    }
+    OK
+}
+
+/// What the mixer slot reports without waiting for any sender.
+struct RuntimeSnapshot {
+    uptime_ms: u64,
+    input_queue_dropped: u64,
+    output_omt: u32,
+    output_ndi: u32,
+    output_decklink: u32,
+    output_omt_subscribed: u32,
+    output_ndi_connections: u32,
+    targets: Vec<PaceTarget>,
 }
 
 /// Resets the operator-facing counters shown in the resource window.
@@ -7924,6 +7997,72 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::collections::HashMap;
+
+    /// The status indicator asks for stream statistics every 400 ms. A sender writing a
+    /// frame to a slow socket holds its stream for as long as that write blocks, so the
+    /// reader must report the last sample instead of waiting behind it.
+    #[test]
+    fn busy_sender_does_not_stall_the_runtime_stats_reader() {
+        struct Dummy;
+        impl eiviz_pro_api::MediaOutput for Dummy {
+            fn submit_video(
+                &mut self,
+                _: eiviz_pro_api::VideoFrame,
+            ) -> eiviz_pro_api::ProResult<()> {
+                Ok(())
+            }
+            fn submit_audio(
+                &mut self,
+                _: eiviz_pro_api::AudioFrame,
+            ) -> eiviz_pro_api::ProResult<()> {
+                Ok(())
+            }
+            fn stats(&self) -> eiviz_pro_api::OutputStats {
+                eiviz_pro_api::OutputStats {
+                    media_lag_ms: 480,
+                    ..Default::default()
+                }
+            }
+        }
+        impl eiviz_pro_api::StreamOutput for Dummy {
+            fn add_destination(&mut self, _: u64, _: &str) -> eiviz_pro_api::ProResult<()> {
+                Ok(())
+            }
+            fn remove_destination(&mut self, _: u64) -> eiviz_pro_api::ProResult<()> {
+                Ok(())
+            }
+            fn destination_stats(
+                &self,
+                _: u64,
+            ) -> eiviz_pro_api::ProResult<eiviz_pro_api::OutputStats> {
+                Ok(Default::default())
+            }
+        }
+
+        let stream: SharedStream = Arc::new(Mutex::new(
+            Box::new(Dummy) as Box<dyn eiviz_pro_api::StreamOutput>
+        ));
+        // A sample the reader can fall back on.
+        assert_eq!(stream_stats(9_001, &stream).media_lag_ms, 480);
+
+        let held = Arc::clone(&stream);
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let holder = thread::spawn(move || {
+            let _guard = held.lock().unwrap_or_else(|poison| poison.into_inner());
+            ready_tx.send(()).expect("ready");
+            thread::sleep(Duration::from_millis(400));
+        });
+        ready_rx.recv().expect("holder started");
+        let start = Instant::now();
+        let stats = stream_stats(9_001, &stream);
+        let waited = start.elapsed();
+        assert!(
+            waited < Duration::from_millis(100),
+            "a busy sender held the reader for {waited:?}"
+        );
+        assert_eq!(stats.media_lag_ms, 480, "the last sample is still reported");
+        holder.join().expect("holder");
+    }
 
     /// A client that asks what Replay is doing must get the document and the live
     /// state, not the facade's empty default: automation and a remote host read the
