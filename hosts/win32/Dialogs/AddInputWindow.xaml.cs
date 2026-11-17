@@ -63,6 +63,7 @@ public partial class AddInputWindow : Window
     public OmtQuality ResultOmtQuality { get; private set; } = OmtQuality.Default;
     public NdiBandwidth ResultNdiBandwidth { get; private set; } = NdiBandwidth.Highest;
     public bool ResultVideoLoop { get; private set; } = true;
+    public InputDecodePath ResultDecodePath { get; private set; } = InputDecodePath.Auto;
     public VideoPlayWhen ResultVideoPlayWhen { get; private set; } = VideoPlayWhen.Never;
     public VideoTriggerWhen ResultVideoRestartWhen { get; private set; } = VideoTriggerWhen.Never;
     public VideoTriggerWhen ResultVideoPauseWhen { get; private set; } = VideoTriggerWhen.Never;
@@ -119,6 +120,8 @@ public partial class AddInputWindow : Window
         StillPath.Text = input.Kind == InputKind.Still ? input.PathOrAddress ?? "" : "";
         VideoPath.Text = input.Kind == InputKind.Video ? input.PathOrAddress ?? "" : "";
         VideoLoopBox.IsChecked = input.VideoLoop;
+        SelectTag(VideoDecodeBox, DecodeTag(input.DecodePath));
+        SelectTag(UvcDecodeBox, DecodeTag(input.DecodePath));
         SelectTag(VideoPlayBox, ((int)input.VideoPlayWhen).ToString());
         SelectTag(VideoRestartBox, ((int)input.VideoRestartWhen).ToString());
         SelectTag(VideoPauseBox, ((int)input.VideoPauseWhen).ToString());
@@ -553,6 +556,7 @@ public partial class AddInputWindow : Window
                 }
                 ResultName = System.IO.Path.GetFileName(ResultPath);
                 ResultVideoLoop = VideoLoopBox.IsChecked == true;
+                ResultDecodePath = ReadDecodePath(VideoDecodeBox);
                 ResultVideoPlayWhen = ReadVideoPlayWhen(VideoPlayBox);
                 ResultVideoRestartWhen = ReadVideoTriggerWhen(VideoRestartBox);
                 ResultVideoPauseWhen = ReadVideoTriggerWhen(VideoPauseBox);
@@ -679,6 +683,7 @@ public partial class AddInputWindow : Window
                 ResultCaptureFpsNum = mode.FpsNum;
                 ResultCaptureFpsDen = mode.FpsDen == 0 ? 1 : mode.FpsDen;
                 ResultFrameBufferFrames = ReadBuffer(UvcBufferBox, 3);
+                ResultDecodePath = ReadDecodePath(UvcDecodeBox);
                 break;
             case InputKind.Replay:
                 ResultPath = "";
@@ -699,6 +704,27 @@ public partial class AddInputWindow : Window
     }
 
     private void AddTag_Click(object sender, RoutedEventArgs e) => _tags?.PromptAdd();
+
+    private static string DecodeTag(InputDecodePath path) => path switch
+    {
+        InputDecodePath.MediaFoundation => "mf",
+        InputDecodePath.VulkanVideo => "vulkan",
+        InputDecodePath.Cpu => "cpu",
+        InputDecodePath.Accelerated => "accel",
+        _ => "auto",
+    };
+
+    private static InputDecodePath ReadDecodePath(ComboBox box) =>
+        box.SelectedItem is ComboBoxItem { Tag: string tag }
+            ? tag switch
+            {
+                "mf" => InputDecodePath.MediaFoundation,
+                "vulkan" => InputDecodePath.VulkanVideo,
+                "cpu" => InputDecodePath.Cpu,
+                "accel" => InputDecodePath.Accelerated,
+                _ => InputDecodePath.Auto,
+            }
+            : InputDecodePath.Auto;
 
     private static uint ReadBuffer(ComboBox box, uint fallback)
     {

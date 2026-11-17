@@ -345,6 +345,9 @@ public partial class MainWindow
         input.OmtQuality = dialog.Kind == InputKind.OMT ? dialog.ResultOmtQuality : OmtQuality.Default;
         input.NdiBandwidth = dialog.Kind == InputKind.NDI ? dialog.ResultNdiBandwidth : NdiBandwidth.Highest;
         input.VideoLoop = dialog.Kind == InputKind.Video && dialog.ResultVideoLoop;
+        input.DecodePath = dialog.Kind is InputKind.Video or InputKind.UVC
+            ? dialog.ResultDecodePath
+            : InputDecodePath.Auto;
         input.VideoPlayWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoPlayWhen : VideoPlayWhen.Never;
         input.VideoRestartWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoRestartWhen : VideoTriggerWhen.Never;
         input.VideoPauseWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoPauseWhen : VideoTriggerWhen.Never;

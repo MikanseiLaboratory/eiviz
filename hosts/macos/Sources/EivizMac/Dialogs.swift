@@ -1211,6 +1211,7 @@ struct AddInputView: View {
     @State private var scroll = false
     @State private var toneHz: Float = 1000
     @State private var useGpu = false
+    @State private var decodePath: InputDecodePath = .auto
     @State private var buffer: UInt32 = 1
     @State private var mediaBuffer: UInt32 = 3
     @State private var quality: UInt32 = 0
@@ -1377,6 +1378,7 @@ struct AddInputView: View {
             pathRow($videoPath) { pick(["public.movie"], $videoPath) }
             recentList(AppPrefs.shared.recentVideos) { videoPath = $0 }
             Toggle("Loop", isOn: $videoLoop)
+            decodePicker
             frameBufferPicker($mediaBuffer)
             Text("Frame buffer (1–8) absorbs decode jitter.")
                 .foregroundStyle(EivizTheme.dim)
@@ -1578,6 +1580,22 @@ struct AddInputView: View {
         }
     }
 
+    /// Video files and cameras can be decoded on the GPU or the CPU. Holding
+    /// VideoToolbox here is what starves a VideoToolbox stream encoder, so the
+    /// operator can move a source's decode to the CPU.
+    private var decodePicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker(L10n.t("settings.decode"), selection: $decodePath) {
+                ForEach(InputDecodePath.macOSChoices, id: \.self) { path in
+                    Text(L10n.t(path.labelKey)).tag(path)
+                }
+            }
+            Text(L10n.t("settings.decodeHelp"))
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private func frameBufferPicker(_ selection: Binding<UInt32>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Frame buffer (frames)")
@@ -1759,6 +1777,7 @@ struct AddInputView: View {
         scroll = editing.scroll
         toneHz = editing.toneHz
         useGpu = editing.useGpu
+        decodePath = editing.decodePath
         buffer = editing.frameBufferFrames
         mediaBuffer = max(1, min(8, editing.frameBufferFrames == 0 ? 3 : editing.frameBufferFrames))
         ndiLow = editing.ndiBandwidth == .lowest
@@ -1866,6 +1885,7 @@ struct AddInputView: View {
             input.kind = .omt
             input.pathOrAddress = omtAddress
             input.useGpu = useGpu
+            input.decodePath = decodePath
             input.frameBufferFrames = buffer
             input.omtQuality = switch quality {
             case 1: .low

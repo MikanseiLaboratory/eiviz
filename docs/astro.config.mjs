@@ -145,6 +145,7 @@ export default defineConfig({
 						'introduction/about',
 						'introduction/mikansei-laboratory',
 						'introduction/requirements',
+						'introduction/hardware-limits',
 						'introduction/plans',
 						'introduction/settings',
 						'introduction/architecture',

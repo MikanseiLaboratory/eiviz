@@ -2,6 +2,13 @@ pub const OK: i32 = 0;
 pub const ERR_ALREADY_CREATED: i32 = 1;
 pub const ERR_NOT_CREATED: i32 = 2;
 pub const ERR_INVALID_ARGUMENT: i32 = 3;
+
+/// Decoder choice passed to `mixer_video_start_ex`.
+pub const DECODE_PATH_AUTO: u32 = 0;
+pub const DECODE_PATH_ACCELERATED: u32 = 1;
+pub const DECODE_PATH_CPU: u32 = 2;
+pub const DECODE_PATH_MEDIAFOUNDATION: u32 = 3;
+pub const DECODE_PATH_VULKAN: u32 = 4;
 pub const ERR_DEVICE: i32 = 4;
 pub const ERR_IO: i32 = 5;
 pub const ERR_BUFFER_TOO_SMALL: i32 = 6;

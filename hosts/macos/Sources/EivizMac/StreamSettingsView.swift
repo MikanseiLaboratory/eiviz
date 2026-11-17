@@ -40,7 +40,8 @@ struct StreamSettingsPane: View {
                     EncodeProfileCard(
                         encoder: $encoder,
                         caps: caps,
-                        locked: onAirLock
+                        locked: onAirLock,
+                        live: isPublishing(encoder)
                     ) {
                         mixer.removeStreamEncoder(encoder.id)
                     }
@@ -68,12 +69,23 @@ struct StreamSettingsPane: View {
                     }
                 }
 
+                OpenH264StatusCard()
+
                 Spacer(minLength: 0)
             }
         }
         .onAppear { caps = StreamCaps.read() }
         .onReceive(NotificationCenter.default.publisher(for: OnAirLock.changed)) { _ in
             onAirLock = OnAirLock.active
+        }
+    }
+
+    /// A profile is live while an enabled destination publishes through it. Editing
+    /// it rebuilds the encoder and reconnects every destination, which would cut the
+    /// stream, so those controls stay locked until it is stopped.
+    private func isPublishing(_ encoder: StreamEncoderEntry) -> Bool {
+        mixer.session.outputs.contains {
+            $0.transport == .rtmp && $0.enabled && $0.streamEncoderId == encoder.id
         }
     }
 
@@ -96,10 +108,15 @@ private struct EncodeProfileCard: View {
     @Binding var encoder: StreamEncoderEntry
     let caps: StreamCaps
     let locked: Bool
+    /// The profile is publishing; controls that rebuild the encoder are locked.
+    let live: Bool
     let onRemove: () -> Void
     @EnvironmentObject private var mixer: MixerController
 
     private var meters: EncodeMeters { EncodeMeters(encoder) }
+
+    /// Controls that only take effect by rebuilding the encoder.
+    private var controlLocked: Bool { locked || live }
 
     /// What the selected encoder actually honours. VideoToolbox accepts only the
     /// automatic thread count and refuses presets it cannot express; Media
@@ -107,16 +124,23 @@ private struct EncodeProfileCard: View {
     private var support: EncoderSupport { EncoderSupport.of(encoder.encoder) }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if live {
+                Text(L10n.t("settings.streamLiveLock"))
+                    .font(.caption)
+                    .foregroundStyle(Color(red: 224 / 255, green: 195 / 255, blue: 106 / 255))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 8) {
             GridRow {
                 TextField(L10n.t("settings.encodeName"), text: $encoder.name)
                     .textFieldStyle(.roundedBorder)
-                    .disabled(locked)
+                    .disabled(controlLocked)
                     .gridCellColumns(3)
                 Button(action: onRemove) {
                     Image(systemName: "minus")
                 }
-                .disabled(locked)
+                .disabled(controlLocked)
                 .help(L10n.t("settings.removeEncode"))
             }
 
@@ -136,7 +160,7 @@ private struct EncodeProfileCard: View {
                 }
                 metered(L10n.t("settings.keyframeInterval"), meters.keyint, L10n.t("settings.keyframeIntervalHint")) {
                     DraggableUIntField(value: $encoder.keyint, minimum: 1)
-                        .disabled(locked)
+                        .disabled(controlLocked)
                 }
             }
 
@@ -161,7 +185,7 @@ private struct EncodeProfileCard: View {
                         ),
                         step: 10
                     )
-                    .disabled(locked)
+                    .disabled(controlLocked)
                 }
             }
 
@@ -186,7 +210,7 @@ private struct EncodeProfileCard: View {
                         ),
                         step: 10
                     )
-                    .disabled(locked)
+                    .disabled(controlLocked)
                 }
                 metered(L10n.t("settings.entropy"), meters.entropy, L10n.t("settings.entropyHint"), fixedByEncoder: !support.entropy) {
                     entropyPicker
@@ -203,7 +227,7 @@ private struct EncodeProfileCard: View {
                     // switch is not in the Windows page.
                     Toggle(L10n.t("settings.videoOnly"), isOn: $encoder.videoOnly)
                         .toggleStyle(.checkbox)
-                        .disabled(locked)
+                        .disabled(controlLocked)
                 }
                 .gridCellColumns(3)
             }
@@ -213,6 +237,7 @@ private struct EncodeProfileCard: View {
             Rectangle()
                 .stroke(Color(white: 0.27), lineWidth: 1)
         )
+        }
         .onAppear { applyEncoderSupport() }
         .onChange(of: encoder.encoder) { _, _ in applyEncoderSupport() }
     }
@@ -253,7 +278,7 @@ private struct EncodeProfileCard: View {
         )
         .textFieldStyle(.roundedBorder)
         .frame(maxWidth: 120)
-        .disabled(locked)
+        .disabled(controlLocked)
     }
 
     private var sizeTag: String {
@@ -296,7 +321,7 @@ private struct EncodeProfileCard: View {
         }
         .labelsHidden()
         .frame(maxWidth: 160)
-        .disabled(locked)
+        .disabled(controlLocked)
     }
 
     private var fpsTag: String {
@@ -343,7 +368,7 @@ private struct EncodeProfileCard: View {
         }
         .labelsHidden()
         .frame(maxWidth: 160)
-        .disabled(locked)
+        .disabled(controlLocked)
     }
 
     private var threadsPicker: some View {
@@ -381,7 +406,7 @@ private struct EncodeProfileCard: View {
         }
         .labelsHidden()
         .frame(maxWidth: 160)
-        .disabled(locked)
+        .disabled(controlLocked)
     }
 
     private var complexityPicker: some View {
@@ -513,7 +538,7 @@ private struct StreamDestinationCard: View {
                 }
                 .labelsHidden()
                 .frame(maxWidth: 220)
-                .disabled(locked)
+                .disabled(locked || output.enabled)
             }
 
             labeled(L10n.t("settings.streamServer")) {
@@ -525,6 +550,13 @@ private struct StreamDestinationCard: View {
             labeled(L10n.t("settings.streamKey")) {
                 RtmpKeyEditor(output: $output)
                     .disabled(locked)
+            }
+
+            if output.enabled {
+                Text(L10n.t("settings.streamLiveLock"))
+                    .font(.caption2)
+                    .foregroundStyle(Color(white: 0.5))
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             HStack(spacing: 12) {
@@ -571,7 +603,7 @@ private struct StreamDestinationCard: View {
                 }
                 .labelsHidden()
                 .frame(maxWidth: 140)
-                .disabled(locked)
+                .disabled(locked || output.enabled)
             }
         }
         .padding(8)

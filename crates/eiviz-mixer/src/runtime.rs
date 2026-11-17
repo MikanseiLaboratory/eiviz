@@ -23,7 +23,7 @@ use crate::{
     mixer_set_rebar_optimization, mixer_snapshot, mixer_stream_destination_add,
     mixer_stream_destination_remove, mixer_stream_encoder_add, mixer_stream_encoder_devices,
     mixer_stream_encoder_remove, mixer_unit_configure, mixer_video_seek, mixer_video_set_loop,
-    mixer_video_set_playing, mixer_video_start,
+    mixer_video_set_playing, mixer_video_start, mixer_video_start_ex,
 };
 
 pub(crate) fn control() -> &'static Mutex<ControlService> {
@@ -346,8 +346,17 @@ impl MixerPort for ProcessMixer {
     fn video_start(&mut self, spec: VideoStartApply) -> ControlResult<()> {
         let c_path =
             CString::new(spec.path).map_err(|error| ControlError::invalid(error.to_string()))?;
+        let decode_path = match spec.decode_path {
+            eiviz_control::session::DecodePath::Auto => crate::abi::DECODE_PATH_AUTO,
+            eiviz_control::session::DecodePath::Accelerated => crate::abi::DECODE_PATH_ACCELERATED,
+            eiviz_control::session::DecodePath::Cpu => crate::abi::DECODE_PATH_CPU,
+            eiviz_control::session::DecodePath::MediaFoundation => {
+                crate::abi::DECODE_PATH_MEDIAFOUNDATION
+            }
+            eiviz_control::session::DecodePath::VulkanVideo => crate::abi::DECODE_PATH_VULKAN,
+        };
         map_abi(unsafe {
-            mixer_video_start(
+            mixer_video_start_ex(
                 spec.id,
                 c_path.as_ptr(),
                 u32::from(spec.capture),
@@ -357,6 +366,7 @@ impl MixerPort for ProcessMixer {
                 spec.fps_num,
                 spec.fps_den,
                 spec.frame_buffer_frames,
+                decode_path,
             )
         })?;
         map_abi(mixer_video_set_loop(spec.id, u32::from(spec.loop_playback)))?;

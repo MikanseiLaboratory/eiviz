@@ -275,6 +275,7 @@ mod tests {
             audio_process_exe: String::new(),
             audio_process_aumid: String::new(),
             decklink_mode: String::new(),
+            decode_path: DecodePath::Auto,
         }
     }
 

@@ -2,6 +2,7 @@
 
 use crate::command::SessionMutation;
 use crate::error::{ControlError, ControlResult};
+use crate::session::DecodePath;
 use crate::session::replay::ReplayDeckEditDto;
 use crate::session::{Document, InputDto, InputKind, MultiviewDto, SceneDto, UnitDto};
 
@@ -188,6 +189,7 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
                 audio_process_exe: String::new(),
                 audio_process_aumid: String::new(),
                 decklink_mode: String::new(),
+                decode_path: DecodePath::Auto,
             });
             document.next_input_id = id.saturating_add(1);
             Ok(())
@@ -844,6 +846,7 @@ mod tests {
             fps_den: 0,
             decklink_device: String::new(),
             decklink_mode: String::new(),
+            decode_path: DecodePath::Auto,
             decklink_external_key: false,
             rtmp_url: String::new(),
             rtmp_secret_ref: String::new(),
@@ -866,6 +869,7 @@ mod tests {
             fps_den: 0,
             decklink_device: String::new(),
             decklink_mode: String::new(),
+            decode_path: DecodePath::Auto,
             decklink_external_key: false,
             rtmp_url: String::new(),
             rtmp_secret_ref: String::new(),
@@ -906,6 +910,7 @@ mod tests {
                     fps_den: 0,
                     decklink_device: String::new(),
                     decklink_mode: String::new(),
+                    decode_path: DecodePath::Auto,
                     decklink_external_key: false,
                     rtmp_url: String::new(),
                     rtmp_secret_ref: String::new(),

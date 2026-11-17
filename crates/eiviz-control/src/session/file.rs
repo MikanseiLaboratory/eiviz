@@ -7,12 +7,12 @@ use std::path::{Path, PathBuf};
 use prost::Message;
 
 use super::{
-    AudioCaptureMode, AudioDeviceKind, AudioLinkMode, BandwidthSave, BezierHandles, Document,
-    HeadphoneDto, InputDto, InputKind, InternalColorFormat, MixSource, MuBusDto, MultiviewDto,
-    MultiviewTemplate, MvLabelAnchor, MvLabelUnit, MvSlot, MvSlotKind, NdiBandwidth, OmtQuality,
-    OutputDto, OutputSourceKind, OutputTransport, OverlaySlot, RgbColor, SceneDto, SceneLayer,
-    SceneLayerGeom, SceneLayoutPreset, SessionSettings, StreamEncoderDto, SwitcherSceneFilter,
-    TransitionPreset, UnitDto, VideoPlayWhen, VideoTriggerWhen,
+    AudioCaptureMode, AudioDeviceKind, AudioLinkMode, BandwidthSave, BezierHandles, DecodePath,
+    Document, HeadphoneDto, InputDto, InputKind, InternalColorFormat, MixSource, MuBusDto,
+    MultiviewDto, MultiviewTemplate, MvLabelAnchor, MvLabelUnit, MvSlot, MvSlotKind, NdiBandwidth,
+    OmtQuality, OutputDto, OutputSourceKind, OutputTransport, OverlaySlot, RgbColor, SceneDto,
+    SceneLayer, SceneLayerGeom, SceneLayoutPreset, SessionSettings, StreamEncoderDto,
+    SwitcherSceneFilter, TransitionPreset, UnitDto, VideoPlayWhen, VideoTriggerWhen,
 };
 
 mod pb {
@@ -634,6 +634,7 @@ fn input_from_pb(input: pb::Input) -> Result<InputDto, String> {
         audio_process_exe: input.audio_process_exe,
         audio_process_aumid: input.audio_process_aumid,
         decklink_mode: input.decklink_mode,
+        decode_path: DecodePath::Auto,
     })
 }
 

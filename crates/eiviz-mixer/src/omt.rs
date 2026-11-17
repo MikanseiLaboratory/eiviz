@@ -114,8 +114,9 @@ impl OmtReceiver {
                             // failure and then at most one line a minute, and keep the newest
                             // text in last_error for the UI.
                             let now = Instant::now();
-                            let due = last_logged
-                                .map_or(true, |at| now.duration_since(at) >= Duration::from_secs(60));
+                            let due = last_logged.map_or(true, |at| {
+                                now.duration_since(at) >= Duration::from_secs(60)
+                            });
                             if due {
                                 crate::diag::error(&message);
                                 last_logged = Some(now);

@@ -354,6 +354,8 @@ pub struct VideoStartApply {
     pub id: u64,
     pub path: String,
     pub capture: bool,
+    /// Decoder choice; `Auto` keeps the current behaviour.
+    pub decode_path: crate::session::DecodePath,
     pub loop_playback: bool,
     pub playing: bool,
     pub width: u32,

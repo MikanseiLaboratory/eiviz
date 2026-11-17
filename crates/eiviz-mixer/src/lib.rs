@@ -3388,7 +3388,41 @@ pub unsafe extern "C" fn mixer_video_start(
     fps_den: u32,
     frame_buffer_frames: u32,
 ) -> i32 {
-    ffi_guard("mixer_video_start", ERR_DEVICE, || unsafe {
+    unsafe {
+        mixer_video_start_ex(
+            id,
+            path,
+            capture,
+            format,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            frame_buffer_frames,
+            crate::abi::DECODE_PATH_AUTO,
+        )
+    }
+}
+
+/// Starts a video file or camera with an explicit decoder choice.
+///
+/// `decode_path` is `0` auto, `1` accelerated, `2` CPU, `3` Media Foundation,
+/// `4` Vulkan Video. Kinds this OS cannot provide fall back to the automatic path
+/// except for an explicit CPU request, which always stays on the CPU.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_video_start_ex(
+    id: u64,
+    path: *const c_char,
+    capture: u32,
+    format: u32,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+    frame_buffer_frames: u32,
+    decode_path: u32,
+) -> i32 {
+    ffi_guard("mixer_video_start_ex", ERR_DEVICE, || unsafe {
         mixer_video_start_ffi(
             id,
             path,
@@ -3399,6 +3433,7 @@ pub unsafe extern "C" fn mixer_video_start(
             fps_num,
             fps_den,
             frame_buffer_frames,
+            decode_path,
         )
     })
 }
@@ -3413,6 +3448,7 @@ unsafe fn mixer_video_start_ffi(
     fps_num: u32,
     fps_den: u32,
     frame_buffer_frames: u32,
+    decode_path: u32,
 ) -> i32 {
     if path.is_null() {
         return ERR_INVALID_ARGUMENT;
@@ -3470,6 +3506,9 @@ unsafe fn mixer_video_start_ffi(
             Ok(device) => device,
             Err(code) => return code,
         };
+        // Only an explicit CPU request turns the VideoToolbox path off; every other
+        // choice (including the Windows-only kinds) keeps macOS on VideoToolbox.
+        let hardware = decode_path != crate::abi::DECODE_PATH_CPU;
         return match VideoPump::start(
             id,
             path,
@@ -3481,6 +3520,7 @@ unsafe fn mixer_video_start_ffi(
             uploads,
             depth,
             Some(gpu_device),
+            hardware,
         ) {
             Ok(pump) => insert_video(id, pump),
             Err(error) => report_io(error),
@@ -3518,6 +3558,39 @@ unsafe fn mixer_video_start_ffi(
             };
         drop(previous_recv);
         drop(previous_video);
+        // An explicit decoder choice must not silently become a different one: CPU
+        // always stays on the CPU, Media Foundation and Vulkan Video refuse when the
+        // machine cannot provide them, and the automatic kinds keep the best path.
+        let (gpu, vulkan) = match decode_path {
+            crate::abi::DECODE_PATH_CPU => (None, None),
+            crate::abi::DECODE_PATH_MEDIAFOUNDATION => {
+                if gpu.is_none() {
+                    return with_mixer(|mixer| {
+                        set_error(
+                            &mixer.telemetry,
+                            "Media Foundation decode was requested but this machine has no GPU video device",
+                        );
+                        ERR_IO
+                    })
+                    .unwrap_or(ERR_IO);
+                }
+                (gpu, None)
+            }
+            crate::abi::DECODE_PATH_VULKAN => {
+                if vulkan.is_none() {
+                    return with_mixer(|mixer| {
+                        set_error(
+                            &mixer.telemetry,
+                            "Vulkan Video decode was requested but this machine has no Vulkan Video device",
+                        );
+                        ERR_IO
+                    })
+                    .unwrap_or(ERR_IO);
+                }
+                (None, vulkan)
+            }
+            _ => (gpu, vulkan),
+        };
         return match VideoPump::start(
             id,
             path,

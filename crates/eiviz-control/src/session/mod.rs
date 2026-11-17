@@ -679,6 +679,25 @@ pub struct InputDto {
     /// DeckLink display mode id. The device id is `path_or_address`.
     #[serde(default)]
     pub decklink_mode: String,
+    /// Decoder choice for video files and UVC cameras. Ignored by other kinds.
+    #[serde(default)]
+    pub decode_path: DecodePath,
+}
+
+// Which decoder an input may use for video files and cameras. `Auto` keeps the best
+// path the OS offers; `Accelerated` requires the GPU path (VideoToolbox on macOS,
+// Media Foundation on Windows); `Cpu` keeps the frames on the CPU; the Windows-only
+// kinds name a path explicitly and behave like `Accelerated` on macOS.
+session_string_enum! {
+    #[derive(Default)]
+    pub enum DecodePath {
+        #[default]
+        Auto,
+        Accelerated,
+        Cpu,
+        MediaFoundation,
+        VulkanVideo,
+    }
 }
 
 session_string_enum! {

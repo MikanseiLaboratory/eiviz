@@ -178,3 +178,7 @@ Available on Professional and above, and only while the project has a Replay inp
 - The angle set cannot change while recording; stop the recording first.
 
 The remaining-time warning thresholds (warning, alert, and critical, in seconds) belong to the session document rather than this window; they default to 600, 300, and 60, and they set the severity the main window colours its Replay status line by.
+
+## OpenH264 (macOS)
+
+VideoToolbox is the default for macOS streaming, but a video or camera input that holds VideoToolbox can leave the stream at 0 fps. In that case set the encode profile's encoder to **OpenH264**. The streaming module loads `libopenh264` when a stream starts, so the host fetches the Apple Silicon build from Cisco (`ciscobinary.openh264.org`) on first use and stores it at `~/Library/Application Support/eiviz/openh264/libopenh264.dylib`. The Stream settings page shows the state and can fetch it again. `OPENH264_PATH`, when set, wins over the fetched copy. The binary is used under [Cisco's binary licence](http://www.openh264.org/BINARY_LICENSE.txt).

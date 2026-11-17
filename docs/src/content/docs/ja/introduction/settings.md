@@ -101,3 +101,7 @@ Professional以上で、かつプロジェクトにリプレイ入力がある�
 - 録画中はアングル構成を変更できません。先に録画を停止してください。
 
 残り時間の警告しきい値（警告/注意/危険、秒）はこのウィンドウではなくセッションの設定に属します。既定は600/300/60秒で、メインウィンドウのリプレイ状態行の色はこの値が決める重大度に従います。
+
+## OpenH264（macOS）
+
+macOSの配信はVideoToolboxが既定ですが、動画やカメラの入力がVideoToolboxを掴んでいると配信が0fpsになることがあります。その場合はエンコード設定のエンコーダーを**OpenH264**にしてください。配信モジュールは`libopenh264`を配信開始時に読み込むため、ホストが初回にCiscoの配布元（`ciscobinary.openh264.org`）からmacOS(Apple Silicon)版を取得し、`~/Library/Application Support/eiviz/openh264/libopenh264.dylib`に保存します。取得状況は設定の「配信」ページに表示され、手動で再取得もできます。`OPENH264_PATH`が設定されている場合はそちらが優先されます。ライセンスは[Ciscoのバイナリライセンス](http://www.openh264.org/BINARY_LICENSE.txt)に従います。

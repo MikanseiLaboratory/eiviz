@@ -831,6 +831,7 @@ fn input_ops(input: &InputDto) -> Vec<ReconcileOp> {
                 id: input.id,
                 path: input.path_or_address.clone().unwrap_or_default(),
                 capture: false,
+                decode_path: input.decode_path,
                 loop_playback: input.video_loop,
                 playing: matches!(
                     input.video_play_when,
@@ -848,6 +849,7 @@ fn input_ops(input: &InputDto) -> Vec<ReconcileOp> {
             id: input.id,
             path: input.path_or_address.clone().unwrap_or_default(),
             capture: true,
+            decode_path: input.decode_path,
             loop_playback: input.video_loop,
             playing: matches!(
                 input.video_play_when,
@@ -1237,6 +1239,7 @@ fn input_desired_equal(a: &InputDto, b: &InputDto) -> bool {
         && a.color_b == b.color_b
         && a.scroll == b.scroll
         && a.use_gpu == b.use_gpu
+        && a.decode_path == b.decode_path
         && a.frame_buffer_frames == b.frame_buffer_frames
         && a.mix_target_id == b.mix_target_id
         && a.mix_source == b.mix_source

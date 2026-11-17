@@ -267,6 +267,37 @@ enum VideoTriggerWhen: String, Codable, Hashable {
     case onPreview = "OnPreview"
 }
 
+/// Which decoder a video file or UVC camera may use. `Auto` keeps the OS default,
+/// `accelerated` requires VideoToolbox, and `cpu` keeps the frames on the CPU. The
+/// Media Foundation and Vulkan Video kinds exist for Windows sessions; macOS reads
+/// them as accelerated.
+enum InputDecodePath: String, Codable, CaseIterable {
+    case auto = "Auto"
+    case accelerated = "Accelerated"
+    case cpu = "Cpu"
+    case mediaFoundation = "MediaFoundation"
+    case vulkanVideo = "VulkanVideo"
+
+    var mixerPath: MixerFFI.VideoDecodePath {
+        switch self {
+        case .auto: .auto
+        case .accelerated, .mediaFoundation, .vulkanVideo: .accelerated
+        case .cpu: .cpu
+        }
+    }
+
+    /// Options the macOS host can offer: VideoToolbox on or off, or the OS default.
+    static var macOSChoices: [InputDecodePath] { [.auto, .accelerated, .cpu] }
+
+    var labelKey: String {
+        switch self {
+        case .auto: "settings.decodeAuto"
+        case .accelerated, .mediaFoundation, .vulkanVideo: "settings.decodeHardware"
+        case .cpu: "settings.decodeSoftware"
+        }
+    }
+}
+
 struct InputEntry: Identifiable, Codable, Hashable {
     var id: UInt64
     var name: String
@@ -284,6 +315,8 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var useGpu: Bool = false
     var frameBufferFrames: UInt32 = 1
     var bandwidthSave: BandwidthSave = .notOnPreviewOrProgram
+    /// Decoder choice for video files and UVC cameras.
+    var decodePath: InputDecodePath = .auto
     var keepFullOnMultiview: Bool = false
     var omtQuality: OmtQuality = .default
     var ndiBandwidth: NdiBandwidth = .highest
@@ -326,7 +359,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, kind, pathOrAddress, colorR, colorG, colorB, scroll, toneHz, toneLevelDbfs
-        case audioUnits, gain, mute, useGpu, frameBufferFrames, bandwidthSave
+        case audioUnits, gain, mute, useGpu, frameBufferFrames, bandwidthSave, decodePath
         case keepFullOnMultiview, omtQuality, ndiBandwidth
         case videoLoop, videoPlayWhen, videoRestartWhen, videoPauseWhen
         case guid, captureWidth, captureHeight, captureFpsNum, captureFpsDen, tags
@@ -352,6 +385,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         useGpu: Bool = false,
         frameBufferFrames: UInt32 = 1,
         bandwidthSave: BandwidthSave = .notOnPreviewOrProgram,
+        decodePath: InputDecodePath = .auto,
         keepFullOnMultiview: Bool = false,
         omtQuality: OmtQuality = .default,
         ndiBandwidth: NdiBandwidth = .highest,
@@ -376,6 +410,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         self.useGpu = useGpu
         self.frameBufferFrames = frameBufferFrames
         self.bandwidthSave = bandwidthSave
+        self.decodePath = decodePath
         self.keepFullOnMultiview = keepFullOnMultiview
         self.omtQuality = omtQuality
         self.ndiBandwidth = ndiBandwidth
@@ -403,6 +438,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         useGpu = try container.decodeIfPresent(Bool.self, forKey: .useGpu) ?? false
         frameBufferFrames = try container.decodeIfPresent(UInt32.self, forKey: .frameBufferFrames) ?? 1
         bandwidthSave = try container.decodeIfPresent(BandwidthSave.self, forKey: .bandwidthSave) ?? .notOnPreviewOrProgram
+        decodePath = try container.decodeIfPresent(InputDecodePath.self, forKey: .decodePath) ?? .auto
         keepFullOnMultiview = try container.decodeIfPresent(Bool.self, forKey: .keepFullOnMultiview) ?? false
         omtQuality = try container.decodeIfPresent(OmtQuality.self, forKey: .omtQuality) ?? .default
         ndiBandwidth = try container.decodeIfPresent(NdiBandwidth.self, forKey: .ndiBandwidth) ?? .highest

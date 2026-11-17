@@ -36,6 +36,18 @@ public enum MixSource
     SessionMultiview
 }
 
+/// Which decoder a video file or UVC camera may use. `Auto` keeps the OS default,
+/// `Accelerated` requires the GPU path, `Cpu` stays on the CPU, and the two Windows
+/// kinds name a path explicitly. The names match the session document's strings.
+public enum InputDecodePath
+{
+    Auto,
+    Accelerated,
+    Cpu,
+    MediaFoundation,
+    VulkanVideo,
+}
+
 public enum BandwidthSave
 {
     AlwaysLow = 0,
@@ -333,6 +345,8 @@ public sealed class InputEntry
     public float Gain { get; set; } = 1;
     public bool Mute { get; set; }
     public bool UseGpu { get; set; }
+    /// Decoder choice for video files and UVC cameras.
+    public InputDecodePath DecodePath { get; set; } = InputDecodePath.Auto;
     public uint FrameBufferFrames { get; set; } = 1;
     public BandwidthSave BandwidthSave { get; set; } = BandwidthSave.NotOnPreviewOrProgram;
     public bool KeepFullOnMultiview { get; set; }

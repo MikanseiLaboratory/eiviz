@@ -294,6 +294,43 @@ enum MixerFFI {
         }
     }
 
+    /// Decoder choice for a video file or camera, matching the session's `DecodePath`.
+    enum VideoDecodePath: UInt32 {
+        case auto = 0
+        case accelerated = 1
+        case cpu = 2
+        case mediaFoundation = 3
+        case vulkanVideo = 4
+    }
+
+    static func videoStart(
+        id: UInt64,
+        path: String,
+        capture: UInt32,
+        format: UInt32,
+        width: UInt32,
+        height: UInt32,
+        fpsNum: UInt32,
+        fpsDen: UInt32,
+        frameBuffer: UInt32,
+        decodePath: VideoDecodePath
+    ) -> Int32 {
+        path.withCString { cstr in
+            mixer_video_start_ex(
+                id,
+                cstr,
+                capture,
+                format,
+                width,
+                height,
+                fpsNum,
+                fpsDen,
+                frameBuffer,
+                decodePath.rawValue
+            )
+        }
+    }
+
     static func streamEncoderRemove(_ encoderId: UInt64) -> Int32 {
         mixer_stream_encoder_remove(encoderId)
     }

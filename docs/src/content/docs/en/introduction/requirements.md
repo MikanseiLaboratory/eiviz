@@ -57,3 +57,5 @@ The generation that satisfies both at once matches Windows:
 | NVIDIA | GeForce RTX 3000 series or later | v535 or later |
 | AMD | Radeon RX 6000 series or later | Mesa RADV or later |
 | Intel | Arc A-series or later | Mesa ANV or later |
+
+Concurrency limits (encoder sessions, decode resources, PCIe and memory bandwidth) are collected in [Hardware limits](./hardware-limits/).

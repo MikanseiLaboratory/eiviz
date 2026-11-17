@@ -46,13 +46,19 @@ struct AvCaptureInfo {
 }
 
 unsafe extern "C" {
-    fn eiviz_av_open_file(path: *const c_char, start_hns: i64, mode: i32) -> *mut AvPump;
+    fn eiviz_av_open_file(
+        path: *const c_char,
+        start_hns: i64,
+        mode: i32,
+        hardware: i32,
+    ) -> *mut AvPump;
     fn eiviz_av_open_capture(
         device_id: *const c_char,
         width: u32,
         height: u32,
         fps_num: u32,
         fps_den: u32,
+        hardware: i32,
     ) -> *mut AvPump;
     fn eiviz_av_enum_captures(out: *mut AvCaptureInfo, cap: u32) -> i32;
     fn eiviz_av_enum_capture_modes(
@@ -120,9 +126,10 @@ struct NativePump {
 unsafe impl Send for NativePump {}
 
 impl NativePump {
-    fn open_file(path: &str, start_hns: i64, mode: i32) -> Result<Self, String> {
+    fn open_file(path: &str, start_hns: i64, mode: i32, hardware: bool) -> Result<Self, String> {
         let c_path = CString::new(path).map_err(|_| "invalid video path".to_string())?;
-        let ptr = unsafe { eiviz_av_open_file(c_path.as_ptr(), start_hns, mode) };
+        let ptr =
+            unsafe { eiviz_av_open_file(c_path.as_ptr(), start_hns, mode, i32::from(hardware)) };
         if ptr.is_null() {
             return Err(format!("could not open video file: {path}"));
         }
@@ -135,9 +142,19 @@ impl NativePump {
         height: u32,
         fps_num: u32,
         fps_den: u32,
+        hardware: bool,
     ) -> Result<Self, String> {
         let c_id = CString::new(device_id).map_err(|_| "invalid capture id".to_string())?;
-        let ptr = unsafe { eiviz_av_open_capture(c_id.as_ptr(), width, height, fps_num, fps_den) };
+        let ptr = unsafe {
+            eiviz_av_open_capture(
+                c_id.as_ptr(),
+                width,
+                height,
+                fps_num,
+                fps_den,
+                i32::from(hardware),
+            )
+        };
         if ptr.is_null() {
             return Err("could not open video capture device".into());
         }
@@ -239,6 +256,7 @@ impl VideoPump {
         uploads: Arc<Mutex<UploadStore>>,
         frame_buffer_frames: u32,
         gpu_device: Option<wgpu::Device>,
+        hardware_decode: bool,
     ) -> Result<Self, String> {
         if !capture && !std::path::Path::new(&path).is_file() {
             return Err(format!("video file not found: {path}"));
@@ -264,8 +282,24 @@ impl VideoPump {
             .spawn(move || {
                 crate::platform::set_thread_qos(crate::platform::QOS_USER_INITIATED);
                 if let Err(error) = run_loop(
-                    source_id, path, capture, width, height, fps_num, fps_den, uploads, depth,
-                    gpu_device, stop_t, playing_t, looping_t, seek_t, pos_t, dur_t, ready_tx,
+                    source_id,
+                    path,
+                    capture,
+                    width,
+                    height,
+                    fps_num,
+                    fps_den,
+                    uploads,
+                    depth,
+                    gpu_device,
+                    hardware_decode,
+                    stop_t,
+                    playing_t,
+                    looping_t,
+                    seek_t,
+                    pos_t,
+                    dur_t,
+                    ready_tx,
                 ) {
                     eprintln!("eiviz video: {error}");
                 }
@@ -376,6 +410,7 @@ fn run_loop(
     uploads: Arc<Mutex<UploadStore>>,
     depth: u32,
     gpu_device: Option<wgpu::Device>,
+    hardware_decode: bool,
     stop: Arc<AtomicBool>,
     playing: Arc<AtomicBool>,
     looping: Arc<AtomicBool>,
@@ -391,9 +426,9 @@ fn run_loop(
             return Ok(());
         }
         let opened = if capture {
-            NativePump::open_capture(&path, width, height, fps_num, fps_den)
+            NativePump::open_capture(&path, width, height, fps_num, fps_den, hardware_decode)
         } else {
-            NativePump::open_file(&path, 0, 1)
+            NativePump::open_file(&path, 0, 1, hardware_decode)
         };
         let mut native = match opened {
             Ok(pump) => pump,
@@ -403,7 +438,7 @@ fn run_loop(
             }
         };
         duration_hns.store(native.duration_hns(), Ordering::Relaxed);
-        if let Some(device) = gpu_device.as_ref() {
+        if hardware_decode && let Some(device) = gpu_device.as_ref() {
             native.set_metal(device);
         }
         send_ready(&mut ready, Ok(()));
@@ -421,7 +456,7 @@ fn run_loop(
             }
             let seek = seek_hns.swap(-1, Ordering::Relaxed);
             if seek >= 0 && !capture {
-                native = match NativePump::open_file(&path, seek, 1) {
+                native = match NativePump::open_file(&path, seek, 1, hardware_decode) {
                     Ok(pump) => pump,
                     Err(error) => return Err(error),
                 };
@@ -574,7 +609,7 @@ fn run_audio_loop(
     looping: Arc<AtomicBool>,
     seek_hns: Arc<AtomicI64>,
 ) {
-    let mut native = match NativePump::open_file(&path, 0, 2) {
+    let mut native = match NativePump::open_file(&path, 0, 2, true) {
         Ok(pump) => pump,
         Err(_) => return,
     };
@@ -584,7 +619,7 @@ fn run_audio_loop(
         }
         let seek = seek_hns.swap(-1, Ordering::Relaxed);
         if seek >= 0 {
-            match NativePump::open_file(&path, seek, 2) {
+            match NativePump::open_file(&path, seek, 2, true) {
                 Ok(pump) => {
                     native = pump;
                     uploads.lock_or_recover().flush_audio(source_id);
@@ -610,7 +645,7 @@ fn run_audio_loop(
             Ok(None) => thread::sleep(Duration::from_millis(2)),
             Err(true) => {
                 if looping.load(Ordering::Relaxed) {
-                    match NativePump::open_file(&path, 0, 2) {
+                    match NativePump::open_file(&path, 0, 2, true) {
                         Ok(pump) => {
                             native = pump;
                             uploads.lock_or_recover().flush_audio(source_id);

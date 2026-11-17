@@ -593,27 +593,27 @@ extension MixerController {
         loop: Bool,
         playing: Bool,
         frameBuffer: UInt32 = 3,
+        decodePath: MixerFFI.VideoDecodePath = .auto,
     ) {
         if capture == 0 && !FileManager.default.fileExists(atPath: path) {
             presentInputError(L10n.missingFile("Video start"))
             return
         }
-        MixerFFI.withCString(path) { cstr in
-            fail(
-                mixer_video_start(
-                    id,
-                    cstr,
-                    capture,
-                    EIVIZ_FMT_BGRA,
-                    width,
-                    height,
-                    fpsNum,
-                    fpsDen,
-                    max(1, min(8, frameBuffer == 0 ? 3 : frameBuffer))
-                ),
-                capture == 0 ? "Video start" : "UVC start"
-            )
-        }
+        fail(
+            MixerFFI.videoStart(
+                id: id,
+                path: path,
+                capture: capture,
+                format: EIVIZ_FMT_BGRA,
+                width: width,
+                height: height,
+                fpsNum: fpsNum,
+                fpsDen: fpsDen,
+                frameBuffer: max(1, min(8, frameBuffer == 0 ? 3 : frameBuffer)),
+                decodePath: decodePath
+            ),
+            capture == 0 ? "Video start" : "UVC start"
+        )
         _ = mixer_video_set_loop(id, loop ? 1 : 0)
         _ = mixer_video_set_playing(id, playing ? 1 : 0)
     }
@@ -700,7 +700,8 @@ extension MixerController {
                     capture: 0,
                     loop: input.videoLoop,
                     playing: input.videoStartsPlaying,
-                    frameBuffer: input.frameBufferFrames
+                    frameBuffer: input.frameBufferFrames,
+                    decodePath: input.decodePath.mixerPath
                 )
                 videoTitle = input.listLabel(in: session, localFiles: !isRemote)
                 videoPlaying = input.videoStartsPlaying
@@ -814,6 +815,7 @@ extension MixerController {
                 loop: false,
                 playing: true,
                 frameBuffer: input.frameBufferFrames,
+                decodePath: input.decodePath.mixerPath
             )
         }
         switch AVCaptureDevice.authorizationStatus(for: .video) {

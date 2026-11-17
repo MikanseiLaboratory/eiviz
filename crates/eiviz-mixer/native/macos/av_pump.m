@@ -497,7 +497,7 @@ static AVAssetTrack *first_track(AVAsset *asset, AVMediaType mediaType) {
 #pragma clang diagnostic pop
 }
 
-EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns, int mode) {
+EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns, int mode, int hardware) {
     if (!path || path[0] == 0) {
         return NULL;
     }
@@ -528,6 +528,11 @@ EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns, int mode) {
         reader.timeRange = CMTimeRangeMake(CMTimeMake(start_hns, 10000000), kCMTimePositiveInfinity);
     }
     EivizAvPumpObj *pump = [[EivizAvPumpObj alloc] init];
+    // A software decode keeps the frames on the CPU: no VideoToolbox pixel
+    // transfer, no Metal import, BGRA straight off AVFoundation.
+    if (!hardware) {
+        pump.useNV12 = NO;
+    }
     AVAssetReaderTrackOutput *video_out = nil;
     if (want_video) {
         video_out = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:video outputSettings:video_attrs(pump.useNV12)];
@@ -670,7 +675,7 @@ static void apply_capture_format(AVCaptureDevice *device, AVCaptureDeviceFormat 
     [device unlockForConfiguration];
 }
 
-EivizAvPump *eiviz_av_open_capture(const char *device_id, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den) {
+EivizAvPump *eiviz_av_open_capture(const char *device_id, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, int hardware) {
     @try {
         NSString *uid = device_id ? [NSString stringWithUTF8String:device_id] : @"";
         AVCaptureDevice *device = nil;
@@ -700,6 +705,9 @@ EivizAvPump *eiviz_av_open_capture(const char *device_id, uint32_t width, uint32
         }
         [session addInput:input];
         EivizAvPumpObj *pump = [[EivizAvPumpObj alloc] init];
+        if (!hardware) {
+            pump.useNV12 = NO;
+        }
         pump.capture = YES;
         pump.capQueue = dispatch_queue_create("eiviz.av.capture", DISPATCH_QUEUE_SERIAL);
         AVCaptureVideoDataOutput *video = [[AVCaptureVideoDataOutput alloc] init];
