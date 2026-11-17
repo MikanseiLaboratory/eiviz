@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
@@ -277,14 +276,12 @@ public partial class SettingsWindow : Window
                             RebuildOutputs();
                     });
                 }
-                var message = code == 0
-                    ? "eivizにライセンスを登録しました。このタブを閉じてください。"
-                    : "eivizへの登録に失敗しました。このタブを閉じて、表示されたチケットをライセンス入力欄へ貼り付けてください。";
-                var body = Encoding.UTF8.GetBytes(
-                    $"<!DOCTYPE html><html lang=\"ja\"><meta charset=\"utf-8\"><title>eiviz</title><p>{message}</p></html>");
-                context.Response.ContentType = "text/html; charset=utf-8";
-                context.Response.ContentLength64 = body.Length;
-                context.Response.OutputStream.Write(body, 0, body.Length);
+                // Bounce the browser back to the license site so the operator sees the
+                // result on the page they came from instead of a stray localhost tab.
+                context.Response.StatusCode = 303;
+                context.Response.RedirectLocation =
+                    $"{Loc.T("settings.licenseUrl")}?returned={(code == 0 ? "ok" : "failed")}";
+                context.Response.ContentLength64 = 0;
                 context.Response.OutputStream.Close();
             }
         }

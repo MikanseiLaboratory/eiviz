@@ -103,14 +103,13 @@ final class LicenseReturnServer: @unchecked Sendable {
                     self.invoke(value)
                 }
             }
-            let message = code == 0
-                ? "eivizにライセンスを登録しました。このタブを閉じてください。"
-                : "eivizへの登録に失敗しました。このタブを閉じて、表示されたチケットをライセンス入力欄へ貼り付けてください。"
-            let page = "<!DOCTYPE html><html lang=\"ja\"><meta charset=\"utf-8\"><title>eiviz</title><p>\(message)</p></html>"
-            let body = Data(page.utf8)
-            let header = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+            // Bounce the browser back to the license site so the operator sees the
+            // result on the page they came from instead of a stray localhost tab.
+            let location = DispatchQueue.main.sync {
+                "\(L10n.t("settings.licenseUrl"))?returned=\(code == 0 ? "ok" : "failed")"
+            }
+            let header = "HTTP/1.1 303 See Other\r\nLocation: \(location)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             var response = Data(header.utf8)
-            response.append(body)
             response.withUnsafeBytes { raw in
                 if let base = raw.baseAddress {
                     _ = send(client, base, raw.count, 0)
