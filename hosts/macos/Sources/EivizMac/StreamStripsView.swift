@@ -58,14 +58,16 @@ struct StreamStripsView: View {
             let target = encoder.map { $0.fpsDen > 0 ? Double($0.fpsNum) / Double($0.fpsDen) : 0 } ?? 0
             let fps = Double(state.fpsMilli) / 1000
             if state.lagMs >= 400 || (target > 0 && fps * 100 < target * 85) {
-                let text = L10n.format(
+                let slow = L10n.format(
                     "status.streamSlow",
                     String(format: "%.1f", fps),
                     String(format: "%.1f", target),
                     "\(state.lagMs)",
                     "\(state.dropped)"
                 )
-                return (amber, text)
+                // The encoder's own reason (for example VideoToolbox being held by
+                // another input) is what tells the operator what to change.
+                return (amber, state.message.isEmpty ? slow : "\(slow)\n\(state.message)")
             }
             return (green, state.message.isEmpty ? L10n.t("chrome.stream") : state.message)
         }

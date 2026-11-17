@@ -208,6 +208,7 @@ final class MixerController: ObservableObject {
 
     func boot() {
         guard !booted else { return }
+        OpenH264Support.configure()
         beginActivity()
         isRemote = HostRole.isRemote
         guard mixer_ping() == 0x4549_5649 else {
@@ -1381,6 +1382,24 @@ final class SwitcherCloser: NSObject, NSWindowDelegate {
             onClose?(unitId)
         } else if raw.hasPrefix("multiview-"), let id = UInt64(raw.dropFirst("multiview-".count)) {
             onClose?(id)
+        }
+    }
+}
+
+/// The Pro module loads libopenh264 at runtime. A Homebrew install is where a
+/// developer machine usually has one, so point OPENH264_PATH at it before the
+/// module asks. That makes the OpenH264 encoder usable when VideoToolbox is held
+/// by another input (a playing video file or the camera) and the stream stalls.
+enum OpenH264Support {
+    static func configure() {
+        guard ProcessInfo.processInfo.environment["OPENH264_PATH"] == nil else { return }
+        let candidates = [
+            "/opt/homebrew/lib/libopenh264.dylib",
+            "/usr/local/lib/libopenh264.dylib",
+        ]
+        for path in candidates where FileManager.default.fileExists(atPath: path) {
+            setenv("OPENH264_PATH", path, 0)
+            return
         }
     }
 }
