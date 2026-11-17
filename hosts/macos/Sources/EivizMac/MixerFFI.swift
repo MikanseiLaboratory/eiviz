@@ -260,7 +260,7 @@ enum MixerFFI {
             encoder.videoOnly ? 1 : 0,
             threads,
             encoder.bufferMs,
-            encoder.encoder == "OpenH264" ? 0 : 1,
+            encoderCode(encoder.encoder),
             encoder.complexity,
             encoder.refFrames,
             encoder.cabac ? 1 : 0,
@@ -268,8 +268,19 @@ enum MixerFFI {
             encoder.backgroundDetection ? 1 : 0,
             encoder.adaptiveQuant ? 1 : 0,
             encoder.sceneChange ? 1 : 0,
-            encoder.audioDelayMs
+            encoder.audioDelayMs,
+            encoder.encoderDevice
         )
+    }
+
+    /// The module's StreamEncoder codes: 0 OpenH264, 1 VideoToolbox,
+    /// 2 MediaFoundation.
+    private static func encoderCode(_ name: String) -> UInt32 {
+        switch name {
+        case "VideoToolbox": 1
+        case "MediaFoundation": 2
+        default: 0
+        }
     }
 
     static func streamDestinationAdd(encoderId: UInt64, destinationId: UInt64, url: String, secretRef: String) -> Int32 {
