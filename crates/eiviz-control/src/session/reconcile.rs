@@ -70,7 +70,9 @@ pub enum ReconcileOp {
     AddStreamEncoder(StreamEncoderApply),
     /// Stops the live encoder for `id` when one is running, and keeps the profile
     /// row in the document. Used when the document stops naming a profile.
-    StopStreamEncoderIfLive { id: u64 },
+    StopStreamEncoderIfLive {
+        id: u64,
+    },
     RemoveStreamEncoder {
         id: u64,
     },
@@ -1388,9 +1390,9 @@ fn diff_streams(previous: Option<&Document>, next: &Document, ops: &mut Vec<Reco
             // The document no longer names this profile, but the row is an
             // operator asset (created on the Stream page, possibly between two
             // destinations). Only its running encoder is stopped.
-            let was_running = prev_outputs.iter().any(|output| {
-                rtmp_destination(output) && output.stream_encoder_id == prev.id
-            });
+            let was_running = prev_outputs
+                .iter()
+                .any(|output| rtmp_destination(output) && output.stream_encoder_id == prev.id);
             if was_running {
                 ops.push(ReconcileOp::StopStreamEncoderIfLive { id: prev.id });
             }
