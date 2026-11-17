@@ -9,8 +9,10 @@ use crate::upload::AudioPacket;
 
 /// Audio blocks a sender may hold while it is busy with a frame. The stream output
 /// submits video and audio from one thread, so a keyframe or a stalled socket parks
-/// this many blocks - at 10 ms each, half a second - before the oldest is dropped.
-const AUDIO_CAP: usize = 48;
+/// this many blocks - at 10 ms each, about a second - before the oldest is dropped.
+/// A 1080p keyframe in the in-box Media Foundation encoder takes long enough that
+/// half a second was not enough to keep the audio gaps out.
+const AUDIO_CAP: usize = 96;
 
 #[derive(Debug, Default)]
 pub struct OutputStats {
