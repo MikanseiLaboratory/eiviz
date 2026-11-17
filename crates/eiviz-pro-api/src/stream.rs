@@ -27,6 +27,14 @@ pub struct AudioEncodeConfig {
     pub video_only: bool,
 }
 
+/// One encoder the module can build for a stream. `name` is what the operator
+/// picked and what `StreamEncodeConfig::encoder_device` carries back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamEncoderDevice {
+    pub name: String,
+    pub hardware: bool,
+}
+
 /// One encode. Destinations are attached afterwards and share the packets.
 #[derive(Clone, Debug)]
 pub struct StreamEncodeConfig {
@@ -37,6 +45,11 @@ pub struct StreamEncodeConfig {
     pub fps_num: u32,
     pub fps_den: u32,
     pub encoder: VideoEncoderKind,
+    /// The encoder device the operator picked, by the name
+    /// [`StreamBackend::encoder_devices`] reported. `None` lets the module use
+    /// its own order; a name that cannot be built is an error at stream start,
+    /// never a quiet move to another device.
+    pub encoder_device: Option<String>,
     /// `0` means automatic: logical CPUs, clamped to the encoder's own limit.
     pub encoder_threads: u32,
     /// Milliseconds of encoded media to hold before the first send, then release
@@ -58,6 +71,13 @@ pub struct StreamEncodeConfig {
 
 pub trait StreamBackend: Send + Sync {
     fn start_stream(&self, config: &StreamEncodeConfig) -> ProResult<Box<dyn StreamOutput>>;
+
+    /// The encoder devices this kind can build on this machine, for the
+    /// operator to pick from. The default offers none, which leaves the
+    /// module's own order in charge.
+    fn encoder_devices(&self, _kind: VideoEncoderKind) -> Vec<StreamEncoderDevice> {
+        Vec::new()
+    }
 }
 
 /// An encoder plus a set of publish sockets. Destination calls may run on a

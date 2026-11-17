@@ -1241,6 +1241,9 @@ struct StreamEncoderEntry: Identifiable {
     /// Milliseconds to hold before the first send. Zero sends immediately.
     var bufferMs: UInt32 = 0
     var encoder: String = "VideoToolbox"
+    /// Encoder device the operator picked, by the name the mixer reports.
+    /// Empty uses the mixer's own order.
+    var encoderDevice: String = ""
     var complexity: UInt32 = 0
     var refFrames: UInt32 = 1
     var cabac: Bool = false
@@ -1257,7 +1260,7 @@ extension StreamEncoderEntry: Codable {
         case id, name, sourceKind, sourceId, unitId, audioUnitId
         case width, height, fpsNum, fpsDen
         case videoBitrate, audioBitrate, keyint, videoOnly, encoderThreads, bufferMs
-        case encoder, complexity, refFrames, cabac, deblock
+        case encoder, encoderDevice, complexity, refFrames, cabac, deblock
         case backgroundDetection, adaptiveQuant, sceneChange, audioDelayMs
     }
 
@@ -1280,6 +1283,7 @@ extension StreamEncoderEntry: Codable {
         encoderThreads = try container.decodeIfPresent(UInt32.self, forKey: .encoderThreads) ?? 0
         bufferMs = try container.decodeIfPresent(UInt32.self, forKey: .bufferMs) ?? 0
         encoder = try container.decodeIfPresent(String.self, forKey: .encoder) ?? "OpenH264"
+        encoderDevice = try container.decodeIfPresent(String.self, forKey: .encoderDevice) ?? ""
         complexity = try container.decodeIfPresent(UInt32.self, forKey: .complexity) ?? 0
         refFrames = try container.decodeIfPresent(UInt32.self, forKey: .refFrames) ?? 1
         cabac = try container.decodeIfPresent(Bool.self, forKey: .cabac) ?? false
@@ -1309,6 +1313,7 @@ extension StreamEncoderEntry: Codable {
         try container.encode(encoderThreads, forKey: .encoderThreads)
         try container.encode(bufferMs, forKey: .bufferMs)
         try container.encode(self.encoder, forKey: .encoder)
+        try container.encode(self.encoderDevice, forKey: .encoderDevice)
         try container.encode(complexity, forKey: .complexity)
         try container.encode(refFrames, forKey: .refFrames)
         try container.encode(cabac, forKey: .cabac)

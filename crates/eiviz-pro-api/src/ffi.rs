@@ -26,7 +26,7 @@ use crate::plan::{Entitlements, Plan, Quota, VideoLimit};
 /// 2. `ProReplayAngle` grew `gpu_encoded`, an array element, so a mixer and a
 ///    module cannot disagree about its size. Everything else that crossed this
 ///    boundary before grew through `struct_size` fields and stays compatible.
-pub const ABI_MAJOR: u32 = 2;
+pub const ABI_MAJOR: u32 = 3;
 
 pub const PRO_OK: u32 = 0;
 pub const PRO_INVALID: u32 = 1;
@@ -277,8 +277,19 @@ pub struct ProApi {
         unsafe extern "C" fn(*mut c_void, *const ProPlayoutConfig, *mut *mut c_void) -> ProStatus,
     >,
     pub stream_start: Option<
-        unsafe extern "C" fn(*mut c_void, *const ProStreamConfig, *mut *mut c_void) -> ProStatus,
+        unsafe extern "C" fn(
+            *mut c_void,
+            *const ProStreamConfig,
+            *const u8,
+            usize,
+            *mut *mut c_void,
+        ) -> ProStatus,
     >,
+    /// Names the encoder devices a stream encoder kind can build, as a JSON
+    /// array of `{"name":"…","hardware":true}`. The operator picks one by
+    /// name; `stream_start` then builds exactly that device.
+    pub stream_encoder_devices:
+        Option<unsafe extern "C" fn(*mut c_void, u32, *mut u8, usize, *mut usize) -> ProStatus>,
     pub stream_add_destination:
         Option<unsafe extern "C" fn(*mut c_void, u64, *const u8, usize) -> ProStatus>,
     pub stream_remove_destination: Option<unsafe extern "C" fn(*mut c_void, u64) -> ProStatus>,

@@ -4379,6 +4379,7 @@ pub unsafe extern "C" fn mixer_stream_encoder_add(
     adaptive_quant: u32,
     scene_change: u32,
     audio_delay_ms: u32,
+    encoder_device: *const c_char,
 ) -> i32 {
     ffi_guard("mixer_stream_encoder_add", ERR_DEVICE, || {
         stream_encoder_add_ffi(
@@ -4406,6 +4407,7 @@ pub unsafe extern "C" fn mixer_stream_encoder_add(
             adaptive_quant,
             scene_change,
             audio_delay_ms,
+            crate::pro::cstr(encoder_device).map(str::to_string),
         )
     })
 }
@@ -4474,6 +4476,7 @@ fn stream_encoder_add_ffi(
     adaptive_quant: u32,
     scene_change: u32,
     audio_delay_ms: u32,
+    encoder_device: Option<String>,
 ) -> i32 {
     if (width == 0) != (height == 0) || (fps_num == 0) != (fps_den == 0) {
         // This used to be a silent reject; the destination attach then reported
@@ -4537,6 +4540,7 @@ fn stream_encoder_add_ffi(
         fps_num,
         fps_den,
         encoder: encoder_kind,
+        encoder_device,
         encoder_threads,
         buffer_ms,
         complexity,
@@ -4667,6 +4671,53 @@ fn stream_encoder_add_ffi(
         OK
     })
     .unwrap_or_else(|code| code)
+}
+
+/// Encoder devices a stream encoder kind can build, as a JSON array of
+/// `{"name":"…","hardware":true}`. `0` OpenH264, `1` VideoToolbox,
+/// `2` MediaFoundation. A kind this build cannot run answers `[]`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_stream_encoder_devices(
+    encoder_kind: u32,
+    out: *mut u8,
+    cap: usize,
+    needed: *mut usize,
+) -> i32 {
+    ffi_guard("mixer_stream_encoder_devices", ERR_DEVICE, || {
+        let list = match crate::pro::module().streaming() {
+            Some(backend) => {
+                let kind = match encoder_kind {
+                    eiviz_pro_api::STREAM_ENCODER_VIDEOTOOLBOX => {
+                        eiviz_pro_api::VideoEncoderKind::VideoToolbox
+                    }
+                    eiviz_pro_api::STREAM_ENCODER_MEDIAFOUNDATION => {
+                        eiviz_pro_api::VideoEncoderKind::MediaFoundation
+                    }
+                    _ => eiviz_pro_api::VideoEncoderKind::OpenH264,
+                };
+                backend.encoder_devices(kind)
+            }
+            None => Vec::new(),
+        };
+        let text = serde_json::to_string(
+            &list
+                .iter()
+                .map(|device| {
+                    serde_json::json!({ "name": device.name, "hardware": device.hardware })
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|_| "[]".to_string());
+        let bytes = text.as_bytes();
+        if !needed.is_null() {
+            unsafe { *needed = bytes.len() };
+        }
+        if out.is_null() || cap < bytes.len() {
+            return ERR_BUFFER_TOO_SMALL;
+        }
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
+        OK
+    })
 }
 
 #[unsafe(no_mangle)]

@@ -498,6 +498,24 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(EivizTheme.dim)
                     }
+                    if mixer.session.streamEncoders[index].encoder == "MediaFoundation" {
+                        HStack(spacing: 8) {
+                            Text(L10n.t("settings.encoderDevice"))
+                            Picker("", selection: $mixer.session.streamEncoders[index].encoderDevice) {
+                                Text(L10n.t("settings.encoderDeviceAuto")).tag("")
+                                let devices = Self.streamEncoderDevices(2)
+                                ForEach(devices, id: \.name) { device in
+                                    Text(device.name).tag(device.name)
+                                }
+                                let saved = mixer.session.streamEncoders[index].encoderDevice
+                                if !saved.isEmpty && !devices.contains(where: { $0.name == saved }) {
+                                    Text(saved).tag(saved)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(width: 260)
+                        }
+                    }
                     HStack(spacing: 8) {
                         Text(L10n.t("settings.videoBitrate"))
                         TextField("", value: Binding(
@@ -685,6 +703,31 @@ struct SettingsView: View {
         var caps = EivizCapabilities()
         guard mixer_capabilities(&caps) == 0 else { return false }
         return caps.rtmp_linked != 0 && caps.rtmp_max_width != 0
+    }
+
+    struct EncoderDevice: Identifiable {
+        let name: String
+        let hardware: Bool
+        var id: String { name }
+    }
+
+    /// Encoder devices the mixer can build for one kind (0 OpenH264,
+    /// 1 VideoToolbox, 2 MediaFoundation). The mixer answers a JSON array;
+    /// an unreadable answer leaves the mixer's own order in charge.
+    private static func streamEncoderDevices(_ kind: UInt32) -> [EncoderDevice] {
+        var needed = 0
+        _ = mixer_stream_encoder_devices(kind, nil, 0, &needed)
+        guard needed > 0 else { return [] }
+        var buffer = [UInt8](repeating: 0, count: needed)
+        guard mixer_stream_encoder_devices(kind, &buffer, buffer.count, &needed) == 0 else { return [] }
+        let bytes = buffer.prefix(min(needed, buffer.count))
+        guard
+            let list = try? JSONSerialization.jsonObject(with: Data(bytes)) as? [[String: Any]]
+        else { return [] }
+        return list.compactMap { entry in
+            guard let name = entry["name"] as? String, !name.isEmpty else { return nil }
+            return EncoderDevice(name: name, hardware: entry["hardware"] as? Bool ?? false)
+        }
     }
 
     /// Bit mask of the stream encoders the mixer can start. 1 OpenH264,

@@ -18,7 +18,8 @@ use eiviz_pro_api::{
     PixelLayout, Plan, ProApi, ProAudioView, ProCaptureCallbacks, ProCaptureStatsAbi,
     ProEntitlementsAbi, ProError, ProErrorKind, ProLicenseStatusAbi, ProOutputStatsAbi,
     ProPlayoutConfig, ProStatus, ProStreamConfig, ProVideoView, SIGNAL_NONE, SignalStatus,
-    StreamBackend, StreamEncodeConfig, StreamOutput, VideoFrame, abi_hash, module_target,
+    StreamBackend, StreamEncodeConfig, StreamEncoderDevice, StreamOutput, VideoEncoderKind,
+    VideoFrame, abi_hash, module_target,
 };
 use sha2::{Digest, Sha256};
 
@@ -215,6 +216,7 @@ fn api_complete(api: &ProApi) -> bool {
         && api.capture_destroy.is_some()
         && api.playout_start.is_some()
         && api.stream_start.is_some()
+        && api.stream_encoder_devices.is_some()
         && api.stream_add_destination.is_some()
         && api.stream_remove_destination.is_some()
         && api.stream_destination_stats.is_some()
@@ -642,9 +644,17 @@ impl StreamBackend for LoadedPro {
             audio_delay_ms: config.audio_delay_ms,
         };
         let mut handle = std::ptr::null_mut();
+        let device = config
+            .encoder_device
+            .as_deref()
+            .map(|name| CString::new(name).unwrap_or_default());
+        let (device_ptr, device_len) = match &device {
+            Some(name) => (name.as_bytes().as_ptr(), name.as_bytes().len()),
+            None => (std::ptr::null(), 0),
+        };
         let status = unsafe {
             if let Some(start) = self.api.stream_start {
-                start(self.module, &raw, &mut handle)
+                start(self.module, &raw, device_ptr, device_len, &mut handle)
             } else {
                 ProStatus::new(PRO_UNAVAILABLE)
             }
@@ -667,6 +677,51 @@ impl StreamBackend for LoadedPro {
             destination_stats: self.api.stream_destination_stats,
         }))
     }
+
+    fn encoder_devices(&self, kind: VideoEncoderKind) -> Vec<StreamEncoderDevice> {
+        let Some(enumerate) = self.api.stream_encoder_devices else {
+            return Vec::new();
+        };
+        // The module answers the JSON array; sizes are asked for first so no
+        // fixed limit caps the list.
+        let mut needed = 0usize;
+        let status = unsafe {
+            enumerate(self.module, encoder_code(kind), std::ptr::null_mut(), 0, &mut needed)
+        };
+        if needed == 0 {
+            let _ = status;
+            return Vec::new();
+        }
+        let mut buffer = vec![0u8; needed];
+        let mut written = 0usize;
+        let status =
+            unsafe { enumerate(self.module, encoder_code(kind), buffer.as_mut_ptr(), buffer.len(), &mut written) };
+        if !status.is_ok() {
+            return Vec::new();
+        }
+        let written = written.min(buffer.len());
+        let text = match String::from_utf8(buffer[..written].to_vec()) {
+            Ok(text) => text,
+            Err(_) => return Vec::new(),
+        };
+        serde_json::from_str::<Vec<StreamEncoderDeviceJson>>(&text)
+            .map(|list| {
+                list.into_iter()
+                    .map(|entry| StreamEncoderDevice {
+                        name: entry.name,
+                        hardware: entry.hardware,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct StreamEncoderDeviceJson {
+    name: String,
+    #[serde(default)]
+    hardware: bool,
 }
 
 impl LicenseBackend for LoadedPro {

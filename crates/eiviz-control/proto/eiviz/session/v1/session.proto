@@ -325,8 +325,12 @@ message StreamEncoder {
   // 0 sends immediately. Otherwise hold this many milliseconds, then release at 1x.
   uint32 buffer_ms = 16;
   // Empty and "OpenH264" name the linked software encoder everywhere;
-  // "VideoToolbox" names the macOS hardware encoder.
+  // "VideoToolbox" names the macOS hardware encoder, "MediaFoundation" the
+  // Windows OS encoder.
   string encoder = 17;
+  // Encoder device the operator picked, by the name the mixer reports for the
+  // chosen encoder. Empty uses the module's own order.
+  string encoder_device = 26;
   // 0 low, 1 medium, 2 high.
   uint32 complexity = 18;
   uint32 ref_frames = 19;

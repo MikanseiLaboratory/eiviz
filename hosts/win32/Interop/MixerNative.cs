@@ -669,6 +669,41 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_snapshot", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int Snapshot(ulong unitId, uint kind, string path);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_stream_encoder_devices")]
+    internal static unsafe partial int StreamEncoderDevicesRaw(
+        uint encoderKind, byte* buffer, nuint capacity, nuint* needed);
+
+    /// <summary>
+    /// Encoder devices the mixer can build for one encoder kind: bit 1
+    /// OpenH264, 2 VideoToolbox, 4 MediaFoundation. Kind 2 lists the Windows
+    /// Media Foundation encoders (hardware first) for the operator to pick.
+    /// A kind without devices answers an empty list.
+    /// </summary>
+    internal static unsafe List<StreamEncoderDeviceInfo> StreamEncoderDevices(uint encoderKind)
+    {
+        nuint needed = 0;
+        var code = StreamEncoderDevicesRaw(encoderKind, null, 0, &needed);
+        if (code != ErrBufferTooSmall || needed == 0)
+            return [];
+        var buffer = new byte[needed];
+        fixed (byte* ptr = buffer)
+        {
+            code = StreamEncoderDevicesRaw(encoderKind, ptr, (nuint)buffer.Length, &needed);
+        }
+        if (code != 0)
+            return [];
+        var length = (int)Math.Min(needed, (nuint)buffer.Length);
+        try
+        {
+            return JsonSerializer.Deserialize<List<StreamEncoderDeviceInfo>>(
+                buffer.AsSpan(0, length), DeckLinkJson) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_output_remove")]
     internal static partial int OutputRemove(ulong outputId);
 
@@ -1275,6 +1310,12 @@ internal struct EivizActiveSequence
     [FieldOffset(8)] public uint StepIndex;
     [FieldOffset(12)] public uint Reverse;
     [FieldOffset(16)] public uint Holding;
+}
+
+internal sealed class StreamEncoderDeviceInfo
+{
+    public string Name { get; set; } = "";
+    public bool Hardware { get; set; }
 }
 
 [StructLayout(LayoutKind.Sequential)]

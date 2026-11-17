@@ -679,8 +679,14 @@ int32_t mixer_stream_encoder_add(
     uint32_t video_only, uint32_t encoder_threads, uint32_t buffer_ms, uint32_t encoder,
     uint32_t complexity, uint32_t ref_frames, uint32_t cabac, uint32_t deblock,
     uint32_t background_detection, uint32_t adaptive_quant, uint32_t scene_change,
-    uint32_t audio_delay_ms);
+    uint32_t audio_delay_ms, const char *encoder_device);
 int32_t mixer_stream_encoder_remove(uint64_t encoder_id);
+// Encoder devices a kind can build, as a JSON array of {"name","hardware"}.
+// encoder_kind: 0 OpenH264, 1 VideoToolbox, 2 MediaFoundation. Writes the
+// required byte count to *needed and returns ERR_BUFFER_TOO_SMALL when cap is
+// too small (a null buffer with cap 0 asks for the size only).
+int32_t mixer_stream_encoder_devices(
+    uint32_t encoder_kind, uint8_t *out, size_t cap, size_t *needed);
 int32_t mixer_stream_destination_add(
     uint64_t encoder_id, uint64_t destination_id, const char *url, const char *secret_ref);
 int32_t mixer_stream_destination_remove(uint64_t encoder_id, uint64_t destination_id);

@@ -1090,6 +1090,9 @@ public sealed class StreamEncoderEntry
     public uint EncoderThreads { get; set; }
     public uint BufferMs { get; set; }
     public string Encoder { get; set; } = "OpenH264";
+    // Encoder device the operator picked, by the name the mixer reports.
+    // Empty uses the mixer's own order.
+    public string EncoderDevice { get; set; } = "";
     public uint Complexity { get; set; }
     public uint RefFrames { get; set; } = 1;
     public bool Cabac { get; set; }
@@ -1118,6 +1121,7 @@ public sealed class StreamEncoderEntry
         EncoderThreads = EncoderThreads,
         BufferMs = BufferMs,
         Encoder = Encoder,
+        EncoderDevice = EncoderDevice,
         Complexity = Complexity,
         RefFrames = RefFrames,
         Cabac = Cabac,

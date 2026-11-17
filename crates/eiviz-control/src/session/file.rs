@@ -1090,6 +1090,7 @@ fn stream_encoder_to_pb(encoder: &StreamEncoderDto) -> pb::StreamEncoder {
         encoder_threads: encoder.encoder_threads,
         buffer_ms: encoder.buffer_ms,
         encoder: encoder.encoder.clone(),
+        encoder_device: encoder.encoder_device.clone(),
         complexity: encoder.complexity,
         ref_frames: encoder.ref_frames,
         cabac: encoder.cabac,
@@ -1124,6 +1125,7 @@ fn stream_encoder_from_pb(encoder: pb::StreamEncoder) -> Result<StreamEncoderDto
         } else {
             encoder.encoder
         },
+        encoder_device: encoder.encoder_device,
         complexity: encoder.complexity,
         ref_frames: if encoder.ref_frames == 0 {
             1

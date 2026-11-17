@@ -1322,10 +1322,15 @@ pub struct StreamEncoderDto {
     /// milliseconds of encoded media, then releases it at 1x.
     #[serde(default)]
     pub buffer_ms: u32,
-    /// `OpenH264` is linked everywhere; `VideoToolbox` on the macOS module. Empty
-    /// is the same encoder as `OpenH264`.
+    /// `OpenH264` is linked everywhere; `VideoToolbox` on the macOS module;
+    /// `MediaFoundation` on the Windows module. Empty is the same encoder as
+    /// `OpenH264`.
     #[serde(default = "default_openh264")]
     pub encoder: String,
+    /// Encoder device the operator picked, by the name the mixer reports.
+    /// Empty uses the module's own order.
+    #[serde(default)]
+    pub encoder_device: String,
     /// `0` low, `1` medium, `2` high.
     #[serde(default)]
     pub complexity: u32,

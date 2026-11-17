@@ -1285,6 +1285,7 @@ fn encoder_equal(a: &StreamEncoderDto, b: &StreamEncoderDto) -> bool {
         && a.encoder_threads == b.encoder_threads
         && a.buffer_ms == b.buffer_ms
         && a.encoder == b.encoder
+        && a.encoder_device == b.encoder_device
         && a.complexity == b.complexity
         && a.ref_frames == b.ref_frames
         && a.cabac == b.cabac
@@ -1467,6 +1468,7 @@ fn stream_encoder_apply(encoder: &StreamEncoderDto) -> StreamEncoderApply {
             "MediaFoundation" => 2,
             _ => u32::MAX,
         },
+        encoder_device: encoder.encoder_device.clone(),
         complexity: encoder.complexity,
         ref_frames: encoder.ref_frames,
         cabac: encoder.cabac,
@@ -1934,6 +1936,36 @@ mod tests {
             ops.iter().any(|op| {
                 matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102)
             })
+        );
+    }
+
+    #[test]
+    fn picking_a_different_encoder_device_rebuilds_the_encoder() {
+        let prev = rtmp_doc("youtube", "rtmp://example/live");
+        let mut next = rtmp_doc("youtube", "rtmp://example/live");
+        next.stream_encoders[0].encoder = "MediaFoundation".into();
+        next.stream_encoders[0].encoder_device = "NVIDIA NVENC H.264 Encoder".into();
+        let ops = plan(Some(&prev), &next);
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::RemoveStreamEncoder { id: 1 })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                ReconcileOp::AddStreamEncoder(spec)
+                    if spec.encoder == 2
+                        && spec.encoder_device == "NVIDIA NVENC H.264 Encoder"
+            )),
+            "{ops:?}"
+        );
+        // The same device again keeps the running encoder.
+        let ops = plan(Some(&next), &next);
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::RemoveStreamEncoder { .. })),
+            "{ops:?}"
         );
     }
 

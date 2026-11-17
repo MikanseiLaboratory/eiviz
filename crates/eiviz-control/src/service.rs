@@ -1498,6 +1498,10 @@ mod tests {
             self.push_op(format!("remove_output {id}"));
             Ok(())
         }
+        fn stream_encoder_devices(&mut self, _kind: u32) -> ControlResult<String> {
+            Ok("[]".to_string())
+        }
+
         fn stream_encoder_add(&mut self, spec: StreamEncoderApply) -> ControlResult<()> {
             self.push_op(format!("stream_encoder {}", spec.id));
             Ok(())

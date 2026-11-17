@@ -60,8 +60,8 @@ pub use replay::{
 };
 pub use stream::{
     AudioEncodeConfig, STREAM_ENCODER_MEDIAFOUNDATION, STREAM_ENCODER_OPENH264,
-    STREAM_ENCODER_VIDEOTOOLBOX, StreamBackend, StreamEncodeConfig, StreamOutput,
-    VideoEncoderKind,
+    STREAM_ENCODER_VIDEOTOOLBOX, StreamBackend, StreamEncodeConfig, StreamEncoderDevice,
+    StreamOutput, VideoEncoderKind,
 };
 
 /// Entry point implemented by the Community stand-in and by the private Pro crate.

@@ -10,7 +10,8 @@ use std::sync::{Mutex, OnceLock};
 
 use eiviz_pro_api::{
     ABI_MAJOR, Entitlements, FEATURE_DECKLINK, FEATURE_LICENSE, FEATURE_RTMP, LAYOUT_BGRA,
-    LAYOUT_UYVY, PRO_BUSY, PRO_DEVICE, PRO_INVALID, PRO_OK, PRO_UNAVAILABLE, ProApi, ProAudioView,
+    LAYOUT_UYVY, PRO_BUSY, PRO_DEVICE, PRO_INVALID, PRO_OK, PRO_UNAVAILABLE, ProApi,
+    ProAudioView,
     ProCaptureCallbacks, ProCaptureStatsAbi, ProEntitlementsAbi, ProLicenseStatusAbi,
     ProOutputStatsAbi, ProPlayoutConfig, ProReplayConfig, ProReplayDecoded, ProReplayEstimateAbi,
     ProReplayPacket, ProReplayStatsAbi, ProStatus, ProStreamConfig, ProVideoView,
@@ -252,9 +253,31 @@ unsafe extern "C" fn playout_start(
 unsafe extern "C" fn stream_start(
     module: *mut c_void,
     config: *const ProStreamConfig,
+    _device: *const u8,
+    _device_len: usize,
     out: *mut *mut c_void,
 ) -> ProStatus {
     open_output(module, !config.is_null(), out)
+}
+
+unsafe extern "C" fn stream_encoder_devices(
+    _module: *mut c_void,
+    _kind: u32,
+    out: *mut u8,
+    cap: usize,
+    needed: *mut usize,
+) -> ProStatus {
+    // The stand-in knows one encoder and no devices.
+    // Same shape as `copy_to_buffer`: the caller sizes the buffer first.
+    let text = b"[]";
+    if !needed.is_null() {
+        unsafe { *needed = text.len() };
+    }
+    if out.is_null() || cap < text.len() {
+        return ProStatus::new(PRO_INVALID);
+    }
+    unsafe { std::ptr::copy_nonoverlapping(text.as_ptr(), out, text.len()) };
+    ProStatus::ok()
 }
 
 unsafe extern "C" fn stream_add_destination(
@@ -475,6 +498,7 @@ fn base_api() -> ProApi {
         capture_destroy: Some(capture_destroy),
         playout_start: Some(playout_start),
         stream_start: Some(stream_start),
+        stream_encoder_devices: Some(stream_encoder_devices),
         stream_add_destination: Some(stream_add_destination),
         stream_remove_destination: Some(stream_remove_destination),
         stream_destination_stats: Some(stream_destination_stats),
