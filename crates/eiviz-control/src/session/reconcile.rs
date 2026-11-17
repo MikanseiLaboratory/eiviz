@@ -1336,6 +1336,20 @@ fn diff_streams(previous: Option<&Document>, next: &Document, ops: &mut Vec<Reco
             }
             continue;
         }
+        // An encoding profile may exist with no destination yet (#303). The
+        // mixer never started it, so attaching a destination now has to start
+        // the encoder in this same pass, or the attach fails with
+        // "stream encoder is not running" and waits for a second publish.
+        let was_running = prev_outputs
+            .iter()
+            .any(|output| rtmp_destination(output) && output.stream_encoder_id == encoder.id);
+        if !was_running {
+            ops.push(ReconcileOp::AddStreamEncoder(stream_encoder_apply(encoder)));
+            for dest in &dests {
+                ops.push(ReconcileOp::AddStreamDestination(destination_apply(dest)));
+            }
+            continue;
+        }
         for dest in &dests {
             let prev_dest = prev_outputs.iter().find(|item| item.id == dest.id);
             if prev_dest.is_some_and(|item| rtmp_destination(item) && destination_equal(item, dest))
@@ -1936,6 +1950,32 @@ mod tests {
             ops.iter().any(|op| {
                 matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102)
             })
+        );
+    }
+
+    #[test]
+    fn attaching_a_destination_starts_the_idle_profile_in_the_same_publish() {
+        // The session holds a profile with no destination: nothing is running.
+        let idle = Document {
+            stream_encoders: Vec::new(),
+            outputs: Vec::new(),
+            ..rtmp_doc("youtube", "rtmp://example/live")
+        };
+        let live = rtmp_doc("youtube", "rtmp://example/live");
+        let mut prev = idle.clone();
+        prev.stream_encoders = live.stream_encoders.clone();
+        let ops = plan(Some(&prev), &live);
+        let encoder = ops
+            .iter()
+            .position(|op| matches!(op, ReconcileOp::AddStreamEncoder(spec) if spec.id == 1));
+        let destination = ops.iter().position(|op| {
+            matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102)
+        });
+        assert!(encoder.is_some(), "{ops:?}");
+        assert!(destination.is_some(), "{ops:?}");
+        assert!(
+            encoder < destination,
+            "the encoder starts before its destination attaches: {ops:?}"
         );
     }
 
