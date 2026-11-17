@@ -310,7 +310,10 @@ mod tests {
     #[test]
     fn audio_mailbox_is_bounded() {
         let box_ = AudioMailbox::new();
-        for i in 0..20 {
+        // Push past the cap by a known margin instead of a fixed count: the cap is the
+        // thing this test is about, so it must not be a second copy of the constant.
+        let overflow = 4i64;
+        for i in 0..AUDIO_CAP as i64 + overflow {
             box_.push(AudioPacket {
                 timestamp: i,
                 sample_rate: 48_000,
@@ -321,8 +324,8 @@ mod tests {
         }
         let drained = box_.drain();
         assert_eq!(drained.len(), AUDIO_CAP);
-        assert_eq!(drained[0].timestamp, 4);
-        assert_eq!(box_.drops(), 4);
+        assert_eq!(drained[0].timestamp, overflow);
+        assert_eq!(box_.drops(), overflow as u64);
     }
 
     #[test]
