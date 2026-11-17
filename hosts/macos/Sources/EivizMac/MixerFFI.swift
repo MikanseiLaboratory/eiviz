@@ -295,6 +295,10 @@ enum MixerFFI {
         mixer_stream_encoder_remove(encoderId)
     }
 
+    static func streamDestinationRemove(encoderId: UInt64, destinationId: UInt64) -> Int32 {
+        mixer_stream_destination_remove(encoderId, destinationId)
+    }
+
     static func replayCapacity(path: String, width: UInt32, height: UInt32) -> (ReplayCapacity?, String) {
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         var written = 0

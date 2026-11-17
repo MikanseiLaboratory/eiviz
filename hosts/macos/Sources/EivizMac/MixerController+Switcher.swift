@@ -709,8 +709,22 @@ extension MixerController {
         }
         if isRemote { return }
         if output.transport == .rtmp, output.streamEncoderId != 0 {
-            _ = MixerFFI.streamEncoderRemove(output.streamEncoderId)
-            session.streamEncoders.removeAll { $0.id == output.streamEncoderId }
+            // Destinations are separate from encode profiles: removing a row keeps the
+            // profile in the document. Stop the profile only when nothing else is
+            // publishing through it.
+            _ = MixerFFI.streamDestinationRemove(
+                encoderId: output.streamEncoderId,
+                destinationId: output.id
+            )
+            let stillShared = session.outputs.contains {
+                $0.id != output.id
+                    && $0.transport == .rtmp
+                    && $0.streamEncoderId == output.streamEncoderId
+                    && $0.enabled
+            }
+            if !stillShared {
+                _ = MixerFFI.streamEncoderRemove(output.streamEncoderId)
+            }
         }
         if output.transport == .rtmp, !output.rtmpSecretRef.isEmpty {
             // The key belongs to the row: leaving it in the Keychain after the row is
@@ -765,6 +779,63 @@ extension MixerController {
         }
         session.streamEncoders.removeAll { $0.id == id }
         publishSession()
+    }
+
+    /// Creates an RTMP destination for an existing encode profile, like the Windows
+    /// "add destination" button: a destination never invents a profile, and the row
+    /// starts disabled so the operator can fill in the server and key first.
+    func addRtmpDestination() {
+        if isRemote { return }
+        guard let profile = session.streamEncoders.first else {
+            presentError(L10n.t("settings.encodeNeeded"), title: L10n.t("settings.destinations"))
+            return
+        }
+        var id = session.nextOutputId < 100 ? 100 : session.nextOutputId
+        while session.outputs.contains(where: { $0.id == id }) { id += 1 }
+        var entry = OutputEntry(id: id, name: nextStreamName(), transport: .rtmp)
+        entry.sourceKind = .muProgram
+        entry.unitId = session.units.first?.id ?? 1
+        entry.audioUnitId = entry.unitId
+        entry.enabled = false
+        entry.skipEncodeWhenNoReceivers = false
+        entry.rtmpSecretRef = "stream-\(id)"
+        entry.streamEncoderId = profile.id
+        session.nextOutputId = max(session.nextOutputId, id + 1)
+        session.outputs.append(entry)
+        publishSession()
+    }
+
+    /// Rebuilds every running RTMP profile after the settings sheet is applied, so an
+    /// edited profile reaches a live stream without pressing each destination: the
+    /// same outcome as editing a profile on the Windows page.
+    func restartRunningStreams() {
+        if isRemote { return }
+        var seen = Set<UInt64>()
+        for output in session.outputs where output.transport == .rtmp && output.enabled {
+            guard !seen.contains(output.streamEncoderId) else { continue }
+            seen.insert(output.streamEncoderId)
+            addOutput(output)
+        }
+    }
+
+    /// Stops the profile only when no enabled destination still publishes through it.
+    private func stopSharedEncoderIfIdle(_ encoderId: UInt64) {
+        let stillShared = session.outputs.contains {
+            $0.transport == .rtmp && $0.streamEncoderId == encoderId && $0.enabled
+        }
+        if !stillShared {
+            _ = MixerFFI.streamEncoderRemove(encoderId)
+        }
+    }
+
+    private func nextStreamName() -> String {
+        let prefix = "Stream"
+        if !session.outputs.contains(where: { $0.name == prefix }) { return prefix }
+        for n in 2 ..< 100 {
+            let name = "\(prefix) \(n)"
+            if !session.outputs.contains(where: { $0.name == name }) { return name }
+        }
+        return prefix
     }
 
     private func nextEncodeName() -> String {
@@ -829,24 +900,30 @@ extension MixerController {
             session.outputs.append(entry)
         }
         if entry.transport == .rtmp {
-            if previousEncoder != 0 {
+            guard entry.enabled else {
+                // Turning a destination off stops that destination; the profile stays
+                // in the document and keeps serving the others.
+                _ = MixerFFI.streamDestinationRemove(
+                    encoderId: entry.streamEncoderId,
+                    destinationId: entry.id
+                )
+                stopSharedEncoderIfIdle(entry.streamEncoderId)
+                return
+            }
+            if previousEncoder != 0, previousEncoder != entry.streamEncoderId {
                 _ = MixerFFI.streamEncoderRemove(previousEncoder)
             }
-            guard entry.enabled else { return }
             let key = rtmpKey
-            // The profile already exists (checked above); the destination only
-            // keeps it pointing at this row's source and picture.
+            // The profile owns the picture (size, frame rate, name); the destination
+            // only points the profile at this row's source. The Windows page splits
+            // them the same way, so editing a destination cannot silently retune the
+            // encode profile another destination is sharing.
             var encoder = session.streamEncoders.first { $0.id == entry.streamEncoderId }
                 ?? StreamEncoderEntry(id: entry.streamEncoderId)
             encoder.sourceKind = entry.sourceKind
             encoder.sourceId = entry.sourceId
             encoder.unitId = entry.unitId
             encoder.audioUnitId = entry.audioUnitId
-            encoder.width = entry.width == 0 ? 1920 : entry.width
-            encoder.height = entry.height == 0 ? 1080 : entry.height
-            encoder.fpsNum = entry.fpsNum == 0 ? session.settings.masterFpsNum : entry.fpsNum
-            encoder.fpsDen = entry.fpsDen == 0 ? session.settings.masterFpsDen : entry.fpsDen
-            encoder.name = entry.name.isEmpty ? "Stream" : entry.name
             let sourceId = entry.sourceId
             entry.streamEncoderId = encoder.id
             if let index = session.streamEncoders.firstIndex(where: { $0.id == encoder.id }) {
@@ -862,18 +939,29 @@ extension MixerController {
                 _ = fail(code, "Start stream encoder")
                 return
             }
-            MixerFFI.withCString(entry.rtmpSecretRef) { name in
-                MixerFFI.withCString(key) { value in
-                    _ = mixer_secret_set(name, value)
-                }
+            // Starting the encoder drops every destination registered on the profile,
+            // so reconnect them all. The Windows page does the same when an encode
+            // profile is applied: the profile is shared, the destinations are not.
+            let shared = session.outputs.filter {
+                $0.transport == .rtmp && $0.streamEncoderId == encoder.id && $0.enabled
             }
-            let destination = MixerFFI.streamDestinationAdd(
-                encoderId: encoder.id,
-                destinationId: entry.id,
-                url: entry.rtmpUrl,
-                secretRef: entry.rtmpSecretRef
-            )
-            _ = fail(destination, "Start RTMP destination")
+            for destination in shared {
+                let destinationKey = destination.id == entry.id
+                    ? key
+                    : KeychainStore.load(account: "rtmp/" + destination.rtmpSecretRef)
+                guard !destinationKey.isEmpty else { continue }
+                MixerFFI.withCString(destination.rtmpSecretRef) { name in
+                    MixerFFI.withCString(destinationKey) { value in
+                        _ = mixer_secret_set(name, value)
+                    }
+                }
+                _ = MixerFFI.streamDestinationAdd(
+                    encoderId: encoder.id,
+                    destinationId: destination.id,
+                    url: destination.rtmpUrl,
+                    secretRef: destination.rtmpSecretRef
+                )
+            }
             return
         }
         _ = mixer_output_remove(entry.id)

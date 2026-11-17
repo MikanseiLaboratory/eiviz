@@ -124,22 +124,41 @@ struct SettingsView: View {
     @EnvironmentObject private var mixer: MixerController
     @Environment(\.dismiss) private var dismiss
     @State private var category = 0
+    /// Encode profiles as they were when the sheet opened. The Windows page rebuilds
+    /// a running encoder the moment its profile changes; this host applies the
+    /// document on OK, so the rebuild happens after the document lands.
+    @State private var encoderSnapshot: [StreamEncoderEntry] = []
     @State private var selectedMultiviewId: UInt64?
     @State private var decklinkDevices: [DeckLinkDeviceInfo] = []
     @State private var decklinkModes: [String: [DeckLinkModeInfo]] = [:]
     @State private var decklinkError = ""
     @State private var audioRefresh = 0
 
+    /// Selecting the Stream page needs an RTMP-capable plan, like the Windows
+    /// category list: refuse the selection and keep the previous page.
+    private var categorySelection: Binding<Int> {
+        Binding(
+            get: { category },
+            set: { next in
+                if next == 3 && !Self.rtmpAllowed() {
+                    mixer.presentError(L10n.t("msg.planEncodeSettings"), title: L10n.t("settings.stream"))
+                    return
+                }
+                category = next
+            }
+        )
+    }
+
     var body: some View {
         HStack(spacing: 0) {
-            List(selection: $category) {
-                Text("Display").tag(0)
-                Text("Performance").tag(1)
-                Text("Outputs").tag(2)
-                Text("Multiview").tag(3)
-                Text(L10n.t("settings.audio")).tag(4)
-                Text(L10n.t("settings.webApi")).tag(5)
-                Text(L10n.t("settings.encoding")).tag(6)
+            List(selection: categorySelection) {
+                Text(L10n.t("settings.display")).tag(0)
+                Text(L10n.t("settings.performance")).tag(1)
+                Text(L10n.t("settings.outputs")).tag(2)
+                Text(L10n.t("settings.stream")).tag(3)
+                Text(L10n.t("settings.multiview")).tag(4)
+                Text(L10n.t("settings.audio")).tag(5)
+                Text(L10n.t("settings.webApi")).tag(6)
                 Text(L10n.t("settings.license")).tag(7)
             }
             .frame(width: 200)
@@ -149,10 +168,10 @@ struct SettingsView: View {
                     if category == 0 { display }
                     else if category == 1 { performance }
                     else if category == 2 { outputs }
-                    else if category == 3 { multiview }
-                    else if category == 4 { audio }
-                    else if category == 5 { webApi }
-                    else if category == 6 { encoding }
+                    else if category == 3 { StreamSettingsPane() }
+                    else if category == 4 { multiview }
+                    else if category == 5 { audio }
+                    else if category == 6 { webApi }
                     else { license }
                 }
                 Spacer()
@@ -181,6 +200,7 @@ struct SettingsView: View {
                         AppPrefs.shared.save()
                         mixer.applyVmixApi()
                         mixer.publishSession()
+                        restartChangedStreamProfiles()
                         dismiss()
                     }
                     Button("Cancel") { dismiss() }
@@ -191,8 +211,20 @@ struct SettingsView: View {
         }
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
-        .onAppear { category = mixer.settingsCategory }
+        .onAppear {
+            category = mixer.settingsCategory
+            encoderSnapshot = mixer.session.streamEncoders
+        }
         .sheet(isPresented: $mixer.showMultiviewSlots) { MultiviewSlotsView() }
+    }
+
+    private func restartChangedStreamProfiles() {
+        guard let before = try? JSONEncoder().encode(encoderSnapshot),
+              let after = try? JSONEncoder().encode(mixer.session.streamEncoders)
+        else { return }
+        if before != after {
+            mixer.restartRunningStreams()
+        }
     }
 
     private var display: some View {
@@ -387,7 +419,9 @@ struct SettingsView: View {
             Text(L10n.t("settings.outputsHelp"))
                 .foregroundStyle(EivizTheme.dim)
             ForEach($mixer.session.outputs) { $output in
-                outputRow($output)
+                if output.transport != .rtmp {
+                    outputRow($output)
+                }
             }
         }
         .onAppear { refreshDeckLinkDevices() }
@@ -463,123 +497,6 @@ struct SettingsView: View {
     @State private var licenseExpiry = "-"
     @State private var licenseFingerprint = ""
     @State private var licenseReturn = LicenseReturnServer()
-
-    private var encoding: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(L10n.t("settings.encoding"))
-                .font(.headline)
-            Text(L10n.t("settings.encodingHelp"))
-                .font(.caption)
-                .foregroundStyle(EivizTheme.dim)
-            HStack(spacing: 8) {
-                Button(L10n.t("settings.addEncode")) {
-                    mixer.addStreamEncoder()
-                }
-                .disabled(!Self.rtmpAllowed())
-            }
-            if mixer.session.streamEncoders.isEmpty {
-                Text(L10n.t("settings.encodingEmpty"))
-                    .foregroundStyle(EivizTheme.dim)
-            }
-            ForEach(mixer.session.streamEncoders.indices, id: \.self) { index in
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        Text(mixer.session.streamEncoders[index].name.isEmpty
-                             ? L10n.t("settings.encodeName")
-                             : mixer.session.streamEncoders[index].name)
-                            .fontWeight(.semibold)
-                        Spacer()
-                        Button {
-                            mixer.removeStreamEncoder(mixer.session.streamEncoders[index].id)
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                        .buttonStyle(.borderless)
-                        .help(L10n.t("settings.removeEncode"))
-                    }
-                    HStack(spacing: 8) {
-                        Text(L10n.t("settings.encoder"))
-                        Picker("", selection: $mixer.session.streamEncoders[index].encoder) {
-                            Text("OpenH264").tag("OpenH264")
-                            if Self.streamEncoderMask() & 2 != 0 {
-                                Text("VideoToolbox").tag("VideoToolbox")
-                            }
-                            if Self.streamEncoderMask() & 4 != 0 {
-                                Text("MediaFoundation").tag("MediaFoundation")
-                            }
-                            let saved = mixer.session.streamEncoders[index].encoder
-                            if saved != "OpenH264" && saved != "VideoToolbox" && saved != "MediaFoundation" && !saved.isEmpty {
-                                Text(saved).tag(saved)
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(width: 190)
-                        Text(L10n.t("settings.encoderHelp"))
-                            .font(.caption)
-                            .foregroundStyle(EivizTheme.dim)
-                    }
-                    HStack(spacing: 8) {
-                        Text(L10n.t("settings.videoBitrate"))
-                        TextField("", value: Binding(
-                            get: { mixer.session.streamEncoders[index].videoBitrate / 1000 },
-                            set: { mixer.session.streamEncoders[index].videoBitrate = max(100, $0) * 1000 }
-                        ), format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 80)
-                        Text("kbps")
-                        Text(L10n.t("settings.audioBitrate"))
-                        TextField("", value: Binding(
-                            get: { mixer.session.streamEncoders[index].audioBitrate / 1000 },
-                            set: { mixer.session.streamEncoders[index].audioBitrate = max(32, $0) * 1000 }
-                        ), format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 64)
-                        Text("kbps")
-                    }
-                    HStack(spacing: 8) {
-                        Text(L10n.t("settings.audioDelay"))
-                        DraggableUIntField(value: $mixer.session.streamEncoders[index].audioDelayMs, step: 10)
-                            .frame(width: 92)
-                        Text("ms")
-                        Text(L10n.t("settings.keyframeInterval"))
-                        DraggableUIntField(value: $mixer.session.streamEncoders[index].keyint)
-                            .frame(width: 76)
-                        Text(L10n.t("settings.encoderThreads"))
-                        DraggableUIntField(value: $mixer.session.streamEncoders[index].encoderThreads)
-                            .frame(width: 64)
-                    }
-                    HStack(spacing: 8) {
-                        Text(L10n.t("settings.sendBuffer"))
-                        DraggableUIntField(value: $mixer.session.streamEncoders[index].bufferMs, step: 10)
-                            .frame(width: 76)
-                        Text("ms")
-                        Picker(L10n.t("settings.complexity"), selection: $mixer.session.streamEncoders[index].complexity) {
-                            Text(L10n.t("settings.complexityLow")).tag(UInt32(0))
-                            Text(L10n.t("settings.complexityMedium")).tag(UInt32(1))
-                            Text(L10n.t("settings.complexityHigh")).tag(UInt32(2))
-                        }
-                        .frame(width: 150)
-                        Picker(L10n.t("settings.refFrames"), selection: $mixer.session.streamEncoders[index].refFrames) {
-                            ForEach(1 ... 4, id: \.self) { count in Text("\(count)").tag(UInt32(count)) }
-                        }
-                        .frame(width: 110)
-                    }
-                    HStack(spacing: 12) {
-                        Toggle(L10n.t("settings.cabac"), isOn: $mixer.session.streamEncoders[index].cabac)
-                        Toggle(L10n.t("settings.videoOnly"), isOn: $mixer.session.streamEncoders[index].videoOnly)
-                        Toggle(L10n.t("settings.deblock"), isOn: $mixer.session.streamEncoders[index].deblock)
-                        Toggle(L10n.t("settings.backgroundDetect"), isOn: $mixer.session.streamEncoders[index].backgroundDetection)
-                        Toggle(L10n.t("settings.adaptiveQuant"), isOn: $mixer.session.streamEncoders[index].adaptiveQuant)
-                        Toggle(L10n.t("settings.sceneChange"), isOn: $mixer.session.streamEncoders[index].sceneChange)
-                    }
-                    .toggleStyle(.checkbox)
-                }
-                .padding(10)
-                .background(Color(white: 0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-        }
-    }
 
     private var license: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -760,9 +677,6 @@ struct SettingsView: View {
                     Text("NDI®").tag(OutputTransport.ndi)
                     if output.wrappedValue.transport == .deckLink || Self.deckLinkOutputAllowed() {
                         Text("DeckLink").tag(OutputTransport.deckLink)
-                    }
-                    if output.wrappedValue.transport == .rtmp || Self.rtmpAllowed() {
-                        Text("RTMP").tag(OutputTransport.rtmp)
                     }
                 }
                 if output.wrappedValue.transport == .rtmp {
@@ -2139,7 +2053,7 @@ struct MixingUnitView: View {
     }
 }
 
-private struct RtmpKeyEditor: View {
+struct RtmpKeyEditor: View {
     @Binding var output: OutputEntry
     @State private var key = ""
 
