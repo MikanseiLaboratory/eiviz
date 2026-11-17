@@ -114,7 +114,12 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Test mixer
-        run: cargo test -p eiviz_mixer --release --locked -- --test-threads=1
+        # The Replay suite stages a stand-in module signed with the test key, so the release
+        # key must not be embedded here: the accepted-key list ignores the test key whenever a
+        # build carries one. The shipped build recompiles without this override.
+        env:
+          EIVIZ_PRO_MODULE_PUBLIC_KEY: ""
+        run: cargo test -p eiviz_mixer --release --locked --features pro-test-key -- --test-threads=1
 
       - name: Build headless
         run: cargo build -p eiviz-headless --release --locked --bins
@@ -240,7 +245,12 @@ jobs:
           workspaces: .
 
       - name: Test mixer
-        run: cargo test -p eiviz_mixer --release --locked -- --test-threads=1
+        # The Replay suite stages a stand-in module signed with the test key, so the release
+        # key must not be embedded here: the accepted-key list ignores the test key whenever a
+        # build carries one. The shipped build recompiles without this override.
+        env:
+          EIVIZ_PRO_MODULE_PUBLIC_KEY: ""
+        run: cargo test -p eiviz_mixer --release --locked --features pro-test-key -- --test-threads=1
 
       - name: Build headless
         run: cargo build -p eiviz-headless --release --locked --bins --target aarch64-apple-darwin
