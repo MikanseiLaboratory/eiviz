@@ -724,6 +724,58 @@ extension MixerController {
         }
     }
 
+    /// Creates an encoding profile on its own, without an RTMP output. The
+    /// profile is idle until a destination names it: the mixer starts encoders
+    /// for destinations, so nothing is encoded in the meantime.
+    func addStreamEncoder() {
+        if isRemote { return }
+        var id = session.nextStreamEncoderId == 0 ? 1 : session.nextStreamEncoderId
+        while session.streamEncoders.contains(where: { $0.id == id }) { id += 1 }
+        let unit = session.units.first?.id ?? 1
+        var encoder = StreamEncoderEntry(id: id)
+        encoder.name = nextEncodeName()
+        encoder.sourceKind = .muProgram
+        encoder.unitId = unit
+        encoder.audioUnitId = unit
+        encoder.width = 1920
+        encoder.height = 1080
+        encoder.fpsNum = session.settings.masterFpsNum
+        encoder.fpsDen = session.settings.masterFpsDen
+        if encoder.fpsNum == 0 || encoder.fpsDen == 0 {
+            encoder.fpsNum = 60_000
+            encoder.fpsDen = 1_001
+        }
+        encoder.videoBitrate = 6_000_000
+        encoder.audioBitrate = 128_000
+        encoder.keyint = 120
+        encoder.encoder = "OpenH264"
+        session.nextStreamEncoderId = max(session.nextStreamEncoderId, id + 1)
+        session.streamEncoders.append(encoder)
+        publishSession()
+    }
+
+    /// Removes an encoding profile. A profile an RTMP output still names stays:
+    /// deleting it would leave that output pointing at an encoder that cannot
+    /// start, which is the failure this setting exists to avoid.
+    func removeStreamEncoder(_ id: UInt64) {
+        if isRemote { return }
+        guard !session.outputs.contains(where: { $0.transport == .rtmp && $0.streamEncoderId == id }) else {
+            presentInputError(L10n.t("settings.encodeInUse"), editing: false)
+            return
+        }
+        session.streamEncoders.removeAll { $0.id == id }
+        publishSession()
+    }
+
+    private func nextEncodeName() -> String {
+        let prefix = L10n.t("settings.encodeName")
+        for n in 1 ..< 100 {
+            let name = "\(prefix) \(n)"
+            if !session.streamEncoders.contains(where: { $0.name == name }) { return name }
+        }
+        return prefix
+    }
+
     func addOutput(_ output: OutputEntry) {
         if isRemote { return }
         var entry = output

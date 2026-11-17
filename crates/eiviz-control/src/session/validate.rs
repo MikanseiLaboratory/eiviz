@@ -1579,6 +1579,22 @@ mod encoder_validation_tests {
         );
     }
 
+    /// An encoding profile is a setting in its own right: it can exist before
+    /// any RTMP output names it, and nothing about it needs a destination.
+    #[test]
+    fn an_encoding_profile_is_valid_without_any_destination() {
+        let text = r#"{
+          "version": 2,
+          "inputs": [{ "id": 2, "name": "Bars", "kind": "Bars" }],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 2, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }],
+          "streamEncoders": [{ "id": 1, "name": "Encode 1", "sourceKind": "MuProgram", "unitId": 1 }]
+        }"#;
+        let doc = parse(text.as_bytes()).unwrap();
+        validate(&doc).unwrap();
+        validate_for_apply(&doc).unwrap();
+    }
+
     /// A live RTMP output must name an encoder the session defines. A dangling
     /// reference would attach a destination to an encoder the mixer never had,
     /// so `validate_for_apply` stops it with the reason while the session

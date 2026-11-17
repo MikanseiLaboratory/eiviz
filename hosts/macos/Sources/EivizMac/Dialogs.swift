@@ -471,12 +471,32 @@ struct SettingsView: View {
             Text(L10n.t("settings.encodingHelp"))
                 .font(.caption)
                 .foregroundStyle(EivizTheme.dim)
+            HStack(spacing: 8) {
+                Button(L10n.t("settings.addEncode")) {
+                    mixer.addStreamEncoder()
+                }
+                .disabled(!Self.rtmpAllowed())
+            }
             if mixer.session.streamEncoders.isEmpty {
                 Text(L10n.t("settings.encodingEmpty"))
                     .foregroundStyle(EivizTheme.dim)
             }
             ForEach(mixer.session.streamEncoders.indices, id: \.self) { index in
                 VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Text(mixer.session.streamEncoders[index].name.isEmpty
+                             ? L10n.t("settings.encodeName")
+                             : mixer.session.streamEncoders[index].name)
+                            .fontWeight(.semibold)
+                        Spacer()
+                        Button {
+                            mixer.removeStreamEncoder(mixer.session.streamEncoders[index].id)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .help(L10n.t("settings.removeEncode"))
+                    }
                     HStack(spacing: 8) {
                         Text(L10n.t("settings.encoder"))
                         Picker("", selection: $mixer.session.streamEncoders[index].encoder) {
@@ -666,7 +686,8 @@ struct SettingsView: View {
         if mixer_machine_fingerprint(&fingerprint, fingerprint.count) == 0 {
             licenseFingerprint = String(decoding: fingerprint.prefix { $0 != 0 }, as: UTF8.self)
         } else {
-            licenseFingerprint = ""
+            // A blank fingerprint cannot be sent for a ticket; say why.
+            licenseFingerprint = L10n.t("settings.licenseFingerprintUnavailable")
         }
     }
 
