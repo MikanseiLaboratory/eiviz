@@ -4765,7 +4765,8 @@ pub unsafe extern "C" fn mixer_stream_destination_add(
             Ok(Some(stream)) => stream,
             Ok(None) => {
                 let message = format!(
-                    "stream encoder is not running ({})",
+                    "stream encoder is not running ({}); select an encoding profile for this \
+                     destination, or create one in the Encoding settings",
                     stream_encoder_note(encoder_id)
                 );
                 crate::diag::error(&format!(

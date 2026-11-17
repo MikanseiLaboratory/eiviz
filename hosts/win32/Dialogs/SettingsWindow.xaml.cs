@@ -704,10 +704,12 @@ public partial class SettingsWindow : Window
             return;
         if (_nextOutputId < 100)
             _nextOutputId = 100;
+        // An encoding profile is a setting the operator creates in the Encoding
+        // list, not something a destination conjures up.
         if (StreamEncoders.Count == 0)
         {
-            StreamEncoders.Add(NewEncoder());
-            RebuildEncodes();
+            PlanGate.Tip(this, "msg.encodeNeeded");
+            return;
         }
         var unit = _session.Units.Count > 0 ? _session.Units[0].Id : 1;
         Outputs.Add(new OutputEntry

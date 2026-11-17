@@ -797,6 +797,22 @@ extension MixerController {
         let previousEncoder = session.outputs.first { $0.id == entry.id }?.streamEncoderId ?? 0
         var rtmpKey = ""
         if entry.transport == .rtmp, entry.enabled {
+            // An encoding profile is a setting the operator creates, not
+            // something a destination conjures up: refuse and say so instead of
+            // quietly starting an encoder the session never showed.
+            guard session.streamEncoders.contains(where: { $0.id == entry.streamEncoderId }) else {
+                // Keep the row, but off: an enabled destination without a
+                // profile would be a document the mixer has to refuse.
+                var blocked = entry
+                blocked.enabled = false
+                if let index = session.outputs.firstIndex(where: { $0.id == blocked.id }) {
+                    session.outputs[index] = blocked
+                } else {
+                    session.outputs.append(blocked)
+                }
+                presentInputError(L10n.t("settings.encodeNeeded"), editing: false)
+                return
+            }
             guard !entry.rtmpSecretRef.isEmpty else {
                 presentInputError(L10n.t("settings.streamKeyMissing"), editing: false)
                 return
@@ -818,11 +834,10 @@ extension MixerController {
             }
             guard entry.enabled else { return }
             let key = rtmpKey
+            // The profile already exists (checked above); the destination only
+            // keeps it pointing at this row's source and picture.
             var encoder = session.streamEncoders.first { $0.id == entry.streamEncoderId }
-                ?? StreamEncoderEntry(id: entry.streamEncoderId == 0 ? session.nextStreamEncoderId : entry.streamEncoderId)
-            if encoder.id == session.nextStreamEncoderId {
-                session.nextStreamEncoderId = max(session.nextStreamEncoderId + 1, encoder.id + 1)
-            }
+                ?? StreamEncoderEntry(id: entry.streamEncoderId)
             encoder.sourceKind = entry.sourceKind
             encoder.sourceId = entry.sourceId
             encoder.unitId = entry.unitId
