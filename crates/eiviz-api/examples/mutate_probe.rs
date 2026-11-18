@@ -4,8 +4,8 @@ use eiviz_api::client::ControlClient;
 
 #[tokio::main]
 async fn main() {
-    let mutation = std::fs::read(std::env::args().nth(1).expect("mutation json"))
-        .expect("read mutation");
+    let mutation =
+        std::fs::read(std::env::args().nth(1).expect("mutation json")).expect("read mutation");
     let client = ControlClient::websocket("ws://127.0.0.1:9400", "");
     match client.mutate_session(mutation, 0).await {
         Ok(()) => println!("mutate ok"),
