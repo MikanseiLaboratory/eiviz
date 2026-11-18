@@ -11,10 +11,11 @@ use openmediatransport::{
     Quality, ReceiverConfig, ReceiverSession, Sender, Tally, VideoTextureMeta,
 };
 
-use crate::abi::FMT_BGRA;
 use crate::device::GpuDevice;
 use crate::save::debounce_want_full;
-use crate::upload::{AudioPacket, CpuFormat, GpuVideoFrame, UploadStore, ingest_audio_live};
+use crate::upload::{
+    AudioPacket, CpuFormat, GpuIngest, GpuUploadRing, GpuVideoFrame, UploadStore, ingest_audio_live,
+};
 
 pub type OmtGpu = GpuVideoContext;
 
@@ -55,6 +56,7 @@ impl OmtReceiver {
         address: String,
         uploads: Arc<Mutex<UploadStore>>,
         gpu: Option<OmtGpu>,
+        ingest: GpuIngest,
         frame_buffer_frames: u32,
         quality: u32,
     ) -> Result<Self, String> {
@@ -87,11 +89,14 @@ impl OmtReceiver {
         let join = thread::Builder::new()
             .name(format!("eiviz-omt-{source_id}"))
             .spawn(move || {
-                let format = if use_gpu {
-                    CpuFormat::GpuRgba
-                } else {
-                    CpuFormat::from_abi(FMT_BGRA).expect("BGRA")
-                };
+                // Both decode paths publish GPU textures: the GPU path receives
+                // them from the OMT session, and the CPU path uploads its BGRA
+                // frames here, on this feed's own thread, into a ring texture.
+                // BGRA rows handed to the render thread used to cost one full
+                // frame copy plus one upload per feed inside the single render
+                // loop (measured 9 ms of a 16.7 ms budget at eight 1080p feeds;
+                // the same feeds through GPU textures stay under 1 ms).
+                let format = CpuFormat::GpuRgba;
                 let mut last_logged: Option<Instant> = None;
                 loop {
                     if stop_thread.load(Ordering::Relaxed) || crate::diag::is_fatal() {
@@ -142,6 +147,7 @@ impl OmtReceiver {
                     let live_since = Instant::now();
                     let mut missing_video_logged = false;
                     let mut jitter = JitterRing::default();
+                    let mut gpu_ring = GpuUploadRing::new();
                     let run = panic::catch_unwind(AssertUnwindSafe(|| {
                         while !stop_thread.load(Ordering::Relaxed) && !crate::diag::is_fatal() {
                             let full = debounce_want_full(
@@ -219,27 +225,58 @@ impl OmtReceiver {
                             } else if let Some(frame) =
                                 session.recv_video_timeout(Duration::from_millis(4))
                             {
-                                let mut store = uploads.lock_or_recover();
-                                store.ensure_playout(
-                                    source_id,
-                                    frame.width.max(2),
-                                    frame.height.max(2),
-                                    CpuFormat::from_abi(FMT_BGRA).expect("BGRA"),
-                                    depth,
-                                );
+                                // Upload on this feed's thread (parallel across feeds)
+                                // instead of the render thread: see the note above.
+                                let width = frame.width.max(2) as u32;
+                                let height = frame.height.max(2) as u32;
                                 let stride = frame.stride.max(frame.width * 4) as usize;
                                 let pts = next_pts(&mut pts_seq, frame.timestamp);
-                                store
-                                    .push_playout_cpu(source_id, &frame.pixels, stride, pts)
-                                    .map(|()| has_video_thread.store(true, Ordering::Relaxed))
-                                    .unwrap_or_else(|error| {
-                                        let message =
-                                            format!("omt_push_cpu id={source_id}: {error}");
-                                        crate::diag::error(&message);
-                                        if let Ok(mut slot) = last_error_thread.lock() {
-                                            *slot = message;
+                                match gpu_ring.upload(
+                                    &ingest,
+                                    &frame.pixels,
+                                    stride,
+                                    width,
+                                    height,
+                                    CpuFormat::Bgra,
+                                    pts,
+                                ) {
+                                    Ok(gpu_frame) => {
+                                        let mut store = uploads.lock_or_recover();
+                                        store.ensure_playout(
+                                            source_id,
+                                            gpu_frame.width,
+                                            gpu_frame.height,
+                                            CpuFormat::GpuRgba,
+                                            depth,
+                                        );
+                                        store.set_ring_vram(source_id, gpu_ring.vram_bytes());
+                                        match store.push_playout_gpu(source_id, gpu_frame) {
+                                            Ok(()) => {
+                                                has_video_thread.store(true, Ordering::Relaxed)
+                                            }
+                                            Err(error) => {
+                                                let message =
+                                                    format!("omt_push_gpu id={source_id}: {error}");
+                                                crate::diag::error(&message);
+                                                if let Ok(mut slot) = last_error_thread.lock() {
+                                                    *slot = message;
+                                                }
+                                            }
                                         }
-                                    });
+                                    }
+                                    Err(error) => {
+                                        // An exhausted ring repeats on every frame; like the
+                                        // NDI ingest, one line is enough.
+                                        let message =
+                                            format!("omt_gpu_upload id={source_id}: {error}");
+                                        if let Ok(mut slot) = last_error_thread.lock() {
+                                            if *slot != message {
+                                                crate::diag::error(&message);
+                                                *slot = message;
+                                            }
+                                        }
+                                    }
+                                }
                             }
                             if !missing_video_logged
                                 && !has_video_thread.load(Ordering::Relaxed)
