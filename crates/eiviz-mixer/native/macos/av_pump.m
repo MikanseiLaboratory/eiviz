@@ -7,7 +7,7 @@
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 #import <Metal/Metal.h>
-#import <VideoToolbox/VideoToolbox.h>
+#import <CoreImage/CoreImage.h>
 
 enum {
     EIVIZ_AV_RETRY = 0,
@@ -49,11 +49,17 @@ static void release_sample(CMSampleBufferRef *slot) {
 @property (nonatomic, strong) NSMutableArray<NSNumber *> *inboxAudio;
 @property (nonatomic) id<MTLDevice> metal;
 @property (nonatomic) CVMetalTextureCacheRef metalCache;
-@property (nonatomic) VTPixelTransferSessionRef transfer;
 @property (nonatomic) CVPixelBufferPoolRef bgraPool;
 @property (nonatomic) size_t bgraWidth;
 @property (nonatomic) size_t bgraHeight;
 @property (nonatomic) BOOL useNV12;
+/// Converts NV12 to BGRA on the GPU. The conversion used to run through a
+/// VideoToolbox transfer session, and that call shares the process's
+/// VideoToolbox channel with the RTMP encoder: with a camera or a playing file
+/// converting every frame, the encoder's completion callbacks stopped arriving
+/// altogether. CoreImage renders through Metal instead and leaves VideoToolbox
+/// to the encoders.
+@property (nonatomic) CIContext *ciContext;
 @end
 
 @implementation EivizAvPumpObj
@@ -65,11 +71,9 @@ static void release_sample(CMSampleBufferRef *slot) {
         _cond = [[NSCondition alloc] init];
         _inbox = [NSMutableArray array];
         _inboxAudio = [NSMutableArray array];
-        VTPixelTransferSessionRef transfer = NULL;
-        if (VTPixelTransferSessionCreate(NULL, &transfer) == noErr) {
-            _transfer = transfer;
-            _useNV12 = YES;
-        }
+        // The decoder's own format. Turning NV12 into BGRA must not use
+        // VideoToolbox: it is the same channel the encoders need.
+        _useNV12 = YES;
     }
     return self;
 }
@@ -112,11 +116,6 @@ static void release_sample(CMSampleBufferRef *slot) {
         CVPixelBufferPoolRelease(_bgraPool);
         _bgraPool = NULL;
     }
-    if (_transfer) {
-        VTPixelTransferSessionInvalidate(_transfer);
-        CFRelease(_transfer);
-        _transfer = NULL;
-    }
     _metal = nil;
 }
 
@@ -134,9 +133,6 @@ static void release_sample(CMSampleBufferRef *slot) {
 - (CVPixelBufferRef)copyBGRA:(CVPixelBufferRef)source CF_RETURNS_RETAINED {
     if (!self.useNV12 || !CVPixelBufferIsPlanar(source)) {
         return CVPixelBufferRetain(source);
-    }
-    if (!self.transfer) {
-        return NULL;
     }
     size_t width = CVPixelBufferGetWidth(source);
     size_t height = CVPixelBufferGetHeight(source);
@@ -165,10 +161,20 @@ static void release_sample(CMSampleBufferRef *slot) {
     if (CVPixelBufferPoolCreatePixelBuffer(NULL, self.bgraPool, &destination) != kCVReturnSuccess || !destination) {
         return NULL;
     }
-    OSStatus status = VTPixelTransferSessionTransferImage(self.transfer, source, destination);
-    if (status != noErr) {
+    if (!self.ciContext) {
+        if (self.metal) {
+            self.ciContext = [CIContext contextWithMTLDevice:self.metal];
+        } else {
+            self.ciContext = [CIContext context];
+        }
+    }
+    if (!self.ciContext) {
         CVPixelBufferRelease(destination);
         return NULL;
+    }
+    @autoreleasepool {
+        CIImage *image = [CIImage imageWithCVPixelBuffer:source];
+        [self.ciContext render:image toCVPixelBuffer:destination];
     }
     return destination;
 }
@@ -537,6 +543,13 @@ EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns, int mode, i
     if (want_video) {
         video_out = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:video outputSettings:video_attrs(pump.useNV12)];
         video_out.alwaysCopiesSampleData = NO;
+        if (![reader canAddOutput:video_out] && !pump.useNV12) {
+            // This asset cannot hand back BGRA. Take the decoder's own NV12 and let
+            // copyBGRA convert it, which is the path every captured frame uses.
+            pump.useNV12 = YES;
+            video_out = [AVAssetReaderTrackOutput assetReaderTrackOutputWithTrack:video outputSettings:video_attrs(YES)];
+            video_out.alwaysCopiesSampleData = NO;
+        }
         if (![reader canAddOutput:video_out]) {
             return NULL;
         }
@@ -712,13 +725,12 @@ EivizAvPump *eiviz_av_open_capture(const char *device_id, uint32_t width, uint32
         pump.capQueue = dispatch_queue_create("eiviz.av.capture", DISPATCH_QUEUE_SERIAL);
         AVCaptureVideoDataOutput *video = [[AVCaptureVideoDataOutput alloc] init];
         video.alwaysDiscardsLateVideoFrames = YES;
-        @try {
-            video.videoSettings = video_attrs(pump.useNV12);
-        } @catch (NSException *ex) {
-            NSLog(@"eiviz av: NV12 videoSettings rejected: %@", ex);
-            pump.useNV12 = NO;
-            video.videoSettings = video_attrs(NO);
-        }
+        // NV12 is the known-good capture format. The pump turns it into BGRA on
+        // the GPU (CoreImage), not through a VideoToolbox transfer session: that
+        // session used to run on every captured frame and compete with the
+        // encoders for the same VideoToolbox channel.
+        video.videoSettings = video_attrs(YES);
+        pump.useNV12 = YES;
         [video setSampleBufferDelegate:pump queue:pump.capQueue];
         if ([session canAddOutput:video]) {
             [session addOutput:video];
