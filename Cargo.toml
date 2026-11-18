@@ -51,3 +51,14 @@ opt-level = 1
 
 [profile.test.package.eiviz-control]
 opt-level = 1
+
+# Performance branches of the in-house codec crates, pinned by commit so CI
+# builds the exact revisions this branch was measured against:
+# - vmx-rs perf/hot-path (PR #37): AVX2 fused zigzag+mask encode kernel,
+#   CPUID-free x86 dispatch, instance-pool wgpu entropy, opt-in shared pool.
+# - openmediatransport-rs perf/receive-hot-path (PR #50): per-frame copy and
+#   per-poll syscall removal, cached peer write timeouts.
+# Switch back to the registry pins once those PRs are merged and published.
+[patch.crates-io]
+vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs", rev = "9cf81c08ceff71716bb6aa33518064fbaf6c3ba4" }
+openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatransport-rs", rev = "ef499c4323d19da1e24fb039552af6891c240a8b" }
