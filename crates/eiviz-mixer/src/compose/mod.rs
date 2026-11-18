@@ -256,6 +256,10 @@ pub struct Composer {
     label_cache: HashMap<LabelTexKey, LabelTexture>,
     frame: u64,
     pool: UniformPool,
+    /// Reusable row-padding scratch for `write_aligned_texture`, so a source
+    /// whose stride is not 256-aligned stops allocating (and zero-filling) a
+    /// full frame buffer every upload.
+    upload_pad: Vec<u8>,
     blit_groups: HashMap<u64, wgpu::BindGroup>,
     uyvy_groups: HashMap<u64, wgpu::BindGroup>,
     mix_groups: HashMap<u64, wgpu::BindGroup>,
@@ -523,6 +527,7 @@ impl Composer {
             last_tallies: Vec::new(),
             scene_gpu_pct: HashMap::new(),
             uploader: crate::rebar::FrameUploader::new(device),
+            upload_pad: Vec::new(),
         })
     }
 
@@ -762,33 +767,32 @@ impl Composer {
         if pts == i64::MIN {
             return None;
         }
-        device.queue.write_texture(
-            first.as_image_copy(),
+        // `write_aligned_texture` pads rows to the 256-byte multiple wgpu
+        // requires. The raw write passed `stride` through unvalidated, so a
+        // source whose stride is not 256-aligned (a 720-wide BGRA frame, for
+        // example) tripped a validation error mid-transition and took the
+        // whole mixer down with it.
+        let _ = write_aligned_texture(
+            device,
+            first,
             outgoing,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(stride as u32),
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d {
-                width: tex_w,
-                height,
-                depth_or_array_layers: 1,
-            },
+            stride,
+            height,
+            tex_w,
+            format,
+            None,
+            &mut self.upload_pad,
         );
-        device.queue.write_texture(
-            second.as_image_copy(),
+        let _ = write_aligned_texture(
+            device,
+            second,
             incoming,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(stride as u32),
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d {
-                width: tex_w,
-                height,
-                depth_or_array_layers: 1,
-            },
+            stride,
+            height,
+            tex_w,
+            format,
+            None,
+            &mut self.upload_pad,
         );
         // The pass needs a target that is neither input: the source texture is that
         // target, and the compositor samples it as usual.
@@ -942,8 +946,20 @@ impl Composer {
                         || gpu.packed != frame.packed
                         || gpu.bgra != frame.bgra
                 });
-                self.blit_groups.remove(&id);
-                self.uyvy_groups.remove(&id);
+                // The ingest ring hands textures out per slot, and the lease
+                // marks the slot: the same lease means the very same texture is
+                // current, so the blit/uyvy bind groups still point at it and
+                // stay valid. Anything else invalidates as before.
+                let same_slot = self.sources.get(&id).is_some_and(|gpu| {
+                    match (gpu.lease.as_ref(), frame.lease.as_ref()) {
+                        (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+                        _ => false,
+                    }
+                });
+                if !same_slot || layout_changed {
+                    self.blit_groups.remove(&id);
+                    self.uyvy_groups.remove(&id);
+                }
                 if layout_changed {
                     self.gpu_epoch = self.gpu_epoch.wrapping_add(1);
                 }
@@ -1080,6 +1096,7 @@ impl Composer {
                 tex_w,
                 format,
                 self.uploader.as_mut().filter(|_| use_rebar),
+                &mut self.upload_pad,
             );
             match written {
                 Ok(()) => {
@@ -1480,6 +1497,7 @@ impl Composer {
             raster.width,
             wgpu::TextureFormat::Rgba8Unorm,
             None,
+            &mut self.upload_pad,
         )
         .ok()?;
         let view = texture.create_view(&Default::default());
@@ -1711,6 +1729,25 @@ impl Composer {
         } else {
             self.draw_bus(device, encoder, unit_id, mix_source, false, width, height)?;
         }
+        // A unit entering datamosh cold has no fresh feedback base in `prev`
+        // (the history store below only refreshes it on datamosh frames), so
+        // seed it once from `program` — the same value the mix==0 frames keep
+        // in `mixed`, which is where the ungated copy used to take it from.
+        if state.transition_kind == TRANSITION_DATAMOSH
+            && let Some(unit) = self.units.get(&unit_id)
+            && !unit.datamosh_prev
+            && unit.prev_seeded
+        {
+            encoder.copy_texture_to_texture(
+                unit.program.as_image_copy(),
+                unit.prev.as_image_copy(),
+                wgpu::Extent3d {
+                    width: unit.width.max(1),
+                    height: unit.height.max(1),
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
         self.seed_mix_history(encoder, unit_id);
         if state.mix == 0.0 {
             let unit = self.units.get(&unit_id).ok_or("unit targets missing")?;
@@ -1849,8 +1886,14 @@ impl Composer {
     }
 
     /// Runs before overlays so feedback transitions never smear DSK/overlay layers.
+    ///
+    /// Only the datamosh transition reads `prev` as its feedback base, so the
+    /// mixed→prev copy runs on datamosh frames — plus the frame right after
+    /// datamosh ends, so an immediately re-armed datamosh still starts from a
+    /// fresh frame. Every other transition and plain cut used to pay a
+    /// full-resolution GPU copy per unit per frame for a texture nothing read.
     fn store_mix_history(&mut self, encoder: &mut wgpu::CommandEncoder, unit_id: u64, kind: u32) {
-        let Some(unit) = self.units.get(&unit_id) else {
+        let Some(unit) = self.units.get_mut(&unit_id) else {
             return;
         };
         let extent = wgpu::Extent3d {
@@ -1858,18 +1901,22 @@ impl Composer {
             height: unit.height.max(1),
             depth_or_array_layers: 1,
         };
-        encoder.copy_texture_to_texture(
-            unit.mixed.as_image_copy(),
-            unit.prev.as_image_copy(),
-            extent,
-        );
-        if kind == TRANSITION_DATAMOSH {
+        let datamosh = kind == TRANSITION_DATAMOSH;
+        if datamosh || unit.datamosh_prev {
+            encoder.copy_texture_to_texture(
+                unit.mixed.as_image_copy(),
+                unit.prev.as_image_copy(),
+                extent,
+            );
+        }
+        if datamosh {
             encoder.copy_texture_to_texture(
                 unit.preview.as_image_copy(),
                 unit.pvw_prev.as_image_copy(),
                 extent,
             );
         }
+        unit.datamosh_prev = datamosh;
     }
 
     fn mix_params(

@@ -35,6 +35,9 @@ pub struct UnitTargets {
     pub(crate) pvw_prev_view: wgpu::TextureView,
     pub(crate) mosh_mv_view: wgpu::TextureView,
     pub(crate) prev_seeded: bool,
+    /// Whether the previous frame stored a datamosh history into `prev`; the
+    /// history copy is gated to datamosh frames (plus one frame after).
+    pub(crate) datamosh_prev: bool,
     pub(crate) packed_view: Option<wgpu::TextureView>,
 }
 
@@ -86,6 +89,7 @@ impl UnitTargets {
             pvw_prev_view: pvw_prev.create_view(&Default::default()),
             mosh_mv_view: mosh_mv.create_view(&Default::default()),
             prev_seeded: false,
+            datamosh_prev: false,
             packed_view: None,
             program,
             preview,

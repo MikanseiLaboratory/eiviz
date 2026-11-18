@@ -45,6 +45,9 @@ pub(crate) fn render_loop(
     let mut phases = (0f32, 0f32, 0f32, 0u32);
     let mut cached_mem = (0u64, 0u64);
     let mut cached_adapter = 0u64;
+    let mut cached_compose_vram = 0u64;
+    let mut cached_delay_vram = 0u64;
+    let mut cached_send_vram = 0u64;
     let mut mem_at = Instant::now()
         .checked_sub(Duration::from_secs(1))
         .unwrap_or_else(Instant::now);
@@ -605,7 +608,12 @@ pub(crate) fn render_loop(
                         );
                     }
                 }
-                device.submit(Some(encoder.finish()));
+                // Submitting an empty command buffer still costs a queue round
+                // trip (see the present pass above); submit only when this
+                // encoder actually recorded a copy.
+                if !packed_copies.is_empty() || !gpu_copies.is_empty() {
+                    device.submit(Some(encoder.finish()));
+                }
                 emit_packed(&mut readbacks, &device, &packed_copies, &outputs_snap);
             }
 
@@ -1003,14 +1011,22 @@ pub(crate) fn render_loop(
                     set_error(&telemetry, error);
                 }
             }
-            let compose_vram = composer.vram_bytes();
-            let delay_vram = frame_delay.vram_bytes();
-            let send_vram = gpu_sends.vram_bytes();
-            if mem_at.elapsed() >= Duration::from_millis(500) {
+            // The vram walks (every texture) and the scene-usage list are
+            // telemetry, so they ride the same 500 ms cadence as the memory
+            // snapshot; a session with many sources and scenes paid for all of
+            // them on every frame.
+            let mem_due = mem_at.elapsed() >= Duration::from_millis(500);
+            if mem_due {
+                mem_at = Instant::now();
                 cached_mem = uploads.lock_or_recover().memory_bytes();
                 cached_adapter = crate::rebar::adapter_usage_bytes(&device.device);
-                mem_at = Instant::now();
+                cached_compose_vram = composer.vram_bytes();
+                cached_delay_vram = frame_delay.vram_bytes();
+                cached_send_vram = gpu_sends.vram_bytes();
             }
+            let compose_vram = cached_compose_vram;
+            let delay_vram = cached_delay_vram;
+            let send_vram = cached_send_vram;
             let (ram, source_vram) = cached_mem;
             let accounted = source_vram
                 .saturating_add(compose_vram)
@@ -1023,7 +1039,9 @@ pub(crate) fn render_loop(
                 guard.last_compose_vram = compose_vram;
                 guard.last_delay_vram = delay_vram;
                 guard.last_vram_bytes = cached_adapter.max(accounted);
-                guard.scene_usage = composer.scene_usages();
+                if mem_due {
+                    guard.scene_usage = composer.scene_usages();
+                }
                 if crate::diag::profile_send() && frame_i % 60 == 0 {
                     let readback = crate::diag::take_readback_avg_ms().unwrap_or(0.0);
                     crate::diag::info(&format!(
@@ -1096,22 +1114,29 @@ pub(crate) fn emit_packed(
     packed_copies: &[(u64, u32, u32)],
     outputs_snap: &[OutputSnap],
 ) {
+    if packed_copies.is_empty() {
+        return;
+    }
+    // One poll for the whole device, then the per-store work — the same shape
+    // `emit_replay` uses. Polling inside the loop meant one device poll per
+    // CPU output per frame, and a poll walks every submission the queue holds.
+    if crate::diag::profile_send() {
+        let started = Instant::now();
+        let _ = device.device.poll(wgpu::PollType::Poll);
+        crate::diag::add_readback(started.elapsed());
+    } else {
+        let _ = device.device.poll(wgpu::PollType::Poll);
+    }
     for (key, width, height) in packed_copies {
         if let Some(rb) = readbacks.get_mut(*key) {
-            if crate::diag::profile_send() {
-                let started = Instant::now();
-                rb.advance(device);
-                crate::diag::add_readback(started.elapsed());
-            } else {
-                rb.advance(device);
-            }
-            if let Some((packed, content_pts)) = rb.latest() {
+            rb.advance_polled();
+            if let Some((packed, content_pts)) = rb.take_back() {
                 let bpp = outputs_snap
                     .iter()
                     .find(|output| output.output_id == *key)
                     .map(|output| output.bytes_per_pixel.max(2))
                     .unwrap_or(2);
-                let data: Arc<Vec<u8>> = Arc::new(packed.to_vec());
+                let data: Arc<Vec<u8>> = Arc::new(packed);
                 last_frames().lock_or_recover().insert(
                     *key,
                     Acquired {

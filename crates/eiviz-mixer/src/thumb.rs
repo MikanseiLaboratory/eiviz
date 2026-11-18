@@ -103,12 +103,16 @@ impl ThumbStore {
     }
 
     pub fn advance(&mut self, device: &GpuDevice) {
+        // One poll for every thumbnail, then the per-thumb work. A poll walks
+        // the submission queue, so polling per thumb paid that walk once per
+        // subscribed unit per frame.
+        let _ = device.device.poll(wgpu::PollType::Poll);
         for (id, gpu) in &mut self.gpu {
             if !gpu.copied {
                 continue;
             }
             gpu.copied = false;
-            if let Some(frame) = gpu.advance(device) {
+            if let Some(frame) = gpu.advance_polled() {
                 if let Ok(mut pixels) = self.pixels.lock() {
                     pixels.insert(*id, frame);
                 }
@@ -179,9 +183,9 @@ impl ThumbGpu {
         );
     }
 
-    fn advance(&mut self, device: &GpuDevice) -> Option<ThumbPixels> {
+    /// The per-thumb work, for a caller that has already polled the device.
+    fn advance_polled(&mut self) -> Option<ThumbPixels> {
         self.slots[self.write].pending = true;
-        let _ = device.device.poll(wgpu::PollType::Poll);
         let mut mapped = None;
         for slot in &mut self.slots {
             if !slot.waiting {
