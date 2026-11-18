@@ -77,6 +77,13 @@
                     </DockPanel>
                     <CheckBox x:Name="VideoLoopBox" Content="Loop" IsChecked="True"
                               Foreground="#EEE" Margin="0,12,0,8"/>
+                    <TextBlock Text="Decode" Margin="0,0,0,4"/>
+                    <ComboBox x:Name="VideoDecodeBox" Width="280" HorizontalAlignment="Left" Margin="0,0,0,8">
+                        <ComboBoxItem Content="Automatic" Tag="auto" IsSelected="True"/>
+                        <ComboBoxItem Content="Media Foundation (GPU)" Tag="mf"/>
+                        <ComboBoxItem Content="Vulkan Video (GPU)" Tag="vulkan"/>
+                        <ComboBoxItem Content="Software (CPU)" Tag="cpu"/>
+                    </ComboBox>
                     <TextBlock Text="Frame buffer (frames)" Margin="0,0,0,4"/>
                     <ComboBox x:Name="VideoBufferBox" Width="220" HorizontalAlignment="Left" Margin="0,0,0,8">
                         <ComboBoxItem Content="1" Tag="1"/>
@@ -193,6 +200,12 @@
                     </ComboBox>
                     <TextBlock TextWrapping="Wrap" Foreground="#AAAAAA"
                                Text="Frame buffer (1–8) holds decoded camera frames on the GPU, same as NDI/OMT."/>
+                    <TextBlock Text="Decode" Margin="0,12,0,4"/>
+                    <ComboBox x:Name="UvcDecodeBox" Width="280" HorizontalAlignment="Left" Margin="0,0,0,8">
+                        <ComboBoxItem Content="Automatic" Tag="auto" IsSelected="True"/>
+                        <ComboBoxItem Content="Media Foundation (GPU)" Tag="mf"/>
+                        <ComboBoxItem Content="Software (CPU)" Tag="cpu"/>
+                    </ComboBox>
                 </StackPanel>
                 <StackPanel x:Name="DeckLinkPanel" Visibility="Collapsed">
                     <TextBlock Text="DeckLink" Margin="0,0,0,8"/>

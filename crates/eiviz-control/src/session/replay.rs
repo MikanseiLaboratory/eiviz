@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{Document, InputDto, InputKind};
+use crate::session::DecodePath;
 
 /// Source-id band for Replay channel inputs. `0x0005_0000` holds the host's
 /// remote preview/program/multiview video sources and `0x0007_0000` holds
@@ -1470,6 +1471,7 @@ fn replay_input(id: u64, name: String) -> InputDto {
         audio_process_exe: String::new(),
         audio_process_aumid: String::new(),
         decklink_mode: String::new(),
+        decode_path: DecodePath::Auto,
     }
 }
 

@@ -44,8 +44,8 @@ typedef struct EivizAvCaptureMode {
     uint32_t format;
 } EivizAvCaptureMode;
 
-EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns, int mode);
-EivizAvPump *eiviz_av_open_capture(const char *device_id, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den);
+EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns, int mode, int hardware);
+EivizAvPump *eiviz_av_open_capture(const char *device_id, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, int hardware);
 int eiviz_av_enum_captures(EivizAvCaptureInfo *out, uint32_t cap);
 int eiviz_av_enum_capture_modes(const char *device_id, EivizAvCaptureMode *out, uint32_t cap);
 void eiviz_av_close(EivizAvPump *pump);

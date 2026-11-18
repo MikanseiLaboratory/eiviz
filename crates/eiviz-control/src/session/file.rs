@@ -7,12 +7,12 @@ use std::path::{Path, PathBuf};
 use prost::Message;
 
 use super::{
-    AudioCaptureMode, AudioDeviceKind, AudioLinkMode, BandwidthSave, BezierHandles, Document,
-    HeadphoneDto, InputDto, InputKind, InternalColorFormat, MixSource, MuBusDto, MultiviewDto,
-    MultiviewTemplate, MvLabelAnchor, MvLabelUnit, MvSlot, MvSlotKind, NdiBandwidth, OmtQuality,
-    OutputDto, OutputSourceKind, OutputTransport, OverlaySlot, RgbColor, SceneDto, SceneLayer,
-    SceneLayerGeom, SceneLayoutPreset, SessionSettings, StreamEncoderDto, SwitcherSceneFilter,
-    TransitionPreset, UnitDto, VideoPlayWhen, VideoTriggerWhen,
+    AudioCaptureMode, AudioDeviceKind, AudioLinkMode, BandwidthSave, BezierHandles, DecodePath,
+    Document, HeadphoneDto, InputDto, InputKind, InternalColorFormat, MixSource, MuBusDto,
+    MultiviewDto, MultiviewTemplate, MvLabelAnchor, MvLabelUnit, MvSlot, MvSlotKind, NdiBandwidth,
+    OmtQuality, OutputDto, OutputSourceKind, OutputTransport, OverlaySlot, RgbColor, SceneDto,
+    SceneLayer, SceneLayerGeom, SceneLayoutPreset, SessionSettings, StreamEncoderDto,
+    SwitcherSceneFilter, TransitionPreset, UnitDto, VideoPlayWhen, VideoTriggerWhen,
 };
 
 mod pb {
@@ -634,6 +634,7 @@ fn input_from_pb(input: pb::Input) -> Result<InputDto, String> {
         audio_process_exe: input.audio_process_exe,
         audio_process_aumid: input.audio_process_aumid,
         decklink_mode: input.decklink_mode,
+        decode_path: DecodePath::Auto,
     })
 }
 
@@ -1090,6 +1091,7 @@ fn stream_encoder_to_pb(encoder: &StreamEncoderDto) -> pb::StreamEncoder {
         encoder_threads: encoder.encoder_threads,
         buffer_ms: encoder.buffer_ms,
         encoder: encoder.encoder.clone(),
+        encoder_device: encoder.encoder_device.clone(),
         complexity: encoder.complexity,
         ref_frames: encoder.ref_frames,
         cabac: encoder.cabac,
@@ -1124,6 +1126,7 @@ fn stream_encoder_from_pb(encoder: pb::StreamEncoder) -> Result<StreamEncoderDto
         } else {
             encoder.encoder
         },
+        encoder_device: encoder.encoder_device,
         complexity: encoder.complexity,
         ref_frames: if encoder.ref_frames == 0 {
             1
@@ -2530,5 +2533,72 @@ mod tests {
         assert_eq!(read_document(&standalone).unwrap().inputs[0].name, "one");
         assert_eq!(read_document(&path).unwrap().inputs[0].name, "two");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Reads a local `.eivz` and prints the stream encoder / RTMP output
+    /// references. Run manually with:
+    /// `EIVIZ_DECODE_SESSION=/path/to/session.eivz cargo test -p eiviz-control
+    /// --lib -- --ignored session::file::tests::decode_local_session_file`.
+    #[test]
+    #[ignore]
+    fn decode_local_session_file() {
+        let path = std::env::var("EIVIZ_DECODE_SESSION")
+            .expect("set EIVIZ_DECODE_SESSION to a .eivz path");
+        let doc = read_document(&path).unwrap();
+        println!("streamEncoders:");
+        for encoder in &doc.stream_encoders {
+            println!(
+                "  id={} name={:?} sourceKind={:?} sourceId={} unitId={} audioUnitId={} encoder={:?} picture=({},{}) fps=({},{}) bitrate=({},{}) keyint={} threads={} buffer={} complexity={} ref={} cabac={} deblock={} bg={} aq={} sc={} delay={}",
+                encoder.id,
+                encoder.name,
+                encoder.source_kind,
+                encoder.source_id,
+                encoder.unit_id,
+                encoder.audio_unit_id,
+                encoder.encoder,
+                encoder.width,
+                encoder.height,
+                encoder.fps_num,
+                encoder.fps_den,
+                encoder.video_bitrate,
+                encoder.audio_bitrate,
+                encoder.keyint,
+                encoder.encoder_threads,
+                encoder.buffer_ms,
+                encoder.complexity,
+                encoder.ref_frames,
+                encoder.cabac,
+                encoder.deblock,
+                encoder.background_detection,
+                encoder.adaptive_quant,
+                encoder.scene_change,
+                encoder.audio_delay_ms
+            );
+        }
+        println!("outputs:");
+        for output in &doc.outputs {
+            println!(
+                "  id={} name={:?} transport={:?} enabled={} sourceKind={:?} sourceId={} unitId={} audioUnitId={} useGpu={} encoderRef={} rtmpUrl={:?} picture=({},{}) fps=({},{})",
+                output.id,
+                output.name,
+                output.transport,
+                output.enabled,
+                output.source_kind,
+                output.source_id,
+                output.unit_id,
+                output.audio_unit_id,
+                output.use_gpu,
+                output.stream_encoder_id,
+                output.rtmp_url,
+                output.width,
+                output.height,
+                output.fps_num,
+                output.fps_den
+            );
+        }
+        println!(
+            "validate_for_apply: {:?}",
+            crate::session::validate_for_apply(&doc)
+        );
     }
 }

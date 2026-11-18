@@ -35,6 +35,9 @@ pub struct Capabilities {
     pub replay_angle_limit: u32,
     pub replay_channel_limit: u32,
     pub replay_linked: bool,
+    /// Which stream encoder kinds can start on this build. Bits are
+    /// `1 << code`: 1 OpenH264, 2 VideoToolbox, 4 MediaFoundation.
+    pub stream_encoder_mask: u32,
 }
 
 impl Default for Capabilities {
@@ -75,6 +78,7 @@ impl Default for Capabilities {
             replay_angle_limit: 0,
             replay_channel_limit: 0,
             replay_linked: false,
+            stream_encoder_mask: 0,
         }
     }
 }

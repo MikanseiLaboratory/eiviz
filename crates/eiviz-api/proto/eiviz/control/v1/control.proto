@@ -242,6 +242,9 @@ message Capabilities {
   uint32 replay_angle_limit = 21;
   uint32 replay_channel_limit = 22;
   bool replay_linked = 23;
+  // Which stream encoder kinds can start on this build. Bits are 1 << code:
+  // 1 OpenH264, 2 VideoToolbox, 4 MediaFoundation.
+  uint32 stream_encoder_mask = 24;
 }
 
 message Snapshot {

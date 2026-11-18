@@ -189,7 +189,13 @@ public partial class App : Application
             ? MixerNative.FormatBgra
             : MixerNative.FormatUyvy;
         SessionStore.ReplaceRuntime(Session);
-        ApplyVmixApi();
+        // Whether the API is on belongs to the session; prefs only carries it from run to
+        // run. A bind failure used to leave "off" in prefs, and the listener then never
+        // came back on its own, so read the session's answer before starting it.
+        AppPrefs.Current.NativeApiEnabled = Session.Settings.NativeApiEnabledValue;
+        AppPrefs.Current.Save();
+        // A fresh mixer has nothing configured yet, whatever the last one was left with.
+        ApplyVmixApi(force: true);
         SessionStore.Publish(Session);
         // The mixer starts with no Replay at all, so a project that already has one needs
         // its settings and clip list pushed once. Without this the clips of an earlier
@@ -249,9 +255,20 @@ public partial class App : Application
         Backend = new DisconnectedRemoteBackend();
     }
 
-    internal static void ApplyVmixApi()
+    /// The API configuration the listeners were last configured with. Settings that do
+    /// not touch the API leave it alone: stopping and rebinding a listener drops every
+    /// client on it, and the port can still look taken while the old socket closes.
+    private static string? _apiRequest;
+
+    /// <param name="force">
+    /// The mixer was just created, so nothing is listening and the cache describes an
+    /// earlier mixer, not this one.
+    /// </param>
+    internal static void ApplyVmixApi(bool force = false)
     {
         var app = (App)Current;
+        if (!force && ApiRequest(app) == _apiRequest)
+            return;
         var settings = app.Session.Settings;
         var port = settings.VmixApiPort == 0 ? 8088u : settings.VmixApiPort;
         var user = settings.VmixApiUser ?? "";
@@ -259,6 +276,30 @@ public partial class App : Application
         ApplyHttpApi(app, settings, port, user, password);
         ApplyTcpApi(settings);
         ApplyNativeApi(app, settings);
+        // Keep what was actually configured, not what was asked for: a busy HTTP port is
+        // moved to the next free one, and asking for the moved port again is not a change.
+        _apiRequest = ApiRequest(app);
+    }
+
+    /// Everything the three listeners are configured from, so an apply that would not
+    /// change one of them can be skipped.
+    private static string ApiRequest(App app)
+    {
+        var settings = app.Session.Settings;
+        var prefs = AppPrefs.Current;
+        return string.Join(
+            '\u001f',
+            settings.VmixApiEnabledValue,
+            settings.VmixApiPort == 0 ? 8088u : settings.VmixApiPort,
+            settings.VmixApiUser ?? "",
+            settings.VmixApiPassword ?? "",
+            settings.VmixTcpEnabledValue,
+            prefs.NativeApiEnabled,
+            prefs.NativeApiPort == 0 ? 9400u : prefs.NativeApiPort,
+            prefs.NativeApiBind,
+            prefs.NativeApiRole,
+            prefs.ResolvedMediaDirectory,
+            CredentialStore.Load("listen") ?? "");
     }
 
     private static void ApplyHttpApi(App app, SessionSettings settings, uint port, string user, string password)
@@ -368,11 +409,10 @@ public partial class App : Application
             MixerNative.ThrowIfFailed(code, "Configure Protobuf WebSocket API");
 
         var owner = ListenOwner(MixerNative.WsListenOwnerText());
-        prefs.NativeApiEnabled = false;
-        prefs.Save();
-        var disable = MixerNative.WsConfigureOwned(0, bind, port, "", "", "");
-        if (disable != 0)
-            HostLog.Write("WARN", $"disable Protobuf WebSocket API after listen failure: {disable}");
+        // The configured state stays as it is. Switching the API off here would hide a
+        // port conflict - one the operator can clear, or that a restart clears by
+        // itself - behind a setting nobody changed, and the listener would never come
+        // back on its own.
         HostLog.Write(
             "WARN",
             owner is null
@@ -500,10 +540,11 @@ public partial class App : Application
                         input.PathOrAddress,
                         input.VideoLoop,
                         input.VideoStartsPlaying,
-                        input.FrameBufferFrames);
+                        input.FrameBufferFrames,
+                        decodePath: input.DecodePath);
                     break;
                 case InputKind.UVC when !network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                    MixerApply.StartUvc(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames);
+                    MixerApply.StartUvc(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames, decodePath: input.DecodePath);
                     break;
                 case InputKind.OMT when network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
                     MixerApply.ConnectOmt(

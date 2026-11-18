@@ -92,6 +92,7 @@ impl OmtReceiver {
                 } else {
                     CpuFormat::from_abi(FMT_BGRA).expect("BGRA")
                 };
+                let mut last_logged: Option<Instant> = None;
                 loop {
                     if stop_thread.load(Ordering::Relaxed) || crate::diag::is_fatal() {
                         return;
@@ -99,6 +100,7 @@ impl OmtReceiver {
                     let session = match connect_receiver(&address, config.clone()) {
                         Ok(session) => {
                             session_live_thread.store(true, Ordering::Relaxed);
+                            last_logged = None;
                             if let Ok(mut slot) = last_error_thread.lock() {
                                 slot.clear();
                             }
@@ -107,7 +109,18 @@ impl OmtReceiver {
                         Err(error) => {
                             session_live_thread.store(false, Ordering::Relaxed);
                             let message = format!("omt_connect id={source_id}: {error}");
-                            crate::diag::error(&message);
+                            // A source that is simply not up yet retries every second; logging
+                            // every attempt buries everything else in the log. Keep the first
+                            // failure and then at most one line a minute, and keep the newest
+                            // text in last_error for the UI.
+                            let now = Instant::now();
+                            let due = last_logged.map_or(true, |at| {
+                                now.duration_since(at) >= Duration::from_secs(60)
+                            });
+                            if due {
+                                crate::diag::error(&message);
+                                last_logged = Some(now);
+                            }
                             if let Ok(mut slot) = last_error_thread.lock() {
                                 *slot = message;
                             }

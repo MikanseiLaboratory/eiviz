@@ -48,6 +48,8 @@ pub trait MixerPort: Send {
     fn output_add(&mut self, spec: OutputApply) -> ControlResult<()>;
     fn output_remove(&mut self, id: u64) -> ControlResult<()>;
     fn stream_encoder_add(&mut self, spec: StreamEncoderApply) -> ControlResult<()>;
+    /// Encoder devices for the given kind code, as the module's JSON array.
+    fn stream_encoder_devices(&mut self, kind: u32) -> ControlResult<String>;
     fn stream_encoder_remove(&mut self, id: u64) -> ControlResult<()>;
     fn stream_destination_add(&mut self, spec: StreamDestinationApply) -> ControlResult<()>;
     fn stream_destination_remove(&mut self, encoder_id: u64, id: u64) -> ControlResult<()>;
@@ -352,6 +354,8 @@ pub struct VideoStartApply {
     pub id: u64,
     pub path: String,
     pub capture: bool,
+    /// Decoder choice; `Auto` keeps the current behaviour.
+    pub decode_path: crate::session::DecodePath,
     pub loop_playback: bool,
     pub playing: bool,
     pub width: u32,
@@ -425,8 +429,11 @@ pub struct StreamEncoderApply {
     pub encoder_threads: u32,
     /// `0` sends immediately.
     pub buffer_ms: u32,
-    /// `0` is OpenH264, `1` is VideoToolbox.
+    /// `0` is OpenH264, `1` is VideoToolbox, `2` is MediaFoundation.
     pub encoder: u32,
+    /// Encoder device the operator picked, by the name
+    /// `stream_encoder_devices` reported. Empty leaves the module's order.
+    pub encoder_device: String,
     pub complexity: u32,
     pub ref_frames: u32,
     pub cabac: bool,
@@ -610,6 +617,12 @@ impl MixerPort for NullMixer {
     fn output_remove(&mut self, _id: u64) -> ControlResult<()> {
         Ok(())
     }
+    /// Encoder devices for a kind, as the module's JSON array. The default
+    /// offers none, which leaves the module's own order in charge.
+    fn stream_encoder_devices(&mut self, _kind: u32) -> ControlResult<String> {
+        Ok("[]".to_string())
+    }
+
     fn stream_encoder_add(&mut self, _spec: StreamEncoderApply) -> ControlResult<()> {
         Ok(())
     }

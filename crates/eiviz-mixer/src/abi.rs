@@ -2,6 +2,13 @@ pub const OK: i32 = 0;
 pub const ERR_ALREADY_CREATED: i32 = 1;
 pub const ERR_NOT_CREATED: i32 = 2;
 pub const ERR_INVALID_ARGUMENT: i32 = 3;
+
+/// Decoder choice passed to `mixer_video_start_ex`.
+pub const DECODE_PATH_AUTO: u32 = 0;
+pub const DECODE_PATH_ACCELERATED: u32 = 1;
+pub const DECODE_PATH_CPU: u32 = 2;
+pub const DECODE_PATH_MEDIAFOUNDATION: u32 = 3;
+pub const DECODE_PATH_VULKAN: u32 = 4;
 pub const ERR_DEVICE: i32 = 4;
 pub const ERR_IO: i32 = 5;
 pub const ERR_BUFFER_TOO_SMALL: i32 = 6;
@@ -168,6 +175,13 @@ pub const OUT_RTMP: u32 = 3;
 #[allow(dead_code)]
 pub const QUOTA_UNLIMITED: u32 = u32::MAX;
 
+/// Availability bits for [`MixerCapabilities`]. Bit `n` is ON when encoder
+/// code `n` in `ProStreamConfig.encoder` can start a stream on this build:
+/// `1 << 0` OpenH264, `1 << 1` VideoToolbox, `1 << 2` MediaFoundation.
+pub const STREAM_ENCODER_BIT_OPENH264: u32 = 1;
+pub const STREAM_ENCODER_BIT_VIDEOTOOLBOX: u32 = 1 << 1;
+pub const STREAM_ENCODER_BIT_MEDIAFOUNDATION: u32 = 1 << 2;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MixerCapabilities {
@@ -187,6 +201,10 @@ pub struct MixerCapabilities {
     pub replay_angle_limit: u32,
     pub replay_channel_limit: u32,
     pub replay_linked: u32,
+    /// Available stream encoder kinds. A mixer without the Pro streaming
+    /// module reports nothing, and the host then offers only the encoder it
+    /// knows anyway.
+    pub stream_encoder_mask: u32,
 }
 
 #[repr(C)]

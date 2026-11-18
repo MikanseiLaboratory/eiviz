@@ -7,7 +7,12 @@ use crate::clock::{PlayoutCursor, Rate};
 use crate::output::release_send_cmd;
 use crate::upload::AudioPacket;
 
-const AUDIO_CAP: usize = 16;
+/// Audio blocks a sender may hold while it is busy with a frame. The stream output
+/// submits video and audio from one thread, so a keyframe or a stalled socket parks
+/// this many blocks - at 10 ms each, about a second - before the oldest is dropped.
+/// A 1080p keyframe in the in-box Media Foundation encoder takes long enough that
+/// half a second was not enough to keep the audio gaps out.
+const AUDIO_CAP: usize = 96;
 
 #[derive(Debug, Default)]
 pub struct OutputStats {
@@ -305,7 +310,10 @@ mod tests {
     #[test]
     fn audio_mailbox_is_bounded() {
         let box_ = AudioMailbox::new();
-        for i in 0..20 {
+        // Push past the cap by a known margin instead of a fixed count: the cap is the
+        // thing this test is about, so it must not be a second copy of the constant.
+        let overflow = 4i64;
+        for i in 0..AUDIO_CAP as i64 + overflow {
             box_.push(AudioPacket {
                 timestamp: i,
                 sample_rate: 48_000,
@@ -316,8 +324,8 @@ mod tests {
         }
         let drained = box_.drain();
         assert_eq!(drained.len(), AUDIO_CAP);
-        assert_eq!(drained[0].timestamp, 4);
-        assert_eq!(box_.drops(), 4);
+        assert_eq!(drained[0].timestamp, overflow);
+        assert_eq!(box_.drops(), overflow as u64);
     }
 
     #[test]

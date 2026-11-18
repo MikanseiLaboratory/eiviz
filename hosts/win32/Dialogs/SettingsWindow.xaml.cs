@@ -704,10 +704,12 @@ public partial class SettingsWindow : Window
             return;
         if (_nextOutputId < 100)
             _nextOutputId = 100;
+        // An encoding profile is a setting the operator creates in the Encoding
+        // list, not something a destination conjures up.
         if (StreamEncoders.Count == 0)
         {
-            StreamEncoders.Add(NewEncoder());
-            RebuildEncodes();
+            PlanGate.Tip(this, "msg.encodeNeeded");
+            return;
         }
         var unit = _session.Units.Count > 0 ? _session.Units[0].Id : 1;
         Outputs.Add(new OutputEntry
@@ -899,16 +901,66 @@ public partial class SettingsWindow : Window
             Paint();
         };
         var encoderBox = new ComboBox { IsEnabled = !locked };
+        // The mixer names which encoders this build can start: bit 1 OpenH264,
+        // 2 VideoToolbox, 4 MediaFoundation. Without a mask keep only OpenH264
+        // and the session's saved value, so an old document does not silently
+        // pick a different kind.
+        var encoderMask = PlanGate.TryStreamEncoderMask(out var maskBit) ? maskBit : 0;
+        var listed = new System.Collections.Generic.List<string> { "OpenH264" };
         encoderBox.Items.Add(new ComboBoxItem { Content = "OpenH264", Tag = "OpenH264" });
-        if (!string.IsNullOrEmpty(encoder.Encoder) && encoder.Encoder != "OpenH264")
-            encoderBox.Items.Add(new ComboBoxItem { Content = encoder.Encoder, Tag = encoder.Encoder });
+        if ((encoderMask & 2) != 0)
+        {
+            listed.Add("VideoToolbox");
+            encoderBox.Items.Add(new ComboBoxItem { Content = "VideoToolbox", Tag = "VideoToolbox" });
+        }
+        if ((encoderMask & 4) != 0)
+        {
+            listed.Add("MediaFoundation");
+            encoderBox.Items.Add(new ComboBoxItem { Content = "MediaFoundation", Tag = "MediaFoundation" });
+        }
+        if (!string.IsNullOrEmpty(encoder.Encoder) && !listed.Contains(encoder.Encoder))
+        {
+            var item = new ComboBoxItem { Content = encoder.Encoder, Tag = encoder.Encoder };
+            if (encoderMask != 0)
+            {
+                // The mixer can start other kinds; the saved one is not
+                // among them, which is why the stream never started.
+                item.ToolTip = Loc.T("msg.encoderUnavailable");
+                ToolTipService.SetShowOnDisabled(item, true);
+            }
+            encoderBox.Items.Add(item);
+        }
         SelectStringTag(encoderBox, string.IsNullOrEmpty(encoder.Encoder) ? "OpenH264" : encoder.Encoder);
+        // Which Media Foundation encoder to build. The mixer lists them in its
+        // own order (hardware first); an empty choice keeps the mixer's default.
+        var deviceBox = new ComboBox { IsEnabled = false, Margin = new Thickness(0, 4, 0, 0) };
+        var devices = (encoderMask & 4) != 0 ? MixerNative.StreamEncoderDevices(2) : [];
+        deviceBox.Items.Add(new ComboBoxItem { Content = Loc.T("settings.encoderDeviceAuto"), Tag = "" });
+        foreach (var device in devices)
+        {
+            var label = device.Hardware
+                ? Loc.Format("settings.encoderDeviceHardware", device.Name)
+                : device.Name;
+            deviceBox.Items.Add(new ComboBoxItem { Content = label, Tag = device.Name });
+        }
+        if (!string.IsNullOrEmpty(encoder.EncoderDevice)
+            && devices.TrueForAll(device => device.Name != encoder.EncoderDevice))
+            deviceBox.Items.Add(new ComboBoxItem { Content = encoder.EncoderDevice, Tag = encoder.EncoderDevice });
+        SelectStringTag(deviceBox, string.IsNullOrEmpty(encoder.EncoderDevice) ? "" : encoder.EncoderDevice);
+        deviceBox.SelectionChanged += (_, _) =>
+        {
+            if (!OnAirLock.Active && deviceBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
+                encoder.EncoderDevice = tag;
+            Paint();
+        };
         encoderBox.SelectionChanged += (_, _) =>
         {
             if (!OnAirLock.Active && encoderBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
                 encoder.Encoder = tag;
+            deviceBox.IsEnabled = !locked && encoder.Encoder == "MediaFoundation" && devices.Count > 0;
             Paint();
         };
+        deviceBox.IsEnabled = !locked && encoder.Encoder == "MediaFoundation" && devices.Count > 0;
         var complexity = new ComboBox { IsEnabled = !locked };
         complexity.Items.Add(new ComboBoxItem { Content = Loc.T("settings.complexityLow"), Tag = "0" });
         complexity.Items.Add(new ComboBoxItem { Content = Loc.T("settings.complexityMedium"), Tag = "1" });
@@ -974,7 +1026,13 @@ public partial class SettingsWindow : Window
         var sizePanel = Metered(Loc.T("settings.encodeSize"), Loc.T("settings.encodeSizeHint"), meters.Size, size);
         var fpsPanel = Metered(Loc.T("settings.encodeFps"), Loc.T("settings.encodeFpsHint"), meters.Fps, fps);
         var threadPanel = Metered(Loc.T("settings.threads"), Loc.T("settings.threadsHint"), meters.Threads, threads);
-        var encoderPanel = Metered(Loc.T("settings.encoder"), Loc.T("settings.encoderHint"), meters.Encoder, encoderBox);
+        var encoderStack = new StackPanel();
+        encoderStack.Children.Add(encoderBox);
+        encoderStack.Children.Add(deviceBox);
+        var encoderPanel = Metered(Loc.T("settings.encoder"), Loc.T("settings.encoderHint"), meters.Encoder, encoderStack);
+        encoderBox.ToolTip = Loc.T(encoder.Encoder == "MediaFoundation"
+            ? "settings.encoderHintMediaFoundation"
+            : "settings.encoderHintOpenH264");
         var complexityPanel = Metered(Loc.T("settings.complexity"), Loc.T("settings.complexityHint"), meters.Complexity, complexity);
         var refsPanel = Metered(Loc.T("settings.refFrames"), Loc.T("settings.refFramesHint"), meters.Refs, refs);
         var entropyPanel = Metered(Loc.T("settings.entropy"), Loc.T("settings.entropyHint"), meters.Entropy, entropy);

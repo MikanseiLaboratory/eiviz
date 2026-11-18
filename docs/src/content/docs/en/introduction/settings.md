@@ -80,6 +80,10 @@ One thread is assigned per output. Detail is in [NDI / OMT](/eiviz/en/features/o
 
 Windows applies when you press OK. macOS can also Apply per row.
 
+### Streaming (RTMP) diagnostics
+
+When a stream does not start and the log says `stream destination id=…: stream encoder is not running (…)`, first check that the session defines a stream encoder with that name and that the ingest URL and its secret are set. The text in parentheses is the result of the latest encoder add (for example `the last add failed: ...`). When the encoder add itself fails, an earlier `stream encoder id=…` line names the reason: picture size or frame rate, the plan limit, or a build without the Pro streaming module. The encoder picker lists OpenH264 plus Media Foundation on Windows (the OS encoder; NVIDIA/AMD/Intel hardware when the GPU driver provides it) and OpenH264 plus VideoToolbox on macOS. On Windows, choosing Media Foundation shows an **encoder device** field: it lists the Media Foundation H.264 encoders this machine offers (GPU-vendor hardware and the OS software encoder) and takes one by name. Automatic follows the mixer's order (NVIDIA, AMD, Intel, then others, then software). A device that cannot be built is an error at stream start; the stream never switches to another device on its own.
+
 ## Multiview
 
 <img src="/eiviz/images/en/introduction/settings/multiview.jpg" alt="Screenshot of the Multiview settings" style="max-width: 100%; height: auto;" />
@@ -174,3 +178,7 @@ Available on Professional and above, and only while the project has a Replay inp
 - The angle set cannot change while recording; stop the recording first.
 
 The remaining-time warning thresholds (warning, alert, and critical, in seconds) belong to the session document rather than this window; they default to 600, 300, and 60, and they set the severity the main window colours its Replay status line by.
+
+## OpenH264 (macOS)
+
+VideoToolbox is the default for macOS streaming, but a video or camera input that holds VideoToolbox can leave the stream at 0 fps. In that case set the encode profile's encoder to **OpenH264**. The streaming module loads `libopenh264` when a stream starts, so the host fetches the Apple Silicon build from Cisco (`ciscobinary.openh264.org`) on first use and stores it at `~/Library/Application Support/eiviz/openh264/libopenh264.dylib`. The Stream settings page shows the state and can fetch it again. `OPENH264_PATH`, when set, wins over the fetched copy. The binary is used under [Cisco's binary licence](http://www.openh264.org/BINARY_LICENSE.txt).

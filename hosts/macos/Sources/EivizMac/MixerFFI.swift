@@ -241,9 +241,12 @@ enum MixerFFI {
     }
 
     static func streamEncoderAdd(_ encoder: StreamEncoderEntry, sourceKind: UInt32, sourceId: UInt64) -> Int32 {
-        let threads = encoder.encoderThreads == 0
-            ? UInt32(max(1, min(4, ProcessInfo.processInfo.activeProcessorCount)))
-            : encoder.encoderThreads
+        // Pass "automatic" through as 0. VideoToolbox only accepts the automatic
+        // thread count (it picks its own workers) and refuses a pinned one, so
+        // resolving 0 here made every default VideoToolbox stream fail with
+        // "the selected preset needs OpenH264". The module resolves 0 for the
+        // OpenH264 path itself.
+        let threads = encoder.encoderThreads
         return mixer_stream_encoder_add(
             encoder.id,
             sourceKind,
@@ -260,7 +263,7 @@ enum MixerFFI {
             encoder.videoOnly ? 1 : 0,
             threads,
             encoder.bufferMs,
-            encoder.encoder == "OpenH264" ? 0 : 1,
+            encoderCode(encoder.encoder),
             encoder.complexity,
             encoder.refFrames,
             encoder.cabac ? 1 : 0,
@@ -268,8 +271,19 @@ enum MixerFFI {
             encoder.backgroundDetection ? 1 : 0,
             encoder.adaptiveQuant ? 1 : 0,
             encoder.sceneChange ? 1 : 0,
-            encoder.audioDelayMs
+            encoder.audioDelayMs,
+            encoder.encoderDevice
         )
+    }
+
+    /// The module's StreamEncoder codes: 0 OpenH264, 1 VideoToolbox,
+    /// 2 MediaFoundation.
+    private static func encoderCode(_ name: String) -> UInt32 {
+        switch name {
+        case "VideoToolbox": 1
+        case "MediaFoundation": 2
+        default: 0
+        }
     }
 
     static func streamDestinationAdd(encoderId: UInt64, destinationId: UInt64, url: String, secretRef: String) -> Int32 {
@@ -280,8 +294,97 @@ enum MixerFFI {
         }
     }
 
+    /// Decoder choice for a video file or camera, matching the session's `DecodePath`.
+    enum VideoDecodePath: UInt32 {
+        case auto = 0
+        case accelerated = 1
+        case cpu = 2
+        case mediaFoundation = 3
+        case vulkanVideo = 4
+    }
+
+    static func videoStart(
+        id: UInt64,
+        path: String,
+        capture: UInt32,
+        format: UInt32,
+        width: UInt32,
+        height: UInt32,
+        fpsNum: UInt32,
+        fpsDen: UInt32,
+        frameBuffer: UInt32,
+        decodePath: VideoDecodePath
+    ) -> Int32 {
+        path.withCString { cstr in
+            mixer_video_start_ex(
+                id,
+                cstr,
+                capture,
+                format,
+                width,
+                height,
+                fpsNum,
+                fpsDen,
+                frameBuffer,
+                decodePath.rawValue
+            )
+        }
+    }
+
     static func streamEncoderRemove(_ encoderId: UInt64) -> Int32 {
         mixer_stream_encoder_remove(encoderId)
+    }
+
+    static func streamDestinationRemove(encoderId: UInt64, destinationId: UInt64) -> Int32 {
+        mixer_stream_destination_remove(encoderId, destinationId)
+    }
+
+    struct StreamDestinationStats: Equatable {
+        var connected: Bool
+        var frames: UInt64
+        var dropped: UInt64
+        var bitrate: UInt32
+        var lagMs: UInt32
+        var fpsMilli: UInt32
+        var message: String
+    }
+
+    /// Live state of one RTMP destination, for the strip beside the deck.
+    static func streamDestinationStats(encoderId: UInt64, destinationId: UInt64) -> StreamDestinationStats? {
+        var connected: UInt32 = 0
+        var frames: UInt64 = 0
+        var dropped: UInt64 = 0
+        var bitrate: UInt32 = 0
+        var threads: UInt32 = 0
+        var lag: UInt32 = 0
+        var fps: UInt32 = 0
+        var message = [UInt8](repeating: 0, count: 256)
+        let code = message.withUnsafeMutableBufferPointer { buffer in
+            mixer_stream_destination_stats(
+                encoderId,
+                destinationId,
+                &connected,
+                &frames,
+                &dropped,
+                &bitrate,
+                &threads,
+                &lag,
+                &fps,
+                buffer.baseAddress,
+                buffer.count
+            )
+        }
+        guard code == EIVIZ_OK else { return nil }
+        let text = String(bytes: message.prefix { $0 != 0 }, encoding: .utf8) ?? ""
+        return StreamDestinationStats(
+            connected: connected != 0,
+            frames: frames,
+            dropped: dropped,
+            bitrate: bitrate,
+            lagMs: lag,
+            fpsMilli: fps,
+            message: text
+        )
     }
 
     static func replayCapacity(path: String, width: UInt32, height: UInt32) -> (ReplayCapacity?, String) {

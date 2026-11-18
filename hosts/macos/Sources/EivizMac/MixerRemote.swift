@@ -3,7 +3,27 @@ import Foundation
 import Security
 
 enum KeychainStore {
+    /// RTMP stream keys live in a 0600 file instead of the Keychain.
+    ///
+    /// The Keychain ties an item to the app that created it, and an ad-hoc signed
+    /// development build is a different app after every rebuild. Reading a key saved
+    /// by an earlier build raises "eiviz wants to use confidential information stored
+    /// in eiviz.api" and blocks the stream on the login password. The Windows host
+    /// keeps stream keys in a per-user credential store for the same reason; the file
+    /// here is readable only by this user.
+    private static let streamKeyPrefix = "rtmp/"
+
     static func save(account: String, token: String) {
+        if account.hasPrefix(streamKeyPrefix) {
+            var keys = streamKeys()
+            if token.isEmpty {
+                keys[account] = nil
+            } else {
+                keys[account] = token
+            }
+            writeStreamKeys(keys)
+            return
+        }
         let data = Data(token.utf8)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -17,7 +37,30 @@ enum KeychainStore {
         SecItemAdd(add as CFDictionary, nil)
     }
 
+    /// Whether a secret exists, without reading it back.
+    ///
+    /// Reading the value makes macOS ask for the login keychain password because
+    /// a development build is not in the item's access list; the attributes are
+    /// enough to tell the operator that a key is already stored.
+    static func exists(account: String) -> Bool {
+        if account.hasPrefix(streamKeyPrefix) {
+            return streamKeys()[account] != nil
+        }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "eiviz.api",
+            kSecAttrAccount as String: account,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: CFTypeRef?
+        return SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess
+    }
+
     static func load(account: String) -> String {
+        if account.hasPrefix(streamKeyPrefix) {
+            return streamKeys()[account] ?? ""
+        }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "eiviz.api",
@@ -29,6 +72,33 @@ enum KeychainStore {
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         guard status == errSecSuccess, let data = item as? Data else { return "" }
         return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    private static func streamKeysURL() -> URL? {
+        guard let base = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else { return nil }
+        let directory = base.appendingPathComponent("eiviz", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("stream-keys.json")
+    }
+
+    private static func streamKeys() -> [String: String] {
+        guard let url = streamKeysURL(),
+              let data = try? Data(contentsOf: url),
+              let keys = try? JSONDecoder().decode([String: String].self, from: data)
+        else { return [:] }
+        return keys
+    }
+
+    private static func writeStreamKeys(_ keys: [String: String]) {
+        guard let url = streamKeysURL(), let data = try? JSONEncoder().encode(keys) else { return }
+        try? data.write(to: url, options: [.atomic])
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: url.path
+        )
     }
 }
 

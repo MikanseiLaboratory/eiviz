@@ -68,6 +68,11 @@ pub enum ReconcileOp {
         id: u64,
     },
     AddStreamEncoder(StreamEncoderApply),
+    /// Stops the live encoder for `id` when one is running, and keeps the profile
+    /// row in the document. Used when the document stops naming a profile.
+    StopStreamEncoderIfLive {
+        id: u64,
+    },
     RemoveStreamEncoder {
         id: u64,
     },
@@ -75,6 +80,13 @@ pub enum ReconcileOp {
     RemoveStreamDestination {
         encoder_id: u64,
         id: u64,
+    },
+    /// A documented destination names a stream encoder the document never
+    /// defines. Attaching it would fail on every reconcile, so report it as a
+    /// final state instead of a retriable one.
+    FailOutput {
+        id: u64,
+        message: String,
     },
     AudioInput {
         id: u64,
@@ -641,6 +653,7 @@ fn apply_live<P: crate::port::MixerPort + ?Sized>(
             spec.id,
         ),
         ReconcileOp::RemoveStreamEncoder { id } => port.stream_encoder_remove(*id),
+        ReconcileOp::StopStreamEncoderIfLive { id } => port.stream_encoder_remove(*id),
         ReconcileOp::AddStreamDestination(spec) => accept_io(
             port.stream_destination_add(spec.clone()),
             statuses,
@@ -649,6 +662,10 @@ fn apply_live<P: crate::port::MixerPort + ?Sized>(
         ),
         ReconcileOp::RemoveStreamDestination { encoder_id, id } => {
             port.stream_destination_remove(*encoder_id, *id)
+        }
+        ReconcileOp::FailOutput { id, message } => {
+            statuses.push(failed(crate::ids::ResourceKind::Output, *id, message));
+            Ok(())
         }
         ReconcileOp::AudioInput {
             id,
@@ -820,6 +837,7 @@ fn input_ops(input: &InputDto) -> Vec<ReconcileOp> {
                 id: input.id,
                 path: input.path_or_address.clone().unwrap_or_default(),
                 capture: false,
+                decode_path: input.decode_path,
                 loop_playback: input.video_loop,
                 playing: matches!(
                     input.video_play_when,
@@ -837,6 +855,7 @@ fn input_ops(input: &InputDto) -> Vec<ReconcileOp> {
             id: input.id,
             path: input.path_or_address.clone().unwrap_or_default(),
             capture: true,
+            decode_path: input.decode_path,
             loop_playback: input.video_loop,
             playing: matches!(
                 input.video_play_when,
@@ -1226,6 +1245,7 @@ fn input_desired_equal(a: &InputDto, b: &InputDto) -> bool {
         && a.color_b == b.color_b
         && a.scroll == b.scroll
         && a.use_gpu == b.use_gpu
+        && a.decode_path == b.decode_path
         && a.frame_buffer_frames == b.frame_buffer_frames
         && a.mix_target_id == b.mix_target_id
         && a.mix_source == b.mix_source
@@ -1274,6 +1294,7 @@ fn encoder_equal(a: &StreamEncoderDto, b: &StreamEncoderDto) -> bool {
         && a.encoder_threads == b.encoder_threads
         && a.buffer_ms == b.buffer_ms
         && a.encoder == b.encoder
+        && a.encoder_device == b.encoder_device
         && a.complexity == b.complexity
         && a.ref_frames == b.ref_frames
         && a.cabac == b.cabac
@@ -1324,6 +1345,20 @@ fn diff_streams(previous: Option<&Document>, next: &Document, ops: &mut Vec<Reco
             }
             continue;
         }
+        // An encoding profile may exist with no destination yet (#303). The
+        // mixer never started it, so attaching a destination now has to start
+        // the encoder in this same pass, or the attach fails with
+        // "stream encoder is not running" and waits for a second publish.
+        let was_running = prev_outputs
+            .iter()
+            .any(|output| rtmp_destination(output) && output.stream_encoder_id == encoder.id);
+        if !was_running {
+            ops.push(ReconcileOp::AddStreamEncoder(stream_encoder_apply(encoder)));
+            for dest in &dests {
+                ops.push(ReconcileOp::AddStreamDestination(destination_apply(dest)));
+            }
+            continue;
+        }
         for dest in &dests {
             let prev_dest = prev_outputs.iter().find(|item| item.id == dest.id);
             if prev_dest.is_some_and(|item| rtmp_destination(item) && destination_equal(item, dest))
@@ -1352,7 +1387,15 @@ fn diff_streams(previous: Option<&Document>, next: &Document, ops: &mut Vec<Reco
     }
     for prev in prev_encoders {
         if !seen.contains(&prev.id) {
-            remove_stream(prev_outputs, prev.id, ops);
+            // The document no longer names this profile, but the row is an
+            // operator asset (created on the Stream page, possibly between two
+            // destinations). Only its running encoder is stopped.
+            let was_running = prev_outputs
+                .iter()
+                .any(|output| rtmp_destination(output) && output.stream_encoder_id == prev.id);
+            if was_running {
+                ops.push(ReconcileOp::StopStreamEncoderIfLive { id: prev.id });
+            }
         }
     }
     for output in &next.outputs {
@@ -1362,7 +1405,32 @@ fn diff_streams(previous: Option<&Document>, next: &Document, ops: &mut Vec<Reco
                 .iter()
                 .any(|encoder| encoder.id == output.stream_encoder_id)
         {
-            ops.push(ReconcileOp::AddStreamDestination(destination_apply(output)));
+            // The mixer has no such encoder and nothing ever retries the
+            // dangling reference, so report it as a final failure instead of
+            // attaching a destination that keeps failing on every publish.
+            // An earlier document that already carried the same dangling
+            // reference already reported it.
+            let previously_dangling = previous
+                .map(|prev| {
+                    prev.outputs.iter().any(|prev_output| {
+                        rtmp_destination(prev_output)
+                            && prev_output.id == output.id
+                            && prev_output.stream_encoder_id == output.stream_encoder_id
+                            && !prev.stream_encoders.iter().any(|prev_encoder| {
+                                prev_encoder.id == prev_output.stream_encoder_id
+                            })
+                    })
+                })
+                .unwrap_or(false);
+            if !previously_dangling {
+                ops.push(ReconcileOp::FailOutput {
+                    id: output.id,
+                    message: format!(
+                        "output {} needs stream encoder {}, which the session does not define",
+                        output.id, output.stream_encoder_id
+                    ),
+                });
+            }
         }
     }
 }
@@ -1420,13 +1488,17 @@ fn stream_encoder_apply(encoder: &StreamEncoderDto) -> StreamEncoderApply {
         buffer_ms: encoder.buffer_ms,
         encoder: match encoder.encoder.as_str() {
             "" | "OpenH264" => 0,
-            // `STREAM_ENCODER_VIDEOTOOLBOX` in eiviz-pro-api. The code goes through
-            // unchanged: the module refuses one it cannot build (VideoToolbox is
-            // macOS only), so a mismatch is an error at stream start rather than a
-            // quietly different encoder doing the work.
+            // `STREAM_ENCODER_VIDEOTOOLBOX` / `STREAM_ENCODER_MEDIAFOUNDATION`
+            // in eiviz-pro-api. The code goes through unchanged: the module
+            // refuses one it cannot build (VideoToolbox is macOS only,
+            // MediaFoundation is Windows only), so a mismatch is an error at
+            // stream start rather than a quietly different encoder doing the
+            // work.
             "VideoToolbox" => 1,
+            "MediaFoundation" => 2,
             _ => u32::MAX,
         },
+        encoder_device: encoder.encoder_device.clone(),
         complexity: encoder.complexity,
         ref_frames: encoder.ref_frames,
         cabac: encoder.cabac,
@@ -1440,7 +1512,9 @@ fn stream_encoder_apply(encoder: &StreamEncoderDto) -> StreamEncoderApply {
 
 /// A failed attach is otherwise skipped forever: the next document compares equal
 /// and `plan` emits nothing. Re-issue destination adds, and rebuild an encoder
-/// whose last attempt never started.
+/// whose last attempt never started — either because its own row is not ready,
+/// whatever the reason it recorded, or because a destination still reports a
+/// missing encoder.
 pub fn reinforce_streams(
     previous: &[crate::live::ResourceStatus],
     next: &Document,
@@ -1465,7 +1539,7 @@ pub fn reinforce_streams(
         if dests.is_empty() {
             continue;
         }
-        let encoder_down = trouble(encoder.id).is_some_and(needs_encoder)
+        let encoder_down = trouble(encoder.id).is_some()
             || dests
                 .iter()
                 .any(|dest| trouble(dest.id).is_some_and(needs_encoder));
@@ -1892,6 +1966,154 @@ mod tests {
             ops.iter().any(|op| {
                 matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102)
             })
+        );
+    }
+
+    #[test]
+    fn attaching_a_destination_starts_the_idle_profile_in_the_same_publish() {
+        // The session holds a profile with no destination: nothing is running.
+        let idle = Document {
+            stream_encoders: Vec::new(),
+            outputs: Vec::new(),
+            ..rtmp_doc("youtube", "rtmp://example/live")
+        };
+        let live = rtmp_doc("youtube", "rtmp://example/live");
+        let mut prev = idle.clone();
+        prev.stream_encoders = live.stream_encoders.clone();
+        let ops = plan(Some(&prev), &live);
+        let encoder = ops
+            .iter()
+            .position(|op| matches!(op, ReconcileOp::AddStreamEncoder(spec) if spec.id == 1));
+        let destination = ops
+            .iter()
+            .position(|op| matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102));
+        assert!(encoder.is_some(), "{ops:?}");
+        assert!(destination.is_some(), "{ops:?}");
+        assert!(
+            encoder < destination,
+            "the encoder starts before its destination attaches: {ops:?}"
+        );
+    }
+
+    #[test]
+    fn picking_a_different_encoder_device_rebuilds_the_encoder() {
+        let prev = rtmp_doc("youtube", "rtmp://example/live");
+        let mut next = rtmp_doc("youtube", "rtmp://example/live");
+        next.stream_encoders[0].encoder = "MediaFoundation".into();
+        next.stream_encoders[0].encoder_device = "NVIDIA NVENC H.264 Encoder".into();
+        let ops = plan(Some(&prev), &next);
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::RemoveStreamEncoder { id: 1 })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                ReconcileOp::AddStreamEncoder(spec)
+                    if spec.encoder == 2
+                        && spec.encoder_device == "NVIDIA NVENC H.264 Encoder"
+            )),
+            "{ops:?}"
+        );
+        // The same device again keeps the running encoder.
+        let ops = plan(Some(&next), &next);
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::RemoveStreamEncoder { .. })),
+            "{ops:?}"
+        );
+    }
+
+    #[test]
+    fn an_encoder_failure_for_any_reason_is_rebuilt_on_the_next_publish() {
+        let doc = rtmp_doc("youtube", "rtmp://example/live");
+        let mut ops = plan(Some(&doc), &doc);
+        let failed = vec![crate::live::ResourceStatus {
+            kind: crate::ids::ResourceKind::Output,
+            id: 1,
+            phase: crate::live::ResourcePhase::Retrying,
+            message: "stream encoder needs both sides of the picture size and frame rate: 1920x0 at 60x0; fill both or leave both at auto".into(),
+        }];
+        reinforce_streams(&failed, &doc, &mut ops);
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::RemoveStreamEncoder { id: 1 })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::AddStreamEncoder(spec) if spec.id == 1)),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102)
+            }),
+            "{ops:?}"
+        );
+    }
+
+    #[test]
+    fn a_mediafoundation_encoder_maps_to_the_mediafoundation_code() {
+        let mut doc = rtmp_doc("youtube", "rtmp://example/live");
+        doc.stream_encoders[0].encoder = "MediaFoundation".into();
+        let ops = plan(None, &doc);
+        assert!(
+            ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamEncoder(spec) if spec.encoder == 2)
+            }),
+            "{ops:?}"
+        );
+    }
+
+    #[test]
+    fn a_destination_without_an_encoder_fails_once_instead_of_retrying() {
+        let mut doc = rtmp_doc("youtube", "rtmp://example/live");
+        doc.outputs[0].stream_encoder_id = 9;
+        let ops = plan(None, &doc);
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::FailOutput { id: 102, .. })),
+            "{ops:?}"
+        );
+        assert!(
+            !ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102)
+            }),
+            "{ops:?}"
+        );
+        let ops = plan(Some(&doc), &doc);
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::FailOutput { id: 102, .. })),
+            "{ops:?}"
+        );
+        assert!(
+            !ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamDestination(spec) if spec.id == 102)
+            }),
+            "{ops:?}"
+        );
+        // Naming a defined encoder again restores the ordinary attach, and the
+        // stale reference is removed first so the mixer never holds both.
+        let ops = plan(Some(&doc), &rtmp_doc("youtube", "rtmp://example/live"));
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, ReconcileOp::RemoveStreamDestination { id: 102, .. })),
+            "{ops:?}"
+        );
+        assert!(
+            ops.iter().any(|op| {
+                matches!(op, ReconcileOp::AddStreamDestination(spec)
+                        if spec.id == 102 && spec.encoder_id == 1)
+            }),
+            "{ops:?}"
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::FailOutput { .. })),
+            "{ops:?}"
         );
     }
 

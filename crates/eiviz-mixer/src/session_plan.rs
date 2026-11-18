@@ -137,6 +137,7 @@ mod tests {
             replay_angle_limit: 0,
             replay_channel_limit: 0,
             replay_linked: 0,
+            stream_encoder_mask: 1,
         }
     }
 

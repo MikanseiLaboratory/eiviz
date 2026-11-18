@@ -679,6 +679,25 @@ pub struct InputDto {
     /// DeckLink display mode id. The device id is `path_or_address`.
     #[serde(default)]
     pub decklink_mode: String,
+    /// Decoder choice for video files and UVC cameras. Ignored by other kinds.
+    #[serde(default)]
+    pub decode_path: DecodePath,
+}
+
+// Which decoder an input may use for video files and cameras. `Auto` keeps the best
+// path the OS offers; `Accelerated` requires the GPU path (VideoToolbox on macOS,
+// Media Foundation on Windows); `Cpu` keeps the frames on the CPU; the Windows-only
+// kinds name a path explicitly and behave like `Accelerated` on macOS.
+session_string_enum! {
+    #[derive(Default)]
+    pub enum DecodePath {
+        #[default]
+        Auto,
+        Accelerated,
+        Cpu,
+        MediaFoundation,
+        VulkanVideo,
+    }
 }
 
 session_string_enum! {
@@ -1322,10 +1341,15 @@ pub struct StreamEncoderDto {
     /// milliseconds of encoded media, then releases it at 1x.
     #[serde(default)]
     pub buffer_ms: u32,
-    /// `OpenH264` is linked everywhere; `VideoToolbox` on the macOS module. Empty
-    /// is the same encoder as `OpenH264`.
+    /// `OpenH264` is linked everywhere; `VideoToolbox` on the macOS module;
+    /// `MediaFoundation` on the Windows module. Empty is the same encoder as
+    /// `OpenH264`.
     #[serde(default = "default_openh264")]
     pub encoder: String,
+    /// Encoder device the operator picked, by the name the mixer reports.
+    /// Empty uses the module's own order.
+    #[serde(default)]
+    pub encoder_device: String,
     /// `0` low, `1` medium, `2` high.
     #[serde(default)]
     pub complexity: u32,

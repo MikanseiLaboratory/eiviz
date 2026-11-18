@@ -82,8 +82,9 @@ pub use abi::{
     OutputRuntimeStats, OverlayDesc, Rect, SAVE_FLAG_MULTIVIEW, SAVE_NOT_ON_PREVIEW_OR_PROGRAM,
     SCENE_BASE, SCENE_SEQ_PLAY, SCENE_SEQ_REVERSE, SCENE_SEQ_STOP, SRC_BARS, SRC_BLACK, SRC_BLUE,
     SRC_COLOR, SRC_KIND_INPUT, SRC_KIND_MU_MULTIVIEW, SRC_KIND_MU_PREVIEW, SRC_KIND_MU_PROGRAM,
-    SRC_KIND_SCENE, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR, TRANSITION_BLINDS,
-    TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
+    SRC_KIND_SCENE, STREAM_ENCODER_BIT_MEDIAFOUNDATION, STREAM_ENCODER_BIT_OPENH264,
+    STREAM_ENCODER_BIT_VIDEOTOOLBOX, SourceUsage, TRANSITION_ADDITIVE, TRANSITION_BARN_DOOR,
+    TRANSITION_BLINDS, TRANSITION_BLOOM, TRANSITION_CLOCK, TRANSITION_CROSS_ZOOM, TRANSITION_CUBE,
     TRANSITION_CUBE_ZOOM, TRANSITION_CUSTOM, TRANSITION_CUT, TRANSITION_DATAMOSH,
     TRANSITION_DIAMOND, TRANSITION_DIP, TRANSITION_DIR_DOWN, TRANSITION_DIR_LEFT,
     TRANSITION_DIR_RIGHT, TRANSITION_DIR_UP, TRANSITION_DISPLACE, TRANSITION_FADE,
@@ -463,6 +464,18 @@ pub(crate) enum OutputHandle {
 }
 
 impl OutputHandle {
+    /// Names the transport in send-error lines. Every output shares the same
+    /// send loop, so a stream failure used to be logged as an OMT one.
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Omt(_) => "omt",
+            #[cfg(any(windows, target_os = "macos"))]
+            Self::Ndi(_) => "ndi",
+            Self::Pro(_) => "output",
+            Self::Stream(_) => "stream",
+        }
+    }
+
     fn pump(&mut self) -> Result<bool, String> {
         match self {
             Self::Omt(sender) => {
@@ -3375,7 +3388,41 @@ pub unsafe extern "C" fn mixer_video_start(
     fps_den: u32,
     frame_buffer_frames: u32,
 ) -> i32 {
-    ffi_guard("mixer_video_start", ERR_DEVICE, || unsafe {
+    unsafe {
+        mixer_video_start_ex(
+            id,
+            path,
+            capture,
+            format,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            frame_buffer_frames,
+            crate::abi::DECODE_PATH_AUTO,
+        )
+    }
+}
+
+/// Starts a video file or camera with an explicit decoder choice.
+///
+/// `decode_path` is `0` auto, `1` accelerated, `2` CPU, `3` Media Foundation,
+/// `4` Vulkan Video. Kinds this OS cannot provide fall back to the automatic path
+/// except for an explicit CPU request, which always stays on the CPU.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_video_start_ex(
+    id: u64,
+    path: *const c_char,
+    capture: u32,
+    format: u32,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+    frame_buffer_frames: u32,
+    decode_path: u32,
+) -> i32 {
+    ffi_guard("mixer_video_start_ex", ERR_DEVICE, || unsafe {
         mixer_video_start_ffi(
             id,
             path,
@@ -3386,6 +3433,7 @@ pub unsafe extern "C" fn mixer_video_start(
             fps_num,
             fps_den,
             frame_buffer_frames,
+            decode_path,
         )
     })
 }
@@ -3400,6 +3448,7 @@ unsafe fn mixer_video_start_ffi(
     fps_num: u32,
     fps_den: u32,
     frame_buffer_frames: u32,
+    decode_path: u32,
 ) -> i32 {
     if path.is_null() {
         return ERR_INVALID_ARGUMENT;
@@ -3457,6 +3506,9 @@ unsafe fn mixer_video_start_ffi(
             Ok(device) => device,
             Err(code) => return code,
         };
+        // Only an explicit CPU request turns the VideoToolbox path off; every other
+        // choice (including the Windows-only kinds) keeps macOS on VideoToolbox.
+        let hardware = decode_path != crate::abi::DECODE_PATH_CPU;
         return match VideoPump::start(
             id,
             path,
@@ -3468,6 +3520,7 @@ unsafe fn mixer_video_start_ffi(
             uploads,
             depth,
             Some(gpu_device),
+            hardware,
         ) {
             Ok(pump) => insert_video(id, pump),
             Err(error) => report_io(error),
@@ -3505,6 +3558,39 @@ unsafe fn mixer_video_start_ffi(
             };
         drop(previous_recv);
         drop(previous_video);
+        // An explicit decoder choice must not silently become a different one: CPU
+        // always stays on the CPU, Media Foundation and Vulkan Video refuse when the
+        // machine cannot provide them, and the automatic kinds keep the best path.
+        let (gpu, vulkan) = match decode_path {
+            crate::abi::DECODE_PATH_CPU => (None, None),
+            crate::abi::DECODE_PATH_MEDIAFOUNDATION => {
+                if gpu.is_none() {
+                    return with_mixer(|mixer| {
+                        set_error(
+                            &mixer.telemetry,
+                            "Media Foundation decode was requested but this machine has no GPU video device",
+                        );
+                        ERR_IO
+                    })
+                    .unwrap_or(ERR_IO);
+                }
+                (gpu, None)
+            }
+            crate::abi::DECODE_PATH_VULKAN => {
+                if vulkan.is_none() {
+                    return with_mixer(|mixer| {
+                        set_error(
+                            &mixer.telemetry,
+                            "Vulkan Video decode was requested but this machine has no Vulkan Video device",
+                        );
+                        ERR_IO
+                    })
+                    .unwrap_or(ERR_IO);
+                }
+                (None, vulkan)
+            }
+            _ => (gpu, vulkan),
+        };
         return match VideoPump::start(
             id,
             path,
@@ -4377,6 +4463,7 @@ pub unsafe extern "C" fn mixer_stream_encoder_add(
     adaptive_quant: u32,
     scene_change: u32,
     audio_delay_ms: u32,
+    encoder_device: *const c_char,
 ) -> i32 {
     ffi_guard("mixer_stream_encoder_add", ERR_DEVICE, || {
         stream_encoder_add_ffi(
@@ -4404,7 +4491,46 @@ pub unsafe extern "C" fn mixer_stream_encoder_add(
             adaptive_quant,
             scene_change,
             audio_delay_ms,
+            crate::pro::cstr(encoder_device).map(str::to_string),
         )
+    })
+}
+
+/// Last stream-encoder add result per encoder id. A destination attach reports
+/// it next to "stream encoder is not running", so the operator sees why the
+/// encoder is absent instead of scrolling for an earlier diagnostic.
+enum StreamEncoderState {
+    Running,
+    Failed(String),
+}
+
+static STREAM_ENCODER_STATES: OnceLock<Mutex<HashMap<u64, StreamEncoderState>>> = OnceLock::new();
+
+fn stream_encoder_states() -> &'static Mutex<HashMap<u64, StreamEncoderState>> {
+    STREAM_ENCODER_STATES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn record_stream_encoder_result(encoder_id: u64, state: StreamEncoderState) {
+    if let Ok(mut states) = stream_encoder_states().lock() {
+        states.insert(encoder_id, state);
+    }
+}
+
+/// Human note for a destination attach that found no running encoder.
+fn stream_encoder_note(encoder_id: u64) -> String {
+    stream_encoder_note_or(encoder_id).unwrap_or_else(|| "no add was ever attempted".to_string())
+}
+
+/// Human note for a destination attach that found no running encoder, when a
+/// previous add is known.
+fn stream_encoder_note_or(encoder_id: u64) -> Option<String> {
+    let states = stream_encoder_states();
+    let states = states.lock().unwrap_or_else(|poison| poison.into_inner());
+    states.get(&encoder_id).map(|state| match state {
+        StreamEncoderState::Running => {
+            "the last add succeeded; it has since been removed or stopped".to_string()
+        }
+        StreamEncoderState::Failed(message) => format!("the last add failed: {message}"),
     })
 }
 
@@ -4433,35 +4559,54 @@ fn stream_encoder_add_ffi(
     adaptive_quant: u32,
     scene_change: u32,
     audio_delay_ms: u32,
+    encoder_device: Option<String>,
 ) -> i32 {
     if (width == 0) != (height == 0) || (fps_num == 0) != (fps_den == 0) {
+        // This used to be a silent reject; the destination attach then reported
+        // only "stream encoder is not running" and the loop was invisible.
+        let message = format!(
+            "stream encoder needs both sides of the picture size and frame rate: {width}x{height} at {fps_num}/{fps_den}; fill both or leave both at auto"
+        );
+        crate::diag::error(&format!("stream encoder id={encoder_id}: {message}"));
+        record_stream_encoder_result(encoder_id, StreamEncoderState::Failed(message.clone()));
+        let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
         return ERR_INVALID_ARGUMENT;
     }
     let extras = crate::pro::OutputExtras::default();
     if let Some(code) = gate_pro_output(
         encoder_id, OUT_RTMP, unit_id, width, height, fps_num, fps_den, &extras,
     ) {
+        // The gate put its reason into the telemetry. Keep it for the next
+        // destination attach, which otherwise reports only "not running".
+        let message = with_mixer(|mixer| mixer.telemetry.lock_or_recover().last_error.clone())
+            .unwrap_or_else(|_| "the stream encoder was refused".to_string());
+        record_stream_encoder_result(encoder_id, StreamEncoderState::Failed(message));
         return code;
     }
     let (width, height, fps_num, fps_den) = picture_of(unit_id, width, height, fps_num, fps_den);
     let Some(backend) = crate::pro::module().streaming() else {
         let message = "RTMP is not linked in this build";
         crate::diag::error(&format!("stream encoder id={encoder_id}: {message}"));
+        record_stream_encoder_result(encoder_id, StreamEncoderState::Failed(message.into()));
         let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
         return ERR_IO;
     };
-    if encoder > eiviz_pro_api::STREAM_ENCODER_VIDEOTOOLBOX {
-        let message = "video encoder is not available";
+    if encoder > eiviz_pro_api::STREAM_ENCODER_MEDIAFOUNDATION {
+        let message = format!("video encoder {encoder} is not available in this build");
         crate::diag::error(&format!("stream encoder id={encoder_id}: {message}"));
+        record_stream_encoder_result(encoder_id, StreamEncoderState::Failed(message.clone()));
         let _ = with_mixer(|mixer| set_error(&mixer.telemetry, message));
         return ERR_INVALID_ARGUMENT;
     }
     let encoder_kind = match encoder {
         // The codes are the module's StreamEncoder codes: passing the ask through is
-        // what makes VideoToolbox reachable, and the module refuses a code it cannot
-        // build, so an unusable ask is refused at stream start, not silently
-        // switched to OpenH264.
+        // what makes VideoToolbox and MediaFoundation reachable, and the module
+        // refuses a code it cannot build, so an unusable ask is refused at stream
+        // start, not silently switched to OpenH264.
         eiviz_pro_api::STREAM_ENCODER_VIDEOTOOLBOX => eiviz_pro_api::VideoEncoderKind::VideoToolbox,
+        eiviz_pro_api::STREAM_ENCODER_MEDIAFOUNDATION => {
+            eiviz_pro_api::VideoEncoderKind::MediaFoundation
+        }
         _ => eiviz_pro_api::VideoEncoderKind::OpenH264,
     };
     let started = backend.start_stream(&eiviz_pro_api::StreamEncodeConfig {
@@ -4476,6 +4621,7 @@ fn stream_encoder_add_ffi(
         fps_num,
         fps_den,
         encoder: encoder_kind,
+        encoder_device,
         encoder_threads,
         buffer_ms,
         complexity,
@@ -4503,37 +4649,24 @@ fn stream_encoder_add_ffi(
                 "stream encoder id={encoder_id}: {}",
                 error.message
             ));
+            record_stream_encoder_result(
+                encoder_id,
+                StreamEncoderState::Failed(error.message.clone()),
+            );
             let _ = with_mixer(|mixer| set_error(&mixer.telemetry, error.message));
             return code;
         }
     };
     let shared = Arc::new(Mutex::new(output));
-    // The audio scheduler must not wait on OpenH264. A blocked 10 ms tick
-    // skips samples, which is a click even on a generated 1 kHz tone.
-    let (audio_tx, audio_rx) = std::sync::mpsc::sync_channel(64);
-    let audio_output = Arc::clone(&shared);
-    let audio_thread = thread::Builder::new()
-        .name(format!("eiviz-rtmp-aac-{encoder_id}"))
-        .spawn(move || {
-            while let Ok(packet) = audio_rx.recv() {
-                if let Err(error) =
-                    lock_stream(&audio_output).submit_audio(crate::pro::audio_frame(&packet))
-                {
-                    crate::diag::error_throttled(&format!("stream send audio: {}", error.message));
-                }
-            }
-        });
-    if let Err(error) = audio_thread {
-        crate::diag::error(&format!("stream audio thread: {error}"));
-        return ERR_DEVICE;
-    }
-    let audio_send: Arc<dyn Fn(AudioPacket) + Send + Sync> = Arc::new(move |packet| {
-        if audio_tx.try_send(packet).is_err() {
-            crate::diag::error_throttled("stream audio queue is full");
-        }
-    });
+    // Audio reaches the stream through the output worker's mailbox, like every other
+    // transport. The stream mutex then has one owner - the worker that also submits
+    // video - so an audio submit never queues behind a frame encode, and the audio
+    // scheduler only pushes into a mailbox instead of waiting for OpenH264.
     let source_id = crate::abi::resolve_output_source_id(source_kind, source_id);
-    let audio_unit_id = if source_kind == SRC_KIND_MU_MULTIVIEW {
+    // A video-only encoder rejects audio at the module boundary, and the audio
+    // scheduler would keep feeding it every block. Zero means "no audio route", so
+    // the stream never sees an audio packet it must refuse.
+    let audio_unit_id = if source_kind == SRC_KIND_MU_MULTIVIEW || video_only != 0 {
         0
     } else {
         audio_unit_id
@@ -4591,16 +4724,64 @@ fn stream_encoder_add_ffi(
                 bytes_per_pixel: 2,
                 tx: worker.tx.clone(),
                 pace: Arc::clone(&worker.tx.pace),
-                audio_send: Some(audio_send),
+                audio_send: None,
             },
         );
         mixer.send_workers.insert(encoder_id, worker);
+        record_stream_encoder_result(encoder_id, StreamEncoderState::Running);
         crate::diag::info(&format!(
             "stream encoder id={encoder_id} {width}x{height} {fps_num}/{fps_den}"
         ));
         OK
     })
     .unwrap_or_else(|code| code)
+}
+
+/// Encoder devices a stream encoder kind can build, as a JSON array of
+/// `{"name":"…","hardware":true}`. `0` OpenH264, `1` VideoToolbox,
+/// `2` MediaFoundation. A kind this build cannot run answers `[]`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mixer_stream_encoder_devices(
+    encoder_kind: u32,
+    out: *mut u8,
+    cap: usize,
+    needed: *mut usize,
+) -> i32 {
+    ffi_guard("mixer_stream_encoder_devices", ERR_DEVICE, || {
+        let list = match crate::pro::module().streaming() {
+            Some(backend) => {
+                let kind = match encoder_kind {
+                    eiviz_pro_api::STREAM_ENCODER_VIDEOTOOLBOX => {
+                        eiviz_pro_api::VideoEncoderKind::VideoToolbox
+                    }
+                    eiviz_pro_api::STREAM_ENCODER_MEDIAFOUNDATION => {
+                        eiviz_pro_api::VideoEncoderKind::MediaFoundation
+                    }
+                    _ => eiviz_pro_api::VideoEncoderKind::OpenH264,
+                };
+                backend.encoder_devices(kind)
+            }
+            None => Vec::new(),
+        };
+        let text = serde_json::to_string(
+            &list
+                .iter()
+                .map(|device| {
+                    serde_json::json!({ "name": device.name, "hardware": device.hardware })
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|_| "[]".to_string());
+        let bytes = text.as_bytes();
+        if !needed.is_null() {
+            unsafe { *needed = bytes.len() };
+        }
+        if out.is_null() || cap < bytes.len() {
+            return ERR_BUFFER_TOO_SMALL;
+        }
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
+        OK
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -4647,7 +4828,11 @@ pub unsafe extern "C" fn mixer_stream_destination_add(
         }) {
             Ok(Some(stream)) => stream,
             Ok(None) => {
-                let message = "stream encoder is not running";
+                let message = format!(
+                    "stream encoder is not running ({}); select an encoding profile for this \
+                     destination, or create one in the Encoding settings",
+                    stream_encoder_note(encoder_id)
+                );
                 crate::diag::error(&format!(
                     "stream destination id={destination_id} encoder={encoder_id}: {message}"
                 ));
@@ -4818,6 +5003,7 @@ unsafe fn mixer_capabilities_ffi(out: *mut MixerCapabilities) -> i32 {
         replay_angle_limit: 0,
         replay_channel_limit: 0,
         replay_linked: 0,
+        stream_encoder_mask: 0,
     };
     crate::pro::fill_capabilities(&mut caps);
     unsafe { *out = caps };
@@ -7297,7 +7483,44 @@ struct StreamPace {
     dropped: u64,
 }
 
-fn stream_pace(shared: &Shared) -> StreamPace {
+/// One stream output the pace indicator reads: what the slot knows, gathered under the
+/// slot, and the sender asked afterwards.
+struct PaceTarget {
+    output_id: u64,
+    stream: SharedStream,
+    target_fps_milli: u32,
+    warmed: bool,
+}
+
+/// The last statistics a reader managed to take, per output. The indicator asks every few
+/// hundred milliseconds; the sender owns the stream while a frame goes out to a slow
+/// socket, and waiting for it there would stall compose and audio with it.
+fn stream_stats(output_id: u64, stream: &SharedStream) -> eiviz_pro_api::OutputStats {
+    use std::sync::TryLockError;
+    match stream.try_lock() {
+        Ok(output) => {
+            let stats = output.stats();
+            if let Ok(mut cache) = stream_stats_cache().lock() {
+                cache.insert(output_id, stats.clone());
+            }
+            stats
+        }
+        // Busy sender: report what the last successful read saw rather than wait.
+        Err(TryLockError::WouldBlock) => stream_stats_cache()
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&output_id).cloned())
+            .unwrap_or_default(),
+        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner().stats(),
+    }
+}
+
+fn stream_stats_cache() -> &'static Mutex<HashMap<u64, eiviz_pro_api::OutputStats>> {
+    static CACHE: OnceLock<Mutex<HashMap<u64, eiviz_pro_api::OutputStats>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn stream_pace(targets: &[PaceTarget]) -> StreamPace {
     let mut pace = StreamPace {
         slow: 0,
         lag_ms: 0,
@@ -7305,25 +7528,18 @@ fn stream_pace(shared: &Shared) -> StreamPace {
         target_fps_milli: 0,
         dropped: 0,
     };
-    for output in shared.outputs.values() {
-        if output.transport != OUT_RTMP {
-            continue;
-        }
-        let Some(stream) = &output.stream else {
-            continue;
-        };
-        let stats = lock_stream(stream).stats();
+    for target in targets {
+        let stats = stream_stats(target.output_id, &target.stream);
         pace.dropped = pace.dropped.saturating_add(stats.dropped);
-        let target = fps_times_1000(output.fps_num, output.fps_den);
-        let warmed = output.started_at.elapsed() >= std::time::Duration::from_secs(3);
+        let target_fps_milli = target.target_fps_milli;
         // sent_fps_milli stays 0 until the first one-second window closes.
         let fps_low = stats.sent_fps_milli > 0
-            && stats.sent_fps_milli.saturating_mul(100) < target.saturating_mul(85);
-        let behind = stats.connected && warmed && (stats.media_lag_ms >= 400 || fps_low);
+            && stats.sent_fps_milli.saturating_mul(100) < target_fps_milli.saturating_mul(85);
+        let behind = stats.connected && target.warmed && (stats.media_lag_ms >= 400 || fps_low);
         if behind || stats.media_lag_ms >= pace.lag_ms {
             pace.lag_ms = stats.media_lag_ms;
             pace.fps_milli = stats.sent_fps_milli;
-            pace.target_fps_milli = target;
+            pace.target_fps_milli = target_fps_milli;
         }
         if behind {
             pace.slow = 1;
@@ -7364,7 +7580,11 @@ unsafe fn mixer_copy_runtime_stats_ffi(out: *mut MixerRuntimeStats) -> i32 {
     if out.is_null() {
         return ERR_INVALID_ARGUMENT;
     }
-    with_mixer(|mixer| {
+    // Take what the slot knows first, then ask the senders outside it. A sender can hold
+    // its stream for as long as a socket write blocks, and waiting there inside the slot
+    // stops compose, audio, and uploads for the same seconds - which is how a slow RTMP
+    // peer turned into "mixer_slot held 1600ms" and a full audio queue.
+    let snapshot = match with_mixer(|mixer| {
         let shared = mixer.shared.lock_or_recover();
         let uploads = shared.uploads.lock_or_recover();
         let input_queue_dropped = uploads.runtime_rows().map(|(_, _, dropped)| dropped).sum();
@@ -7389,28 +7609,66 @@ unsafe fn mixer_copy_runtime_stats_ffi(out: *mut MixerRuntimeStats) -> i32 {
                 _ => {}
             }
         }
-        let pace = stream_pace(&shared);
-        unsafe {
-            *out = MixerRuntimeStats {
-                uptime_ms: elapsed_ms(shared.clock.epoch()),
-                render_skipped: crate::diag::render_skipped(),
-                frames_rendered: crate::diag::frames_rendered(),
-                input_queue_dropped,
-                output_omt,
-                output_ndi,
-                output_decklink,
-                output_omt_subscribed,
-                output_ndi_connections,
-                stream_slow: pace.slow,
-                stream_lag_ms: pace.lag_ms,
-                stream_fps_milli: pace.fps_milli,
-                stream_target_fps_milli: pace.target_fps_milli,
-                stream_dropped: pace.dropped,
-            };
+        let targets = shared
+            .outputs
+            .iter()
+            .filter(|(_, output)| output.transport == OUT_RTMP)
+            .filter_map(|(&output_id, output)| {
+                let stream = output.stream.as_ref()?;
+                Some(PaceTarget {
+                    output_id,
+                    stream: Arc::clone(stream),
+                    target_fps_milli: fps_times_1000(output.fps_num, output.fps_den),
+                    warmed: output.started_at.elapsed() >= std::time::Duration::from_secs(3),
+                })
+            })
+            .collect::<Vec<_>>();
+        RuntimeSnapshot {
+            uptime_ms: elapsed_ms(shared.clock.epoch()),
+            input_queue_dropped,
+            output_omt,
+            output_ndi,
+            output_decklink,
+            output_omt_subscribed,
+            output_ndi_connections,
+            targets,
         }
-        OK
-    })
-    .unwrap_or_else(|code| code)
+    }) {
+        Ok(snapshot) => snapshot,
+        Err(code) => return code,
+    };
+    let pace = stream_pace(&snapshot.targets);
+    unsafe {
+        *out = MixerRuntimeStats {
+            uptime_ms: snapshot.uptime_ms,
+            render_skipped: crate::diag::render_skipped(),
+            frames_rendered: crate::diag::frames_rendered(),
+            input_queue_dropped: snapshot.input_queue_dropped,
+            output_omt: snapshot.output_omt,
+            output_ndi: snapshot.output_ndi,
+            output_decklink: snapshot.output_decklink,
+            output_omt_subscribed: snapshot.output_omt_subscribed,
+            output_ndi_connections: snapshot.output_ndi_connections,
+            stream_slow: pace.slow,
+            stream_lag_ms: pace.lag_ms,
+            stream_fps_milli: pace.fps_milli,
+            stream_target_fps_milli: pace.target_fps_milli,
+            stream_dropped: pace.dropped,
+        };
+    }
+    OK
+}
+
+/// What the mixer slot reports without waiting for any sender.
+struct RuntimeSnapshot {
+    uptime_ms: u64,
+    input_queue_dropped: u64,
+    output_omt: u32,
+    output_ndi: u32,
+    output_decklink: u32,
+    output_omt_subscribed: u32,
+    output_ndi_connections: u32,
+    targets: Vec<PaceTarget>,
 }
 
 /// Resets the operator-facing counters shown in the resource window.
@@ -7802,6 +8060,72 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::collections::HashMap;
+
+    /// The status indicator asks for stream statistics every 400 ms. A sender writing a
+    /// frame to a slow socket holds its stream for as long as that write blocks, so the
+    /// reader must report the last sample instead of waiting behind it.
+    #[test]
+    fn busy_sender_does_not_stall_the_runtime_stats_reader() {
+        struct Dummy;
+        impl eiviz_pro_api::MediaOutput for Dummy {
+            fn submit_video(
+                &mut self,
+                _: eiviz_pro_api::VideoFrame,
+            ) -> eiviz_pro_api::ProResult<()> {
+                Ok(())
+            }
+            fn submit_audio(
+                &mut self,
+                _: eiviz_pro_api::AudioFrame,
+            ) -> eiviz_pro_api::ProResult<()> {
+                Ok(())
+            }
+            fn stats(&self) -> eiviz_pro_api::OutputStats {
+                eiviz_pro_api::OutputStats {
+                    media_lag_ms: 480,
+                    ..Default::default()
+                }
+            }
+        }
+        impl eiviz_pro_api::StreamOutput for Dummy {
+            fn add_destination(&mut self, _: u64, _: &str) -> eiviz_pro_api::ProResult<()> {
+                Ok(())
+            }
+            fn remove_destination(&mut self, _: u64) -> eiviz_pro_api::ProResult<()> {
+                Ok(())
+            }
+            fn destination_stats(
+                &self,
+                _: u64,
+            ) -> eiviz_pro_api::ProResult<eiviz_pro_api::OutputStats> {
+                Ok(Default::default())
+            }
+        }
+
+        let stream: SharedStream = Arc::new(Mutex::new(
+            Box::new(Dummy) as Box<dyn eiviz_pro_api::StreamOutput>
+        ));
+        // A sample the reader can fall back on.
+        assert_eq!(stream_stats(9_001, &stream).media_lag_ms, 480);
+
+        let held = Arc::clone(&stream);
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let holder = thread::spawn(move || {
+            let _guard = held.lock().unwrap_or_else(|poison| poison.into_inner());
+            ready_tx.send(()).expect("ready");
+            thread::sleep(Duration::from_millis(400));
+        });
+        ready_rx.recv().expect("holder started");
+        let start = Instant::now();
+        let stats = stream_stats(9_001, &stream);
+        let waited = start.elapsed();
+        assert!(
+            waited < Duration::from_millis(100),
+            "a busy sender held the reader for {waited:?}"
+        );
+        assert_eq!(stats.media_lag_ms, 480, "the last sample is still reported");
+        holder.join().expect("holder");
+    }
 
     /// A client that asks what Replay is doing must get the document and the live
     /// state, not the facade's empty default: automation and a remote host read the

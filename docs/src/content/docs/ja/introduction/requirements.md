@@ -48,3 +48,5 @@ Apple M3 MacBook Air / macOS 27で検証しています。サポート対象はm
 | NVIDIA | GeForce RTX 3000シリーズ以降 | ドライバv535以降 |
 | AMD | Radeon RX 6000シリーズ以降 | Mesa RADV |
 | Intel | Arc Aシリーズ以降 | Mesa ANV |
+
+同時利用の制約（エンコーダー本数、デコード資源、PCIe/メモリ帯域）は[ハードウェア固有の制約](./hardware-limits/)にまとめています。

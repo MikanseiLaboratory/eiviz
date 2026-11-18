@@ -34,6 +34,12 @@ pub(crate) fn spawn_output_worker(
     let join = thread::Builder::new()
         .name(format!("eiviz-send-{output_id}"))
         .spawn(move || {
+            // The Pro module builds its VideoToolbox session on this thread and
+            // wait-bounded delivers its output. A session whose service connection
+            // inherits a low QOS class lagged minutes behind the pipeline (the
+            // hardware encoder itself stayed instant in fresh processes); the
+            // interactive class keeps the encoder service at the pipeline's pace.
+            crate::platform::set_thread_qos(crate::platform::QOS_USER_INTERACTIVE);
             send_worker(
                 output_id,
                 ctrl_rx,
@@ -327,12 +333,23 @@ pub(crate) fn apply_send_cmd(sender: &mut OutputHandle, cmd: SendCmd, omt_gpu: &
             fps_n,
             fps_d,
         } => {
+            if let OutputHandle::Stream(_) = sender {
+                static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                let n = FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if n % 600 == 0 {
+                    crate::diag::info(&format!(
+                        "stream video frames sent to worker: {n} ({width}x{height} pts={pts})"
+                    ));
+                }
+            }
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 sender.send_video_uyvy(width, height, stride, pts, data, fps_n, fps_d)
             })) {
                 Ok(Ok(())) => {}
-                Ok(Err(error)) => crate::diag::error_throttled(&format!("omt send video: {error}")),
-                Err(_) => crate::diag::mark_fatal("omt send video panicked"),
+                Ok(Err(error)) => {
+                    crate::diag::error_throttled(&format!("{} send video: {error}", sender.kind()))
+                }
+                Err(_) => crate::diag::mark_fatal("send video panicked"),
             }
         }
         SendCmd::GpuVideo {
@@ -359,11 +376,11 @@ pub(crate) fn apply_send_cmd(sender: &mut OutputHandle, cmd: SendCmd, omt_gpu: &
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
                     busy.store(false, Ordering::Release);
-                    crate::diag::error(&format!("omt send texture: {error}"));
+                    crate::diag::error(&format!("{} send texture: {error}", sender.kind()));
                 }
                 Err(_) => {
                     busy.store(false, Ordering::Release);
-                    crate::diag::mark_fatal("omt send texture panicked");
+                    crate::diag::mark_fatal("send texture panicked");
                 }
             }
         }
@@ -372,7 +389,9 @@ pub(crate) fn apply_send_cmd(sender: &mut OutputHandle, cmd: SendCmd, omt_gpu: &
                 sender.send_audio(&packet)
             })) {
                 Ok(Ok(())) => {}
-                Ok(Err(error)) => crate::diag::error_throttled(&format!("send audio: {error}")),
+                Ok(Err(error)) => {
+                    crate::diag::error_throttled(&format!("{} send audio: {error}", sender.kind()))
+                }
                 Err(_) => crate::diag::mark_fatal("send audio panicked"),
             }
         }

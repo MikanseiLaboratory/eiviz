@@ -36,6 +36,18 @@ public enum MixSource
     SessionMultiview
 }
 
+/// Which decoder a video file or UVC camera may use. `Auto` keeps the OS default,
+/// `Accelerated` requires the GPU path, `Cpu` stays on the CPU, and the two Windows
+/// kinds name a path explicitly. The names match the session document's strings.
+public enum InputDecodePath
+{
+    Auto,
+    Accelerated,
+    Cpu,
+    MediaFoundation,
+    VulkanVideo,
+}
+
 public enum BandwidthSave
 {
     AlwaysLow = 0,
@@ -333,6 +345,8 @@ public sealed class InputEntry
     public float Gain { get; set; } = 1;
     public bool Mute { get; set; }
     public bool UseGpu { get; set; }
+    /// Decoder choice for video files and UVC cameras.
+    public InputDecodePath DecodePath { get; set; } = InputDecodePath.Auto;
     public uint FrameBufferFrames { get; set; } = 1;
     public BandwidthSave BandwidthSave { get; set; } = BandwidthSave.NotOnPreviewOrProgram;
     public bool KeepFullOnMultiview { get; set; }
@@ -1090,6 +1104,9 @@ public sealed class StreamEncoderEntry
     public uint EncoderThreads { get; set; }
     public uint BufferMs { get; set; }
     public string Encoder { get; set; } = "OpenH264";
+    // Encoder device the operator picked, by the name the mixer reports.
+    // Empty uses the mixer's own order.
+    public string EncoderDevice { get; set; } = "";
     public uint Complexity { get; set; }
     public uint RefFrames { get; set; } = 1;
     public bool Cabac { get; set; }
@@ -1118,6 +1135,7 @@ public sealed class StreamEncoderEntry
         EncoderThreads = EncoderThreads,
         BufferMs = BufferMs,
         Encoder = Encoder,
+        EncoderDevice = EncoderDevice,
         Complexity = Complexity,
         RefFrames = RefFrames,
         Cabac = Cabac,

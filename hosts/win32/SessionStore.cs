@@ -570,6 +570,9 @@ internal static class SessionStore
         public float Gain { get; set; } = 1;
         public bool Mute { get; set; }
         public bool UseGpu { get; set; }
+        /// Decoder choice for video files and UVC cameras. A publish replaces the
+        /// whole document, so leaving it out reset the operator's choice.
+        public InputDecodePath DecodePath { get; set; } = InputDecodePath.Auto;
         public uint FrameBufferFrames { get; set; } = 1;
         public BandwidthSave BandwidthSave { get; set; } = BandwidthSave.NotOnPreviewOrProgram;
         public bool KeepFullOnMultiview { get; set; }
@@ -612,6 +615,7 @@ internal static class SessionStore
             Gain = input.Gain,
             Mute = input.Mute,
             UseGpu = input.UseGpu,
+            DecodePath = input.DecodePath,
             FrameBufferFrames = input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
             BandwidthSave = input.BandwidthSave,
             KeepFullOnMultiview = input.KeepFullOnMultiview,
@@ -655,6 +659,7 @@ internal static class SessionStore
             Gain = MixerNative.MixerGain(Gain),
             Mute = Mute,
             UseGpu = UseGpu,
+            DecodePath = DecodePath,
             FrameBufferFrames = FrameBufferFrames == 0 ? 1 : Math.Clamp(FrameBufferFrames, 1u, 8u),
             BandwidthSave = BandwidthSave,
             KeepFullOnMultiview = KeepFullOnMultiview,

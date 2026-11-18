@@ -345,6 +345,9 @@ public partial class MainWindow
         input.OmtQuality = dialog.Kind == InputKind.OMT ? dialog.ResultOmtQuality : OmtQuality.Default;
         input.NdiBandwidth = dialog.Kind == InputKind.NDI ? dialog.ResultNdiBandwidth : NdiBandwidth.Highest;
         input.VideoLoop = dialog.Kind == InputKind.Video && dialog.ResultVideoLoop;
+        input.DecodePath = dialog.Kind is InputKind.Video or InputKind.UVC
+            ? dialog.ResultDecodePath
+            : InputDecodePath.Auto;
         input.VideoPlayWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoPlayWhen : VideoPlayWhen.Never;
         input.VideoRestartWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoRestartWhen : VideoTriggerWhen.Never;
         input.VideoPauseWhen = dialog.Kind == InputKind.Video ? dialog.ResultVideoPauseWhen : VideoTriggerWhen.Never;
@@ -394,7 +397,8 @@ public partial class MainWindow
                     dialog.ResultPath!,
                     input.VideoLoop,
                     input.VideoStartsPlaying,
-                    input.FrameBufferFrames);
+                    input.FrameBufferFrames,
+                    decodePath: input.DecodePath);
                 break;
             case InputKind.OMT:
                 MixerApply.ConnectOmt(
@@ -429,7 +433,7 @@ public partial class MainWindow
                 input.CaptureHeight = dialog.ResultCaptureHeight;
                 input.CaptureFpsNum = dialog.ResultCaptureFpsNum;
                 input.CaptureFpsDen = dialog.ResultCaptureFpsDen;
-                MixerApply.StartUvc(input.Id, dialog.ResultPath!, dialog.ResultCaptureWidth, dialog.ResultCaptureHeight, dialog.ResultCaptureFpsNum, dialog.ResultCaptureFpsDen, input.FrameBufferFrames);
+                MixerApply.StartUvc(input.Id, dialog.ResultPath!, dialog.ResultCaptureWidth, dialog.ResultCaptureHeight, dialog.ResultCaptureFpsNum, dialog.ResultCaptureFpsDen, input.FrameBufferFrames, decodePath: input.DecodePath);
                 break;
             case InputKind.Mix:
                 if (dialog.ResultMixSource != MixSource.SessionMultiview)
@@ -1289,6 +1293,11 @@ public partial class MainWindow
             BindMainVideo();
             app.Backend.SyncPublishedVideo();
         }
+        // Bind address, port, token, and media directory are host-owned; Preferences is
+        // where they change, so this is where they take effect. The call is a no-op when
+        // none of them moved.
+        if (!HostRole.IsRemote)
+            App.ApplyVmixApi();
     }
 
     private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettings(0);
@@ -1384,10 +1393,11 @@ public partial class MainWindow
                     input.VideoLoop,
                     playing,
                     input.FrameBufferFrames,
-                    position);
+                    position,
+                    decodePath: input.DecodePath);
             }
             else if (input.Kind == InputKind.UVC)
-                MixerApply.StartUvc(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames);
+                MixerApply.StartUvc(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames, decodePath: input.DecodePath);
         }
     }
 

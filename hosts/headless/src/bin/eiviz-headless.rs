@@ -82,6 +82,7 @@ fn install_license(path: &Path) -> Result<(), u8> {
         replay_angle_limit: 0,
         replay_channel_limit: 0,
         replay_linked: 0,
+        stream_encoder_mask: 0,
     };
     if unsafe { eiviz_mixer::mixer_capabilities(&mut caps) } == 0 {
         eprintln!("eiviz-headless capabilities plan={}", caps.plan);

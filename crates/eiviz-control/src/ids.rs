@@ -226,7 +226,7 @@ fn resolve_named<'a, T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{InputDto, InputKind};
+    use crate::session::{DecodePath, InputDto, InputKind};
 
     fn doc_with_inputs(inputs: Vec<InputDto>) -> Document {
         let mut doc: Document = serde_json::from_str("{}").unwrap();
@@ -275,6 +275,7 @@ mod tests {
             audio_process_exe: String::new(),
             audio_process_aumid: String::new(),
             decklink_mode: String::new(),
+            decode_path: DecodePath::Auto,
         }
     }
 

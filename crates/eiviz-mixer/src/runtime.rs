@@ -21,9 +21,9 @@ use crate::{
     mixer_output_add_ex, mixer_output_remove, mixer_set_bus_colors, mixer_set_frame_buffer,
     mixer_set_live_save, mixer_set_master_fps, mixer_set_mv_label, mixer_set_ndi_gpu_upload,
     mixer_set_rebar_optimization, mixer_snapshot, mixer_stream_destination_add,
-    mixer_stream_destination_remove, mixer_stream_encoder_add, mixer_stream_encoder_remove,
-    mixer_unit_configure, mixer_video_seek, mixer_video_set_loop, mixer_video_set_playing,
-    mixer_video_start,
+    mixer_stream_destination_remove, mixer_stream_encoder_add, mixer_stream_encoder_devices,
+    mixer_stream_encoder_remove, mixer_unit_configure, mixer_video_seek, mixer_video_set_loop,
+    mixer_video_set_playing, mixer_video_start, mixer_video_start_ex,
 };
 
 pub(crate) fn control() -> &'static Mutex<ControlService> {
@@ -346,8 +346,17 @@ impl MixerPort for ProcessMixer {
     fn video_start(&mut self, spec: VideoStartApply) -> ControlResult<()> {
         let c_path =
             CString::new(spec.path).map_err(|error| ControlError::invalid(error.to_string()))?;
+        let decode_path = match spec.decode_path {
+            eiviz_control::session::DecodePath::Auto => crate::abi::DECODE_PATH_AUTO,
+            eiviz_control::session::DecodePath::Accelerated => crate::abi::DECODE_PATH_ACCELERATED,
+            eiviz_control::session::DecodePath::Cpu => crate::abi::DECODE_PATH_CPU,
+            eiviz_control::session::DecodePath::MediaFoundation => {
+                crate::abi::DECODE_PATH_MEDIAFOUNDATION
+            }
+            eiviz_control::session::DecodePath::VulkanVideo => crate::abi::DECODE_PATH_VULKAN,
+        };
         map_abi(unsafe {
-            mixer_video_start(
+            mixer_video_start_ex(
                 spec.id,
                 c_path.as_ptr(),
                 u32::from(spec.capture),
@@ -357,6 +366,7 @@ impl MixerPort for ProcessMixer {
                 spec.fps_num,
                 spec.fps_den,
                 spec.frame_buffer_frames,
+                decode_path,
             )
         })?;
         map_abi(mixer_video_set_loop(spec.id, u32::from(spec.loop_playback)))?;
@@ -490,6 +500,7 @@ impl MixerPort for ProcessMixer {
             replay_angle_limit: 0,
             replay_channel_limit: 0,
             replay_linked: 0,
+            stream_encoder_mask: 0,
         };
         if unsafe { mixer_capabilities(&mut raw) } != crate::abi::OK {
             return eiviz_control::query::Capabilities::default();
@@ -511,6 +522,7 @@ impl MixerPort for ProcessMixer {
             replay_angle_limit: raw.replay_angle_limit,
             replay_channel_limit: raw.replay_channel_limit,
             replay_linked: raw.replay_linked != 0,
+            stream_encoder_mask: raw.stream_encoder_mask,
             ..eiviz_control::query::Capabilities::default()
         }
     }
@@ -597,6 +609,7 @@ impl MixerPort for ProcessMixer {
 
     fn stream_encoder_add(&mut self, spec: StreamEncoderApply) -> ControlResult<()> {
         let id = eiviz_control::ids::stream_encoder_gpu_id(spec.id);
+        let device = CString::new(spec.encoder_device.clone()).unwrap_or_default();
         map_abi(unsafe {
             mixer_stream_encoder_add(
                 id,
@@ -623,8 +636,26 @@ impl MixerPort for ProcessMixer {
                 u32::from(spec.adaptive_quant),
                 u32::from(spec.scene_change),
                 spec.audio_delay_ms,
+                device.as_ptr(),
             )
         })
+    }
+
+    fn stream_encoder_devices(&mut self, kind: u32) -> ControlResult<String> {
+        let mut needed = 0usize;
+        let code =
+            unsafe { mixer_stream_encoder_devices(kind, std::ptr::null_mut(), 0, &mut needed) };
+        if code != crate::abi::ERR_BUFFER_TOO_SMALL || needed == 0 {
+            map_abi(code)?;
+            return Ok("[]".to_string());
+        }
+        let mut buffer = vec![0u8; needed];
+        let code = unsafe {
+            mixer_stream_encoder_devices(kind, buffer.as_mut_ptr(), buffer.len(), &mut needed)
+        };
+        map_abi(code)?;
+        let written = needed.min(buffer.len());
+        Ok(String::from_utf8_lossy(&buffer[..written]).into_owned())
     }
 
     fn stream_encoder_remove(&mut self, id: u64) -> ControlResult<()> {

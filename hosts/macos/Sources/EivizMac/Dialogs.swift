@@ -130,16 +130,31 @@ struct SettingsView: View {
     @State private var decklinkError = ""
     @State private var audioRefresh = 0
 
+    /// Selecting the Stream page needs an RTMP-capable plan, like the Windows
+    /// category list: refuse the selection and keep the previous page.
+    private var categorySelection: Binding<Int> {
+        Binding(
+            get: { category },
+            set: { next in
+                if next == 3 && !Self.rtmpAllowed() {
+                    mixer.presentError(L10n.t("msg.planEncodeSettings"), title: L10n.t("settings.stream"))
+                    return
+                }
+                category = next
+            }
+        )
+    }
+
     var body: some View {
         HStack(spacing: 0) {
-            List(selection: $category) {
-                Text("Display").tag(0)
-                Text("Performance").tag(1)
-                Text("Outputs").tag(2)
-                Text("Multiview").tag(3)
-                Text(L10n.t("settings.audio")).tag(4)
-                Text(L10n.t("settings.webApi")).tag(5)
-                Text(L10n.t("settings.encoding")).tag(6)
+            List(selection: categorySelection) {
+                Text(L10n.t("settings.display")).tag(0)
+                Text(L10n.t("settings.performance")).tag(1)
+                Text(L10n.t("settings.outputs")).tag(2)
+                Text(L10n.t("settings.stream")).tag(3)
+                Text(L10n.t("settings.multiview")).tag(4)
+                Text(L10n.t("settings.audio")).tag(5)
+                Text(L10n.t("settings.webApi")).tag(6)
                 Text(L10n.t("settings.license")).tag(7)
             }
             .frame(width: 200)
@@ -149,10 +164,10 @@ struct SettingsView: View {
                     if category == 0 { display }
                     else if category == 1 { performance }
                     else if category == 2 { outputs }
-                    else if category == 3 { multiview }
-                    else if category == 4 { audio }
-                    else if category == 5 { webApi }
-                    else if category == 6 { encoding }
+                    else if category == 3 { StreamSettingsPane() }
+                    else if category == 4 { multiview }
+                    else if category == 5 { audio }
+                    else if category == 6 { webApi }
                     else { license }
                 }
                 Spacer()
@@ -191,7 +206,9 @@ struct SettingsView: View {
         }
         .background(EivizTheme.dialog)
         .foregroundStyle(EivizTheme.text)
-        .onAppear { category = mixer.settingsCategory }
+        .onAppear {
+            category = mixer.settingsCategory
+        }
         .sheet(isPresented: $mixer.showMultiviewSlots) { MultiviewSlotsView() }
     }
 
@@ -387,7 +404,9 @@ struct SettingsView: View {
             Text(L10n.t("settings.outputsHelp"))
                 .foregroundStyle(EivizTheme.dim)
             ForEach($mixer.session.outputs) { $output in
-                outputRow($output)
+                if output.transport != .rtmp {
+                    outputRow($output)
+                }
             }
         }
         .onAppear { refreshDeckLinkDevices() }
@@ -464,94 +483,6 @@ struct SettingsView: View {
     @State private var licenseFingerprint = ""
     @State private var licenseReturn = LicenseReturnServer()
 
-    private var encoding: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(L10n.t("settings.encoding"))
-                .font(.headline)
-            Text(L10n.t("settings.encodingHelp"))
-                .font(.caption)
-                .foregroundStyle(EivizTheme.dim)
-            if mixer.session.streamEncoders.isEmpty {
-                Text(L10n.t("settings.encodingEmpty"))
-                    .foregroundStyle(EivizTheme.dim)
-            }
-            ForEach(mixer.session.streamEncoders.indices, id: \.self) { index in
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        Text(L10n.t("settings.encoder"))
-                        Picker("", selection: $mixer.session.streamEncoders[index].encoder) {
-                            Text("OpenH264").tag("OpenH264")
-                            Text("VideoToolbox").tag("VideoToolbox")
-                        }
-                        .labelsHidden()
-                        .frame(width: 190)
-                        Text(L10n.t("settings.encoderHelp"))
-                            .font(.caption)
-                            .foregroundStyle(EivizTheme.dim)
-                    }
-                    HStack(spacing: 8) {
-                        Text(L10n.t("settings.videoBitrate"))
-                        TextField("", value: Binding(
-                            get: { mixer.session.streamEncoders[index].videoBitrate / 1000 },
-                            set: { mixer.session.streamEncoders[index].videoBitrate = max(100, $0) * 1000 }
-                        ), format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 80)
-                        Text("kbps")
-                        Text(L10n.t("settings.audioBitrate"))
-                        TextField("", value: Binding(
-                            get: { mixer.session.streamEncoders[index].audioBitrate / 1000 },
-                            set: { mixer.session.streamEncoders[index].audioBitrate = max(32, $0) * 1000 }
-                        ), format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 64)
-                        Text("kbps")
-                    }
-                    HStack(spacing: 8) {
-                        Text(L10n.t("settings.audioDelay"))
-                        DraggableUIntField(value: $mixer.session.streamEncoders[index].audioDelayMs, step: 10)
-                            .frame(width: 92)
-                        Text("ms")
-                        Text(L10n.t("settings.keyframeInterval"))
-                        DraggableUIntField(value: $mixer.session.streamEncoders[index].keyint)
-                            .frame(width: 76)
-                        Text(L10n.t("settings.encoderThreads"))
-                        DraggableUIntField(value: $mixer.session.streamEncoders[index].encoderThreads)
-                            .frame(width: 64)
-                    }
-                    HStack(spacing: 8) {
-                        Text(L10n.t("settings.sendBuffer"))
-                        DraggableUIntField(value: $mixer.session.streamEncoders[index].bufferMs, step: 10)
-                            .frame(width: 76)
-                        Text("ms")
-                        Picker(L10n.t("settings.complexity"), selection: $mixer.session.streamEncoders[index].complexity) {
-                            Text(L10n.t("settings.complexityLow")).tag(UInt32(0))
-                            Text(L10n.t("settings.complexityMedium")).tag(UInt32(1))
-                            Text(L10n.t("settings.complexityHigh")).tag(UInt32(2))
-                        }
-                        .frame(width: 150)
-                        Picker(L10n.t("settings.refFrames"), selection: $mixer.session.streamEncoders[index].refFrames) {
-                            ForEach(1 ... 4, id: \.self) { count in Text("\(count)").tag(UInt32(count)) }
-                        }
-                        .frame(width: 110)
-                    }
-                    HStack(spacing: 12) {
-                        Toggle(L10n.t("settings.cabac"), isOn: $mixer.session.streamEncoders[index].cabac)
-                        Toggle(L10n.t("settings.videoOnly"), isOn: $mixer.session.streamEncoders[index].videoOnly)
-                        Toggle(L10n.t("settings.deblock"), isOn: $mixer.session.streamEncoders[index].deblock)
-                        Toggle(L10n.t("settings.backgroundDetect"), isOn: $mixer.session.streamEncoders[index].backgroundDetection)
-                        Toggle(L10n.t("settings.adaptiveQuant"), isOn: $mixer.session.streamEncoders[index].adaptiveQuant)
-                        Toggle(L10n.t("settings.sceneChange"), isOn: $mixer.session.streamEncoders[index].sceneChange)
-                    }
-                    .toggleStyle(.checkbox)
-                }
-                .padding(10)
-                .background(Color(white: 0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-        }
-    }
-
     private var license: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(L10n.t("settings.license")).fontWeight(.bold)
@@ -569,10 +500,16 @@ struct SettingsView: View {
             HStack {
                 Button(L10n.t("settings.licenseInstall")) {
                     let ticket = licenseTicket.trimmingCharacters(in: .whitespacesAndNewlines)
-                    ticket.withCString { ptr in
-                        _ = mixer_license_install(ptr)
+                    let code = ticket.withCString { ptr in
+                        mixer_license_install(ptr)
                     }
                     refreshLicense()
+                    // The plan is read once, when the mixer starts: until the
+                    // app restarts, the Outputs settings still refuse an RTMP
+                    // destination even though the ticket is now valid.
+                    if code == 0 {
+                        promptRestartForPlan()
+                    }
                 }
                 Button(L10n.t("settings.licenseClear")) {
                     _ = mixer_license_clear()
@@ -657,7 +594,8 @@ struct SettingsView: View {
         if mixer_machine_fingerprint(&fingerprint, fingerprint.count) == 0 {
             licenseFingerprint = String(decoding: fingerprint.prefix { $0 != 0 }, as: UTF8.self)
         } else {
-            licenseFingerprint = ""
+            // A blank fingerprint cannot be sent for a ticket; say why.
+            licenseFingerprint = L10n.t("settings.licenseFingerprintUnavailable")
         }
     }
 
@@ -672,10 +610,38 @@ struct SettingsView: View {
         #endif
     }
 
+    /// Asks for the restart the new plan needs, then relaunches this app with
+    /// the same arguments instead of leaving the operator to find the app again.
+    private func promptRestartForPlan() {
+        let alert = NSAlert()
+        alert.messageText = L10n.t("settings.restartNeededTitle")
+        alert.informativeText = L10n.t("settings.restartNeeded")
+        alert.addButton(withTitle: L10n.t("settings.restartNow"))
+        alert.addButton(withTitle: L10n.t("settings.restartLater"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let bundle = Bundle.main.bundlePath
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        task.arguments = ["-n", "-a", bundle, "--args"] + arguments
+        try? task.run()
+        task.waitUntilExit()
+        NSApplication.shared.terminate(nil)
+    }
+
     private static func rtmpAllowed() -> Bool {
         var caps = EivizCapabilities()
         guard mixer_capabilities(&caps) == 0 else { return false }
         return caps.rtmp_linked != 0 && caps.rtmp_max_width != 0
+    }
+
+    /// Bit mask of the stream encoders the mixer can start. 1 OpenH264,
+    /// 2 VideoToolbox, 4 MediaFoundation. A mixer that cannot report it
+    /// answers 0, and the picker falls back to OpenH264 plus the saved value.
+    private static func streamEncoderMask() -> UInt32 {
+        var caps = EivizCapabilities()
+        guard mixer_capabilities(&caps) == 0 else { return 0 }
+        return caps.stream_encoder_mask
     }
 
     private func outputRow(_ output: Binding<OutputEntry>) -> some View {
@@ -697,13 +663,32 @@ struct SettingsView: View {
                     if output.wrappedValue.transport == .deckLink || Self.deckLinkOutputAllowed() {
                         Text("DeckLink").tag(OutputTransport.deckLink)
                     }
-                    if output.wrappedValue.transport == .rtmp || Self.rtmpAllowed() {
-                        Text("RTMP").tag(OutputTransport.rtmp)
-                    }
                 }
                 if output.wrappedValue.transport == .rtmp {
                     mixerTextField(output.rtmpUrl, placeholder: L10n.t("settings.rtmpUrl"))
                     RtmpKeyEditor(output: output)
+                    // Which encoding profile this destination publishes. The
+                    // profiles are created in the Encoding settings, on their
+                    // own, so a destination picks one here.
+                    HStack(spacing: 8) {
+                        Text(L10n.t("settings.useEncode"))
+                        Picker("", selection: output.streamEncoderId) {
+                            if mixer.session.streamEncoders.isEmpty {
+                                Text(L10n.t("settings.encodingEmptyShort")).tag(UInt64(0))
+                            }
+                            ForEach(mixer.session.streamEncoders) { encoder in
+                                Text(encoder.name.isEmpty ? L10n.t("settings.encodeName") : encoder.name)
+                                    .tag(encoder.id)
+                            }
+                            let current = output.wrappedValue.streamEncoderId
+                            if current != 0
+                                && !mixer.session.streamEncoders.contains(where: { $0.id == current }) {
+                                Text(L10n.t("settings.encodeMissing")).tag(current)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 200)
+                    }
                 }
                 if output.wrappedValue.transport == .deckLink {
                     deckLinkOutputFields(output)
@@ -1162,6 +1147,10 @@ struct PreferencesView: View {
                     if mixer.isRemote, remoteOmtUseGpu != originalRemoteOmtUseGpu {
                         mixer.reconnectRemoteVideo()
                     }
+                    // Bind address, port, token, and media directory belong to the host,
+                    // and this is where they change. The call does nothing when none of
+                    // them moved.
+                    if !mixer.isRemote { mixer.applyVmixApi() }
                     dismiss()
                 }
                 Button(L10n.t("dialog.cancel")) {
@@ -1222,6 +1211,7 @@ struct AddInputView: View {
     @State private var scroll = false
     @State private var toneHz: Float = 1000
     @State private var useGpu = false
+    @State private var decodePath: InputDecodePath = .auto
     @State private var buffer: UInt32 = 1
     @State private var mediaBuffer: UInt32 = 3
     @State private var quality: UInt32 = 0
@@ -1388,6 +1378,7 @@ struct AddInputView: View {
             pathRow($videoPath) { pick(["public.movie"], $videoPath) }
             recentList(AppPrefs.shared.recentVideos) { videoPath = $0 }
             Toggle("Loop", isOn: $videoLoop)
+            decodePicker
             frameBufferPicker($mediaBuffer)
             Text("Frame buffer (1–8) absorbs decode jitter.")
                 .foregroundStyle(EivizTheme.dim)
@@ -1467,6 +1458,7 @@ struct AddInputView: View {
             Text("Frame buffer (1–8) holds decoded camera frames, same as NDI/OMT.")
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
+            decodePicker
         case "DeckLink":
             Button("Refresh devices") { refreshDeckLink() }
             if !decklinkError.isEmpty {
@@ -1584,6 +1576,22 @@ struct AddInputView: View {
             }
             frameBufferPicker($mixBuffer)
             Text("Mix Input reads N frames ago from the existing delay ring. Audio follows the referenced Mixing Unit. A session Multiview is silent. Same Mixing Unit wiring is refused.")
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Video files and cameras can be decoded on the GPU or the CPU. Holding
+    /// VideoToolbox here is what starves a VideoToolbox stream encoder, so the
+    /// operator can move a source's decode to the CPU.
+    private var decodePicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker(L10n.t("settings.decode"), selection: $decodePath) {
+                ForEach(InputDecodePath.macOSChoices, id: \.self) { path in
+                    Text(L10n.t(path.labelKey)).tag(path)
+                }
+            }
+            Text(L10n.t("settings.decodeHelp"))
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1770,6 +1778,7 @@ struct AddInputView: View {
         scroll = editing.scroll
         toneHz = editing.toneHz
         useGpu = editing.useGpu
+        decodePath = editing.decodePath
         buffer = editing.frameBufferFrames
         mediaBuffer = max(1, min(8, editing.frameBufferFrames == 0 ? 3 : editing.frameBufferFrames))
         ndiLow = editing.ndiBandwidth == .lowest
@@ -1877,6 +1886,7 @@ struct AddInputView: View {
             input.kind = .omt
             input.pathOrAddress = omtAddress
             input.useGpu = useGpu
+            input.decodePath = decodePath
             input.frameBufferFrames = buffer
             input.omtQuality = switch quality {
             case 1: .low
@@ -2049,23 +2059,55 @@ struct MixingUnitView: View {
     }
 }
 
-private struct RtmpKeyEditor: View {
+struct RtmpKeyEditor: View {
     @Binding var output: OutputEntry
     @State private var key = ""
+    /// A key already lives in the Keychain for this row. The value itself is not
+    /// read back (that would ask for the login password), so the field only says
+    /// that a stored key is in use.
+    @State private var stored = false
 
     var body: some View {
-        SecureField(L10n.t("settings.streamKey"), text: $key)
-            .textFieldStyle(.roundedBorder)
-            .frame(width: 180)
-            .onAppear {
-                if output.rtmpSecretRef.isEmpty {
-                    output.rtmpSecretRef = "stream-\(output.id)"
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                // Write-only on purpose: reading the stored key back into this field made
+                // macOS ask for the login keychain password, because a development build is
+                // not in the item's access list (the prompt is the keychain's, not ours).
+                // A stored key is never read back, but an empty field looked like the
+                // key had been lost; the masked prompt says one is in use.
+                SecureField(
+                    stored ? L10n.t("settings.streamKeyStoredMask") : L10n.t("settings.streamKey"),
+                    text: $key
+                )
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 180)
+                    .help(L10n.t("settings.streamKeyStored"))
+                    .onAppear {
+                        if output.rtmpSecretRef.isEmpty {
+                            output.rtmpSecretRef = "stream-\(output.id)"
+                        }
+                        stored = KeychainStore.exists(account: "rtmp/" + output.rtmpSecretRef)
+                    }
+                    .onChange(of: key) { _, value in
+                        guard !value.isEmpty else { return }
+                        KeychainStore.save(account: "rtmp/" + output.rtmpSecretRef, token: value)
+                        stored = true
+                    }
+                Button(L10n.t("settings.streamKeyClear")) {
+                    KeychainStore.save(account: "rtmp/" + output.rtmpSecretRef, token: "")
+                    key = ""
+                    stored = false
                 }
-                key = KeychainStore.load(account: "rtmp/" + output.rtmpSecretRef)
+                .controlSize(.small)
+                .help(L10n.t("settings.streamKeyStored"))
             }
-            .onChange(of: key) { _, value in
-                KeychainStore.save(account: "rtmp/" + output.rtmpSecretRef, token: value)
+            if stored && key.isEmpty {
+                Text(L10n.t("settings.streamKeySaved"))
+                    .font(.caption2)
+                    .foregroundStyle(Color(white: 0.5))
+                    .fixedSize(horizontal: false, vertical: true)
             }
+        }
     }
 }
 

@@ -85,6 +85,10 @@ final class MixerController: ObservableObject {
     var meterTimer: Timer?
     var mixTimer: Timer?
     var sessionSyncTimer: Timer?
+    var streamTimer: Timer?
+    private var streamLogAt: Date?
+    /// Live state of each RTMP destination, for the strips beside the deck.
+    @Published var streamStats: [UInt64: MixerFFI.StreamDestinationStats] = [:]
     /// Revision of the control session whose Replay document the host has already adopted.
     var syncedSessionRevision: UInt64 = 0
     /// Inputs created locally that the control document has not seen yet. The sync
@@ -205,6 +209,7 @@ final class MixerController: ObservableObject {
 
     func boot() {
         guard !booted else { return }
+        OpenH264Library.shared.prepare()
         beginActivity()
         isRemote = HostRole.isRemote
         guard mixer_ping() == 0x4549_5649 else {
@@ -224,6 +229,11 @@ final class MixerController: ObservableObject {
         fail(mixer_set_ndi_gpu_upload(session.settings.ndiGpuUploadEnabled ? 1 : 0), "Set NDI GPU upload")
         FlipBudget.configure(session.settings.flipSwapchainLimit)
         applyBusColors()
+        // Whether the API is on belongs to the session; prefs only carries it from run to
+        // run. A bind failure used to leave "off" in prefs, and the listener then never
+        // came back on its own, so read the session's answer before starting it.
+        AppPrefs.shared.nativeApiEnabled = session.settings.nativeApiEnabled
+        AppPrefs.shared.save()
         applySession()
         bumpSurfaceEpoch()
         startTimers()
@@ -271,12 +281,53 @@ final class MixerController: ObservableObject {
         return text
     }
 
+    /// Reads each enabled RTMP destination's state. The control service registers the
+    /// stream encoder under the gpu id namespace, which is what the stats call expects.
+    func refreshStreamStats() {
+        guard !isRemote else { return }
+        var next: [UInt64: MixerFFI.StreamDestinationStats] = [:]
+        for output in session.outputs
+        where output.transport == .rtmp && output.enabled {
+            let encoderId = output.streamEncoderId >= 0x0006_0000
+                ? output.streamEncoderId
+                : 0x0006_0000 | output.streamEncoderId
+            if let state = MixerFFI.streamDestinationStats(
+                encoderId: encoderId,
+                destinationId: output.id
+            ) {
+                next[output.id] = state
+            }
+        }
+        if next != streamStats {
+            streamStats = next
+        }
+        // A stream that is enabled but sending nothing is the case support needs to
+        // see; one line every couple of seconds names the numbers.
+        if !next.isEmpty {
+            let now = Date()
+            if streamLogAt.map({ now.timeIntervalSince($0) >= 2 }) ?? true {
+                streamLogAt = now
+                for (id, state) in next {
+                    HostLog.write(
+                        "INFO",
+                        "stream stats dest=\(id) connected=\(state.connected) frames=\(state.frames) dropped=\(state.dropped) fps=\(Double(state.fpsMilli) / 1000) bitrate=\(state.bitrate) lag=\(state.lagMs) message=\(state.message)"
+                    )
+                }
+            }
+        }
+    }
+
     private func startTimers() {
         // The vMix API and eivizctl edit the mixer's session, not this host's copy. Poll the
         // revision and adopt the Replay document so marks and clips made from a Stream Deck
         // appear in the deck.
         sessionSyncTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.syncReplayFromMixer() }
+        }
+        // One shared poll feeds every stream strip; a timer owned by a view would be
+        // rebuilt by the meter updates that redraw the deck dozens of times a second.
+        streamTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshStreamStats() }
         }
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -537,10 +588,47 @@ final class MixerController: ObservableObject {
         refreshRemoteWarn()
     }
 
-    func applyVmixApi() {
+    /// The API configuration the listeners were last configured with. A settings change
+    /// that does not touch the API leaves them alone: stopping and rebinding drops every
+    /// client, and the port can still look taken while the old socket closes.
+    private var appliedApiRequest: String?
+
+    /// `force` is for a mixer that was just created: nothing is listening yet, so the
+    /// cached request describes an earlier mixer.
+    func applyVmixApi(force: Bool = false) {
+        if !force, apiRequest() == appliedApiRequest { return }
         applyHttpApi()
         applyTcpApi()
         applyNativeApi()
+        // Keep what was actually configured, not what was asked for: a busy HTTP port is
+        // moved to the next free one, and asking for the moved port again is not a change.
+        appliedApiRequest = apiRequest()
+    }
+
+    /// Everything the three listeners are configured from, so an apply that would not
+    /// change one of them can be skipped.
+    private func apiRequest() -> String {
+        let settings = session.settings
+        let prefs = AppPrefs.shared
+        return [
+            "\(settings.vmixApiEnabled)",
+            "\(settings.vmixApiPort)",
+            settings.vmixApiUser,
+            settings.vmixApiPassword,
+            "\(settings.vmixTcpEnabled)",
+            "\(prefs.nativeApiEnabled)",
+            "\(prefs.nativeApiPort)",
+            prefs.nativeApiBind,
+            prefs.nativeApiRole,
+            prefs.resolvedMediaDirectory,
+            KeychainStore.load(account: "listen")
+        ].joined(separator: "\u{1F}")
+    }
+
+    /// The mixer is gone, so its listeners went with it; the next apply has to configure
+    /// them even though the request has not changed.
+    func invalidateApiRequest() {
+        appliedApiRequest = nil
     }
 
     private func applyHttpApi() {
@@ -662,11 +750,9 @@ final class MixerController: ObservableObject {
         }
         let ownerText = MixerFFI.wsListenOwnerText()
         let owner = ownerText.isEmpty ? nil : ownerText
-        prefs.nativeApiEnabled = false
-        prefs.save()
-        _ = MixerFFI.withCString(host) { hostPtr in
-            mixer_ws_configure_owned(0, hostPtr, port, "", "", "")
-        }
+        // The configured state stays as it is. Switching the API off here would hide a
+        // port conflict - one the operator can clear, or that a restart clears by
+        // itself - behind a setting nobody changed.
         if let owner {
             HostLog.write("WARN", "Protobuf WebSocket API listen failed on port \(port); in use by \(owner); disabled")
         } else {
@@ -703,6 +789,9 @@ final class MixerController: ObservableObject {
 
     func publishSession() {
         if isRemote { return }
+        // The core reconciles RTMP destinations from this document, so the module must
+        // already know each destination's key when the replace runs.
+        syncRtmpSecrets()
         // New surfaces read the cap from here, so a master-format change in the
         // settings reaches the flip size without needing to re-create controllers.
         EivizSurfaceCap.shared.update(width: session.settings.defaultWidth, height: session.settings.defaultHeight)
@@ -1313,3 +1402,4 @@ final class SwitcherCloser: NSObject, NSWindowDelegate {
         }
     }
 }
+

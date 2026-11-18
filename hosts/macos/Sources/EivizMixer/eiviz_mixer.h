@@ -126,6 +126,9 @@ typedef struct EivizCapabilities {
     uint32_t replay_angle_limit;
     uint32_t replay_channel_limit;
     uint32_t replay_linked;
+    // Bit n is ON when stream encoder code n can start: 1 OpenH264,
+    // 2 VideoToolbox, 4 MediaFoundation.
+    uint32_t stream_encoder_mask;
 } EivizCapabilities;
 
 typedef struct EivizReplayStats {
@@ -520,6 +523,7 @@ int32_t mixer_push_frame(uint64_t id, const uint8_t *ptr, uint32_t stride, uint3
 int32_t mixer_push_audio(uint64_t id, int32_t sample_rate, int32_t channels, uint32_t frames, int64_t pts, const float *planar);
 int32_t mixer_load_still(uint64_t id, const char *path);
 int32_t mixer_video_start(uint64_t id, const char *path, uint32_t capture, uint32_t format, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, uint32_t frame_buffer_frames);
+int32_t mixer_video_start_ex(uint64_t id, const char *path, uint32_t capture, uint32_t format, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, uint32_t frame_buffer_frames, uint32_t decode_path);
 int32_t mixer_video_enum_captures(EivizVideoCaptureInfo *out, uint32_t cap);
 int32_t mixer_video_enum_capture_modes(const char *device_id, EivizVideoCaptureMode *out, uint32_t cap);
 int32_t mixer_video_set_playing(uint64_t id, uint32_t playing);
@@ -676,8 +680,14 @@ int32_t mixer_stream_encoder_add(
     uint32_t video_only, uint32_t encoder_threads, uint32_t buffer_ms, uint32_t encoder,
     uint32_t complexity, uint32_t ref_frames, uint32_t cabac, uint32_t deblock,
     uint32_t background_detection, uint32_t adaptive_quant, uint32_t scene_change,
-    uint32_t audio_delay_ms);
+    uint32_t audio_delay_ms, const char *encoder_device);
 int32_t mixer_stream_encoder_remove(uint64_t encoder_id);
+// Encoder devices a kind can build, as a JSON array of {"name","hardware"}.
+// encoder_kind: 0 OpenH264, 1 VideoToolbox, 2 MediaFoundation. Writes the
+// required byte count to *needed and returns ERR_BUFFER_TOO_SMALL when cap is
+// too small (a null buffer with cap 0 asks for the size only).
+int32_t mixer_stream_encoder_devices(
+    uint32_t encoder_kind, uint8_t *out, size_t cap, size_t *needed);
 int32_t mixer_stream_destination_add(
     uint64_t encoder_id, uint64_t destination_id, const char *url, const char *secret_ref);
 int32_t mixer_stream_destination_remove(uint64_t encoder_id, uint64_t destination_id);

@@ -141,6 +141,22 @@ pub fn fill_capabilities(out: &mut MixerCapabilities) {
     let ent = entitlements();
     let decklink = module().decklink().is_some();
     let rtmp = module().streaming().is_some();
+    // OpenH264 is linked everywhere the streaming module is. VideoToolbox is
+    // macOS only; MediaFoundation is Windows only. The mask tells the host
+    // which choices to offer; a stream with an unavailable kind still fails at
+    // start, so the mask must never claim a kind this OS cannot build.
+    let mut stream_encoder_mask = 0;
+    if rtmp {
+        stream_encoder_mask |= crate::abi::STREAM_ENCODER_BIT_OPENH264;
+        #[cfg(target_os = "macos")]
+        {
+            stream_encoder_mask |= crate::abi::STREAM_ENCODER_BIT_VIDEOTOOLBOX;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            stream_encoder_mask |= crate::abi::STREAM_ENCODER_BIT_MEDIAFOUNDATION;
+        }
+    }
     *out = MixerCapabilities {
         plan: ent.plan.abi(),
         mixing_unit_limit: ent.mixing_units.abi_count(),
@@ -158,6 +174,7 @@ pub fn fill_capabilities(out: &mut MixerCapabilities) {
         replay_angle_limit: ent.replay_angles.abi_count(),
         replay_channel_limit: ent.replay_channels.abi_count(),
         replay_linked: u32::from(module().replay().is_some()),
+        stream_encoder_mask,
     };
     let _ = Plan::Community;
 }

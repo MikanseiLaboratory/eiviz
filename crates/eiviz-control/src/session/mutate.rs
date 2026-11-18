@@ -2,6 +2,7 @@
 
 use crate::command::SessionMutation;
 use crate::error::{ControlError, ControlResult};
+use crate::session::DecodePath;
 use crate::session::replay::ReplayDeckEditDto;
 use crate::session::{Document, InputDto, InputKind, MultiviewDto, SceneDto, UnitDto};
 
@@ -188,6 +189,7 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
                 audio_process_exe: String::new(),
                 audio_process_aumid: String::new(),
                 decklink_mode: String::new(),
+                decode_path: DecodePath::Auto,
             });
             document.next_input_id = id.saturating_add(1);
             Ok(())
@@ -1020,6 +1022,39 @@ mod tests {
         let replay = doc.replay.as_ref().unwrap();
         assert_eq!(replay.events.len(), 1, "the event survives an Apply");
         assert_eq!(replay.events[0].name, "Goal");
+    }
+
+    /// An angle added in the settings window has to reach the document. Apply
+    /// sends only the settings, so the angle list is the one thing that must
+    /// travel with them.
+    #[test]
+    fn updating_replay_settings_adds_an_angle() {
+        use crate::session::replay::{AngleDto, ReplaySettingsDto};
+        let mut doc = bars_with_replay();
+        let base = doc.replay.as_ref().unwrap().clone();
+        assert!(base.angles.is_empty(), "the fixture starts with no angles");
+        let mut settings = ReplaySettingsDto::from_document(&base);
+        settings.angles.push(AngleDto {
+            id: 1,
+            name: "A1".into(),
+            source: Default::default(),
+            scene_id: 1,
+            input_id: 0,
+            audio: Default::default(),
+            audio_unit_id: 0,
+            encoder: Default::default(),
+        });
+        apply(
+            &mut doc,
+            SessionMutation::UpdateReplaySettings {
+                settings: Box::new(settings),
+            },
+        )
+        .unwrap();
+        let replay = doc.replay.as_ref().unwrap();
+        assert_eq!(replay.angles.len(), 1, "the new angle is in the document");
+        assert_eq!(replay.angles[0].id, 1);
+        assert_eq!(replay.next_angle_id, 2, "the counter follows the angle");
     }
 
     #[test]

@@ -43,6 +43,10 @@ description: セッションに保存される設定ウィンドウの項目
   - **GPU**: GPU負荷を活用する補助エンコーダー。Multiviewなどの監視用途に適しています。
   - ※NDIは常にCPUでエンコードされます。
 
+### 配信 (RTMP) の診断
+
+配信が始まらず、ログに `stream destination id=…: stream encoder is not running (…)` と出る場合は、まず同じ名前のストリームエンコーダがセッションに定義され、URLの接続先とシークレットが設定済みかを確認します。括弧内は直近のエンコーダ追加の結果です（例: `the last add failed: ...`）。エンコーダの追加自体が失敗しているときは、その直前に `stream encoder id=…` のエラー行が出力され、解像度・フレームレート・プラン上限・Proモジュールの有無など理由が書かれています。エンコーダーの選択肢は、WindowsではOpenH264とMedia Foundation（OS側のエンコーダー。ドライバーが対応していればNVIDIA/AMD/Intelのハードウェアを使用）、macOSではOpenH264とVideoToolboxが表示されます。WindowsでMedia Foundationを選ぶと**エンコーダーデバイス**の選択欄が現れ、このマシンで利用できるMedia FoundationのH.264エンコーダー（GPUベンダーのハードウェアやOSのソフトウェアエンコーダー）を名前で明示的に選べます。「自動」はミキサーの既定順（NVIDIA→AMD→Intel→その他→ソフトウェア）に従います。選択したデバイスが使えない場合はそのまま配信開始がエラーになり、別のデバイスへ黙って切り替わることはありません。
+
 ## Multiview
 
 マルチビュー機能の動作を設定します。詳細は[Multiviews](/eiviz/ja/concepts/multiviews/)を参照してください。
@@ -97,3 +101,7 @@ Professional以上で、かつプロジェクトにリプレイ入力がある�
 - 録画中はアングル構成を変更できません。先に録画を停止してください。
 
 残り時間の警告しきい値（警告/注意/危険、秒）はこのウィンドウではなくセッションの設定に属します。既定は600/300/60秒で、メインウィンドウのリプレイ状態行の色はこの値が決める重大度に従います。
+
+## OpenH264（macOS）
+
+macOSの配信はVideoToolboxが既定ですが、動画やカメラの入力がVideoToolboxを掴んでいると配信が0fpsになることがあります。その場合はエンコード設定のエンコーダーを**OpenH264**にしてください。配信モジュールは`libopenh264`を配信開始時に読み込むため、ホストが初回にCiscoの配布元（`ciscobinary.openh264.org`）からmacOS(Apple Silicon)版を取得し、`~/Library/Application Support/eiviz/openh264/libopenh264.dylib`に保存します。取得状況は設定の「配信」ページに表示され、手動で再取得もできます。`OPENH264_PATH`が設定されている場合はそちらが優先されます。ライセンスは[Ciscoのバイナリライセンス](http://www.openh264.org/BINARY_LICENSE.txt)に従います。
