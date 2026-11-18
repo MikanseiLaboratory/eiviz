@@ -3745,6 +3745,7 @@ unsafe fn mixer_omt_connect_ffi(
         let previous_video = shared.videos.remove(&id);
         let previous_recv = shared.receivers.remove(&id);
         let uploads = shared.uploads.clone();
+        let ingest = shared.gpu_ingest.clone();
         let gpu = if use_gpu != 0 {
             Some(shared.omt_gpu.clone())
         } else {
@@ -3752,24 +3753,24 @@ unsafe fn mixer_omt_connect_ffi(
         };
         #[cfg(any(windows, target_os = "macos"))]
         {
-            (uploads, gpu, previous_recv, previous_video)
+            (uploads, gpu, ingest, previous_recv, previous_video)
         }
         #[cfg(not(any(windows, target_os = "macos")))]
         {
-            (uploads, gpu, previous_recv)
+            (uploads, gpu, ingest, previous_recv)
         }
     }) {
         Ok(value) => value,
         Err(code) => return code,
     };
     #[cfg(any(windows, target_os = "macos"))]
-    let (uploads, gpu, previous_recv, previous_video) = taken;
+    let (uploads, gpu, ingest, previous_recv, previous_video) = taken;
     #[cfg(not(any(windows, target_os = "macos")))]
-    let (uploads, gpu, previous_recv) = taken;
+    let (uploads, gpu, ingest, previous_recv) = taken;
     drop(previous_recv);
     #[cfg(any(windows, target_os = "macos"))]
     drop(previous_video);
-    match OmtReceiver::start(id, address, uploads, gpu, depth, quality) {
+    match OmtReceiver::start(id, address, uploads, gpu, ingest, depth, quality) {
         Ok(receiver) => insert_receiver(id, LiveReceiver::Omt(receiver)),
         Err(error) => report_io(error),
     }
