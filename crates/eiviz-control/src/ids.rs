@@ -226,7 +226,7 @@ fn resolve_named<'a, T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{InputDto, InputKind};
+    use crate::session::{DecodePath, InputDto, InputKind};
 
     fn doc_with_inputs(inputs: Vec<InputDto>) -> Document {
         let mut doc: Document = serde_json::from_str("{}").unwrap();

@@ -916,7 +916,7 @@ mod tests {
                 format!("{}/tests/fixtures/av_metal.mp4", env!("CARGO_MANIFEST_DIR"))
             });
         let gpu = GpuDevice::with_backend(BackendRequest::Metal).expect("Metal device");
-        let mut pump = NativePump::open_file(&path, 0, 1).expect("video pump");
+        let mut pump = NativePump::open_file(&path, 0, 1, true).expect("video pump");
         pump.set_metal(&gpu.device);
         for _ in 0..60 {
             match pump.next() {
@@ -958,6 +958,7 @@ mod tests {
             Arc::clone(&uploads),
             3,
             Some(gpu.device.clone()),
+            true,
         )
         .expect("video pump");
         for _ in 0..300 {
