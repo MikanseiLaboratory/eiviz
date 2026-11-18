@@ -40,6 +40,14 @@ final class EivizAppDelegate: NSObject, NSApplicationDelegate {
     private let closeGuard = OnAirWindowDelegate()
     private var observer: NSObjectProtocol?
 
+    /// AppKit reads this before it starts restoring windows, and SwiftUI's own
+    /// restore path does not honour the delegate answers. A window the previous
+    /// run left mid-restore makes the launch wait forever, so the switch is set
+    /// here, during launch, and the session decides the windows instead.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        UserDefaults.standard.set(false, forKey: "NSQuitAlwaysKeepsWindows")
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         observer = NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification,
@@ -52,6 +60,37 @@ final class EivizAppDelegate: NSObject, NSApplicationDelegate {
             else { return }
             window.delegate = self.closeGuard
         }
+    }
+
+    /// Window state restoration is off for this app.
+    ///
+    /// The session is what decides the windows and the layout, and AppKit's
+    /// automatic restore runs before the session is applied. On a machine where a
+    /// previous run was killed, that restore waits for a SwiftUI window that is
+    /// never going to come back and the app hangs before the first frame: the
+    /// operator sees a launch that never finishes. Nothing here needs the
+    /// restoration, so it is refused outright.
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
+        false
+    }
+
+    func applicationShouldSaveSecureApplicationState(_ app: NSApplication) -> Bool {
+        false
+    }
+
+    /// The pre-Secure-Coding pair. AppKit still asks these first on a plain
+    /// launch, and it is the pair that decides whether the restore that hung
+    /// `_batchMinimizeWindows` runs at all.
+    func applicationShouldSaveApplicationState(_ app: NSApplication) -> Bool {
+        false
+    }
+
+    func applicationShouldRestoreApplicationState(_ app: NSApplication) -> Bool {
+        false
+    }
+
+    func applicationShouldRestoreSecureApplicationState(_ app: NSApplication) -> Bool {
+        false
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

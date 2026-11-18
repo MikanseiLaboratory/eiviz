@@ -453,7 +453,13 @@ extension MixerController {
             pendingOpenPath = path
             return
         }
-        loadSession(path: path)
+        // Opening a document arrives as an AppleEvent, and this runs inside
+        // AppKit's handler for it. Creating a mixer there deadlocks: the audio
+        // engine waits on a reply that only the main run loop can deliver, and
+        // the run loop is inside this call. One turn later the run loop is free.
+        DispatchQueue.main.async { [weak self] in
+            self?.loadSession(path: path)
+        }
     }
 
     func openPendingSession() {
