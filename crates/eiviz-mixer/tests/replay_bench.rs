@@ -300,6 +300,18 @@ fn replay_stage0() {
 #[test]
 #[ignore]
 fn decode_concurrency() {
+    // EIVIZ_BENCH_SHARED_POOL=<n>: every channel's codec draws slice workers
+    // from one shared pool (<n> workers; "1" or unparsable = machine default)
+    // instead of per-codec worker sets, which oversubscribe once channels
+    // multiply. The shared pool also carries the GPU entropy stage.
+    if let Some(value) = std::env::var_os("EIVIZ_BENCH_SHARED_POOL") {
+        let threads = value
+            .to_str()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|n| *n > 1);
+        vmx::use_shared_thread_pool(threads);
+        println!("shared slice pool: on ({threads:?} threads)");
+    }
     let packet = {
         let mut encoder = Codec::new(Config {
             width: WIDTH as i32,
@@ -342,7 +354,7 @@ fn decode_concurrency() {
         } else {
             None
         };
-        let started = Instant::now();
+        let _started = Instant::now();
         let mut joins = Vec::new();
         for _ in 0..channels {
             let packet = packet.clone();

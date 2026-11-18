@@ -1933,7 +1933,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "openmediatransport"
 version = "0.2.0"
-source = "git+https://github.com/MikanseiLaboratory/openmediatransport-rs?branch=perf%2Freceive-hot-path#ef499c4323d19da1e24fb039552af6891c240a8b"
+source = "git+https://github.com/MikanseiLaboratory/openmediatransport-rs?rev=ef499c4323d19da1e24fb039552af6891c240a8b#ef499c4323d19da1e24fb039552af6891c240a8b"
 dependencies = [
  "bytes",
  "mdns-sd",
@@ -3122,7 +3122,7 @@ dependencies = [
 [[package]]
 name = "vmx"
 version = "0.2.0"
-source = "git+https://github.com/MikanseiLaboratory/vmx-rs?branch=perf%2Fhot-path#9cf81c08ceff71716bb6aa33518064fbaf6c3ba4"
+source = "git+https://github.com/MikanseiLaboratory/vmx-rs?rev=aed8aeece63fb38e313c1c516a295547672e9099#aed8aeece63fb38e313c1c516a295547672e9099"
 dependencies = [
  "bytemuck",
  "pollster 0.4.0",
