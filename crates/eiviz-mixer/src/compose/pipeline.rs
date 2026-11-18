@@ -354,6 +354,7 @@ pub(crate) fn write_aligned_texture(
     tex_width: u32,
     format: wgpu::TextureFormat,
     uploader: Option<&mut crate::rebar::FrameUploader>,
+    pad: &mut Vec<u8>,
 ) -> Result<(), String> {
     // A selected uploader that fails is reported, not replaced by `queue.write_texture`.
     if let Some(uploader) = uploader.filter(|uploader| !uploader.uses_queue_write()) {
@@ -374,16 +375,23 @@ pub(crate) fn write_aligned_texture(
         }
         (Cow::Borrowed(&data[..needed]), row_bytes)
     } else {
-        let mut padded = vec![0u8; aligned as usize * height as usize];
+        // The pad gaps are zeroed only when the scratch is (re)sized; the row
+        // copies never touch them, so the buffer is reused across frames
+        // without another allocation or zero-fill pass.
+        let padded_len = aligned as usize * height as usize;
+        if pad.len() != padded_len {
+            pad.clear();
+            pad.resize(padded_len, 0);
+        }
         let row = row_bytes as usize;
         for y in 0..height as usize {
             let src = y * row;
             let dst = y * aligned as usize;
             if src + row <= data.len() {
-                padded[dst..dst + row].copy_from_slice(&data[src..src + row]);
+                pad[dst..dst + row].copy_from_slice(&data[src..src + row]);
             }
         }
-        (Cow::Owned(padded), aligned)
+        (Cow::Borrowed(&pad[..]), aligned)
     };
     device.queue.write_texture(
         texture.as_image_copy(),
