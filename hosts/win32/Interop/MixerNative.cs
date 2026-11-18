@@ -381,6 +381,9 @@ internal static partial class MixerNative
     [LibraryImport(LibraryName, EntryPoint = "mixer_video_start", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int VideoStart(ulong id, string path, uint capture, uint format, uint width, uint height, uint fpsNum, uint fpsDen, uint frameBufferFrames);
 
+    [LibraryImport(LibraryName, EntryPoint = "mixer_video_start_ex", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int VideoStartEx(ulong id, string path, uint capture, uint format, uint width, uint height, uint fpsNum, uint fpsDen, uint frameBufferFrames, uint decodePath);
+
     [LibraryImport(LibraryName, EntryPoint = "mixer_video_enum_captures")]
     internal static unsafe partial int VideoEnumCaptures(MixerVideoCaptureInfo* devices, uint capacity);
 

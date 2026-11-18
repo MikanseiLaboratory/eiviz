@@ -531,12 +531,13 @@ internal static class MixerApply
         bool loop = true,
         bool playing = true,
         uint frameBufferFrames = 3,
-        long positionHns = 0) => Try(() =>
+        long positionHns = 0,
+        InputDecodePath decodePath = InputDecodePath.Auto) => Try(() =>
     {
         if (!File.Exists(path))
             throw new InvalidOperationException(Loc.MissingFile("Video start"));
         MixerNative.ThrowIfFailed(
-            MixerNative.VideoStart(
+            MixerNative.VideoStartEx(
                 sourceId,
                 path,
                 0,
@@ -545,7 +546,8 @@ internal static class MixerApply
                 0,
                 0,
                 0,
-                Math.Clamp(frameBufferFrames == 0 ? 3u : frameBufferFrames, 1u, 8u)),
+                Math.Clamp(frameBufferFrames == 0 ? 3u : frameBufferFrames, 1u, 8u),
+                (uint)decodePath),
             "Video start");
         MixerNative.VideoSetLoop(sourceId, loop ? 1u : 0u);
         MixerNative.VideoSetPlaying(sourceId, playing ? 1u : 0u);
@@ -560,9 +562,10 @@ internal static class MixerApply
         uint height,
         uint fpsNum,
         uint fpsDen,
-        uint frameBufferFrames = 3) => Try(() =>
+        uint frameBufferFrames = 3,
+        InputDecodePath decodePath = InputDecodePath.Auto) => Try(() =>
         MixerNative.ThrowIfFailed(
-            MixerNative.VideoStart(
+            MixerNative.VideoStartEx(
                 sourceId,
                 symbolicLink,
                 1,
@@ -571,7 +574,8 @@ internal static class MixerApply
                 height,
                 fpsNum,
                 fpsDen,
-                Math.Clamp(frameBufferFrames == 0 ? 3u : frameBufferFrames, 1u, 8u)),
+                Math.Clamp(frameBufferFrames == 0 ? 3u : frameBufferFrames, 1u, 8u),
+                (uint)decodePath),
             "UVC start"));
 
     public static bool RemoveOutput(ulong outputId) => Try(() => MixerNative.OutputRemove(outputId));

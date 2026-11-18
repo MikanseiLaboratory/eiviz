@@ -540,10 +540,11 @@ public partial class App : Application
                         input.PathOrAddress,
                         input.VideoLoop,
                         input.VideoStartsPlaying,
-                        input.FrameBufferFrames);
+                        input.FrameBufferFrames,
+                        decodePath: input.DecodePath);
                     break;
                 case InputKind.UVC when !network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
-                    MixerApply.StartUvc(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames);
+                    MixerApply.StartUvc(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames, decodePath: input.DecodePath);
                     break;
                 case InputKind.OMT when network && !string.IsNullOrWhiteSpace(input.PathOrAddress):
                     MixerApply.ConnectOmt(

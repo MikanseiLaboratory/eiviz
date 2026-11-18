@@ -397,7 +397,8 @@ public partial class MainWindow
                     dialog.ResultPath!,
                     input.VideoLoop,
                     input.VideoStartsPlaying,
-                    input.FrameBufferFrames);
+                    input.FrameBufferFrames,
+                    decodePath: input.DecodePath);
                 break;
             case InputKind.OMT:
                 MixerApply.ConnectOmt(
@@ -432,7 +433,7 @@ public partial class MainWindow
                 input.CaptureHeight = dialog.ResultCaptureHeight;
                 input.CaptureFpsNum = dialog.ResultCaptureFpsNum;
                 input.CaptureFpsDen = dialog.ResultCaptureFpsDen;
-                MixerApply.StartUvc(input.Id, dialog.ResultPath!, dialog.ResultCaptureWidth, dialog.ResultCaptureHeight, dialog.ResultCaptureFpsNum, dialog.ResultCaptureFpsDen, input.FrameBufferFrames);
+                MixerApply.StartUvc(input.Id, dialog.ResultPath!, dialog.ResultCaptureWidth, dialog.ResultCaptureHeight, dialog.ResultCaptureFpsNum, dialog.ResultCaptureFpsDen, input.FrameBufferFrames, decodePath: input.DecodePath);
                 break;
             case InputKind.Mix:
                 if (dialog.ResultMixSource != MixSource.SessionMultiview)
@@ -1392,10 +1393,11 @@ public partial class MainWindow
                     input.VideoLoop,
                     playing,
                     input.FrameBufferFrames,
-                    position);
+                    position,
+                    decodePath: input.DecodePath);
             }
             else if (input.Kind == InputKind.UVC)
-                MixerApply.StartUvc(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames);
+                MixerApply.StartUvc(input.Id, input.PathOrAddress, input.CaptureWidth, input.CaptureHeight, input.CaptureFpsNum, input.CaptureFpsDen, input.FrameBufferFrames, decodePath: input.DecodePath);
         }
     }
 
