@@ -915,42 +915,16 @@ impl ReplayEngine {
                 &dto.angles.iter().map(|angle| angle.id).collect::<Vec<_>>(),
             );
         }
-        let mut inner = self.lock();
-        let mut old = std::mem::take(&mut inner.channels);
-        // The recording store is opened with the angle set the operator had at the time,
-        // and it keeps that list: a later configure with more angles left the extra ones
-        // without a store entry, so their statistics read zero even though the recorder
-        // wrote them. A changed angle set while stopped reopens it.
-        let previous_angles: Vec<u32> = inner.config.angles.iter().map(|angle| angle.id).collect();
-        let next_angles: Vec<u32> = dto.angles.iter().map(|angle| angle.id).collect();
-        let angles_changed = previous_angles != next_angles;
-        let recording = inner.recording;
-        drop(inner);
-        // Only when the store actually holds a different angle set: closing one that
-        // already matches would drop a recording the operator is still working with.
-        let stale_store = angles_changed
-            && !recording
-            && self
-                .record_store
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_ref()
-                .is_some_and(|store| {
-                    let reported = store
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .stats()
-                        .angles
-                        .len();
-                    reported != next_angles.len()
-                });
-        if stale_store {
-            self.release_store();
-            *self
-                .record_store
-                .lock()
-                .unwrap_or_else(|error| error.into_inner()) = None;
-        }
+        // The store is opened with the angle set the operator had when the recording
+        // started. Applying a different set while stopped must not close it: what it
+        // recorded stays readable, which is what stopping the recorder promises. The
+        // next recording opens a store with the set configured by then, and dropping
+        // the old one finalises it.
+        let mut old = {
+            // The guard is released before anything else takes the lock.
+            let mut inner = self.lock();
+            std::mem::take(&mut inner.channels)
+        };
         let mut inner = self.lock();
         inner.operations_reason = operations_reason;
         // The cue tables are shared slices so the playout tick clones two reference
@@ -2902,7 +2876,20 @@ impl ReplayEngine {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
+        // Taken before the engine lock: the readback counters have a lock of
+        // their own, and taking it while the engine lock is held is the other
+        // half of a lock order another thread completes.
+        let dropped: std::collections::HashMap<u32, u64> = self
+            .dropped_readback
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
         let Some(store) = store else {
+            // Nothing has been recorded yet, or the store is gone. The angle list
+            // still follows the configuration, so an angle added in Replay Setup
+            // shows up before the first recording instead of only after it.
+            let mut inner = self.lock();
+            refresh_angle_list(&mut inner, &dropped, None);
             return;
         };
         let snapshot = store
@@ -2910,11 +2897,16 @@ impl ReplayEngine {
             .unwrap_or_else(|error| error.into_inner())
             .stats();
         let mut inner = self.lock();
-        apply_pro_stats(&mut inner, self, &snapshot);
+        apply_pro_stats(&mut inner, self, &dropped, &snapshot);
     }
 }
 
-fn apply_pro_stats(inner: &mut Inner, engine: &ReplayEngine, snapshot: &ReplayStats) {
+fn apply_pro_stats(
+    inner: &mut Inner,
+    engine: &ReplayEngine,
+    dropped: &std::collections::HashMap<u32, u64>,
+    snapshot: &ReplayStats,
+) {
     inner.stats.state = if inner.recording {
         STATE_RECORDING
     } else if snapshot.state == STATE_STOPPED {
@@ -2974,8 +2966,18 @@ fn apply_pro_stats(inner: &mut Inner, engine: &ReplayEngine, snapshot: &ReplaySt
             pace,
         )
     };
-    // One entry per configured angle, so the operator sees the readback drops and
-    // the queue even when the module has not reported that angle yet.
+    refresh_angle_list(inner, dropped, Some(snapshot));
+}
+
+/// Rebuilds the per-angle statistics from the configured angle list, merging what
+/// the store reported for the angles that exist in it. A configured angle the
+/// store has never seen reads zero rather than disappearing: the operator added
+/// it and needs to see it.
+fn refresh_angle_list(
+    inner: &mut Inner,
+    dropped_readback: &std::collections::HashMap<u32, u64>,
+    snapshot: Option<&ReplayStats>,
+) {
     let configured: Vec<(u32, u64)> = inner
         .config
         .angles
@@ -2989,24 +2991,19 @@ fn apply_pro_stats(inner: &mut Inner, engine: &ReplayEngine, snapshot: &ReplaySt
             ..ReplayAngleStats::default()
         };
         let reported = snapshot
-            .angles
-            .iter()
-            .find(|angle| angle.angle_id == angle_id)
+            .and_then(|snapshot| {
+                snapshot
+                    .angles
+                    .iter()
+                    .find(|angle| angle.angle_id == angle_id)
+            })
             .unwrap_or(&empty);
         // The store and the engine both count what was written. Whichever is larger is
         // the truth: a module that under-reports an angle must not hide frames that are
         // on disk, and a store that has flushed more than this engine saw is ahead.
         let ours = inner.angle_written.get(&angle_id).copied().unwrap_or(0);
-        // The per-angle readback losses keep their own mutex, so the refresh takes
-        // it once per angle rather than leaving it to the stat assembly.
-        let dropped = engine
-            .dropped_readback
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get(&angle_id)
-            .copied()
-            .unwrap_or(0);
-        let mut stats = angle_stats(reported, &inner, scene_gpu_id, dropped);
+        let dropped = dropped_readback.get(&angle_id).copied().unwrap_or(0);
+        let mut stats = angle_stats(reported, inner, scene_gpu_id, dropped);
         stats.frames_written = stats.frames_written.max(ours);
         angles.push(stats);
     }
@@ -5814,6 +5811,38 @@ mod recording_registry_tests {
             }],
             default_transition: ClipTransitionDto::default(),
         }
+    }
+
+    fn angle(id: u32) -> eiviz_control::session::replay::AngleDto {
+        eiviz_control::session::replay::AngleDto {
+            id,
+            name: format!("A{id}"),
+            source: Default::default(),
+            scene_id: u64::from(id),
+            input_id: 0,
+            audio: Default::default(),
+            audio_unit_id: 0,
+            encoder: Default::default(),
+        }
+    }
+
+    /// An angle added in Replay Setup has to show up before the first recording
+    /// starts. It used to appear only after a store existed, because the list was
+    /// built from the store alone.
+    #[test]
+    fn configured_angles_appear_before_any_recording() {
+        let engine = ReplayEngine::new();
+        let mut inner = engine.lock();
+        inner.config.angles = vec![angle(1), angle(2)];
+        refresh_angle_list(&mut inner, &std::collections::HashMap::new(), None);
+        assert_eq!(inner.angles.len(), 2, "both configured angles are listed");
+        assert_eq!(inner.angles[0].angle_id, 1);
+        assert_eq!(inner.angles[1].angle_id, 2);
+        assert_eq!(inner.stats.angle_count, 2);
+        assert_eq!(
+            inner.angles[1].frames_written, 0,
+            "an angle that has not recorded yet reads zero, not absent"
+        );
     }
 
     #[test]
