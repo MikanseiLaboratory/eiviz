@@ -273,6 +273,8 @@ impl VideoPump {
         let seek_t = Arc::clone(&seek_hns);
         let pos_t = Arc::clone(&position_hns);
         let dur_t = Arc::clone(&duration_hns);
+        let audio_seek = Arc::new(AtomicI64::new(-1));
+        let audio_seek_video = Arc::clone(&audio_seek);
         let depth = frame_buffer_frames.clamp(1, 8);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let audio_path = path.clone();
@@ -297,6 +299,7 @@ impl VideoPump {
                     playing_t,
                     looping_t,
                     seek_t,
+                    audio_seek_video,
                     pos_t,
                     dur_t,
                     ready_tx,
@@ -307,13 +310,11 @@ impl VideoPump {
             .map_err(|error| error.to_string())?;
         match wait_ready(ready_rx) {
             Ok(()) => {
-                let audio_seek = Arc::new(AtomicI64::new(-1));
                 let audio_join = if capture {
                     None
                 } else {
                     let audio_stop = Arc::clone(&stop);
                     let audio_playing = Arc::clone(&playing);
-                    let audio_looping = Arc::clone(&looping);
                     let audio_seek_t = Arc::clone(&audio_seek);
                     thread::Builder::new()
                         .name(format!("eiviz-av-audio-{source_id}"))
@@ -324,7 +325,6 @@ impl VideoPump {
                                 audio_uploads,
                                 audio_stop,
                                 audio_playing,
-                                audio_looping,
                                 audio_seek_t,
                             );
                         })
@@ -415,6 +415,7 @@ fn run_loop(
     playing: Arc<AtomicBool>,
     looping: Arc<AtomicBool>,
     seek_hns: Arc<AtomicI64>,
+    audio_seek_hns: Arc<AtomicI64>,
     position_hns: Arc<AtomicI64>,
     duration_hns: Arc<AtomicI64>,
     ready: mpsc::SyncSender<Result<(), String>>,
@@ -527,6 +528,11 @@ fn run_loop(
                     if looping.load(Ordering::Relaxed) {
                         position_hns.store(0, Ordering::Relaxed);
                         seek_hns.store(0, Ordering::Relaxed);
+                        // The audio session runs on the output device's clock,
+                        // not on this wall clock, so its own EOF restart drifts
+                        // against the picture by the audio/video duration gap
+                        // on every pass. The seam signal re-anchors it here.
+                        audio_seek_hns.store(0, Ordering::Relaxed);
                     } else {
                         playing.store(false, Ordering::Relaxed);
                     }
@@ -606,7 +612,6 @@ fn run_audio_loop(
     uploads: Arc<Mutex<UploadStore>>,
     stop: Arc<AtomicBool>,
     playing: Arc<AtomicBool>,
-    looping: Arc<AtomicBool>,
     seek_hns: Arc<AtomicI64>,
 ) {
     let mut native = match NativePump::open_file(&path, 0, 2, true) {
@@ -644,17 +649,12 @@ fn run_audio_loop(
             }
             Ok(None) => thread::sleep(Duration::from_millis(2)),
             Err(true) => {
-                if looping.load(Ordering::Relaxed) {
-                    match NativePump::open_file(&path, 0, 2, true) {
-                        Ok(pump) => {
-                            native = pump;
-                            uploads.lock_or_recover().flush_audio(source_id);
-                        }
-                        Err(_) => return,
-                    }
-                } else {
-                    thread::sleep(Duration::from_millis(16));
-                }
+                // The audio track ended. Never restart from here: an audio-only
+                // restart runs on the output device's clock and drifts against
+                // the picture by the audio/video duration gap every pass. Loop
+                // playback re-anchors audio through the seek flag the video
+                // thread stores at its own EOF; a user seek does the same.
+                thread::sleep(Duration::from_millis(16));
             }
             Err(false) => thread::sleep(Duration::from_millis(16)),
         }
@@ -936,6 +936,85 @@ mod tests {
             }
         }
         panic!("no video frame reached the Metal path");
+    }
+
+    /// The audio pump restarts on its own EOF schedule, so looping decouples it
+    /// from the picture unless the video thread's loop seam re-anchors it. The
+    /// fixture (1.0 s of video, 0.17 s of audio) makes every seam drift the audio
+    /// phase by ~0.83 s when the seam signal is missing.
+    #[test]
+    fn loop_restart_re_anchors_audio_to_the_picture_seam() {
+        let path = std::env::var_os("EIVIZ_AV_LOOP_FIXTURE")
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| {
+                format!("{}/tests/fixtures/av_loop.mov", env!("CARGO_MANIFEST_DIR"))
+            });
+        let gpu = GpuDevice::with_backend(BackendRequest::Metal).expect("Metal device");
+        let uploads = Arc::new(Mutex::new(UploadStore::default()));
+        let pump = VideoPump::start(
+            78,
+            path,
+            false,
+            0,
+            0,
+            30_000,
+            1_001,
+            Arc::clone(&uploads),
+            3,
+            Some(gpu.device.clone()),
+            true,
+        )
+        .expect("video pump");
+
+        // Stand in for the output device: drain 1024 frames (~21.3 ms) on a
+        // wall-clock cadence so the audio thread advances like a real callback.
+        let audio = uploads.lock_or_recover().audio_store();
+        let seam_window = 3_000_000i64;
+        let wrap_gap = 500_000i64;
+        let start = Instant::now();
+        let mut ignored = 0u8;
+        let mut audio_wraps = 0u32;
+        let mut video_wraps = 0u32;
+        let mut violations = 0u32;
+        let mut last_audio_ts = -1i64;
+        let mut last_pos = 0i64;
+        while start.elapsed() < Duration::from_millis(6000) {
+            thread::sleep(Duration::from_millis(20));
+            let mut slot = Vec::new();
+            audio.lock_or_recover().pop_frames_into(78, 1024, &mut slot);
+            let pos = pump.info().position_hns;
+            if last_pos > pos + wrap_gap {
+                video_wraps += 1;
+            }
+            last_pos = pos;
+            if let Some(packet) = audio.lock_or_recover().latest_packet(78) {
+                if last_audio_ts >= 0 && last_audio_ts > packet.timestamp + wrap_gap {
+                    audio_wraps += 1;
+                    if ignored < 2 {
+                        // The first wraps warm every cache; later ones must count.
+                        ignored += 1;
+                    } else if pos > seam_window {
+                        eprintln!("audio restarted at picture position {} hns", pos);
+                        violations += 1;
+                    }
+                }
+                last_audio_ts = packet.timestamp;
+            }
+        }
+        drop(pump);
+
+        assert!(
+            video_wraps >= 4,
+            "only {video_wraps} loop seams in 6 s; the pump never looped"
+        );
+        assert!(
+            audio_wraps >= 4,
+            "audio restarted only {audio_wraps} times in 6 s"
+        );
+        assert_eq!(
+            violations, 0,
+            "audio restarted mid-pass {violations} times: the loop seam must re-anchor it"
+        );
     }
 
     #[test]
