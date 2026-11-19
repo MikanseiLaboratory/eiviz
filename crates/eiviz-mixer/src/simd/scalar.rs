@@ -83,6 +83,35 @@ pub fn yuy2_to_uyvy(src: &[u8], width: u32, height: u32, stride: usize, dst: &mu
     }
 }
 
+pub fn bgra_to_rgba_rows(
+    src: &[u8],
+    src_stride: usize,
+    dst: &mut [u8],
+    dst_stride: usize,
+    width: u32,
+    height: u32,
+) {
+    let row_bytes = (width as usize) * 4;
+    for y in 0..height as usize {
+        let s = y * src_stride;
+        let d = y * dst_stride;
+        // A row that does not fit is skipped (left untouched), matching the
+        // per-pixel loop that used to break out of that row.
+        if s >= src.len() || d >= dst.len() {
+            continue;
+        }
+        let n = row_bytes.min(src.len() - s).min(dst.len() - d) / 4 * 4;
+        for x in (0..n).step_by(4) {
+            let o = s + x;
+            let p = d + x;
+            dst[p] = src[o + 2];
+            dst[p + 1] = src[o + 1];
+            dst[p + 2] = src[o];
+            dst[p + 3] = src[o + 3];
+        }
+    }
+}
+
 pub fn or_opaque_bgra(pixels: &mut [u8]) {
     for pixel in pixels.chunks_exact_mut(4) {
         pixel[3] = 0xFF;

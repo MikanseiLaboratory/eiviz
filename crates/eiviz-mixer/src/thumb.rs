@@ -231,21 +231,17 @@ fn aligned_stride(width: u32) -> u32 {
 fn pack_bgra(src: &[u8], width: u32, height: u32, gpu_stride: u32) -> ThumbPixels {
     let stride = width * 4;
     let mut data = vec![0u8; (stride * height) as usize];
-    for y in 0..height as usize {
-        let row = y * gpu_stride as usize;
-        let dest = y * stride as usize;
-        for x in 0..width as usize {
-            let s = row + x * 4;
-            let d = dest + x * 4;
-            if s + 3 >= src.len() || d + 3 >= data.len() {
-                break;
-            }
-            data[d] = src[s + 2];
-            data[d + 1] = src[s + 1];
-            data[d + 2] = src[s];
-            data[d + 3] = src[s + 3];
-        }
-    }
+    // The GPU readback rows are padded to 256 bytes, so the repack is a
+    // stride-copy plus a per-pixel red/blue swap. Both are a byte permute;
+    // the SIMD path is byte-identical to the scalar loop.
+    crate::simd::bgra_to_rgba_rows(
+        src,
+        gpu_stride as usize,
+        &mut data,
+        stride as usize,
+        width,
+        height,
+    );
     ThumbPixels {
         width,
         height,
