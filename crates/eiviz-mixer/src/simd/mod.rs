@@ -45,6 +45,25 @@ pub fn yuy2_to_uyvy(src: &[u8], width: u32, height: u32, stride: usize, dst: &mu
     scalar::yuy2_to_uyvy(src, width, height, stride, dst);
 }
 
+/// Repack BGRA rows as RGBA (red/blue swapped) into a possibly tighter stride.
+pub fn bgra_to_rgba_rows(
+    src: &[u8],
+    src_stride: usize,
+    dst: &mut [u8],
+    dst_stride: usize,
+    width: u32,
+    height: u32,
+) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        x86::bgra_to_rgba_rows(src, src_stride, dst, dst_stride, width, height);
+        return;
+    }
+    // No aarch64 kernel yet: the swap is a byte permute, but a NEON version
+    // would need aarch64 CI to prove it byte-identical, so it stays scalar.
+    scalar::bgra_to_rgba_rows(src, src_stride, dst, dst_stride, width, height);
+}
+
 pub fn or_opaque_bgra(pixels: &mut [u8]) {
     #[cfg(target_arch = "x86_64")]
     {
@@ -172,6 +191,124 @@ mod tests {
         yuv422_to_bgra(&src, w, h, (w * 2) as usize, true, &mut simd);
         scalar::yuv422_to_bgra(&src, w, h, (w * 2) as usize, true, &mut scalar_out);
         assert_eq!(simd, scalar_out);
+    }
+
+    /// Widths that leave a tail after the 4-pixel vector step, plus the
+    /// one-pair edge, must still match the scalar reference exactly.
+    #[test]
+    fn yuv_odd_width_matches_scalar() {
+        for (w, uyvy) in [
+            (30u32, false),
+            (30, true),
+            (34, false),
+            (34, true),
+            (2, false),
+        ] {
+            let h = 3u32;
+            let src = packed_yuy2(w as usize, h as usize);
+            let mut simd = vec![0u8; (w * h * 4) as usize];
+            let mut scalar_out = vec![0u8; simd.len()];
+            yuv422_to_bgra(&src, w, h, (w * 2) as usize, uyvy, &mut simd);
+            scalar::yuv422_to_bgra(&src, w, h, (w * 2) as usize, uyvy, &mut scalar_out);
+            assert_eq!(simd, scalar_out, "w={w} uyvy={uyvy}");
+        }
+    }
+
+    /// Truncated source and destination buffers: the x86 kernels must stop at
+    /// the same sample as the scalar path instead of reading past the end.
+    ///
+    /// x86-only: the NEON path has always left a truncated frame's tail
+    /// unwritten, which is a different (pre-existing) policy for a case the
+    /// decoder never produces.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn yuv_short_buffers_match_scalar() {
+        let (w, h) = (16u32, 4u32);
+        let src = packed_yuy2(w as usize, h as usize);
+        let mut simd = vec![0u8; (w * h * 4) as usize];
+        let mut scalar_out = vec![0u8; simd.len()];
+        // Not a row boundary, so the last row is cut mid-sample.
+        let cut = 40usize;
+        yuv422_to_bgra(&src[..cut], w, h, (w * 2) as usize, false, &mut simd);
+        scalar::yuv422_to_bgra(&src[..cut], w, h, (w * 2) as usize, false, &mut scalar_out);
+        assert_eq!(simd, scalar_out);
+    }
+
+    /// Repeatable micro-benchmark: the dispatched kernel against the scalar
+    /// reference at 1080p. Run with `--ignored --nocapture`; on aarch64 this
+    /// measures NEON, on x86_64 SSE2/AVX2 (a Rosetta build reports SSE2 only,
+    /// so build the test binary for that target to exercise the x86 kernel).
+    #[test]
+    #[ignore = "micro-benchmark; run with --ignored --nocapture"]
+    fn yuv422_simd_speedup_over_scalar() {
+        use std::time::Instant;
+        let (w, h) = (1920u32, 1080u32);
+        let src = packed_yuy2(w as usize, h as usize);
+        let mut dst = vec![0u8; (w * h * 4) as usize];
+        let stride = (w * 2) as usize;
+        let iters = 20u32;
+        let started = Instant::now();
+        for _ in 0..iters {
+            scalar::yuv422_to_bgra(&src, w, h, stride, true, &mut dst);
+        }
+        let slow = started.elapsed().as_secs_f64() * 1000.0 / f64::from(iters);
+        let started = Instant::now();
+        for _ in 0..iters {
+            yuv422_to_bgra(&src, w, h, stride, true, &mut dst);
+        }
+        let fast = started.elapsed().as_secs_f64() * 1000.0 / f64::from(iters);
+        println!(
+            "path={} yuv422_to_bgra 1080p scalar={slow:.3} ms simd={fast:.3} ms speedup={:.2}x",
+            path(),
+            slow / fast
+        );
+        if path() != SimdPath::Scalar {
+            assert!(fast < slow, "simd path must beat scalar: {fast} vs {slow}");
+        }
+    }
+
+    #[test]
+    fn bgra_swap_rows_matches_scalar() {
+        // Padded readback stride in, tight thumb stride out, odd width tail.
+        for (w, h, gpu_stride) in [(64u32, 8u32, 320usize), (17, 3, 128), (1, 1, 256)] {
+            let src_len = gpu_stride * h as usize;
+            let src: Vec<u8> = (0..src_len).map(|i| (i * 7 % 251) as u8).collect();
+            let mut simd = vec![0u8; (w * 4 * h) as usize];
+            let mut scalar_out = vec![0u8; simd.len()];
+            bgra_to_rgba_rows(&src, gpu_stride, &mut simd, (w * 4) as usize, w, h);
+            scalar::bgra_to_rgba_rows(&src, gpu_stride, &mut scalar_out, (w * 4) as usize, w, h);
+            assert_eq!(simd, scalar_out, "w={w} h={h} stride={gpu_stride}");
+        }
+    }
+
+    /// Repeatable micro-benchmark for the thumbnail repack (padded GPU
+    /// readback stride in, tight thumb stride out, red/blue swapped).
+    #[test]
+    #[ignore = "micro-benchmark; run with --ignored --nocapture"]
+    fn bgra_swap_speedup_over_scalar() {
+        use std::time::Instant;
+        let (w, h) = (1920u32, 1080u32);
+        let gpu_stride = w as usize * 4 + 256;
+        let src: Vec<u8> = (0..gpu_stride * h as usize)
+            .map(|i| (i % 251) as u8)
+            .collect();
+        let mut dst = vec![0u8; (w * 4 * h) as usize];
+        let mut bench = |f: &dyn Fn(&mut [u8])| {
+            f(&mut dst);
+            let t = Instant::now();
+            for _ in 0..20 {
+                f(&mut dst);
+            }
+            t.elapsed().as_secs_f64() * 1000.0 / 20.0
+        };
+        let slow =
+            bench(&|d| scalar::bgra_to_rgba_rows(&src, gpu_stride, d, (w * 4) as usize, w, h));
+        let fast = bench(&|d| bgra_to_rgba_rows(&src, gpu_stride, d, (w * 4) as usize, w, h));
+        println!(
+            "path={} bgra_to_rgba_rows 1080p scalar={slow:.3} ms simd={fast:.3} ms speedup={:.2}x",
+            path(),
+            slow / fast
+        );
     }
 
     #[test]

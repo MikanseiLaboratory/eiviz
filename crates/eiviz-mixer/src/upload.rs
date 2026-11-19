@@ -330,6 +330,39 @@ impl GpuUploadRing {
     }
 }
 
+fn pad_spare() -> &'static Mutex<Vec<Vec<u8>>> {
+    static SPARE: OnceLock<Mutex<Vec<Vec<u8>>>> = OnceLock::new();
+    SPARE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// A row-alignment padding buffer, recycled across frames. The pad gaps are
+/// zeroed when a buffer is (re)sized and the row copies never touch them, so
+/// a reused buffer stays valid without another zero-fill pass.
+fn take_pad(len: usize) -> Vec<u8> {
+    let mut pool = pad_spare()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    while let Some(mut buffer) = pool.pop() {
+        if buffer.capacity() >= len {
+            if buffer.len() != len {
+                buffer.clear();
+                buffer.resize(len, 0);
+            }
+            return buffer;
+        }
+    }
+    vec![0u8; len]
+}
+
+fn give_pad(buffer: Vec<u8>) {
+    let mut pool = pad_spare()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if pool.len() < 8 {
+        pool.push(buffer);
+    }
+}
+
 pub(crate) fn write_queue_texture(
     queue: &wgpu::Queue,
     texture: &wgpu::Texture,
@@ -354,7 +387,7 @@ pub(crate) fn write_queue_texture(
         (Cow::Borrowed(&data[..n]), stride as u32)
     } else {
         let aligned = row_bytes.div_ceil(256) * 256;
-        let mut padded = vec![0u8; aligned.saturating_mul(height as usize)];
+        let mut padded = take_pad(aligned.saturating_mul(height as usize));
         for y in 0..height as usize {
             let src = y * stride;
             let dst = y * aligned;
@@ -388,6 +421,9 @@ pub(crate) fn write_queue_texture(
             depth_or_array_layers: 1,
         },
     );
+    if let Cow::Owned(padded) = bytes {
+        give_pad(padded);
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -1,12 +1,14 @@
-const Y_SCALE: f32 = 255.0 / 219.0;
-const C_SCALE: f32 = 255.0 / 224.0;
-const CR_R: f32 = 1.5748;
-const CB_B: f32 = 1.8556;
-const CB_G: f32 = 0.187324;
-const CR_G: f32 = 0.468124;
+pub(crate) const Y_SCALE: f32 = 255.0 / 219.0;
+pub(crate) const C_SCALE: f32 = 255.0 / 224.0;
+pub(crate) const CR_R: f32 = 1.5748;
+pub(crate) const CB_B: f32 = 1.8556;
+pub(crate) const CB_G: f32 = 0.187324;
+pub(crate) const CR_G: f32 = 0.468124;
 
+/// One 4:2:2 sample pair's colour conversion. Kept here so the SIMD kernels
+/// (including their scalar tails) run exactly the same float expression.
 #[inline]
-fn yuv_to_bgra(luma: f32, u: f32, v: f32) -> [u8; 4] {
+pub(crate) fn yuv_to_bgra(luma: f32, u: f32, v: f32) -> [u8; 4] {
     let yv = (luma - 16.0) * Y_SCALE;
     let u = u * C_SCALE;
     let v = v * C_SCALE;
@@ -77,6 +79,35 @@ pub fn yuy2_to_uyvy(src: &[u8], width: u32, height: u32, stride: usize, dst: &mu
             dst[o + 1] = src[i];
             dst[o + 2] = src[i + 3];
             dst[o + 3] = src[i + 2];
+        }
+    }
+}
+
+pub fn bgra_to_rgba_rows(
+    src: &[u8],
+    src_stride: usize,
+    dst: &mut [u8],
+    dst_stride: usize,
+    width: u32,
+    height: u32,
+) {
+    let row_bytes = (width as usize) * 4;
+    for y in 0..height as usize {
+        let s = y * src_stride;
+        let d = y * dst_stride;
+        // A row that does not fit is skipped (left untouched), matching the
+        // per-pixel loop that used to break out of that row.
+        if s >= src.len() || d >= dst.len() {
+            continue;
+        }
+        let n = row_bytes.min(src.len() - s).min(dst.len() - d) / 4 * 4;
+        for x in (0..n).step_by(4) {
+            let o = s + x;
+            let p = d + x;
+            dst[p] = src[o + 2];
+            dst[p + 1] = src[o + 1];
+            dst[p + 2] = src[o];
+            dst[p + 3] = src[o + 3];
         }
     }
 }
