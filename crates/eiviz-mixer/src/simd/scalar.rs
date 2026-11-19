@@ -1,12 +1,14 @@
-const Y_SCALE: f32 = 255.0 / 219.0;
-const C_SCALE: f32 = 255.0 / 224.0;
-const CR_R: f32 = 1.5748;
-const CB_B: f32 = 1.8556;
-const CB_G: f32 = 0.187324;
-const CR_G: f32 = 0.468124;
+pub(crate) const Y_SCALE: f32 = 255.0 / 219.0;
+pub(crate) const C_SCALE: f32 = 255.0 / 224.0;
+pub(crate) const CR_R: f32 = 1.5748;
+pub(crate) const CB_B: f32 = 1.8556;
+pub(crate) const CB_G: f32 = 0.187324;
+pub(crate) const CR_G: f32 = 0.468124;
 
+/// One 4:2:2 sample pair's colour conversion. Kept here so the SIMD kernels
+/// (including their scalar tails) run exactly the same float expression.
 #[inline]
-fn yuv_to_bgra(luma: f32, u: f32, v: f32) -> [u8; 4] {
+pub(crate) fn yuv_to_bgra(luma: f32, u: f32, v: f32) -> [u8; 4] {
     let yv = (luma - 16.0) * Y_SCALE;
     let u = u * C_SCALE;
     let v = v * C_SCALE;

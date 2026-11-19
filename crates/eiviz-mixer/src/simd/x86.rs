@@ -76,6 +76,13 @@ pub fn peak_interleaved(samples: &[f32]) -> (f32, f32) {
     scalar::peak_interleaved(samples)
 }
 
+/// Four pixels per step of 4:2:2 to BGRA.
+///
+/// The float expression is the scalar one, lane for lane: `(y-16)*Y_SCALE`,
+/// `(u-128)*C_SCALE`, `(v-128)*C_SCALE`, then the scalar's add/sub order.
+/// Every step is IEEE f32 per lane and the clamp+truncate matches
+/// `clamp(0.0, 255.0) as u8`, so the result is bit-identical to the scalar
+/// path (the `*_matches_scalar` oracle tests assert it).
 #[target_feature(enable = "sse2")]
 unsafe fn yuv422_to_bgra_sse2(
     src: &[u8],
@@ -85,7 +92,101 @@ unsafe fn yuv422_to_bgra_sse2(
     uyvy: bool,
     dst: &mut [u8],
 ) {
-    scalar::yuv422_to_bgra(src, width, height, stride, uyvy, dst);
+    let w = (width as usize) & !1;
+    let h = height as usize;
+    let dst_stride = w * 4;
+    let y_scale = _mm_set1_ps(scalar::Y_SCALE);
+    let c_scale = _mm_set1_ps(scalar::C_SCALE);
+    let cb_b = _mm_set1_ps(scalar::CB_B);
+    let cb_g = _mm_set1_ps(scalar::CB_G);
+    let cr_g = _mm_set1_ps(scalar::CR_G);
+    let cr_r = _mm_set1_ps(scalar::CR_R);
+    let k16 = _mm_set1_ps(16.0);
+    let k128 = _mm_set1_ps(128.0);
+    let zero = _mm_setzero_ps();
+    let max = _mm_set1_ps(255.0);
+    let opaque = _mm_set1_epi8(-1);
+    for y in 0..h {
+        let s = y * stride;
+        let d = y * dst_stride;
+        let mut x = 0usize;
+        while x + 4 <= w {
+            let i = s + x * 2;
+            let o = d + x * 4;
+            if i + 7 >= src.len() || o + 15 >= dst.len() {
+                break;
+            }
+            let p = src.as_ptr().add(i);
+            let b0 = *p as i32;
+            let b1 = *p.add(1) as i32;
+            let b2 = *p.add(2) as i32;
+            let b3 = *p.add(3) as i32;
+            let b4 = *p.add(4) as i32;
+            let b5 = *p.add(5) as i32;
+            let b6 = *p.add(6) as i32;
+            let b7 = *p.add(7) as i32;
+            let (y0, y1, y2, y3, u0, u1, v0, v1) = if uyvy {
+                (b1, b3, b5, b7, b0, b4, b2, b6)
+            } else {
+                (b0, b2, b4, b6, b1, b5, b3, b7)
+            };
+            let yv = _mm_mul_ps(
+                _mm_sub_ps(_mm_cvtepi32_ps(_mm_setr_epi32(y0, y1, y2, y3)), k16),
+                y_scale,
+            );
+            let uu = _mm_mul_ps(
+                _mm_sub_ps(_mm_cvtepi32_ps(_mm_setr_epi32(u0, u0, u1, u1)), k128),
+                c_scale,
+            );
+            let vv = _mm_mul_ps(
+                _mm_sub_ps(_mm_cvtepi32_ps(_mm_setr_epi32(v0, v0, v1, v1)), k128),
+                c_scale,
+            );
+            let bb = _mm_cvttps_epi32(_mm_min_ps(
+                _mm_max_ps(_mm_add_ps(yv, _mm_mul_ps(cb_b, uu)), zero),
+                max,
+            ));
+            let gg = _mm_cvttps_epi32(_mm_min_ps(
+                _mm_max_ps(
+                    _mm_sub_ps(_mm_sub_ps(yv, _mm_mul_ps(cb_g, uu)), _mm_mul_ps(cr_g, vv)),
+                    zero,
+                ),
+                max,
+            ));
+            let rr = _mm_cvttps_epi32(_mm_min_ps(
+                _mm_max_ps(_mm_add_ps(yv, _mm_mul_ps(cr_r, vv)), zero),
+                max,
+            ));
+            // i32 -> i16 -> u8, then interleave B,G,R,255 into 4 BGRA pixels.
+            let b8 = _mm_packus_epi16(_mm_packs_epi32(bb, bb), _mm_setzero_si128());
+            let g8 = _mm_packus_epi16(_mm_packs_epi32(gg, gg), _mm_setzero_si128());
+            let r8 = _mm_packus_epi16(_mm_packs_epi32(rr, rr), _mm_setzero_si128());
+            let bg = _mm_unpacklo_epi8(b8, g8);
+            let ra = _mm_unpacklo_epi8(r8, opaque);
+            let bgra = _mm_unpacklo_epi16(bg, ra);
+            _mm_storeu_si128(dst.as_mut_ptr().add(o).cast(), bgra);
+            x += 4;
+        }
+        // Tail (odd widths, short buffers): the scalar expression, so the
+        // bounds handling and the values match the reference path exactly.
+        while x + 1 < w {
+            let i = s + x * 2;
+            let o = d + x * 4;
+            if i + 3 >= src.len() || o + 7 >= dst.len() {
+                break;
+            }
+            let (u, y0, v, y1) = if uyvy {
+                (src[i], src[i + 1], src[i + 2], src[i + 3])
+            } else {
+                (src[i + 1], src[i], src[i + 3], src[i + 2])
+            };
+            let u = u as f32 - 128.0;
+            let v = v as f32 - 128.0;
+            dst[o..o + 4].copy_from_slice(&scalar::yuv_to_bgra(y0 as f32, u, v));
+            dst[o + 4..o + 8].copy_from_slice(&scalar::yuv_to_bgra(y1 as f32, u, v));
+            x += 2;
+        }
+    }
 }
 
 #[target_feature(enable = "avx2")]
@@ -97,7 +198,10 @@ unsafe fn yuv422_to_bgra_avx2(
     uyvy: bool,
     dst: &mut [u8],
 ) {
-    scalar::yuv422_to_bgra(src, width, height, stride, uyvy, dst);
+    // A 256-bit colour kernel has to be validated on a host that actually
+    // reports AVX2 (Rosetta does not), so AVX2 currently runs the SSE2 kernel:
+    // still vectorised and bit-identical, just 128-bit wide.
+    yuv422_to_bgra_sse2(src, width, height, stride, uyvy, dst);
 }
 
 #[target_feature(enable = "ssse3")]

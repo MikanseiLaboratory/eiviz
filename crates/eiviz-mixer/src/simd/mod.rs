@@ -174,6 +174,80 @@ mod tests {
         assert_eq!(simd, scalar_out);
     }
 
+    /// Widths that leave a tail after the 4-pixel vector step, plus the
+    /// one-pair edge, must still match the scalar reference exactly.
+    #[test]
+    fn yuv_odd_width_matches_scalar() {
+        for (w, uyvy) in [
+            (30u32, false),
+            (30, true),
+            (34, false),
+            (34, true),
+            (2, false),
+        ] {
+            let h = 3u32;
+            let src = packed_yuy2(w as usize, h as usize);
+            let mut simd = vec![0u8; (w * h * 4) as usize];
+            let mut scalar_out = vec![0u8; simd.len()];
+            yuv422_to_bgra(&src, w, h, (w * 2) as usize, uyvy, &mut simd);
+            scalar::yuv422_to_bgra(&src, w, h, (w * 2) as usize, uyvy, &mut scalar_out);
+            assert_eq!(simd, scalar_out, "w={w} uyvy={uyvy}");
+        }
+    }
+
+    /// Truncated source and destination buffers: the x86 kernels must stop at
+    /// the same sample as the scalar path instead of reading past the end.
+    ///
+    /// x86-only: the NEON path has always left a truncated frame's tail
+    /// unwritten, which is a different (pre-existing) policy for a case the
+    /// decoder never produces.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn yuv_short_buffers_match_scalar() {
+        let (w, h) = (16u32, 4u32);
+        let src = packed_yuy2(w as usize, h as usize);
+        let mut simd = vec![0u8; (w * h * 4) as usize];
+        let mut scalar_out = vec![0u8; simd.len()];
+        // Not a row boundary, so the last row is cut mid-sample.
+        let cut = 40usize;
+        yuv422_to_bgra(&src[..cut], w, h, (w * 2) as usize, false, &mut simd);
+        scalar::yuv422_to_bgra(&src[..cut], w, h, (w * 2) as usize, false, &mut scalar_out);
+        assert_eq!(simd, scalar_out);
+    }
+
+    /// Repeatable micro-benchmark: the dispatched kernel against the scalar
+    /// reference at 1080p. Run with `--ignored --nocapture`; on aarch64 this
+    /// measures NEON, on x86_64 SSE2/AVX2 (a Rosetta build reports SSE2 only,
+    /// so build the test binary for that target to exercise the x86 kernel).
+    #[test]
+    #[ignore = "micro-benchmark; run with --ignored --nocapture"]
+    fn yuv422_simd_speedup_over_scalar() {
+        use std::time::Instant;
+        let (w, h) = (1920u32, 1080u32);
+        let src = packed_yuy2(w as usize, h as usize);
+        let mut dst = vec![0u8; (w * h * 4) as usize];
+        let stride = (w * 2) as usize;
+        let iters = 20u32;
+        let started = Instant::now();
+        for _ in 0..iters {
+            scalar::yuv422_to_bgra(&src, w, h, stride, true, &mut dst);
+        }
+        let slow = started.elapsed().as_secs_f64() * 1000.0 / f64::from(iters);
+        let started = Instant::now();
+        for _ in 0..iters {
+            yuv422_to_bgra(&src, w, h, stride, true, &mut dst);
+        }
+        let fast = started.elapsed().as_secs_f64() * 1000.0 / f64::from(iters);
+        println!(
+            "path={} yuv422_to_bgra 1080p scalar={slow:.3} ms simd={fast:.3} ms speedup={:.2}x",
+            path(),
+            slow / fast
+        );
+        if path() != SimdPath::Scalar {
+            assert!(fast < slow, "simd path must beat scalar: {fast} vs {slow}");
+        }
+    }
+
     #[test]
     fn opaque_or_matches_scalar() {
         let mut simd = vec![0x11u8; 64];
