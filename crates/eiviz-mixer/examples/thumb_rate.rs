@@ -205,6 +205,6 @@ fn main() {
             );
         }
     }
-    unsafe { mixer_destroy() };
+    mixer_destroy();
     println!("done");
 }
