@@ -56,7 +56,9 @@ internal static class ReplayTransportRules
     ///
     /// From anything advancing it pauses; from anything held it plays. Pausing on the edge
     /// keeps the live flag, so the deck still says it is at the edge — that is how a mark is
-    /// taken from live material. The state that comes back is the one the button should show,
+    /// taken from live material. The transport holds the frame the live view reached while it
+    /// is paused, so the picture stops there instead of following the write head, and playing
+    /// again continues from it. The state that comes back is the one the button should show,
     /// whether or not the mixer accepted the command.
     /// </summary>
     public static ReplayTransportAction Toggle(ReplayTransportState state)

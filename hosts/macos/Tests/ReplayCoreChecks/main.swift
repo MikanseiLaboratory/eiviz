@@ -764,13 +764,19 @@ check("duplicate storage refused",
       ReplayDeckMath.setupProblem(angles: duplicateAngles, storages: [duplicateStorageA, duplicateStorageB]) == .duplicateStorage(" /tmp/REPLAY "))
 
 
-// MARK: - Live hold target
+// MARK: - Live transport rules
 
-check("live pause uses head when playhead is stale",
-      ReplayDeckMath.liveHoldTarget(playhead: 0, recordingHead: 1500) == 1500)
-check("live pause keeps playhead when ahead",
-      ReplayDeckMath.liveHoldTarget(playhead: 1600, recordingHead: 1500) == 1600)
-check("live target both zero", ReplayDeckMath.liveHoldTarget(playhead: 0, recordingHead: 0) == 0)
+// A pause on the edge is a hold, not a seek: the transport freezes the frame the live
+// view reached and the deck keeps showing LIVE. That is what lets a slowed-down live
+// replay come to a stop without jumping to the newest recorded frame.
+let pausedLive = ReplayTransportRules.toggle(livePlaying)
+check("pausing on the edge holds in place",
+      !pausedLive.playing && pausedLive.next == .atEdge
+        && pausedLive.seekFrame == ReplayTransportAction.keepPlayhead)
+let resumedLive = ReplayTransportRules.toggle(.atEdge)
+check("resuming a parked edge keeps the edge",
+      resumedLive.playing && resumedLive.next == .following
+        && resumedLive.seekFrame == ReplayTransportAction.keepPlayhead)
 
 
 // MARK: - Seek clamping
