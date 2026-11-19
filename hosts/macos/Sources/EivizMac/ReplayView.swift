@@ -2286,13 +2286,12 @@ struct ReplayView: View {
 
     private func pausePlaylist() {
         setChase(false)
-        if transport.live {
-            seekHolding(to: ReplayDeckMath.liveHoldTarget(playhead: displayPlayhead, recordingHead: recordingHead), keepPlaying: false)
-            return
-        }
+        // Pausing in place. A live channel keeps its live flag: the transport holds the
+        // frame it reached, so stopping needs no re-cue and the picture stays on what the
+        // operator was looking at.
         if mixer.replayTransport(
             channel: channel, playing: false, speedMilli: 0, seekFrame: -1) {
-            transport = .held
+            transport = transport.live ? .atEdge : .held
             settleUntil = Date().addingTimeInterval(0.4)
         } else {
             status = L10n.t("replay.commandRefused")
@@ -2306,13 +2305,11 @@ struct ReplayView: View {
     private func togglePlay() {
         scrubFrame = nil
         let action = ReplayTransportRules.toggle(transport)
-        // Pausing a live channel has to leave the edge; a live channel with playing=false
-        // still follows the write head, so the picture would keep moving.
-        if !action.playing && transport.live {
-            setChase(false)
-            seekHolding(to: ReplayDeckMath.liveHoldTarget(playhead: displayPlayhead, recordingHead: recordingHead), keepPlaying: false)
-            return
-        }
+        // A live channel pauses in place and stays live. The transport holds the frame the
+        // live view reached, so the picture stops where the operator saw it instead of
+        // following the write head, and pressing play again continues from that frame.
+        // Leaving the edge here is what used to turn a pause into a jump to the newest
+        // frame, which lost the material a slowed-down live replay had fallen behind by.
         if mixer.replayTransport(
             channel: channel, playing: action.playing, speedMilli: speedMilli, seekFrame: -1)
         {
@@ -2382,14 +2379,10 @@ struct ReplayView: View {
     private func setSpeed(_ milli: Int32) {
         speedMilli = milli
         scrubFrame = nil
-        // A speed preset is a playback instruction. On a live channel there is no clip to
-        // play, so leave the edge at the current frame and run that clip at the new rate.
-        if transport.live, (stats?.last_frame ?? 0) > 0 {
-            // A speed preset on a live channel starts the recorded picture at that rate,
-            // from the newest frame rather than from wherever a stale position said zero.
-            seekHolding(to: ReplayDeckMath.liveHoldTarget(playhead: displayPlayhead, recordingHead: recordingHead), keepPlaying: true)
-            return
-        }
+        // A speed preset is a playback instruction, not a seek. On a live channel a rate
+        // below normal is how the view falls behind the edge, so the channel stays live
+        // and drifts into slow motion. Leaving the edge here cued a scratch clip that
+        // ended where it started, so the picture parked instead of slowing down.
         if !mixer.replayTransport(
             channel: channel, playing: transport.playing, speedMilli: speedMilli, seekFrame: -1) {
             status = L10n.t("replay.commandRefused")
