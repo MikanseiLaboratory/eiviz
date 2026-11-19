@@ -51,3 +51,14 @@ opt-level = 1
 
 [profile.test.package.eiviz-control]
 opt-level = 1
+
+# Codec / transport hot-path work that has not shipped to crates.io yet.
+# - vmx:         MikanseiLaboratory/vmx-rs#37 (decode/encode hot paths)
+# - openmediatransport: MikanseiLaboratory/openmediatransport-rs#50 (receive hot path)
+# Patch (not a per-crate dependency) so the mixer and openmediatransport resolve
+# the *same* vmx instance: two vmx copies would each build their own rayon pool
+# and the optimized decode would not be the one actually used.
+# Once both PRs merge and are published, delete this section and bump the versions.
+[patch.crates-io]
+vmx = { git = "https://github.com/MikanseiLaboratory/vmx-rs", branch = "perf/hot-path" }
+openmediatransport = { git = "https://github.com/MikanseiLaboratory/openmediatransport-rs", branch = "perf/receive-hot-path" }
