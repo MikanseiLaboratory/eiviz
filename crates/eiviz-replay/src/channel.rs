@@ -180,6 +180,13 @@ pub struct Transport {
     live_angle: u32,
     /// Frames the live view has fallen behind the recording edge.
     lag: f64,
+    /// The recording frame the live view is on.
+    ///
+    /// The edge moves on its own while the recorder writes, so the live view has to
+    /// remember its own frame rather than derive it from the edge every tick. That is
+    /// what lets a paused live channel hold the picture it reached instead of drifting
+    /// forward with the recording.
+    live_frame: f64,
     last_frame: u64,
     pub substituted: u64,
     pub decode_us_sum: u64,
@@ -212,6 +219,7 @@ impl Transport {
             live: false,
             live_angle: 0,
             lag: 0.0,
+            live_frame: 0.0,
             last_frame: 0,
             substituted: 0,
             decode_us_sum: 0,
@@ -360,6 +368,14 @@ impl Transport {
     }
 
     pub fn set_playing(&mut self, playing: bool) {
+        // Resuming a paused live view starts from the frame it was holding, not from
+        // wherever the edge has travelled to in the meantime: the operator paused to
+        // look at a picture, and pressing play again must not skip the material recorded
+        // while it was frozen. The lag becomes what that frame is behind the edge now.
+        if playing && !self.playing && self.live && self.live_frame > 0.0 {
+            let edge = self.last_frame.saturating_sub(3) as f64;
+            self.lag = (edge - self.live_frame).max(0.0);
+        }
         self.playing = playing;
     }
 
@@ -452,6 +468,7 @@ impl Transport {
             .filter(|angle| *angle != 0)
             .unwrap_or(angle);
         self.lag = 0.0;
+        self.live_frame = last_frame.saturating_sub(3) as f64;
         self.shown = None;
     }
 
@@ -650,11 +667,15 @@ impl Transport {
     pub fn step(&mut self, dt: f64) -> Option<FramePlan> {
         if self.live {
             if self.playing {
-                // A rate below 1 lets the view fall behind the recording edge.
+                // A rate below 1 lets the view fall behind the recording edge. The view
+                // carries its own frame so that pausing can hold it: a paused live
+                // channel that kept deriving the frame from the edge would move on with
+                // every frame the recorder wrote, and pause would mean nothing.
                 self.lag = (self.lag + (1.0 - self.rate).max(0.0) * dt).max(0.0);
+                let edge = self.last_frame.saturating_sub(3) as f64;
+                self.live_frame = (edge - self.lag).max(0.0);
             }
-            let edge = self.last_frame.saturating_sub(3) as f64;
-            let frame = (edge - self.lag).max(0.0).round() as u64;
+            let frame = self.live_frame.round() as u64;
             let plan = FramePlan {
                 primary: (self.live_angle != 0).then_some((self.live_angle, frame)),
                 secondary: None,
@@ -688,9 +709,9 @@ impl Transport {
     /// Source frame the channel is showing, for stats and the API.
     pub fn source_frame(&self) -> u64 {
         if self.live {
-            // The live view sits a few frames behind the write head so the frames
-            // it asks for are already on disk.
-            return (self.last_frame as f64 - 3.0 - self.lag).max(0.0) as u64;
+            // The live view shows the frame it holds: a few frames behind the write head
+            // while it advances, and the frozen frame once the operator pauses it.
+            return self.live_frame as u64;
         }
         self.current
             .as_ref()
@@ -701,7 +722,7 @@ impl Transport {
     /// Fractional source position, used to place playback audio between frames.
     pub fn source_position(&self) -> f64 {
         if self.live {
-            return (self.last_frame as f64 - 3.0 - self.lag).max(0.0);
+            return self.live_frame.max(0.0);
         }
         self.current
             .as_ref()
@@ -1396,6 +1417,104 @@ mod tests {
             "{}",
             transport.source_frame()
         );
+    }
+
+    /// Pausing on the live feed has to stop the picture.
+    ///
+    /// The live view used to derive its frame from the recording edge on every tick, so
+    /// `playing = false` changed nothing while the recorder kept writing: the "paused"
+    /// picture moved on with the recording and an operator could not hold a frame to cut
+    /// on. Slow motion is exactly when the operator pauses, so the held frame is the one
+    /// the drift reached, not the edge.
+    #[test]
+    fn pausing_a_live_view_holds_the_frame_it_reached() {
+        let mut transport = Transport::new();
+        transport.jump_to_now(1_000, 6);
+        transport.set_playing(true);
+        for _ in 0..5 {
+            transport.step(1.0);
+        }
+        // Slowing the live view is how far behind the edge it falls, and where a pause
+        // will hold it.
+        transport.set_rate(0.5);
+        for _ in 0..10 {
+            transport.step(1.0);
+        }
+        transport.set_playing(false);
+        let held = transport.source_frame();
+        assert!(held > 0, "the hold must be a real frame: {held}");
+        assert!(held < 997, "half speed is behind the edge: {held}");
+        // The recording runs on; a paused live view must not follow it.
+        for _ in 0..30 {
+            transport.note_recorded_frame(1_030);
+            assert!(
+                transport.step(1.0).is_none(),
+                "a paused live view must keep its picture"
+            );
+        }
+        assert_eq!(transport.source_frame(), held);
+        assert_eq!(transport.source_position().round(), held as f64);
+    }
+
+    /// Pressing play again continues from the held frame instead of jumping to the edge.
+    /// The material recorded while the channel was paused is still there to be watched,
+    /// which is the point of having paused a live feed.
+    #[test]
+    fn playing_again_continues_from_the_held_live_frame() {
+        let mut transport = Transport::new();
+        transport.jump_to_now(1_000, 6);
+        transport.set_playing(true);
+        transport.set_rate(0.5);
+        for _ in 0..10 {
+            transport.step(1.0);
+        }
+        transport.set_playing(false);
+        let held = transport.source_frame();
+        transport.note_recorded_frame(1_030);
+        transport.step(1.0);
+        assert_eq!(transport.source_frame(), held);
+        transport.set_playing(true);
+        // The tick that starts playing again may not repaint the frame that was held;
+        // where the view is and that it moves on from there is what matters.
+        transport.step(1.0);
+        let resumed = transport.source_position();
+        assert!(
+            (resumed - held as f64).abs() <= 1.0,
+            "play must resume at the held frame {held}, got {resumed}"
+        );
+        // The lag the pause created is real: the view is far behind the edge, and it
+        // keeps drifting from there at the new rate as the recording grows.
+        assert!(resumed < 1_027.0, "it must not jump to the edge: {resumed}");
+        for step in 0..4 {
+            transport.note_recorded_frame(1_031 + step);
+            transport.step(1.0);
+        }
+        assert!(
+            transport.source_position() > resumed,
+            "the view must advance again: {}",
+            transport.source_position()
+        );
+    }
+
+    /// The LIVE button parks on the edge again: jumping to now drops the lag and shows
+    /// the newest frame even while the channel is paused.
+    #[test]
+    fn jumping_to_now_leaves_the_paused_live_frame() {
+        let mut transport = Transport::new();
+        transport.jump_to_now(1_000, 6);
+        transport.set_playing(true);
+        transport.set_rate(0.5);
+        for _ in 0..10 {
+            transport.step(1.0);
+        }
+        transport.set_playing(false);
+        let held = transport.source_frame();
+        transport.note_recorded_frame(1_030);
+        transport.jump_to_now(1_030, 6);
+        let plan = transport.step(1.0).unwrap();
+        assert_eq!(plan.primary, Some((6, 1_027)));
+        assert!(transport.source_frame() > held);
+        assert!(transport.is_live());
     }
 
     #[test]
