@@ -7,7 +7,10 @@ use crate::device::GpuDevice;
 
 pub const MAX_WIDTH: u32 = 960;
 pub const MAX_HEIGHT: u32 = 540;
-const SLOTS: usize = 3;
+/// One readback holds its slot from the copy until the harvest one `advance`
+/// later. At one capture per frame three slots keep the rotation fed, and the
+/// fourth absorbs a slow GPU frame without dropping the capture.
+const SLOTS: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ThumbSub {
@@ -39,7 +42,9 @@ pub struct ThumbPixels {
 
 struct Slot {
     buffer: wgpu::Buffer,
+    /// A copy was queued into this slot and its readback is not harvested yet.
     pending: bool,
+    /// `map_async` was issued and the slot is waiting for the GPU.
     waiting: bool,
     ready: Option<Receiver<Result<(), wgpu::BufferAsyncError>>>,
 }
@@ -51,8 +56,8 @@ struct ThumbGpu {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     slots: [Slot; SLOTS],
+    /// Where `idle_slot` starts looking, one past the last slot filled.
     write: usize,
-    copied: bool,
 }
 
 pub struct ThumbStore {
@@ -91,28 +96,33 @@ impl ThumbStore {
             if gpu.width != sub.width || gpu.height != sub.height {
                 *gpu = ThumbGpu::new(device, *sub);
             }
-            if gpu.slots[gpu.write].waiting {
+            // Every slot still holds an unharvested readback: the GPU is behind
+            // the subscription, so this capture is dropped rather than
+            // overwriting a picture that is still in flight.
+            let Some(slot) = gpu.idle_slot() else {
                 continue;
-            }
+            };
             if !composer.blit_source_to(device, encoder, *id, &gpu.view, gpu.width, gpu.height) {
                 continue;
             }
-            gpu.copy_slot(encoder);
-            gpu.copied = true;
+            gpu.copy_slot(encoder, slot);
+            gpu.slots[slot].pending = true;
+            gpu.write = (slot + 1) % SLOTS;
         }
     }
 
     pub fn advance(&mut self, device: &GpuDevice) {
         // One poll for every thumbnail, then the per-thumb work. A poll walks
         // the submission queue, so polling per thumb paid that walk once per
-        // subscribed unit per frame.
+        // subscribed unit per frame. This runs after the frame's submit, so a
+        // slot filled by this frame's capture is mapped here rather than a
+        // capture later.
         let _ = device.device.poll(wgpu::PollType::Poll);
         for (id, gpu) in &mut self.gpu {
-            if !gpu.copied {
+            if !gpu.busy() {
                 continue;
             }
-            gpu.copied = false;
-            if let Some(frame) = gpu.advance_polled() {
+            for frame in gpu.advance_polled() {
                 if let Ok(mut pixels) = self.pixels.lock() {
                     pixels.insert(*id, frame);
                 }
@@ -159,12 +169,21 @@ impl ThumbGpu {
             view,
             slots,
             write: 0,
-            copied: false,
         }
     }
 
-    fn copy_slot(&self, encoder: &mut wgpu::CommandEncoder) {
-        let slot = &self.slots[self.write];
+    fn busy(&self) -> bool {
+        self.slots.iter().any(|slot| slot.pending || slot.waiting)
+    }
+
+    fn idle_slot(&self) -> Option<usize> {
+        (0..SLOTS)
+            .map(|step| (self.write + step) % SLOTS)
+            .find(|&slot| !self.slots[slot].pending && !self.slots[slot].waiting)
+    }
+
+    fn copy_slot(&self, encoder: &mut wgpu::CommandEncoder, slot: usize) {
+        let slot = &self.slots[slot];
         encoder.copy_texture_to_buffer(
             self.texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
@@ -184,9 +203,14 @@ impl ThumbGpu {
     }
 
     /// The per-thumb work, for a caller that has already polled the device.
-    fn advance_polled(&mut self) -> Option<ThumbPixels> {
-        self.slots[self.write].pending = true;
-        let mut mapped = None;
+    /// Returns every readback the GPU finished since the last call, then maps
+    /// every copy the frame's submit has already landed on the GPU queue. The
+    /// old schedule mapped a slot only once the write pointer had passed it,
+    /// which let the pointer lap unmapped slots and overwrite their pictures:
+    /// every subscription delivered at half its configured rate with several
+    /// frames of extra latency.
+    fn advance_polled(&mut self) -> Vec<ThumbPixels> {
+        let mut mapped = Vec::new();
         for slot in &mut self.slots {
             if !slot.waiting {
                 continue;
@@ -197,7 +221,7 @@ impl ThumbGpu {
             if result.is_ok() {
                 let slice = slot.buffer.slice(..);
                 if let Ok(view) = slice.get_mapped_range() {
-                    mapped = Some(pack_bgra(&view, self.width, self.height, self.gpu_stride));
+                    mapped.push(pack_bgra(&view, self.width, self.height, self.gpu_stride));
                     drop(view);
                 }
                 slot.buffer.unmap();
@@ -206,19 +230,17 @@ impl ThumbGpu {
             slot.waiting = false;
             slot.ready = None;
         }
-        let read = (self.write + 1) % SLOTS;
-        if self.slots[read].pending && !self.slots[read].waiting {
-            let slice = self.slots[read].buffer.slice(..);
+        for slot in &mut self.slots {
+            if !slot.pending || slot.waiting {
+                continue;
+            }
+            let slice = slot.buffer.slice(..);
             let (tx, rx) = mpsc::channel();
             slice.map_async(wgpu::MapMode::Read, move |result| {
                 let _ = tx.send(result);
             });
-            self.slots[read].waiting = true;
-            self.slots[read].ready = Some(rx);
-        }
-        let next = (self.write + 1) % SLOTS;
-        if !self.slots[next].waiting {
-            self.write = next;
+            slot.waiting = true;
+            slot.ready = Some(rx);
         }
         mapped
     }
