@@ -377,14 +377,7 @@ unsafe fn yuv422_to_bgra_avx2(
             let si = row_src + x * 2;
             let di = row_dst + x * 4;
             if si < src.len() && di < dst.len() {
-                scalar::yuv422_to_bgra(
-                    &src[si..],
-                    (w - x) as u32,
-                    1,
-                    stride,
-                    uyvy,
-                    &mut dst[di..],
-                );
+                scalar::yuv422_to_bgra(&src[si..], (w - x) as u32, 1, stride, uyvy, &mut dst[di..]);
             }
         }
     }
