@@ -63,11 +63,15 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+; Shortcut icons come from the installed executables, which embed the app icon
+; through ApplicationIcon. They must not point into the build tree: that path
+; does not exist on the user's machine, and Windows then falls back to the
+; generic page icon for the running app in the taskbar as well.
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{#MyAppIcon}"
-Name: "{group}\{#MyAppName} Remote"; Filename: "{app}\Eiviz.Remote.exe"; IconFilename: "{#MyAppIcon}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "{#MyAppIcon}"
-Name: "{autodesktop}\{#MyAppName} Remote"; Filename: "{app}\Eiviz.Remote.exe"; Tasks: desktopicon; IconFilename: "{#MyAppIcon}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName} Remote"; Filename: "{app}\Eiviz.Remote.exe"; IconFilename: "{app}\Eiviz.Remote.exe"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "{app}\{#MyAppExeName}"
+Name: "{autodesktop}\{#MyAppName} Remote"; Filename: "{app}\Eiviz.Remote.exe"; Tasks: desktopicon; IconFilename: "{app}\Eiviz.Remote.exe"
 
 [Registry]
 Root: HKCR; Subkey: ".eivz"; ValueType: string; ValueName: ""; ValueData: "eiviz.session"; Flags: uninsdeletevalue
