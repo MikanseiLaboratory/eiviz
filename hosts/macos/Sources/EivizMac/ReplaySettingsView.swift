@@ -767,10 +767,13 @@ struct ReplaySettingsView: View {
         document = current
         // A confirmed angle removal takes its clips with it. The deck is told first:
         // settings that drop an angle still named by a clip's sound would be refused by
-        // the core. The live deck is the snapshot, so a clip that was removed while this
-        // window was open is not written back by the merge.
+        // the core.
         if !deletedClips.isEmpty {
-            let deck = mixer.replayDocument ?? current
+            var deck = mixer.replayDocument ?? current
+            // The core deletes these clips first and then merges the deck snapshot, so a
+            // snapshot that still listed them put them straight back and the settings
+            // were refused ("clip ... uses angle ..., which does not exist").
+            deck.removeClips(uids: Set(deletedClips))
             guard mixer.applyReplayDeck(deck, deletedClips: deletedClips, angleEdited: false) else {
                 status = L10n.t("replay.publishRefused")
                 return

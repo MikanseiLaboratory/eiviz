@@ -611,6 +611,26 @@ check("a clip naming a removed angle is stranded",
       clipDoc.clipUids(namingOtherThan: [2]).count == 2)
 let removedClips = clipDoc.removeClips(usingAngle: 1)
 check("removing an angle's clips reports them", removedClips.count == 2)
+var byUidDoc = ReplayDocument.empty(format: format)
+let byUidPlaylist = byUidDoc.ensurePlaylist()
+let byUidEvent = byUidDoc.appendEvent(uuid: "rec3", inFrame: 0, outFrame: 30, name: "uid")
+_ = byUidDoc.appendClip(
+    playlistId: byUidPlaylist,
+    event: byUidDoc.events.first(where: { $0.id == byUidEvent })!,
+    angleId: 1)
+_ = byUidDoc.appendClip(
+    playlistId: byUidPlaylist,
+    event: byUidDoc.events.first(where: { $0.id == byUidEvent })!,
+    angleId: 2)
+let firstUid = byUidDoc.clips(playlistId: byUidPlaylist).first!.uid
+check("removing an already-confirmed clip reports it",
+      byUidDoc.removeClips(uids: [firstUid]) == 1)
+check("removing an already-confirmed clip keeps the rest",
+      byUidDoc.clips(playlistId: byUidPlaylist).count == 1
+        && byUidDoc.clips(playlistId: byUidPlaylist).first?.uid != firstUid)
+check("removing an absent uid removes nothing",
+      byUidDoc.removeClips(uids: ["not-a-clip"]) == 0)
+
 check("removing an angle's clips empties both playlists",
       clipDoc.clipUids(usingAngle: 1).isEmpty)
 var audioClipDoc = ReplayDocument.empty(format: format)

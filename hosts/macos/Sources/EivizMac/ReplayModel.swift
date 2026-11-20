@@ -1009,17 +1009,22 @@ struct ReplayDocument {
         }
     }
 
-    /// Deletes the clips `clipUids(usingAngle:)` names, returning their uids. The caller
-    /// remembers them, because the deck has to be told which clips went when it publishes
-    /// the settings.
+    /// Removes specific clips by uid, returning how many were on the document.
+    ///
+    /// Apply sends the deck as well as the settings, and the core applies the deck as a
+    /// difference: deleting a clip first and then merging a snapshot that still lists it
+    /// puts the clip back. The snapshot therefore has to lose the clips the operator
+    /// already confirmed deleting.
     @discardableResult
-    mutating func removeClips(usingAngle angleId: UInt32) -> [String] {
-        var removed: [String] = []
+    mutating func removeClips(uids: Set<String>) -> Int {
+        guard !uids.isEmpty else { return 0 }
+        var removed = 0
         for playlistId in playlistIds {
-            let doomed = Set(clips(playlistId: playlistId).filter { clip in
-                clip.angleId == angleId
-                    || (clip.audioKind == "Angle" && clip.audioAngleId == angleId)
-            }.map(\.uid))
+            let doomed = Set(
+                clips(playlistId: playlistId)
+                    .map(\.uid)
+                    .filter { uids.contains($0) }
+            )
             guard !doomed.isEmpty else { continue }
             updatePlaylist(playlistId: playlistId) { playlist in
                 playlist["clips"] = .array((playlist["clips"]?.arrayValue ?? []).filter { item in
@@ -1027,9 +1032,19 @@ struct ReplayDocument {
                     return !doomed.contains(uid)
                 })
             }
-            removed.append(contentsOf: doomed.sorted())
+            removed += doomed.count
         }
         return removed
+    }
+
+    /// Deletes the clips `clipUids(usingAngle:)` names, returning their uids. The caller
+    /// remembers them, because the deck has to be told which clips went when it publishes
+    /// the settings.
+    @discardableResult
+    mutating func removeClips(usingAngle angleId: UInt32) -> [String] {
+        let uids = Set(clipUids(usingAngle: angleId))
+        removeClips(uids: uids)
+        return uids.sorted()
     }
 
     /// Applies an edit to one playlist.
