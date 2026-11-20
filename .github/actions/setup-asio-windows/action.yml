@@ -1,0 +1,34 @@
+name: Setup ASIO SDK on Windows
+description: >-
+  Pre-extract the Steinberg ASIO SDK and point CPAL_ASIO_DIR at it so cpal's
+  asio-sys build script does not download and Expand-Archive it itself. That
+  path fails on current Windows runners because PowerShell 7's archive module
+  cannot resolve ExtractToDirectory, which breaks every cold build of cpal.
+
+runs:
+  using: composite
+  steps:
+    - name: Download and extract ASIO SDK
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $zip = Join-Path $env:RUNNER_TEMP 'asiosdk.zip'
+        $root = Join-Path $env:RUNNER_TEMP 'asiosdk'
+        if (-not (Test-Path $zip)) {
+          curl.exe -L --fail --retry 4 --retry-delay 8 -o $zip 'https://www.steinberg.net/asiosdk'
+        }
+        if (Test-Path $root) { Remove-Item -Recurse -Force $root }
+        New-Item -ItemType Directory -Force $root | Out-Null
+        # bsdtar ships with Windows and unpacks zip files without the
+        # PowerShell archive module asio-sys has trouble with.
+        tar.exe -xf $zip -C $root
+        $sdk = Get-ChildItem $root -Directory | Where-Object { $_.Name -like 'ASIO*' } | Select-Object -First 1
+        if (-not $sdk) { throw 'ASIO SDK archive does not contain an ASIOSDK directory' }
+        $required = @('common\asio.h', 'host\asiodrivers.cpp', 'host\pc\asiolist.cpp')
+        foreach ($rel in $required) {
+          if (-not (Test-Path (Join-Path $sdk.FullName $rel))) {
+            throw "ASIO SDK is missing $rel"
+          }
+        }
+        "CPAL_ASIO_DIR=$($sdk.FullName)" >> $env:GITHUB_ENV
+        Write-Host "CPAL_ASIO_DIR=$($sdk.FullName)"

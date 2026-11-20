@@ -36,6 +36,9 @@ jobs:
       - name: Setup NDI SDK and LLVM
         uses: ./.github/actions/setup-ndi-windows
 
+      - name: Setup ASIO SDK
+        uses: ./.github/actions/setup-asio-windows
+
       - name: Install Rust 1.97
         uses: dtolnay/rust-toolchain@stable
         with:
