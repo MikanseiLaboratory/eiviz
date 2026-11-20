@@ -10,7 +10,7 @@ use crate::upload::AudioInputStore;
 use super::graph::{DEVICE_ASIO, DEVICE_COREAUDIO, DEVICE_WASAPI};
 use super::info::{CAPTURE_MODE_ENDPOINT_LOOPBACK, CAPTURE_MODE_PROCESS_LOOPBACK};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AudioCaptureSpec {
     pub id: u64,
     pub kind: u32,
@@ -23,6 +23,10 @@ pub struct AudioCaptureSpec {
 }
 
 struct CaptureHandle {
+    /// What the running thread was asked to capture. A second start with the same
+    /// spec is the host telling the same truth twice (a session applied again, an
+    /// Audio input adopted from the control API), not a request to restart it.
+    spec: AudioCaptureSpec,
     stop: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
 }
@@ -47,6 +51,20 @@ impl AudioCaptureStore {
         spec: AudioCaptureSpec,
         uploads: Arc<Mutex<AudioInputStore>>,
     ) -> Result<(), String> {
+        // The host attaches every Audio input after a session replace, and the control
+        // API may add one that the host then attaches on its next sync. Starting the
+        // capture that is already running used to stop and reopen the device, which
+        // dropped a few hundred milliseconds of sound and could fail a second time on
+        // a device that only allows one opener.
+        if let Some(existing) = self.captures.get(&spec.id)
+            && existing.spec == spec
+            && existing
+                .join
+                .as_ref()
+                .is_none_or(|join| !join.is_finished())
+        {
+            return Ok(());
+        }
         self.stop(spec.id);
         #[cfg(windows)]
         if spec.kind == DEVICE_ASIO {
@@ -54,6 +72,7 @@ impl AudioCaptureStore {
             self.captures.insert(
                 spec.id,
                 CaptureHandle {
+                    spec,
                     stop: Arc::new(AtomicBool::new(false)),
                     join: None,
                 },
@@ -63,6 +82,7 @@ impl AudioCaptureStore {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = Arc::clone(&stop);
         let id = spec.id;
+        let spec_for_handle = spec.clone();
         let (ready_tx, ready_rx) = mpsc::channel();
         // Core Audio asks for Audio Recording permission while creating a process tap.
         // The first prompt can stay up longer than the device-open timeout.
@@ -85,6 +105,7 @@ impl AudioCaptureStore {
                 self.captures.insert(
                     id,
                     CaptureHandle {
+                        spec: spec_for_handle,
                         stop,
                         join: Some(join),
                     },

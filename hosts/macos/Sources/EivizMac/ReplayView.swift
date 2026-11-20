@@ -396,8 +396,9 @@ struct ReplayView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Color(white: 0.54))
                 Picker("", selection: $defaultKind) {
-                    Text(L10n.t("replay.transitionCut")).tag("Cut")
-                    Text(L10n.t("replay.transitionDissolve")).tag("Dissolve")
+                    ForEach(["Cut", "Dissolve"], id: \.self) { kind in
+                        Text(ReplayTransitionInfo.displayName(kind)).tag(kind)
+                    }
                 }
                 .labelsHidden()
                 .frame(width: 104, height: 26)

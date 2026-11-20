@@ -195,9 +195,34 @@ struct ReplayTransitionInfo: Hashable {
 
     static let cut = ReplayTransitionInfo(kind: "Cut", timing: "Overwrap", durationFrames: 0)
 
+    /// The kinds a clip can carry, in the order the deck offers them. The replay path
+    /// composes two decoded frames, so the mixing unit's GPU-warp transitions are not
+    /// among them.
+    static let kinds = ["Cut", "Dissolve", "Dip", "Wipe", "Slide", "Push"]
+
+    /// The name the main UI gives this kind.
+    ///
+    /// The document stores the transition as `Dissolve`, while the mixing unit calls the
+    /// same picture `Fade`. An operator meets one catalog, so the deck reads the name
+    /// from there instead of keeping a second set of strings that drifts from it.
+    static func displayName(_ kind: String) -> String {
+        switch kind {
+        case "Cut": TransitionCatalog.label(EIVIZ_TRANSITION_CUT)
+        case "Dissolve": TransitionCatalog.label(EIVIZ_TRANSITION_FADE)
+        case "Dip": TransitionCatalog.label(EIVIZ_TRANSITION_DIP)
+        case "Wipe": TransitionCatalog.label(EIVIZ_TRANSITION_WIPE)
+        case "Slide": TransitionCatalog.label(EIVIZ_TRANSITION_SLIDE)
+        case "Push": TransitionCatalog.label(EIVIZ_TRANSITION_PUSH)
+        default: kind
+        }
+    }
+
     var isCut: Bool { kind == "Cut" || durationFrames == 0 }
 
-    var label: String { isCut ? "Cut" : "\(kind) \(durationFrames)f \(timing)" }
+    var label: String {
+        let name = Self.displayName(kind)
+        return isCut ? name : "\(name) \(durationFrames)f \(timing)"
+    }
 
     var value: JSONValue {
         .object([
@@ -727,6 +752,28 @@ struct ReplayDocument {
         return []
     }
 
+    /// The clips that play one angle, or take their sound from it. Removing the angle
+    /// leaves them pointing at nothing, so the settings window asks about them first.
+    func clipUids(usingAngle angleId: UInt32) -> [String] {
+        playlistIds.flatMap { clips(playlistId: $0) }
+            .filter { clip in
+                clip.angleId == angleId
+                    || (clip.audioKind == "Angle" && clip.audioAngleId == angleId)
+            }
+            .map(\.uid)
+    }
+
+    /// The clips that name an angle outside `kept`, for picture or for sound. Used when
+    /// an Apply removes angles that a clip filed meanwhile may still name.
+    func clipUids(namingOtherThan kept: Set<UInt32>) -> [String] {
+        playlistIds.flatMap { clips(playlistId: $0) }
+            .filter { clip in
+                !kept.contains(clip.angleId)
+                    || (clip.audioKind == "Angle" && !kept.contains(clip.audioAngleId))
+            }
+            .map(\.uid)
+    }
+
     func angleLabel(_ angleId: UInt32) -> String {
         for angle in angles where angle.id == angleId {
             return angle.label
@@ -960,6 +1007,29 @@ struct ReplayDocument {
                 (item.objectValue?["uid"]?.stringValue ?? "") != uid
             })
         }
+    }
+
+    /// Deletes the clips `clipUids(usingAngle:)` names, returning their uids. The caller
+    /// remembers them, because the deck has to be told which clips went when it publishes
+    /// the settings.
+    @discardableResult
+    mutating func removeClips(usingAngle angleId: UInt32) -> [String] {
+        var removed: [String] = []
+        for playlistId in playlistIds {
+            let doomed = Set(clips(playlistId: playlistId).filter { clip in
+                clip.angleId == angleId
+                    || (clip.audioKind == "Angle" && clip.audioAngleId == angleId)
+            }.map(\.uid))
+            guard !doomed.isEmpty else { continue }
+            updatePlaylist(playlistId: playlistId) { playlist in
+                playlist["clips"] = .array((playlist["clips"]?.arrayValue ?? []).filter { item in
+                    guard let uid = item.objectValue?["uid"]?.stringValue else { return true }
+                    return !doomed.contains(uid)
+                })
+            }
+            removed.append(contentsOf: doomed.sorted())
+        }
+        return removed
     }
 
     /// Applies an edit to one playlist.

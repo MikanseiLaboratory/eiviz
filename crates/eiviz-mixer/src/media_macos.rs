@@ -614,6 +614,32 @@ fn run_audio_loop(
     playing: Arc<AtomicBool>,
     seek_hns: Arc<AtomicI64>,
 ) {
+    // A panic here used to leave the video running and the sound permanently gone, with
+    // no line saying why: the thread simply ended. Say which input stopped and what it
+    // panicked with, so the next session can be diagnosed from the log alone.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_audio_loop_inner(path, source_id, uploads, stop, playing, seek_hns);
+    }));
+    if let Err(payload) = outcome {
+        let detail = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("unknown panic");
+        crate::diag::error(&format!(
+            "file audio thread for input {source_id} panicked: {detail}; its sound stops until the input is re-added"
+        ));
+    }
+}
+
+fn run_audio_loop_inner(
+    path: String,
+    source_id: u64,
+    uploads: Arc<Mutex<UploadStore>>,
+    stop: Arc<AtomicBool>,
+    playing: Arc<AtomicBool>,
+    seek_hns: Arc<AtomicI64>,
+) {
     let mut native = match NativePump::open_file(&path, 0, 2, true) {
         Ok(pump) => pump,
         Err(_) => return,
@@ -1015,6 +1041,47 @@ mod tests {
             violations, 0,
             "audio restarted mid-pass {violations} times: the loop seam must re-anchor it"
         );
+    }
+
+    #[test]
+    fn file_audio_survives_a_second_pump_generation() {
+        let path = std::env::var_os("EIVIZ_MP4_FIXTURE")
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| {
+                format!("{}/tests/fixtures/av_metal.mp4", env!("CARGO_MANIFEST_DIR"))
+            });
+        // Two generations, as a host that recreates the mixer does. No consumer drains
+        // the FIFO, which is when the file pump waits for room; before the condvar moved
+        // into the store, the second generation waited on the first generation's
+        // condition variable and the audio thread panicked instead of ingesting.
+        for generation in 0..2 {
+            let uploads = Arc::new(Mutex::new(UploadStore::default()));
+            let pump = VideoPump::start(
+                91,
+                path.clone(),
+                false,
+                0,
+                0,
+                30_000,
+                1_001,
+                Arc::clone(&uploads),
+                3,
+                None,
+                false,
+            )
+            .expect("file pump");
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut frames = 0;
+            while Instant::now() < deadline {
+                frames = uploads.lock_or_recover().fifo_frames(91);
+                if frames > 0 {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            drop(pump);
+            assert!(frames > 0, "generation {generation} ingested no file audio");
+        }
     }
 
     #[test]

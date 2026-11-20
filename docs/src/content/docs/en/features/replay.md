@@ -52,7 +52,7 @@ The Replay window is the operator's surface.
 - **Record / Stop**: starts and stops the recording. The state line shows the remaining time, or that the storage is full, and the health line shows written and read-back frames, frames lost at the readback, encoder and writer losses, segments, queue depth, and write latency. Problems are also spelled out in words, for example "storage low" or "encoder behind".
 - **Mark In (I)** and **Mark Out (O)**: mark the clip. The in point, out point, and duration are shown as timecode, and the marks and the recording position are drawn on the angle's waveform. Cancel mark clears the range.
 - **Event list**: every marked event with its range and duration. Events can be protected from retention, renamed, deleted, and added to the playlist. Deleting an event keeps the clips that came from it.
-- **Playlist**: the clips a channel plays, in order. A clip can be cued, removed, tagged, and edited: transition (Cut or Dissolve), transition timing (Overwrap or Additive), transition length, gain (−60 to +12 dB), keep pitch, playback speed, and where its audio comes from (its own angle, another angle, or silence).
+- **Playlist**: the clips a channel plays, in order. A clip can be cued, removed, tagged, and edited: transition (Cut or Fade), transition timing (Overwrap or Additive), transition length, gain (−60 to +12 dB), keep pitch, playback speed, and where its audio comes from (its own angle, another angle, or silence).
 - While the channel plays, the clip on air is marked ▶. With playlist looping on, playback returns to the first clip after the last one; with it off the playlist ends and the transport reads stopped.
 - **Play all** sends the clips of the selected playlist to the channel in order, each with its own transition. Playback goes to the channel and does not depend on the channel being on air (to show it on the program, add the Replay input to a scene layer and take that scene). The deck says so when the channel is in no scene at all.
 - **Transport**: play, pause, step one frame, jog, 25 %, 50 %, 100 %, and Live to jump back to the recording edge. Stepping and jogging stay inside the mark.
@@ -67,9 +67,9 @@ The Replay window is the operator's surface.
 A clip's transition comes from the playlist's **New clips** setting unless the clip sets its own.
 
 - **Overwrap** shares the transition duration between the two clips: the outgoing clip's tail overlaps the incoming clip's head.
-- **Additive** inserts the duration between the clips, so the playlist becomes `A + duration + B` long. The outgoing clip's last frame and the incoming clip's first frame are held for the insertion and dissolve across it.
+- **Additive** inserts the duration between the clips, so the playlist becomes `A + duration + B` long. The outgoing clip's last frame and the incoming clip's first frame are held for the insertion and fade across it.
 
-A Dissolve with a duration of zero, and a Cut, occupy no time at all.
+A Fade with a duration of zero, and a Cut, occupy no time at all.
 
 Decoding and those transitions are both done on the GPU during playback. Switching between two clips never sends a frame back to the CPU, so playing several channels at once hardly adds CPU load.
 

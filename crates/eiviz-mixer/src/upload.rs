@@ -18,15 +18,6 @@ const AUDIO_FIFO_HIGH_FRAMES: usize = AUDIO_FIFO_FRAMES * 4 / 5;
 pub const AUDIO_LIVE_FRAMES: usize = AUDIO_RATE as usize / 25;
 const AUDIO_PRIME_FRAMES: usize = AUDIO_RATE as usize / 50;
 
-fn fifo_cond() -> &'static Condvar {
-    static COND: OnceLock<Condvar> = OnceLock::new();
-    COND.get_or_init(Condvar::new)
-}
-
-fn notify_fifo() {
-    fifo_cond().notify_all();
-}
-
 /// Fixed-capacity interleaved sample ring. Drops oldest samples when full.
 pub struct SampleRing {
     buf: Vec<f32>,
@@ -808,12 +799,31 @@ impl AudioRing {
     }
 }
 
-#[derive(Default)]
 pub struct AudioInputStore {
     sources: HashMap<u64, AudioRing>,
+    /// Wakes a producer waiting for room in its FIFO. It belongs to this store, not to
+    /// the process: a mixer generation has its own store, and `Condvar::wait` panics if
+    /// the same condition variable is waited on with a different mutex. A global one
+    /// therefore killed the file-audio thread of every generation after the first.
+    cond: Arc<Condvar>,
+}
+
+impl Default for AudioInputStore {
+    fn default() -> Self {
+        Self {
+            sources: HashMap::new(),
+            cond: Arc::new(Condvar::new()),
+        }
+    }
 }
 
 impl AudioInputStore {
+    /// The condition variable paired with this store's mutex. Cloned before waiting:
+    /// the guard cannot be moved into `wait_timeout` while the store borrows it.
+    fn cond(&self) -> Arc<Condvar> {
+        Arc::clone(&self.cond)
+    }
+
     pub fn ingest_audio(&mut self, id: u64, packet: AudioPacket) {
         self.sources
             .entry(id)
@@ -856,7 +866,7 @@ impl AudioInputStore {
         for _ in 0..frames {
             out.push(ring.pop_stereo());
         }
-        notify_fifo();
+        self.cond.notify_all();
         out
     }
 
@@ -888,7 +898,7 @@ impl AudioInputStore {
         } else if want >= 2 {
             ring.last_hold = (out[want - 2], out[want - 1]);
         }
-        notify_fifo();
+        self.cond.notify_all();
     }
 
     #[allow(dead_code)]
@@ -899,7 +909,7 @@ impl AudioInputStore {
         for ring in self.sources.values_mut() {
             ring.skip_frames(frames);
         }
-        notify_fifo();
+        self.cond.notify_all();
     }
 
     pub fn fifo_frames(&self, id: u64) -> usize {
@@ -1239,9 +1249,12 @@ pub fn ingest_audio_clocked(uploads: &Mutex<UploadStore>, id: u64, packet: Audio
 }
 
 fn wait_fifo_below(audio: &Mutex<AudioInputStore>, id: u64, limit: usize) {
+    // Read the condition variable from the store the mutex guards. It is the same
+    // instance for every waiter on this generation, and a different one for the next.
     let mut guard = audio.lock_or_recover();
+    let cond = guard.cond();
     while guard.fifo_frames(id) >= limit {
-        let (next, timeout) = fifo_cond()
+        let (next, timeout) = cond
             .wait_timeout(guard, Duration::from_millis(50))
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard = next;
@@ -1327,6 +1340,42 @@ mod tests {
             channels: 1,
             samples_per_channel: frames as i32,
             pcm_planar_f32: pcm,
+        }
+    }
+
+    #[test]
+    fn audio_stores_wait_on_their_own_condvar() {
+        use std::sync::Barrier;
+
+        // Two generations of the store, as the mixer has after a destroy/create. A
+        // process-wide Condvar used with the first store's mutex and then the second
+        // panics in pthread_cond_wait ("two mutexes"), which is the file-audio thread
+        // dying after the mixer is rebuilt. Both waits must finish on their own store.
+        let stores = [
+            Arc::new(Mutex::new(AudioInputStore::default())),
+            Arc::new(Mutex::new(AudioInputStore::default())),
+        ];
+        for store in &stores {
+            store
+                .lock_or_recover()
+                .ingest_audio(1, tone_packet(AUDIO_FIFO_FRAMES));
+        }
+        let barrier = Arc::new(Barrier::new(stores.len()));
+        let waits: Vec<_> = stores
+            .into_iter()
+            .map(|store| {
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    wait_fifo_below(&store, 1, 1);
+                })
+            })
+            .collect();
+        for wait in waits {
+            assert!(
+                wait.join().is_ok(),
+                "a store waited on another store's mutex"
+            );
         }
     }
 

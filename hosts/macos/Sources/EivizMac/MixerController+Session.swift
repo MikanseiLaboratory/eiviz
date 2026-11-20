@@ -661,12 +661,35 @@ extension MixerController {
         videoFraction = value
     }
 
-    func attachInputs() {
-        for input in session.inputs where input.kind != .omt && input.kind != .ndi {
+    /// Starts Core Audio capture for every Audio input in the document.
+    ///
+    /// The core starts picture sources itself when the session is replaced, but a
+    /// microphone is a capture thread this host owns. Without this, an Audio input
+    /// restored at boot, or one the control API added, was in the document and the
+    /// input list while its capture never ran, so its peak stayed zero and the mixing
+    /// unit had nothing to mix.
+    func attachAudioInputs() {
+        guard !isRemote else { return }
+        for input in session.inputs where input.kind == .audio {
             attach(input)
         }
-        for input in session.inputs where input.kind == .omt || input.kind == .ndi {
-            attach(input)
+    }
+
+    /// Audio inputs whose capture the host still has to start: new to the document, or
+    /// an Audio input whose device settings changed. An input that is already attached
+    /// with the same settings is left alone, and the core's start is a no-op for the
+    /// same spec as well, so a sync cannot stop and reopen a working device.
+    nonisolated static func audioInputsNeedingAttach(
+        inputs: [InputEntry],
+        previous: [InputEntry]
+    ) -> [InputEntry] {
+        var attached: [UInt64: InputEntry] = [:]
+        for input in previous where input.kind == .audio {
+            attached[input.id] = input
+        }
+        return inputs.filter { input in
+            guard input.kind == .audio else { return false }
+            return attached[input.id] != input
         }
     }
 

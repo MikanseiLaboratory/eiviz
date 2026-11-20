@@ -603,6 +603,65 @@ let secondPlaylistForClip = clipDoc.addPlaylist(name: "Other")
 _ = clipDoc.appendClip(playlistId: secondPlaylistForClip, event: clipDoc.events[0], angleId: 1)
 check("clip uid stays unique across playlists",
       clipDoc.clips(playlistId: secondPlaylistForClip).first?.uid == "clip-\(clipEvent)-2")
+check("clips using an angle are found", clipDoc.clipUids(usingAngle: 1).count == 2)
+check("a clip is not matched to another angle", clipDoc.clipUids(usingAngle: 2).isEmpty)
+check("a clip naming a kept angle is not stranded",
+      clipDoc.clipUids(namingOtherThan: [1]).isEmpty)
+check("a clip naming a removed angle is stranded",
+      clipDoc.clipUids(namingOtherThan: [2]).count == 2)
+let removedClips = clipDoc.removeClips(usingAngle: 1)
+check("removing an angle's clips reports them", removedClips.count == 2)
+check("removing an angle's clips empties both playlists",
+      clipDoc.clipUids(usingAngle: 1).isEmpty)
+var audioClipDoc = ReplayDocument.empty(format: format)
+let audioClipPlaylist = audioClipDoc.ensurePlaylist()
+let audioClipEvent = audioClipDoc.appendEvent(uuid: "rec2", inFrame: 0, outFrame: 30, name: "audio")
+_ = audioClipDoc.appendClip(
+    playlistId: audioClipPlaylist,
+    event: audioClipDoc.events.first(where: { $0.id == audioClipEvent })!,
+    angleId: 2)
+audioClipDoc.setClipAudio(
+    playlistId: audioClipPlaylist,
+    uid: "clip-\(audioClipEvent)",
+    kind: "Angle",
+    angleId: 7)
+check("a clip taking sound from an angle is found",
+      audioClipDoc.clipUids(usingAngle: 7) == ["clip-\(audioClipEvent)"])
+check("a clip taking sound from a removed angle is stranded",
+      audioClipDoc.clipUids(namingOtherThan: [2]).count == 1)
+
+let apiMic = InputEntry(id: 10, name: "Mic", kind: .audio)
+let barsInput = InputEntry(id: 2, name: "Bars", kind: .bars)
+check("an Audio input added by the API needs attach",
+      MixerController.audioInputsNeedingAttach(inputs: [apiMic], previous: []).map(\.id) == [10])
+check("an unchanged Audio input is left running",
+      MixerController.audioInputsNeedingAttach(inputs: [apiMic], previous: [apiMic]).isEmpty)
+var reconfiguredMic = apiMic
+reconfiguredMic.audioDeviceId = "system-default"
+check("a reconfigured Audio input is attached again",
+      MixerController.audioInputsNeedingAttach(
+        inputs: [reconfiguredMic],
+        previous: [apiMic]
+      ).map(\.id) == [10])
+check("picture inputs are not attached as audio",
+      MixerController.audioInputsNeedingAttach(inputs: [barsInput], previous: []).isEmpty)
+
+check("a deck tick ignores a locally deleted angle",
+      !ReplayDeckMath.shouldAdoptAngles(remote: [1, 2], local: [2], loaded: [1, 2]))
+check("a deck tick adopts an external angle",
+      ReplayDeckMath.shouldAdoptAngles(remote: [1, 2, 3], local: [1, 2], loaded: [1, 2]))
+check("a deck tick ignores a locally added angle",
+      !ReplayDeckMath.shouldAdoptAngles(remote: [1, 2], local: [1, 2, 3], loaded: [1, 2]))
+
+check("replay transition uses the main UI name",
+      ReplayTransitionInfo.displayName("Dissolve") == "Fade")
+check("replay cut uses the main UI name",
+      ReplayTransitionInfo.displayName("Cut") == "Cut")
+check("replay wipe uses the main UI name",
+      ReplayTransitionInfo.displayName("Wipe") == "Wipe")
+check("transition label uses the main UI name",
+      ReplayTransitionInfo(kind: "Dissolve", timing: "Overwrap", durationFrames: 15)
+        .label.hasPrefix("Fade "))
 
 var transitionDoc = ReplayDocument.empty(format: format)
 let transitionPlaylist = transitionDoc.ensurePlaylist()

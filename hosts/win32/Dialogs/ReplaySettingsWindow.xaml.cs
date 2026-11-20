@@ -34,6 +34,8 @@ public partial class ReplaySettingsWindow : Window
     private uint _channelLimit;
     /// <summary>Set once something is edited: closing without applying asks first.</summary>
     private bool _dirty;
+    /// <summary>Clips this window deleted at an angle row, by uid.</summary>
+    private readonly HashSet<string> _deletedClips = [];
 
     public ReplaySettingsWindow(Session session)
     {
@@ -128,6 +130,7 @@ public partial class ReplaySettingsWindow : Window
             }
         }
         _angles.Clear();
+        _deletedClips.Clear();
         foreach (var angle in ReplayModel.Angles(_replay))
         {
             var row = new AngleRow
@@ -555,8 +558,40 @@ public partial class ReplaySettingsWindow : Window
             {
                 if (clips[index] is not JsonObject clip)
                     continue;
-                if ((clip["angleId"]?.GetValue<uint>() ?? 0) == angleId
-                    || (clip["audioAngleId"]?.GetValue<uint>() ?? 0) == angleId)
+                var picture = (clip["angleId"]?.GetValue<uint>() ?? 0) == angleId;
+                var audio = string.Equals(
+                        clip["audioKind"]?.GetValue<string>(),
+                        "Angle",
+                        StringComparison.OrdinalIgnoreCase)
+                    && (clip["audioAngleId"]?.GetValue<uint>() ?? 0) == angleId;
+                if (!picture && !audio)
+                    continue;
+                // Apply reads the deck from the core again, so the uids are what tells it
+                // these clips were already agreed to; otherwise they come back and the
+                // operator is asked a second time.
+                if (clip["uid"]?.GetValue<string>() is { Length: > 0 } uid)
+                    _deletedClips.Add(uid);
+                clips.RemoveAt(index);
+            }
+            if (clips.Count != before)
+                list["revision"] = (list["revision"]?.GetValue<ulong>() ?? 0) + 1;
+        }
+    }
+
+    /// <summary>Drops the clips the operator already agreed to delete with their angle.</summary>
+    private void DropConfirmedClips()
+    {
+        if (_deletedClips.Count == 0 || _replay?["playlists"] is not JsonArray playlists)
+            return;
+        foreach (var list in playlists.OfType<JsonObject>())
+        {
+            if (list["clips"] is not JsonArray clips)
+                continue;
+            var before = clips.Count;
+            for (var index = clips.Count - 1; index >= 0; index--)
+            {
+                if (clips[index] is JsonObject clip
+                    && _deletedClips.Contains(clip["uid"]?.GetValue<string>() ?? ""))
                 {
                     clips.RemoveAt(index);
                 }
@@ -565,6 +600,20 @@ public partial class ReplaySettingsWindow : Window
                 list["revision"] = (list["revision"]?.GetValue<ulong>() ?? 0) + 1;
         }
     }
+
+    /// <summary>
+    /// True when a clip names an angle outside <paramref name="kept"/>, for picture or for
+    /// sound. A clip whose sound comes from a removed angle makes the control layer refuse
+    /// the whole Apply, so the two are counted together.
+    /// </summary>
+    private static bool NamesRemovedAngle(JsonObject clip, HashSet<uint> kept) =>
+        !kept.Contains(clip["angleId"]?.GetValue<uint>() ?? 0)
+        || (string.Equals(
+                clip["audioKind"]?.GetValue<string>(),
+                "Angle",
+                StringComparison.OrdinalIgnoreCase)
+            && !kept.Contains(clip["audioAngleId"]?.GetValue<uint>() ?? 0));
+
     /// <summary>How many clips play this angle, or take their sound from it.</summary>
     private int ClipsUsingAngle(uint angleId)
     {
@@ -791,11 +840,15 @@ public partial class ReplaySettingsWindow : Window
                     _replay[ownedByDeck] = value.DeepClone();
             }
         }
+        // The deck copy above brought back the clips this window already deleted at an
+        // angle row. The operator confirmed those, so they go again without a second
+        // prompt; only clips filed since then are new to this Apply.
+        DropConfirmedClips();
 
         // Removing an angle strands every clip that plays it, and the control layer
-        // refuses the whole change when that happens. Say how many clips would go and
-        // let the operator decide, rather than failing with a message they cannot act
-        // on or deleting their work without asking.
+        // refuses the whole change when a clip still takes its sound from it. Say how
+        // many clips would go and let the operator decide, rather than failing with a
+        // message they cannot act on or deleting their work without asking.
         var keptAngles = _angles.Select(angle => angle.Id).ToHashSet();
         if (_replay["playlists"] is JsonArray lists)
         {
@@ -805,7 +858,7 @@ public partial class ReplaySettingsWindow : Window
                 if (list["clips"] is not JsonArray clips)
                     continue;
                 stranded += clips.OfType<JsonObject>()
-                    .Count(clip => !keptAngles.Contains(clip["angleId"]?.GetValue<uint>() ?? 0));
+                    .Count(clip => NamesRemovedAngle(clip, keptAngles));
             }
             if (stranded > 0)
             {
@@ -824,8 +877,10 @@ public partial class ReplaySettingsWindow : Window
                     for (var index = clips.Count - 1; index >= 0; index--)
                     {
                         if (clips[index] is JsonObject clip
-                            && !keptAngles.Contains(clip["angleId"]?.GetValue<uint>() ?? 0))
+                            && NamesRemovedAngle(clip, keptAngles))
                         {
+                            if (clip["uid"]?.GetValue<string>() is { Length: > 0 } uid)
+                                _deletedClips.Add(uid);
                             clips.RemoveAt(index);
                         }
                     }
@@ -847,6 +902,26 @@ public partial class ReplaySettingsWindow : Window
         _session.ReplayJson = json;
         try
         {
+            // A clip removed with its angle belongs to the deck, not to the settings, so
+            // settings alone would leave the core holding a clip that names an angle this
+            // window just removed. The deck mutation names the deletions explicitly;
+            // angleEdited is false because this window did not pick a camera.
+            if (_deletedClips.Count > 0)
+            {
+                var deckMutation = ReplayModel.DeckMutation(
+                    _replay,
+                    angleEdited: false,
+                    deletedClips: _deletedClips);
+                if (App.IsRemote)
+                {
+                    if (Owner is MainWindow main)
+                        main.RemoteMutate(deckMutation, Title);
+                }
+                else
+                {
+                    SessionStore.MutateLocal(deckMutation);
+                }
+            }
             if (App.IsRemote)
             {
                 // A remote core owns the events and playlists too, so sending the whole
@@ -877,6 +952,7 @@ public partial class ReplaySettingsWindow : Window
             return;
         }
         _dirty = false;
+        _deletedClips.Clear();
         if (Owner is MainWindow owner)
             owner.NotifyReplaySettingsApplied();
         RefreshFreeSpace();
