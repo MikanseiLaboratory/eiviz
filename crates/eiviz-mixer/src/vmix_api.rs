@@ -302,6 +302,10 @@ pub(crate) fn dispatch_function(
     match name {
         "Cut" | "CutDirect" | "Fade" | "PreviewInput" | "ActiveInput" | "Snapshot"
         | "SnapshotInput" => {}
+        // vMix's documented "refresh all activator device lights and controls". eiviz
+        // has no activator devices, so this is accepted as a known Function and does
+        // nothing. It needs no session.
+        "ActivatorRefresh" => return Ok(()),
         _ => return Err(DispatchError::Unknown(format!("unknown Function {name}"))),
     }
     let doc = {

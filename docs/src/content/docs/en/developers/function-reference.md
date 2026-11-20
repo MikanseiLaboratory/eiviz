@@ -18,6 +18,7 @@ Shortcuts available on the vMix-compatible HTTP API (`GET /api?Function=...`) an
 | `ActiveInput` | `Input` (required), `Mix` | Sets Program to the input. Preview does not change |
 | `Snapshot` | `Value`, `Mix` | Saves Program of the Mixing Unit. `Input` is not used |
 | `SnapshotInput` | `Input` (required), `Value`, `Mix` | Saves that Input. Flat numbers are Scenes first, then raw Inputs. `0` / `-1` are Preview / Program of the Mixing Unit |
+| `ActivatorRefresh` | | Accepted as a known Function for vMix compatibility. eiviz has no activator devices, so it has no effect on the session |
 
 Examples:
 

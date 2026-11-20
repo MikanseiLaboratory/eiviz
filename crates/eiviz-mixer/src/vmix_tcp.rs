@@ -898,6 +898,14 @@ mod tests {
     }
 
     #[test]
+    fn activator_refresh_is_acknowledged() {
+        assert_eq!(
+            dispatch_line("FUNCTION ActivatorRefresh"),
+            Reply::Line("FUNCTION OK Completed\r\n".into())
+        );
+    }
+
+    #[test]
     fn acts_subscribe_sends_only_new_lines() {
         let old = "ACTS OK Input 1 1\nACTS OK Input 2 0";
         let new = "ACTS OK Input 1 0\nACTS OK Input 2 0";

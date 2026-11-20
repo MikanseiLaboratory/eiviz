@@ -20,6 +20,7 @@ vMix互換HTTP APIおよびTCP APIで使用できる主なFunction（Shortcut）
 | `ActiveInput` | `Input`（必須）, `Mix` | 指定したInputをProgramに設定します。 |
 | `Snapshot` | `Value`, `Mix` | 指定したMixing UnitのProgram映像をスクリーンショットとして保存します（`Input`は使用しません）。 |
 | `SnapshotInput` | `Input`（必須）, `Value`, `Mix` | 指定したInputの映像をスクリーンショットとして保存します（通し番号はSceneが先、続いて通常のInputとなり、`0`/`-1`は対象Mixing UnitのPreview/Programを表します）。 |
+| `ActivatorRefresh` | | vMix互換のため既知のFunctionとして受理します。eivizにはアクティベータデバイスがないため、セッションには何も影響しません。 |
 
 ### 実行例
 
