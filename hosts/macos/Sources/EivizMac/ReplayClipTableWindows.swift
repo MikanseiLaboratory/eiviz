@@ -97,12 +97,12 @@ struct ReplayClipTableWindows: View {
                         get: { clip.transition.kind },
                         set: { handlers.transitionKind(clip.uid, $0) }
                     )) {
-                        Text(L10n.t("replay.transitionCut")).tag("Cut")
-                        Text(L10n.t("replay.transitionDissolve")).tag("Dissolve")
-                        Text(L10n.t("replay.transitionDip")).tag("Dip")
-                        Text(L10n.t("replay.transitionWipe")).tag("Wipe")
-                        Text(L10n.t("replay.transitionSlide")).tag("Slide")
-                        Text(L10n.t("replay.transitionPush")).tag("Push")
+                        // The same names the main UI shows: the replay document calls the
+                        // mixer's Fade "Dissolve", and the operator should not have to learn
+                        // both words.
+                        ForEach(ReplayTransitionInfo.kinds, id: \.self) { kind in
+                            Text(ReplayTransitionInfo.displayName(kind)).tag(kind)
+                        }
                     }
                     .labelsHidden()
                     .frame(width: 100)

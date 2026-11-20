@@ -358,6 +358,7 @@ final class MixerController: ObservableObject {
         // Only after both decodes succeeded: a revision marked as synced on a failed
         // decode would never be retried, and the deck would stop adopting remote edits.
         syncedSessionRevision = revision
+        let previousInputs = session.inputs
         var changed = false
         // Inputs are shared with the native API too: a Replay channel added by eivizctl has
         // to appear in the input list, or the deck cannot be opened for it. Inputs the
@@ -389,6 +390,15 @@ final class MixerController: ObservableObject {
             changed = true
         }
         if changed {
+            // The API can add an Audio input, and the core has no capture thread for it:
+            // attaching is the host's job. Only new or reconfigured inputs are started;
+            // an input the UI already attached keeps recording.
+            for input in Self.audioInputsNeedingAttach(
+                inputs: session.inputs,
+                previous: previousInputs
+            ) {
+                attach(input)
+            }
             objectWillChange.send()
         }
     }
@@ -818,6 +828,10 @@ final class MixerController: ObservableObject {
             return false
         }
         adoptCanonicalReplay()
+        // The core starts the picture sources from the document; an Audio input is a
+        // capture thread the host owns. A session restored at boot, or one whose Audio
+        // input the API added, would otherwise be in the document and silent.
+        attachAudioInputs()
         return true
     }
 

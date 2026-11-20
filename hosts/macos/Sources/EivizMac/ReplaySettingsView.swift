@@ -34,6 +34,13 @@ struct ReplaySettingsView: View {
     /// The document as last loaded/applied, so an external angle edit can be adopted
     /// without reloading over the operator's unsaved fields on every tick.
     @State private var loadedJson = ""
+    /// The angle ids the window last loaded. A deck change is only adopted when the
+    /// document's angles really changed; comparing the document with the table made a
+    /// deleted row look like an external edit and reloaded it back.
+    @State private var loadedAngleIds: Set<UInt32> = []
+    /// Clips confirmed for deletion with an angle. Apply publishes them with the
+    /// settings; closing the window discards both.
+    @State private var deletedClips: [String] = []
 
     var body: some View {
         // The settings are taller than the smallest window the view allows, so they scroll
@@ -275,14 +282,19 @@ struct ReplaySettingsView: View {
         .onAppear { load() }
         .onChange(of: mixer.replayDocument?.json) {
             guard let latest = mixer.replayDocument, latest.json != loadedJson else { return }
-            // Adopt a new/removed angle from the deck, but do not reload over a
-            // picker the operator is changing: a unit audio choice was reverting to
-            // Silent on the next document tick.
             let remoteIds = Set(latest.angles.map(\.id))
             let localIds = Set(angles.map(\.id))
-            if remoteIds != localIds {
-                load()
-            }
+            // Adopt a new/removed angle from the deck, but never reload over the
+            // operator's unsaved rows. A clip the deck files while this window is open
+            // changes the document, and comparing it with the table put a deleted angle
+            // back on every such tick. A change that did not touch the angles is not one
+            // this table has to adopt either.
+            guard ReplayDeckMath.shouldAdoptAngles(
+                remote: remoteIds,
+                local: localIds,
+                loaded: loadedAngleIds
+            ) else { return }
+            load()
         }
     }
 
@@ -358,6 +370,8 @@ struct ReplaySettingsView: View {
         decodeAhead = current.raw["decodeAhead"]?.boolValue ?? true
         profiling = current.raw["profiling"]?.boolValue ?? false
         angles = current.angles
+        loadedAngleIds = Set(current.angles.map(\.id))
+        deletedClips.removeAll()
         deckRefresh = mixer.session.settings.replayPresentInterval
     }
 
@@ -536,35 +550,42 @@ struct ReplaySettingsView: View {
 
     /// Removes one angle by id, from its own row's button.
     private func removeAngle(_ angleId: UInt32) {
-        guard let angle = angles.first(where: { $0.id == angleId }) else { return }
-        // A clip that plays this angle, or takes its sound from it, would be left
-        // pointing at nothing, so the angle waits until those clips are gone.
-        let users = clipCount(using: angle.id)
-        if users > 0 {
-            status = L10n.format("replay.angleInUse", "\(users)")
-            return
+        guard let angle = angles.first(where: { $0.id == angleId }), var current = document else { return }
+        // A clip that plays this angle, or takes its sound from it, has nowhere to go
+        // once the angle is gone. The deck may have filed clips since this window
+        // loaded, so the live document is what decides; removing the angle therefore
+        // offers to remove those clips too. Refusing outright left an angle that could
+        // never be removed.
+        let live = mixer.replayDocument ?? current
+        let users = live.clipUids(usingAngle: angleId)
+        if !users.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = L10n.format("replay.angleInUseDeleteClips", "\(users.count)")
+            alert.addButton(withTitle: L10n.t("dialog.ok"))
+            alert.addButton(withTitle: L10n.t("dialog.cancel"))
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            // The copy Apply publishes has to lose them too, and the ids are what tell
+            // the deck which clips went.
+            _ = current.removeClips(usingAngle: angleId)
+            rememberDeleted(users)
         }
         angles.removeAll { $0.id == angle.id }
         // A drive that still listed it would fail validation on Apply.
         for index in storages.indices {
             storages[index].angleIds.removeAll { $0 == angle.id }
         }
+        // Keep the window's document in step with the table: Apply publishes this copy,
+        // and the next deck tick must not read the removed row as an external edit.
+        current.setAngles(angles)
+        current.setStorages(storages)
+        document = current
     }
 
-    /// How many clips play this angle, or take their sound from it.
-    private func clipCount(using angleId: UInt32) -> Int {
-        guard let document else { return 0 }
-        var count = 0
-        for playlistId in document.playlistIds {
-            for clip in document.clips(playlistId: playlistId) {
-                let picture = clip.angleId == angleId
-                let audio = clip.audioKind == "Angle" && clip.audioAngleId == angleId
-                if picture || audio {
-                    count += 1
-                }
-            }
+    /// Remembers clips the operator agreed to delete, once each.
+    private func rememberDeleted(_ uids: [String]) {
+        for uid in uids where !deletedClips.contains(uid) {
+            deletedClips.append(uid)
         }
-        return count
     }
 
     /// Free space for one drive, from the same mixer model the recorder uses. The
@@ -727,10 +748,44 @@ struct ReplaySettingsView: View {
         current.setAutoAddToPlaylist(autoAdd)
         current.raw["decodeAhead"] = .bool(decodeAhead)
         current.raw["profiling"] = .bool(profiling)
+        // A clip filed while this window was open can name an angle this Apply removes.
+        // The control layer refuses a clip that takes its sound from a missing angle and
+        // leaves a picture reference pointing at nothing, so those clips go with the
+        // angle after the operator is told how many.
+        let kept = Set(angles.map(\.id))
+        let stranded = (mixer.replayDocument ?? current)
+            .clipUids(namingOtherThan: kept)
+            .filter { !deletedClips.contains($0) }
+        if !stranded.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = L10n.format("replay.orphanClips", "\(stranded.count)")
+            alert.addButton(withTitle: L10n.t("dialog.ok"))
+            alert.addButton(withTitle: L10n.t("dialog.cancel"))
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            rememberDeleted(stranded)
+        }
         document = current
+        // A confirmed angle removal takes its clips with it. The deck is told first:
+        // settings that drop an angle still named by a clip's sound would be refused by
+        // the core.
+        if !deletedClips.isEmpty {
+            var deck = mixer.replayDocument ?? current
+            // The core deletes these clips first and then merges the deck snapshot, so a
+            // snapshot that still listed them put them straight back and the settings
+            // were refused ("clip ... uses angle ..., which does not exist").
+            deck.removeClips(uids: Set(deletedClips))
+            guard mixer.applyReplayDeck(deck, deletedClips: deletedClips, angleEdited: false) else {
+                status = L10n.t("replay.publishRefused")
+                return
+            }
+            deletedClips.removeAll()
+        }
         // Applying either works or says why. A window that closes without a word
         // leaves the operator unable to tell the two apart.
         if mixer.applyReplay(current) {
+            // The table's rows are now the published ones; a later deck tick has nothing
+            // to adopt unless the angles change again.
+            loadedAngleIds = Set(angles.map(\.id))
             // The deck refresh interval lives in the session settings, not the replay
             // document. Send only that part as a mutation: replacing the whole host
             // document here would revert inputs/scenes/outputs another writer changed

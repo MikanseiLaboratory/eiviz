@@ -3,6 +3,21 @@ import Foundation
 /// The arithmetic the replay deck does between a widget and the mixer. Kept out of the
 /// view so a regression can be caught without opening a window.
 enum ReplayDeckMath {
+    /// Whether a deck tick should replace the settings table's angle rows.
+    ///
+    /// A tick that only filed a clip must not: the table's ids differ from the
+    /// document's because the operator deleted a row, and comparing the two directly
+    /// put that row back on every such tick. The tick is adopted only when the
+    /// document's angles changed since this window loaded them and the operator has
+    /// no unsaved row edit of their own.
+    static func shouldAdoptAngles(
+        remote: Set<UInt32>,
+        local: Set<UInt32>,
+        loaded: Set<UInt32>
+    ) -> Bool {
+        remote != loaded && local == loaded
+    }
+
     /// Where a step or jog lands, clamped to the marks when both exist, otherwise to the
     /// recording range. Steps are relative to the playhead, not to Mark In.
     static func stepTarget(
