@@ -726,11 +726,11 @@ fn omt_program_sends_mu_bus_audio() {
     }
     let video = connect_omt_named(&name);
     let _ = wait_omt_sample(&video, Duration::from_secs(4));
-    let audio = ReceiverSession::connect(
-        video.address(),
-        omt_receiver_config_frames(FrameType::AUDIO),
-    )
-    .expect("OMT audio socket");
+    // The sender now advertises the machine's real host name
+    // (openmediatransport 0.2.3+); CI host names are not resolvable, so open
+    // the audio session through discovery (which carries the sender's IPs)
+    // instead of reusing the machine-name URL.
+    let audio = connect_omt_named_frames(&name, FrameType::AUDIO);
     let energy = wait_omt_audio_energy(&audio, Duration::from_secs(4));
     assert!(
         energy > 1e-6,
