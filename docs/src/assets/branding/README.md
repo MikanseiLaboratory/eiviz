@@ -69,5 +69,5 @@ pwsh -File docs/src/assets/branding/app-icon/New-Icns.ps1
 | プラットフォーム | 設定 |
 | --- | --- |
 | Windows（アプリ） | `hosts/win32/Eiviz.Host.csproj` / `Eiviz.Remote.csproj` の `ApplicationIcon` |
-| Windows（インストーラー） | `packaging/windows/eiviz.iss` の `SetupIconFile` とショートカットの `IconFilename` |
+| Windows（インストーラー） | `packaging/windows/eiviz.iss` の `SetupIconFile`。ショートカットは各実行ファイルの `ApplicationIcon` を使う |
 | macOS | `hosts/macos/Sources/EivizMac/Info*.plist` の `CFBundleIconFile` と、`hosts/macos/package-app.sh` の `Contents/Resources/eiviz.icns` へのコピー |
