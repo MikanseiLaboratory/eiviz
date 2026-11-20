@@ -53,7 +53,7 @@ opt-level = 1
 opt-level = 1
 
 # The codec / transport hot paths this workspace depends on are on crates.io:
-# - vmx 0.2.1            (MikanseiLaboratory/vmx-rs#37)
-# - openmediatransport 0.2.1 (MikanseiLaboratory/openmediatransport-rs#50)
+# - vmx 0.2.3            (MikanseiLaboratory/vmx-rs#45)
+# - openmediatransport 0.2.4 (MikanseiLaboratory/openmediatransport-rs#53, #54, #55)
 # Both keep resolving to one shared vmx instance through the mixer's normal
 # dependency (no [patch.crates-io] section is needed any more).
