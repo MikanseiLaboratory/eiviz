@@ -744,7 +744,8 @@ extension MixerController {
                             cstr,
                             input.useGpu ? 1 : 0,
                             max(1, min(8, input.frameBufferFrames)),
-                            input.omtQuality.rawUInt
+                            input.omtQuality.rawUInt,
+                            input.omtDecodeExact ? 1 : 0
                         ),
                         "OMT connect"
                     )
@@ -1969,7 +1970,7 @@ extension MixerController {
             code = MixerFFI.withCString(resolved.address) { mixer_ndi_connect(id, $0, 1, 0) }
         } else {
             code = MixerFFI.withCString(resolved.address) {
-                mixer_omt_connect(id, $0, AppPrefs.shared.remoteOmtUseGpu ? 1 : 0, 1, 0)
+                mixer_omt_connect(id, $0, AppPrefs.shared.remoteOmtUseGpu ? 1 : 0, 1, 0, 0)
             }
         }
         return code == 0

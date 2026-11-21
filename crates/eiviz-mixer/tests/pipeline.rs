@@ -215,7 +215,7 @@ fn compose_omt_and_program_out() {
     let url = format!("omt://127.0.0.1:{}", sender.port());
     let address = CString::new(url).unwrap();
     unsafe {
-        assert_eq!(mixer_omt_connect(20, address.as_ptr(), 0, 1, 0), OK);
+        assert_eq!(mixer_omt_connect(20, address.as_ptr(), 0, 1, 0, 0), OK);
         assert_eq!(
             mixer_omt_start_send(1, CString::new("eiviz-test-pgm").unwrap().as_ptr()),
             OK
@@ -795,7 +795,7 @@ fn omt_gpu_in_and_out() {
     let url = format!("omt://127.0.0.1:{}", sender.port());
     let address = CString::new(url).unwrap();
     unsafe {
-        assert_eq!(mixer_omt_connect(21, address.as_ptr(), 1, 3, 0), OK);
+        assert_eq!(mixer_omt_connect(21, address.as_ptr(), 1, 3, 0, 0), OK);
         assert_eq!(
             mixer_output_add(
                 201,
@@ -1593,7 +1593,7 @@ fn omt_connect_returns_before_unreachable_timeout() {
     let address = CString::new("omt://127.0.0.1:1/missing").unwrap();
     let started = Instant::now();
     unsafe {
-        assert_eq!(mixer_omt_connect(20, address.as_ptr(), 0, 1, 0), OK);
+        assert_eq!(mixer_omt_connect(20, address.as_ptr(), 0, 1, 0, 0), OK);
     }
     assert!(
         started.elapsed() < Duration::from_millis(750),

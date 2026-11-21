@@ -59,6 +59,7 @@ impl OmtReceiver {
         ingest: GpuIngest,
         frame_buffer_frames: u32,
         quality: u32,
+        decode_exact: bool,
     ) -> Result<Self, String> {
         let depth = frame_buffer_frames.clamp(1, 8);
         let use_gpu = gpu.is_some();
@@ -67,6 +68,11 @@ impl OmtReceiver {
             frame_types: FrameType::VIDEO | FrameType::AUDIO,
             connect_timeout: Duration::from_secs(5),
             gpu: gpu.clone(),
+            gpu_decode_mode: if decode_exact {
+                openmediatransport::GpuDecodeMode::Exact
+            } else {
+                openmediatransport::GpuDecodeMode::Fast
+            },
             quality,
             ..ReceiverConfig::default()
         };

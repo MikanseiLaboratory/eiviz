@@ -471,6 +471,7 @@ internal static class MixerApply
         ulong sourceId,
         string address,
         bool useGpu,
+        bool omtDecodeExact,
         uint frameBufferFrames,
         BandwidthSave saveMode,
         bool keepFullOnMultiview,
@@ -482,7 +483,8 @@ internal static class MixerApply
                 address,
                 useGpu ? 1u : 0u,
                 Math.Clamp(frameBufferFrames, 1u, 8u),
-                (uint)quality),
+                (uint)quality,
+                omtDecodeExact ? 1u : 0u),
             "OMT connect");
         MixerNative.ThrowIfFailed(
             MixerNative.SetLiveSave(

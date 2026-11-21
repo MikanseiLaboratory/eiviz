@@ -551,6 +551,7 @@ public partial class App : Application
                         input.Id,
                         input.PathOrAddress,
                         input.UseGpu,
+                        input.OmtDecodeExact,
                         input.FrameBufferFrames == 0 ? 1 : Math.Clamp(input.FrameBufferFrames, 1u, 8u),
                         input.BandwidthSave,
                         input.KeepFullOnMultiview,
