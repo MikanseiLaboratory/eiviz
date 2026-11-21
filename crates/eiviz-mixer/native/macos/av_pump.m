@@ -504,6 +504,13 @@ static AVAssetTrack *first_track(AVAsset *asset, AVMediaType mediaType) {
 }
 
 EivizAvPump *eiviz_av_open_file(const char *path, int64_t start_hns, int mode, int hardware) {
+    if (getenv("EIVIZ_AV_NO_CAPTURE")) {
+        // Diagnostic: capture and file playback are the only clients that hand the
+        // pump NV12 frames, so turning them off isolates the encoders from the
+        // conversion path when an encoder timeout is being traced.
+        NSLog(@"eiviz av: file playback disabled by EIVIZ_AV_NO_CAPTURE");
+        return NULL;
+    }
     if (!path || path[0] == 0) {
         return NULL;
     }
@@ -689,6 +696,13 @@ static void apply_capture_format(AVCaptureDevice *device, AVCaptureDeviceFormat 
 }
 
 EivizAvPump *eiviz_av_open_capture(const char *device_id, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, int hardware) {
+    if (getenv("EIVIZ_AV_NO_CAPTURE")) {
+        // Diagnostic: see eiviz_av_open_file. Capture is the client that runs the
+        // BGRA conversion on every frame, so turning it off is how an encoder's
+        // timeout is traced back to this path.
+        NSLog(@"eiviz av: capture disabled by EIVIZ_AV_NO_CAPTURE");
+        return NULL;
+    }
     @try {
         NSString *uid = device_id ? [NSString stringWithUTF8String:device_id] : @"";
         AVCaptureDevice *device = nil;
