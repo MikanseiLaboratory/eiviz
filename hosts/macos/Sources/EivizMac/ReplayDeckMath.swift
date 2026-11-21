@@ -18,6 +18,27 @@ enum ReplayDeckMath {
         remote != loaded && local == loaded
     }
 
+    /// The id a new angle row takes.
+    ///
+    /// The table is what the operator sees, so the ids in it are the ones a new row must
+    /// avoid even when this window's copy of the document has fallen a step behind. Two
+    /// rows with one id are one `Identifiable` row to the table: the row that was just
+    /// added disappears, which reads as "the button does nothing".
+    static func nextAngleId(existing: [UInt32], reserved: UInt32) -> UInt32 {
+        let highest = existing.max() ?? 0
+        let afterHighest = highest == .max ? UInt32.max : highest + 1
+        return max(1, max(reserved, afterHighest))
+    }
+
+    /// The scene a new angle records: the first one no angle records yet.
+    ///
+    /// Nil means every scene is already taken, so the new row needs a scene of its own.
+    /// Angles recording an input do not consume a scene.
+    static func nextFreeScene(angles: [ReplayAngleInfo], scenes: [UInt64]) -> UInt64? {
+        let used = Set(angles.filter { $0.source == "Scene" }.map(\.sceneId))
+        return scenes.first { !used.contains($0) }
+    }
+
     /// Where a step or jog lands, clamped to the marks when both exist, otherwise to the
     /// recording range. Steps are relative to the playhead, not to Mark In.
     static func stepTarget(

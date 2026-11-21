@@ -673,6 +673,34 @@ check("a deck tick adopts an external angle",
 check("a deck tick ignores a locally added angle",
       !ReplayDeckMath.shouldAdoptAngles(remote: [1, 2], local: [1, 2, 3], loaded: [1, 2]))
 
+// MARK: - Adding an angle row
+//
+// The row is one table edit, so its id has to be one the table does not already use: two
+// rows with one Identifiable id are one row to SwiftUI, and the row just added vanishes.
+check("a new angle id follows the table",
+      ReplayDeckMath.nextAngleId(existing: [1, 2], reserved: 1) == 3)
+check("a reserved id ahead of the table is kept",
+      ReplayDeckMath.nextAngleId(existing: [1], reserved: 7) == 7)
+check("a new angle id never repeats the table",
+      ReplayDeckMath.nextAngleId(existing: [4], reserved: 4) == 5)
+check("a new angle id starts at one",
+      ReplayDeckMath.nextAngleId(existing: [], reserved: 0) == 1)
+check("a new angle id does not overflow",
+      ReplayDeckMath.nextAngleId(existing: [.max], reserved: 1) == .max)
+
+let angleRows = [
+    ReplayAngleInfo(id: 1, name: "A", source: "Scene", sceneId: 1, inputId: 0, audioUnitId: 0, encoder: "Cpu"),
+    ReplayAngleInfo(id: 2, name: "B", source: "Scene", sceneId: 2, inputId: 0, audioUnitId: 0, encoder: "Cpu"),
+]
+check("the next angle records the first free scene",
+      ReplayDeckMath.nextFreeScene(angles: angleRows, scenes: [1, 2, 3]) == 3)
+check("no free scene when every scene is recorded",
+      ReplayDeckMath.nextFreeScene(angles: angleRows, scenes: [1, 2]) == nil)
+check("an input angle does not take a scene",
+      ReplayDeckMath.nextFreeScene(
+        angles: [ReplayAngleInfo(id: 1, name: "I", source: "Input", sceneId: 0, inputId: 9, audioUnitId: 0, encoder: "Cpu")],
+        scenes: [1]) == 1)
+
 check("replay transition uses the main UI name",
       ReplayTransitionInfo.displayName("Dissolve") == "Fade")
 check("replay cut uses the main UI name",

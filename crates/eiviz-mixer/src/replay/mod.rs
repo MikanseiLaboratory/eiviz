@@ -632,6 +632,12 @@ impl ReplayEngine {
     /// decode creates the compute pipelines, which is far too slow to do in front
     /// of the first frame of a clip.
     fn warm_decoders(&self) {
+        if std::env::var_os("EIVIZ_NO_REPLAY_WARM").is_some() {
+            // Diagnostic: the warm-up keeps decoders alive for the whole session, so
+            // turning it off is how an encoder or capture timeout is traced back to it.
+            // Nothing in the product sets this.
+            return;
+        }
         if self.warming.swap(true, Ordering::AcqRel) {
             return;
         }

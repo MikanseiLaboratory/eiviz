@@ -86,6 +86,7 @@ fn secrets() -> &'static Mutex<std::collections::HashMap<String, String>> {
 }
 
 pub fn secret_set(name: &str, value: &str) {
+    crate::diag::info(&format!("secret set name={name} len={}", value.len()));
     secrets()
         .lock()
         .expect("secrets")
@@ -264,6 +265,11 @@ pub fn rtmp_url(extras: &OutputExtras) -> Result<String, String> {
     if extras.secret_ref.is_empty() {
         return Ok(extras.url.clone());
     }
+    crate::diag::info(&format!(
+        "secret resolve ref={} found={}",
+        extras.secret_ref,
+        resolve_secret(&extras.secret_ref).is_some()
+    ));
     let key = resolve_secret(&extras.secret_ref)
         .ok_or_else(|| format!("RTMP secret '{}' is not set", extras.secret_ref))?;
     if extras.url.ends_with('/') {
