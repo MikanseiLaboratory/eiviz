@@ -15,4 +15,4 @@ crate-type = ["cdylib", "rlib"]
 eiviz-pro-api.workspace = true
 # The test store hands the mixer real VMX1 packets so the GPU playback path can
 # be exercised without the private Pro module.
-vmx = { version = "0.2.3", features = ["wgpu"] }
+vmx = { version = "0.3.0", features = ["wgpu"] }

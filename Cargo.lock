@@ -1932,11 +1932,12 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "openmediatransport"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e335316b045741ec923951584c777a39fc2decfde4e0c6494a3c4da9d429dfb6"
+checksum = "3f1db0dafb7c8a0db2f66b34e326e13900261f82276927bbaa9046d7c0726e85"
 dependencies = [
  "bytes",
+ "if-addrs",
  "libc",
  "mdns-sd",
  "roxmltree",
@@ -3123,9 +3124,9 @@ dependencies = [
 
 [[package]]
 name = "vmx"
-version = "0.2.3"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2105df79924ea6b15e5195ebded79941b40dfc961be419a74d1541f711c8d1c7"
+checksum = "879ae99fed05d004c7ead18e68c1cf5407ae899c03273b1ef72536a2e49acf20"
 dependencies = [
  "bytemuck",
  "pollster 0.4.0",
