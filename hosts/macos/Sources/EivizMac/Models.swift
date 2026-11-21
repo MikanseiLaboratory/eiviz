@@ -313,6 +313,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
     var gain: Float = 1
     var mute: Bool = false
     var useGpu: Bool = false
+    var omtDecodeExact: Bool = false
     var frameBufferFrames: UInt32 = 1
     var bandwidthSave: BandwidthSave = .notOnPreviewOrProgram
     /// Decoder choice for video files and UVC cameras.
@@ -359,7 +360,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, kind, pathOrAddress, colorR, colorG, colorB, scroll, toneHz, toneLevelDbfs
-        case audioUnits, gain, mute, useGpu, frameBufferFrames, bandwidthSave, decodePath
+        case audioUnits, gain, mute, useGpu, omtDecodeExact, frameBufferFrames, bandwidthSave, decodePath
         case keepFullOnMultiview, omtQuality, ndiBandwidth
         case videoLoop, videoPlayWhen, videoRestartWhen, videoPauseWhen
         case guid, captureWidth, captureHeight, captureFpsNum, captureFpsDen, tags
@@ -383,6 +384,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         gain: Float = 1,
         mute: Bool = false,
         useGpu: Bool = false,
+        omtDecodeExact: Bool = false,
         frameBufferFrames: UInt32 = 1,
         bandwidthSave: BandwidthSave = .notOnPreviewOrProgram,
         decodePath: InputDecodePath = .auto,
@@ -408,6 +410,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         self.gain = gain
         self.mute = mute
         self.useGpu = useGpu
+        self.omtDecodeExact = omtDecodeExact
         self.frameBufferFrames = frameBufferFrames
         self.bandwidthSave = bandwidthSave
         self.decodePath = decodePath
@@ -436,6 +439,7 @@ struct InputEntry: Identifiable, Codable, Hashable {
         gain = try container.decodeIfPresent(Float.self, forKey: .gain) ?? 1
         mute = try container.decodeIfPresent(Bool.self, forKey: .mute) ?? false
         useGpu = try container.decodeIfPresent(Bool.self, forKey: .useGpu) ?? false
+        omtDecodeExact = try container.decodeIfPresent(Bool.self, forKey: .omtDecodeExact) ?? false
         frameBufferFrames = try container.decodeIfPresent(UInt32.self, forKey: .frameBufferFrames) ?? 1
         bandwidthSave = try container.decodeIfPresent(BandwidthSave.self, forKey: .bandwidthSave) ?? .notOnPreviewOrProgram
         decodePath = try container.decodeIfPresent(InputDecodePath.self, forKey: .decodePath) ?? .auto

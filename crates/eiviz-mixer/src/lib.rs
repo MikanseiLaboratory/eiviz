@@ -3800,9 +3800,17 @@ pub unsafe extern "C" fn mixer_omt_connect(
     use_gpu: u32,
     frame_buffer_frames: u32,
     quality: u32,
+    decode_exact: u32,
 ) -> i32 {
     ffi_guard("mixer_omt_connect", ERR_DEVICE, || unsafe {
-        mixer_omt_connect_ffi(id, address, use_gpu, frame_buffer_frames, quality)
+        mixer_omt_connect_ffi(
+            id,
+            address,
+            use_gpu,
+            frame_buffer_frames,
+            quality,
+            decode_exact,
+        )
     })
 }
 
@@ -3812,6 +3820,7 @@ unsafe fn mixer_omt_connect_ffi(
     use_gpu: u32,
     frame_buffer_frames: u32,
     quality: u32,
+    decode_exact: u32,
 ) -> i32 {
     if address.is_null() {
         return ERR_INVALID_ARGUMENT;
@@ -3822,8 +3831,9 @@ unsafe fn mixer_omt_connect_ffi(
         .to_string();
     let depth = frame_buffer_frames.clamp(1, 8);
     crate::diag::info(&format!(
-        "omt_connect id={id} gpu={} addr={address}",
-        use_gpu != 0
+        "omt_connect id={id} gpu={} exact={} addr={address}",
+        use_gpu != 0,
+        decode_exact != 0
     ));
     let taken = match with_mixer(|mixer| {
         let mut shared = mixer.shared.lock_or_recover();
@@ -3856,7 +3866,16 @@ unsafe fn mixer_omt_connect_ffi(
     drop(previous_recv);
     #[cfg(any(windows, target_os = "macos"))]
     drop(previous_video);
-    match OmtReceiver::start(id, address, uploads, gpu, ingest, depth, quality) {
+    match OmtReceiver::start(
+        id,
+        address,
+        uploads,
+        gpu,
+        ingest,
+        depth,
+        quality,
+        decode_exact != 0,
+    ) {
         Ok(receiver) => insert_receiver(id, LiveReceiver::Omt(receiver)),
         Err(error) => report_io(error),
     }

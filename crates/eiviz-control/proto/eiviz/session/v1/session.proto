@@ -136,6 +136,8 @@ message Input {
   string audio_process_aumid = 39;
   repeated uint64 audio_units = 40;
   string decklink_mode = 41;
+  // Decode OMT video bit-identically to the CPU decoder (GPU path only).
+  bool omt_decode_exact = 42;
 }
 
 message SceneLayer {

@@ -638,6 +638,13 @@ pub struct InputDto {
     pub keep_full_on_multiview: bool,
     #[serde(default)]
     pub omt_quality: OmtQuality,
+    /// Decode OMT video on the GPU bit-identically to the CPU decoder.
+    ///
+    /// Only meaningful with [`Self::use_gpu`]. The default fast GPU path drops
+    /// high-frequency coefficients; this trades a larger upload for pixels that
+    /// match the CPU decoder byte for byte.
+    #[serde(default)]
+    pub omt_decode_exact: bool,
     #[serde(default)]
     pub ndi_bandwidth: NdiBandwidth,
     #[serde(default = "default_true")]

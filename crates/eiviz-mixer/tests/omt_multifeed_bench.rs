@@ -181,7 +181,7 @@ fn run_count(feeds: u64, use_gpu: u32, secs: u64) {
         let address = CString::new(url.as_str()).expect("url");
         unsafe {
             assert_eq!(
-                mixer_omt_connect(SRC_BASE + i as u64, address.as_ptr(), use_gpu, 3, 0),
+                mixer_omt_connect(SRC_BASE + i as u64, address.as_ptr(), use_gpu, 3, 0, 0),
                 OK
             );
         }

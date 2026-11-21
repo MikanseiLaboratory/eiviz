@@ -131,6 +131,8 @@
                         <ComboBoxItem Content="{Binding [settings.omtCpu], Source={x:Static i18n:Loc.Source}}" Tag="cpu" IsSelected="True"/>
                         <ComboBoxItem Content="{Binding [settings.omtGpu], Source={x:Static i18n:Loc.Source}}" Tag="gpu"/>
                     </ComboBox>
+                    <CheckBox x:Name="OmtExactBox" Margin="0,0,0,8" Foreground="#EEE"
+                              Content="{Binding [settings.omtExactDecode], Source={x:Static i18n:Loc.Source}}"/>
                     <TextBlock Text="Quality" Margin="0,0,0,4"/>
                     <ComboBox x:Name="OmtQualityBox" Width="220" HorizontalAlignment="Left" Margin="0,0,0,8">
                         <ComboBoxItem Content="Default" Tag="0" IsSelected="True"/>

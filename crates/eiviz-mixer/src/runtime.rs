@@ -387,6 +387,7 @@ impl MixerPort for ProcessMixer {
                 u32::from(spec.use_gpu),
                 spec.frame_buffer_frames,
                 spec.quality_or_bandwidth,
+                u32::from(spec.omt_decode_exact),
             )
         })?;
         map_abi(mixer_set_live_save(

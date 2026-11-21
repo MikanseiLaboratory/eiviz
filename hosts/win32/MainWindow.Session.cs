@@ -292,6 +292,7 @@ public partial class MainWindow
                 || (dialog.Kind is InputKind.OMT or InputKind.NDI
                     && input.PathOrAddress == dialog.ResultPath
                     && input.UseGpu == (dialog.Kind == InputKind.OMT && dialog.ResultUseGpu)
+                    && input.OmtDecodeExact == (dialog.Kind == InputKind.OMT && dialog.ResultOmtDecodeExact)
                     && input.FrameBufferFrames == dialog.ResultFrameBufferFrames
                     && (dialog.Kind != InputKind.NDI || input.NdiBandwidth == dialog.ResultNdiBandwidth))
                 || (dialog.Kind == InputKind.Mix
@@ -319,6 +320,7 @@ public partial class MainWindow
         input.ToneHz = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneHz : 0;
         input.ToneLevelDbfs = dialog.Kind is InputKind.Color or InputKind.Bars ? dialog.ResultToneLevelDbfs : -20;
         input.UseGpu = dialog.Kind == InputKind.OMT && dialog.ResultUseGpu;
+        input.OmtDecodeExact = dialog.Kind == InputKind.OMT && dialog.ResultOmtDecodeExact;
         input.FrameBufferFrames = dialog.Kind is InputKind.OMT or InputKind.NDI or InputKind.Video or InputKind.UVC or InputKind.Mix or InputKind.DeckLink
             ? dialog.ResultFrameBufferFrames
             : 1;
@@ -405,6 +407,7 @@ public partial class MainWindow
                     input.Id,
                     dialog.ResultPath!,
                     dialog.ResultUseGpu,
+                    input.OmtDecodeExact,
                     dialog.ResultFrameBufferFrames,
                     input.BandwidthSave,
                     input.KeepFullOnMultiview,

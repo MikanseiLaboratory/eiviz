@@ -272,6 +272,7 @@ internal static class MutationJson
         public float Gain { get; set; } = 1;
         public bool Mute { get; set; }
         public bool UseGpu { get; set; }
+        public bool OmtDecodeExact { get; set; }
         public uint FrameBufferFrames { get; set; } = 1;
         public BandwidthSave BandwidthSave { get; set; }
         public bool KeepFullOnMultiview { get; set; }
@@ -314,6 +315,7 @@ internal static class MutationJson
             Gain = input.Gain,
             Mute = input.Mute,
             UseGpu = input.UseGpu,
+            OmtDecodeExact = input.OmtDecodeExact,
             FrameBufferFrames = input.FrameBufferFrames,
             BandwidthSave = input.BandwidthSave,
             KeepFullOnMultiview = input.KeepFullOnMultiview,
@@ -1257,7 +1259,7 @@ internal sealed class RemoteVideoPresenter
         _boundKey.Remove(id);
         var code = resolved.Transport == OutputTransport.Ndi
             ? MixerNative.ConnectNdi(id, resolved.Address, 1, 0)
-            : MixerNative.ConnectOmt(id, resolved.Address, useGpu ? 1u : 0u, 1, 0);
+            : MixerNative.ConnectOmt(id, resolved.Address, useGpu ? 1u : 0u, 1, 0, 0);
         if (code != 0)
         {
             HostLog.Write("ERROR", MixerNative.LastErrorText());

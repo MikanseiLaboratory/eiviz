@@ -57,6 +57,7 @@ public partial class AddInputWindow : Window
     public float ResultToneHz { get; private set; }
     public float ResultToneLevelDbfs { get; private set; } = -20;
     public bool ResultUseGpu { get; private set; }
+    public bool ResultOmtDecodeExact { get; private set; }
     public uint ResultFrameBufferFrames { get; private set; } = 1;
     public BandwidthSave ResultSaveMode { get; private set; } = BandwidthSave.NotOnPreviewOrProgram;
     public bool ResultKeepFullOnMultiview { get; private set; }
@@ -131,6 +132,7 @@ public partial class AddInputWindow : Window
         OmtAddress.Text = input.Kind == InputKind.OMT ? input.PathOrAddress ?? "" : "";
         NdiAddress.Text = input.Kind == InputKind.NDI ? input.PathOrAddress ?? "" : "";
         SelectTag(OmtPathBox, input.UseGpu ? "gpu" : "cpu");
+        OmtExactBox.IsChecked = input.OmtDecodeExact;
         SelectTag(OmtQualityBox, ((int)input.OmtQuality).ToString());
         SelectTag(OmtBufferBox, Math.Clamp(input.FrameBufferFrames == 0 ? 1 : input.FrameBufferFrames, 1u, 8u).ToString());
         SelectTag(NdiBufferBox, Math.Clamp(input.FrameBufferFrames == 0 ? 1 : input.FrameBufferFrames, 1u, 8u).ToString());
@@ -569,6 +571,7 @@ public partial class AddInputWindow : Window
                 ResultPath = OmtAddress.Text.Trim();
                 ResultName = ResultPath;
                 ResultUseGpu = OmtPathBox.SelectedItem is ComboBoxItem { Tag: "gpu" };
+                ResultOmtDecodeExact = OmtExactBox.IsChecked == true;
                 ResultFrameBufferFrames = ReadBuffer(OmtBufferBox, 1);
                 ResultSaveMode = ReadSaveMode(OmtSaveBox);
                 ResultKeepFullOnMultiview = OmtMvBox.IsChecked == true;
