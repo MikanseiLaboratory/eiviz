@@ -1,0 +1,10 @@
+# Release editions: one named build for one event, published from a tag like
+# v0.5.0-kagaribi16.1. The part after "vX.Y.Z-" without the counter is the slug in
+# the first column; the second column is the name the installer and the app show.
+# An edition is always a prerelease, so it never takes "latest" from the current
+# beta, and the bundle identifier, installer AppId, executable names and install
+# folders stay "eiviz": an edition replaces the normal install instead of adding a
+# second copy beside it.
+#
+# slug<TAB>display name
+kagaribi16	eiviz [KAGARIBI #16]
