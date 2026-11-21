@@ -42,7 +42,16 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       base: ${{ steps.meta.outputs.base }}
       prerelease: ${{ steps.meta.outputs.prerelease }}
+      app_name: ${{ steps.meta.outputs.app_name }}
+      edition: ${{ steps.meta.outputs.edition }}
     steps:
+      - name: Checkout
+        # The edition names live in packaging/editions.tsv, and the name has to come
+        # from the same commit the artifacts are built from.
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
       - name: Resolve tag
         id: meta
         env:
@@ -56,14 +65,33 @@ jobs:
             TAG="$REF_NAME"
           fi
           TAG="${TAG#refs/tags/}"
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)([.-].*)?)?$ ]]; then
-            echo "Unsupported tag '$TAG'. Expected vX.Y.Z or vX.Y.Z-(alpha|beta|rc)[...]" >&2
+          # vX.Y.Z, vX.Y.Z-(alpha|beta|rc)[...], or an edition build for one event:
+          # vX.Y.Z-<slug>[.<n>] such as v0.5.0-kagaribi16.1.
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)([.-].*)?|-([a-z0-9]+)(\.[0-9]+)?)?$ ]]; then
+            echo "Unsupported tag '$TAG'. Expected vX.Y.Z, vX.Y.Z-(alpha|beta|rc)[...], or vX.Y.Z-<edition>[.<n>]" >&2
             exit 1
           fi
           VERSION="${TAG#v}"
           BASE="${VERSION%%-*}"
+          APP_NAME="eiviz"
+          EDITION=""
           if [[ "$TAG" =~ -(alpha|beta|rc)([.-]|$) ]]; then
             PRERELEASE=true
+          elif [[ "$TAG" == *-* ]]; then
+            # An edition: a named build for one event rather than a release of the
+            # version it sits under. It is a prerelease so it never takes "latest".
+            SUFFIX="${TAG#*-}"
+            EDITION="${SUFFIX%.*}"
+            PRERELEASE=true
+            APP_NAME=""
+            while IFS=$'\t' read -r slug name; do
+              case "$slug" in ''|\#*) continue ;; esac
+              if [ "$slug" = "$EDITION" ]; then APP_NAME="$name"; fi
+            done < packaging/editions.tsv
+            if [ -z "$APP_NAME" ]; then
+              echo "No edition '$EDITION' in packaging/editions.tsv; add a line for it." >&2
+              exit 1
+            fi
           else
             PRERELEASE=false
           fi
@@ -71,7 +99,9 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
-          echo "Resolved $TAG (assembly $BASE, prerelease=$PRERELEASE)"
+          echo "app_name=$APP_NAME" >> "$GITHUB_OUTPUT"
+          echo "edition=$EDITION" >> "$GITHUB_OUTPUT"
+          echo "Resolved $TAG (assembly $BASE, app $APP_NAME, prerelease=$PRERELEASE)"
 
   windows-x64:
     name: Release Windows x64
@@ -192,6 +222,7 @@ jobs:
             throw "Inno Setup compiler (ISCC.exe) was not found"
           }
           & $iscc `
+            "/DMyAppName=${{ needs.meta.outputs.app_name }}" `
             "/DMyAppVersion=${{ needs.meta.outputs.version }}" `
             "/DMyAppBase=${{ needs.meta.outputs.base }}" `
             "/DMyAppTag=${{ needs.meta.outputs.tag }}" `
@@ -301,7 +332,7 @@ jobs:
           chmod +x hosts/macos/relocate-dylib.sh hosts/macos/package-app.sh
           hosts/macos/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib" "$STAGING/libeiviz_remote.dylib"
           hosts/macos/relocate-dylib.sh "$STAGING/eiviz-remote" "$STAGING/libeiviz_mixer.dylib" "$STAGING/libeiviz_remote.dylib"
-          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" hosts/macos/package-app.sh "$STAGING"
+          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" EIVIZ_APP_NAME="${{ needs.meta.outputs.app_name }}" hosts/macos/package-app.sh "$STAGING"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_remote.dylib"
           if [ -f "$STAGING/libndi.dylib" ]; then
@@ -432,7 +463,7 @@ jobs:
           chmod +x hosts/macos/relocate-dylib.sh hosts/macos/package-app.sh
           hosts/macos/relocate-dylib.sh "$STAGING/eiviz-mac" "$STAGING/libeiviz_mixer.dylib" "$STAGING/libeiviz_remote.dylib"
           hosts/macos/relocate-dylib.sh "$STAGING/eiviz-remote" "$STAGING/libeiviz_mixer.dylib" "$STAGING/libeiviz_remote.dylib"
-          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" hosts/macos/package-app.sh "$STAGING"
+          EIVIZ_VERSION="${{ needs.meta.outputs.version }}" EIVIZ_APP_NAME="${{ needs.meta.outputs.app_name }}" hosts/macos/package-app.sh "$STAGING"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_mixer.dylib"
           codesign --force --sign - --timestamp=none "$STAGING/libeiviz_remote.dylib"
           if [ -f "$STAGING/libndi.dylib" ]; then
@@ -498,7 +529,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.meta.outputs.tag }}
-          name: ${{ needs.meta.outputs.tag }}
+          name: ${{ needs.meta.outputs.app_name }} ${{ needs.meta.outputs.tag }}
           prerelease: ${{ needs.meta.outputs.prerelease == 'true' }}
           make_latest: ${{ needs.meta.outputs.prerelease != 'true' }}
           generate_release_notes: true
