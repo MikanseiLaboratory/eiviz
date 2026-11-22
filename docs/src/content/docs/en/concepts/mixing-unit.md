@@ -9,7 +9,7 @@ This is the core switching desk. Preview holds the next shot; Program holds the 
 No per-session cap. Add as many as the machine will take.  
 Each unit has its own resolution and output frame rate.
 
-[Overlays](/eiviz/en/concepts/overlays/) are session-wide. Each unit's On-Air list is independent. One unit’s Program can feed another unit or an Output.
+[Overlays](/en/concepts/overlays/) are session-wide. Each unit's On-Air list is independent. One unit’s Program can feed another unit or an Output.
 
 The switching buses are Preview and Program.  
 A Switcher UI shows Preview and Program, so it uses 2 slots of the video output destination window limit. Closing it frees those slots.

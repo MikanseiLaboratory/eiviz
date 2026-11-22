@@ -30,7 +30,7 @@ A valid license ticket determines the active plan. The host UI manages ticket in
 
 Missing, expired, invalidly signed, or mismatched-machine tickets default to the Community plan. Expiration uses the later of the system clock and a persisted timestamp, preventing clock rollback bypasses. Existing outputs continue running when a ticket expires, but subsequent operations exceeding Community limits are rejected.
 
-Public builds without a Pro module compile in Community limits only. Because DeckLink and RTMP implementations are not linked, even configurations within the Community cap return `ERR_IO`. Operations exceeding the active plan return `ERR_NOT_SUPPORTED_PLAN` prior to link verification. Official packages containing `eiviz-pro.required` fail startup if the module is missing, corrupted, or built for an incompatible ABI; they do not fall back to Community. See [System architecture](/eiviz/en/introduction/architecture/) for loading details.
+Public builds without a Pro module compile in Community limits only. Because DeckLink and RTMP implementations are not linked, even configurations within the Community cap return `ERR_IO`. Operations exceeding the active plan return `ERR_NOT_SUPPORTED_PLAN` prior to link verification. Official packages containing `eiviz-pro.required` fail startup if the module is missing, corrupted, or built for an incompatible ABI; they do not fall back to Community. See [System architecture](/en/introduction/architecture/) for loading details.
 
 Only development modules built with the `pro-dev` feature allow the `EIVIZ_PLAN` environment variable to take precedence over installed tickets (accepted values: `community`, `professional`, `pro`, `enterprise`). Release builds ignore this variable.
 

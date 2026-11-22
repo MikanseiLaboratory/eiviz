@@ -21,7 +21,7 @@ The mixer hosts an HTTP server in-process. The default is all interfaces on port
 
 Scenes come first, then Inputs, as a flat Inputs list. A Scene is a Blank input plus layers. `preview` / `active` are the selected Mixing Unit’s flat numbers. Extra Mixing Units appear as `<mix>`.
 
-Supported Functions are in the [Function Reference](/eiviz/en/developers/function-reference/). Unknown Functions return 404; bad arguments return 400. Unlike vMix, a known Function that fails is not reported as success.
+Supported Functions are in the [Function Reference](/en/developers/function-reference/). Unknown Functions return 404; bad arguments return 400. Unlike vMix, a known Function that fails is not reported as success.
 
 HTTP access is written to `eiviz-mixer-http.log`, separate from the mixer log. Bare polling `GET /api` is not logged.
 
@@ -40,7 +40,7 @@ UTF-8, `\r\n` terminated. Replies are `<command> <status> ...\r\n`. `XML` then w
 | `SUBSCRIBE` / `UNSUBSCRIBE` | Push `TALLY` and `ACTS` changes. Iryx uses this |
 | `VERSION` / `QUIT` | Version string and disconnect |
 
-Functions are listed in the [Function Reference](/eiviz/en/developers/function-reference/).
+Functions are listed in the [Function Reference](/en/developers/function-reference/).
 
 ## OBS WebSocket API
 

@@ -1,5 +1,5 @@
 # Official docs site (Starlight) → GitHub Pages.
-# Public URL: https://mikanseilaboratory.github.io/eiviz/
+# Public URL: https://eiviz.mikansei.dev/
 #
 # Path filters skip this workflow when docs did not change.
 # Do not keep "Build docs" as a required check: a skipped workflow stays

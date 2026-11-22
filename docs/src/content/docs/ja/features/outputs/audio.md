@@ -26,5 +26,5 @@ eiviz内部のオーディオ処理は48 kHzステレオで動作します。
 
 ## 音声出力（デバイス出力とネットワーク送出）
 
-- **デバイス出力**: 各Mixing UnitのMU Busは、Mixing UnitのダイアログでWASAPI共有またはASIOへ割り当てます。ヘッドホンは[設定](/eiviz/ja/introduction/settings/)の「ヘッドホン」で設定します。
+- **デバイス出力**: 各Mixing UnitのMU Busは、Mixing UnitのダイアログでWASAPI共有またはASIOへ割り当てます。ヘッドホンは[設定](/ja/introduction/settings/)の「ヘッドホン」で設定します。
 - **ネットワーク送出（OMT/NDI）**: 映像出力とは独立したPCMストリームとして送信されるため、映像エンコードの負荷にかかわらず、音途切れのない低遅延伝送を維持します。

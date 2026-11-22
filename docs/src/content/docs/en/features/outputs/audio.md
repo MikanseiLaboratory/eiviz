@@ -3,7 +3,7 @@ title: Audio, ASIO, and related
 description: Audio output and Audio Inputs
 ---
 
-The internal mix is 48 kHz stereo. Each Mixing Unit's output device is on the Mixing Unit dialog. Headphone's device is under Headphone in [Settings](/eiviz/en/introduction/settings/).
+The internal mix is 48 kHz stereo. Each Mixing Unit's output device is on the Mixing Unit dialog. Headphone's device is under Headphone in [Settings](/en/introduction/settings/).
 
 ## Monitor
 

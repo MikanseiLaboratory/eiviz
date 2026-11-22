@@ -8,7 +8,7 @@ Same job as ATEM output routing or vMix NDI/SRT.
 
 ## Add and source
 
-Add one under [Settings](/eiviz/en/introduction/settings/) → Outputs.  
+Add one under [Settings](/en/introduction/settings/) → Outputs.  
 Transport is OMT or NDI. Source can be Input, Scene, MU Preview, MU Program, or Multiview.  
 Audio is one Mixing Unit's MU Bus, or None (no audio).  
 When Multiview is selected as the video source, audio cannot be sent.  
@@ -21,7 +21,7 @@ Master compose, Mixing Unit compose, and each Output share one rational media cl
 One thread is assigned per output. Encode and socket wait on one Output do not stall compose, the audio scheduler, or other Outputs.  
 OMT and NDI encode once per configured Output; extra receivers on that Output are transport fan-out, not another encode. Ten Outputs that point at the same picture are ten independent encodes.  
 Hardware outputs such as DeckLink are still in progress.  
-Send detail is in [NDI / OMT](/eiviz/en/features/outputs/ndi-omt/).
+Send detail is in [NDI / OMT](/en/features/outputs/ndi-omt/).
 
 ## Clock soak
 

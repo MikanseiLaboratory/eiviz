@@ -15,7 +15,7 @@ Compose, audio, I/O, and session data live in the mixer. Keeping that work off t
 
 External control is handled by `ControlService` inside the mixer. vMix-compatible HTTP (default 8088), vMix-compatible TCP (8099), and Protobuf WebSocket (default 9400) all enter the same dispatcher. The C ABI is the host↔mixer FFI, not a public API. API listen (bind, token, media directory) is host-owned; it is not stored in the session file.
 
-Windows and macOS also ship a [remote connection](/eiviz/en/features/remote/) client (`Eiviz.Remote.exe` / `eiviz-remote.app`). The client loads a receive mixer and `eiviz_remote`, and sends ops to the destination `ControlService`. See [eiviz API](/eiviz/en/developers/api/) for the protocol. The mixer without a host UI is [Headless](/eiviz/en/features/headless/).
+Windows and macOS also ship a [remote connection](/en/features/remote/) client (`Eiviz.Remote.exe` / `eiviz-remote.app`). The client loads a receive mixer and `eiviz_remote`, and sends ops to the destination `ControlService`. See [eiviz API](/en/developers/api/) for the protocol. The mixer without a host UI is [Headless](/en/features/headless/).
 
 ```mermaid
 flowchart TB
@@ -67,7 +67,7 @@ flowchart LR
 
 There is one mixer per process. The host never receives GPU pointers except live preview surfaces. Inputs, scenes, and Mixing Units are integer ids.
 
-The remote-connection process shape is in the diagram above. Operator steps are in [Remote connection](/eiviz/en/features/remote/).
+The remote-connection process shape is in the diagram above. Operator steps are in [Remote connection](/en/features/remote/).
 
 ## Concurrency
 
@@ -263,7 +263,7 @@ File and UVC decode on macOS uses `CVMetalTextureCache` and hands the decoded
 `CVPixelBuffer` to Metal without a CPU copy. The texture is imported through the Metal
 HAL and released with the wgpu texture. NDI ingest uses the same unified-memory
 approach with a leased shared-texture ring.  
-GPU upload can be changed in [Settings](/eiviz/en/introduction/settings/).
+GPU upload can be changed in [Settings](/en/introduction/settings/).
 
 ```mermaid
 flowchart TB
@@ -280,7 +280,7 @@ flowchart TB
 The internal mix is a 48 kHz graph. Every Mixing Unit has one MU Bus. Headphone plays the Mixing Unit or Input chosen with the meter icon.  
 Inputs route to a set of Mixing Units and have gain. Follow tracks Preview/Program. Overlays can follow too.
 
-Detail is in [MU Bus](/eiviz/en/concepts/audio-auxs/).
+Detail is in [MU Bus](/en/concepts/audio-auxs/).
 
 ## Outputs
 
@@ -295,15 +295,15 @@ One thread is assigned per output.
 OMT receive stays full quality on Preview/Program and drops bandwidth otherwise.  
 Full quality holds a short time after leaving those buses so TAKE and the T-bar do not rebuild the receiver.
 
-Detail is in [Settings](/eiviz/en/introduction/settings/) → Outputs and [NDI / OMT](/eiviz/en/features/outputs/ndi-omt/).
+Detail is in [Settings](/en/introduction/settings/) → Outputs and [NDI / OMT](/en/features/outputs/ndi-omt/).
 
 ## Hosts
 
 Per-OS hosts live in `hosts/win32`, `hosts/macos`, and `hosts/linux`. The GUI-less host lives in `hosts/headless`; it links the mixer rlib directly and serves the same `ControlService` over Protobuf WebSocket on Windows, macOS, and Linux. Live Preview/Program, an open Multiview, Scene Editor, the Overlay window, and a switcher’s Preview/Program are drawn by the mixer into a native surface. Windows uses a child HWND; macOS uses an NSView with a Metal layer from wgpu.
 
-On a remote connection those live surfaces sample NDI/OMT receivers. Operator steps are in [Remote connection](/eiviz/en/features/remote/). A Mix Input is a delayed alias of a Mixing Unit bus or a session Multiview; it reads the FrameDelay ring and uses the same thumbnail path.
+On a remote connection those live surfaces sample NDI/OMT receivers. Operator steps are in [Remote connection](/en/features/remote/). A Mix Input is a delayed alias of a Mixing Unit bus or a session Multiview; it reads the FrameDelay ring and uses the same thumbnail path.
 
-Under DirectX 12 on Windows, the number of simultaneous active DXGI flip model swapchains is constrained. **Video output destination window limit** under [Settings](/eiviz/en/introduction/settings/) caps the number of active preview surfaces. Real-time Preview, Program, and Multiview windows draw into these surfaces (a Switcher UI requires 2 slots for Preview and Program). You can increase this limit, though doing so may reduce stability. Closing a window detaches its swapchain and frees the slot. Closing the main window closes secondary windows and exits the process (blocked while On Air Lock is active).
+Under DirectX 12 on Windows, the number of simultaneous active DXGI flip model swapchains is constrained. **Video output destination window limit** under [Settings](/en/introduction/settings/) caps the number of active preview surfaces. Real-time Preview, Program, and Multiview windows draw into these surfaces (a Switcher UI requires 2 slots for Preview and Program). You can increase this limit, though doing so may reduce stability. Closing a window detaches its swapchain and frees the slot. Closing the main window closes secondary windows and exits the process (blocked while On Air Lock is active).
 
 Reloading a session rebuilds the main window so preview surfaces attach on first layout. HWNDs are not reused across mixer lifetimes.
 
@@ -313,7 +313,7 @@ DeckLink I/O, RTMP streaming, and paid-plan entitlements are provided by a signe
 
 Calls not permitted under the active plan return `ERR_NOT_SUPPORTED_PLAN`; unlinked implementations return `ERR_IO` (plan validation takes precedence). Host UIs dynamically expose DeckLink and RTMP options based on runtime `mixer_capabilities` rather than compile-time feature flags.
 
-Paid plans are authenticated using cryptographically signed license tickets. The Pro module embeds the Ed25519 public key, evaluates expiration against the later of the system clock and a persisted timestamp, and authenticates the machine if a majority of salted hardware fingerprints match. The host UI is solely responsible for installing tickets and displaying status, containing no entitlement decision logic. Plan limits are detailed in [Plans](/eiviz/en/introduction/plans/).
+Paid plans are authenticated using cryptographically signed license tickets. The Pro module embeds the Ed25519 public key, evaluates expiration against the later of the system clock and a persisted timestamp, and authenticates the machine if a majority of salted hardware fingerprints match. The host UI is solely responsible for installing tickets and displaying status, containing no entitlement decision logic. Plan limits are detailed in [Plans](/en/introduction/plans/).
 
 ### macOS video encode audit
 

@@ -21,7 +21,7 @@ Use it in tests, labs, and anywhere a crash is acceptable.
 The stack aims for performance, a native feel, and portability across operating systems.
 
 Compositing lives in the mixer core. Each OS UI calls it through an internal C ABI. Host code lives in `hosts/win32`, `hosts/macos`, `hosts/linux`, and the GUI-less `hosts/headless`.  
-GPU paths drop through wgpu to the native API on that platform and apply extra optimization there. `ControlService` inside the mixer handles the control plane. External APIs are vMix-compatible HTTP/TCP and Protobuf WebSocket. Operating another eiviz from Windows or macOS is in [Remote connection](/eiviz/en/features/remote/).
+GPU paths drop through wgpu to the native API on that platform and apply extra optimization there. `ControlService` inside the mixer handles the control plane. External APIs are vMix-compatible HTTP/TCP and Protobuf WebSocket. Operating another eiviz from Windows or macOS is in [Remote connection](/en/features/remote/).
 
 | Layer | Stack |
 | --- | --- |

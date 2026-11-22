@@ -3,7 +3,7 @@ title: NDI / OMT Capture
 description: Capturing video from NDI and OMT
 ---
 
-An Input that receives a network NDI or OMT source. How to add one is [Inputs](/eiviz/en/concepts/inputs/) and [Settings](/eiviz/en/introduction/settings/). Remote receive is covered in [Remote](/eiviz/en/features/remote/).
+An Input that receives a network NDI or OMT source. How to add one is [Inputs](/en/concepts/inputs/) and [Settings](/en/introduction/settings/). Remote receive is covered in [Remote](/en/features/remote/).
 
 ## Transport and decode
 

@@ -3,7 +3,7 @@ title: Scenes
 description: Inputを重ねてつくる合成
 ---
 
-<img src="/eiviz/images/ja/concepts/scenes.jpg" alt="Scenesの概念図" style="max-width: 100%; height: auto;" />
+<img src="/images/ja/concepts/scenes.jpg" alt="Scenesの概念図" style="max-width: 100%; height: auto;" />
 
 Sceneは、複数のInput（カメラ、動画、画像、テロップなど）をレイヤーとして重ね合わせて1つの画面を構成する機能です。OBS Studioのシーンに相当します。
 
@@ -20,9 +20,9 @@ Sceneは、複数のInput（カメラ、動画、画像、テロップなど）�
 作成したSceneは、以下の各機能のソースとして幅広く利用できます。
 
 - Mixing UnitのPreview/Programへの割り当て
-- [Overlay](/eiviz/ja/concepts/overlays/)のテロップ・グラフィックソース
-- [Multiview](/eiviz/ja/concepts/multiviews/)の監視タイル
-- [Outputs](/eiviz/ja/concepts/outputs/)を通じた外部ネットワークへの直接送出
+- [Overlay](/ja/concepts/overlays/)のテロップ・グラフィックソース
+- [Multiview](/ja/concepts/multiviews/)の監視タイル
+- [Outputs](/ja/concepts/outputs/)を通じた外部ネットワークへの直接送出
 
 ## カメラ
 

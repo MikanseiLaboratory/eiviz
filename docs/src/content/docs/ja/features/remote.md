@@ -3,11 +3,11 @@ title: リモート接続
 description: Eiviz.Remoteから別のeivizを操作する
 ---
 
-Windows版の`Eiviz.Remote`やmacOS版の`eiviz-remote`を使用することで、ネットワーク経由で別マシンのeivizを遠隔操作できます。操作は接続先の`ControlService`を通じて行われます。通信プロトコルについては[eiviz API](/eiviz/ja/developers/api/)を参照してください。
+Windows版の`Eiviz.Remote`やmacOS版の`eiviz-remote`を使用することで、ネットワーク経由で別マシンのeivizを遠隔操作できます。操作は接続先の`ControlService`を通じて行われます。通信プロトコルについては[eiviz API](/ja/developers/api/)を参照してください。
 
 ## 接続手順
 
-1. 接続先マシンでAPI受付を有効にします（GUIの環境設定、または[headless](/eiviz/ja/features/headless/)の`eiviz-headless run`）。
+1. 接続先マシンでAPI受付を有効にします（GUIの環境設定、または[headless](/ja/features/headless/)の`eiviz-headless run`）。
 2. 接続用の認証tokenを設定します。
 3. 操作側マシンで`Eiviz.Remote`（macOSは`eiviz-remote`）を起動します。
 4. 画面左上のConnectボタンからIPアドレス、ポート番号、tokenを入力して接続します。

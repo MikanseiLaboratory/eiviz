@@ -9,7 +9,7 @@ description: セッションに保存される設定ウィンドウの項目
 
 画面表示や基本解像度、フレームレートを設定します。
 
-<img src="/eiviz/images/ja/introduction/settings/setting_ui.jpg" alt="設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
+<img src="/images/ja/introduction/settings/setting_ui.jpg" alt="設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
 - **色設定**: Preview色、Program色、非アクティブ色の枠線やボタン表示色を設定します（既定: 緑、赤、グレー）。
 - **マスターフレームレート**: セッション共通の基本フレームレートです（既定: 59.94p）。変更後はセッションを保存して再起動するか、セッションを再度開いてください。各Mixing Unitで個別に上書きも可能です。
@@ -21,7 +21,7 @@ description: セッションに保存される設定ウィンドウの項目
 
 ハードウェアアクセラレーションに関する設定です。
 
-<img src="/eiviz/images/ja/introduction/settings/performance.jpg" alt="パフォーマンス設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
+<img src="/images/ja/introduction/settings/performance.jpg" alt="パフォーマンス設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
 - **グラフィックスアダプター**: 使用中のGPU名を表示します。
 - **Resizable BAR / Unified Memory**: 
@@ -33,7 +33,7 @@ description: セッションに保存される設定ウィンドウの項目
 
 ネットワーク（OMT/NDI）への映像・音声送出を設定します。
 
-<img src="/eiviz/images/ja/introduction/settings/outputs.jpg" alt="出力設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
+<img src="/images/ja/introduction/settings/outputs.jpg" alt="出力設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
 - **映像ソース**: Input、Scene、MU PRV、MU PGM、Multiviewから選択できます。
 - **音声ソース**: Mixing UnitのMU Bus、またはNone（音声なし）から選択します（Multiview選択時は音声なし固定）。
@@ -49,24 +49,24 @@ description: セッションに保存される設定ウィンドウの項目
 
 ## Multiview
 
-マルチビュー機能の動作を設定します。詳細は[Multiviews](/eiviz/ja/concepts/multiviews/)を参照してください。
+マルチビュー機能の動作を設定します。詳細は[Multiviews](/ja/concepts/multiviews/)を参照してください。
 
-<img src="/eiviz/images/ja/introduction/settings/multiview.jpg" alt="Multiview設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
+<img src="/images/ja/introduction/settings/multiview.jpg" alt="Multiview設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
 - **新規Multiviewの既定Mixing Unit**: マルチビュー作成時にPreview/Programとして割り当てる既定のユニットを指定します。
 - **プレビュー更新間隔**: タイルの更新頻度を設定します（既定: 3フレームごと、約20 fps）。スペックが不足する場合は間隔を広げることで描画負荷を軽減できます。
 
 ## ヘッドホン
 
-<img src="/eiviz/images/ja/introduction/settings/audio-aux.jpg" alt="ヘッドホン設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
+<img src="/images/ja/introduction/settings/audio-aux.jpg" alt="ヘッドホン設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
-内部ミックスは48 kHzステレオです。本項目ではヘッドホン出力に使用するデバイスを設定します。モニター対象は各メーターのヘッドホンアイコンで切り替えます。なお、各Mixing Unitのマスター出力デバイスは各Mixing Unitの設定ダイアログで指定します。詳細は[MU Bus](/eiviz/ja/concepts/audio-auxs/)と[音声、ASIOなど](/eiviz/ja/features/outputs/audio/)を参照してください。
+内部ミックスは48 kHzステレオです。本項目ではヘッドホン出力に使用するデバイスを設定します。モニター対象は各メーターのヘッドホンアイコンで切り替えます。なお、各Mixing Unitのマスター出力デバイスは各Mixing Unitの設定ダイアログで指定します。詳細は[MU Bus](/ja/concepts/audio-auxs/)と[音声、ASIOなど](/ja/features/outputs/audio/)を参照してください。
 
 - **None**: 内部ミックスのまま保持されます。デバイスへ出力する際はWASAPI共有またはASIOを使用します。
 
 ## Web API
 
-外部制御用のAPIサーバーを設定します。設定の詳細は[eiviz API](/eiviz/ja/developers/api/)および[互換API](/eiviz/ja/developers/compatibility/)を参照してください。
+外部制御用のAPIサーバーを設定します。設定の詳細は[eiviz API](/ja/developers/api/)および[互換API](/ja/developers/compatibility/)を参照してください。
 
 - **HTTP**: vMix互換HTTPサーバー（既定ポート: 8088）。Basic認証に対応。ポート競合時は警告を表示し、次のポート（+1）での起動を試行します。
 - **TCP**: vMix互換TCPサーバー（既定ポート: 8099）。認証には対応していません。
@@ -81,7 +81,7 @@ description: セッションに保存される設定ウィンドウの項目
 
 PC全体で共有されるグローバル設定です。
 
-<img src="/eiviz/images/ja/introduction/settings/preferences.jpg" alt="環境設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
+<img src="/images/ja/introduction/settings/preferences.jpg" alt="環境設定ウィンドウのスクリーンショット" style="max-width: 100%; height: auto;" />
 
 - **言語**: 日本語/英語の切り替え
 - **テーマ**: ダーク、ライト、OS連動

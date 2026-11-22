@@ -3,16 +3,16 @@ title: Remote connection
 description: Operate another eiviz from Eiviz.Remote
 ---
 
-Windows ships `Eiviz.Host.exe` (the mixer) and `Eiviz.Remote.exe` (the operator client). macOS ships `eiviz-mac.app` and `eiviz-remote.app`. Live ops and session edits are handled by the destination `ControlService`. See [eiviz API](/eiviz/en/developers/api/) for the protocol.
+Windows ships `Eiviz.Host.exe` (the mixer) and `Eiviz.Remote.exe` (the operator client). macOS ships `eiviz-mac.app` and `eiviz-remote.app`. Live ops and session edits are handled by the destination `ControlService`. See [eiviz API](/en/developers/api/) for the protocol.
 
 ## Connect
 
-1. Enable API listen on the destination (`Eiviz.Host.exe` Preferences, or [Headless](/eiviz/en/features/headless/) `eiviz-headless run`)
+1. Enable API listen on the destination (`Eiviz.Host.exe` Preferences, or [Headless](/en/features/headless/) `eiviz-headless run`)
 2. Set a listen token
 3. Launch `Eiviz.Remote.exe` (or `eiviz-remote.app`)
 4. Click Connect in the top left, enter the IP, port, and token, then OK. The operator UI opens after the connection succeeds.
 
-The connection is authenticated `ws://` on a trusted LAN or VPN. Tokens live in Windows Credential Manager / macOS Keychain. They are not stored in the session file. Host listen fields are in [Settings](/eiviz/en/introduction/settings/). When the destination is `eiviz-headless`, listen and token steps are in [Headless](/eiviz/en/features/headless/).
+The connection is authenticated `ws://` on a trusted LAN or VPN. Tokens live in Windows Credential Manager / macOS Keychain. They are not stored in the session file. Host listen fields are in [Settings](/en/introduction/settings/). When the destination is `eiviz-headless`, listen and token steps are in [Headless](/en/features/headless/).
 
 The Connect ▾ menu lists recent destinations. Disconnect closes the connection.
 
@@ -20,7 +20,7 @@ Multiple clients can stay connected; live state stays aligned through subscribe.
 
 ## Video
 
-The main video row is either Preview and Program, or one Multiview pane. Switch the layout from the top bar. Pick the NDI or OMT source from each header menu. CPU versus GPU OMT receive is a Preferences setting on `Eiviz.Remote.exe` (or `eiviz-remote.app`). The default is CPU (Recommended). See [NDI / OMT Capture](/eiviz/en/features/inputs/ndi-omt/) for when to use each path. Add, tile-edit, and delete Multiview layouts from Settings.
+The main video row is either Preview and Program, or one Multiview pane. Switch the layout from the top bar. Pick the NDI or OMT source from each header menu. CPU versus GPU OMT receive is a Preferences setting on `Eiviz.Remote.exe` (or `eiviz-remote.app`). The default is CPU (Recommended). See [NDI / OMT Capture](/en/features/inputs/ndi-omt/) for when to use each path. Add, tile-edit, and delete Multiview layouts from Settings.
 
 The scene list and switcher scene buttons show every Scene, collapsed. Preview/Program chrome still paints the collapsed tiles.
 

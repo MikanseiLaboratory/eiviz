@@ -5,7 +5,7 @@ description: GUIなしでMixerを動かし、eivizctlとRemoteから操作する
 
 `eiviz-headless`は、GUIを持たずにMixerをバックグラウンドで実行するデーモンです。セッションファイル（`.eivz`または`.eivzx`）を読み込んで映像合成を行い、制御用のProtobuf WebSocketを開きます（既定: loopbackポート9400）。`run`実行時に`--session`を省略した場合は、OSの`eiviz/sessions`ディレクトリ配下に日付付きの既定ファイルが自動作成され、そのファイルが使用されます。
 
-`eiviz-headless`はWindows/macOS/Linuxで動作します。LinuxはGUIホストが未実装のため配布物がheadlessのみで、Windows/macOSの配布パッケージにはGUIホストと同じバイナリが同梱されています。操作はローカルの`eivizctl`や、別マシンの`Eiviz.Remote`（macOSは`eiviz-remote`）から行います。通信プロトコルについては[eiviz API](/eiviz/ja/developers/api/)、Remoteの画面操作については[リモート接続](/eiviz/ja/features/remote/)を参照してください。
+`eiviz-headless`はWindows/macOS/Linuxで動作します。LinuxはGUIホストが未実装のため配布物がheadlessのみで、Windows/macOSの配布パッケージにはGUIホストと同じバイナリが同梱されています。操作はローカルの`eivizctl`や、別マシンの`Eiviz.Remote`（macOSは`eiviz-remote`）から行います。通信プロトコルについては[eiviz API](/ja/developers/api/)、Remoteの画面操作については[リモート接続](/ja/features/remote/)を参照してください。
 
 初めて利用する場合は、まず「起動」と「Remoteから接続する」の手順に沿って接続を確認してください。
 
@@ -116,7 +116,7 @@ eiviz> shutdown
 
 複数のクライアントから同時に接続できます。また、`eivizctl`とRemoteの併用にも対応しています。
 
-映像プレビューを確認する場合は、headless側でNDIまたはOMT出力を有効にし、Remote側のヘッダーメニューから該当出力を選択してください。詳細は[リモート接続](/eiviz/ja/features/remote/)を参照してください。
+映像プレビューを確認する場合は、headless側でNDIまたはOMT出力を有効にし、Remote側のヘッダーメニューから該当出力を選択してください。詳細は[リモート接続](/ja/features/remote/)を参照してください。
 
 ## 終了コード
 

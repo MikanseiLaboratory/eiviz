@@ -3,7 +3,7 @@ title: NDI / OMT
 description: Sending Program over NDI and OMT
 ---
 
-The exit that puts a chosen source on the network. How to add a row and pick a source is [Outputs](/eiviz/en/concepts/outputs/) and [Settings](/eiviz/en/introduction/settings/) → Outputs.
+The exit that puts a chosen source on the network. How to add a row and pick a source is [Outputs](/en/concepts/outputs/) and [Settings](/en/introduction/settings/) → Outputs.
 
 ## Transport and encode
 
@@ -26,4 +26,4 @@ Each OMT output can skip VMX encode when no receiver is subscribed. The default 
 Audio is one Mixing Unit's MU Bus, or None (no audio).  
 When Multiview is selected as the video source, audio cannot be sent.
 
-Device mix is [Audio, ASIO, and related](/eiviz/en/features/outputs/audio/). Network PCM is taken from that internal mix.
+Device mix is [Audio, ASIO, and related](/en/features/outputs/audio/). Network PCM is taken from that internal mix.

@@ -3,7 +3,7 @@ title: eiviz API
 description: Native control API and headless operations
 ---
 
-The control plane is handled by `ControlService` inside the mixer. vMix-compatible HTTP/TCP, Protobuf WebSocket, and `eivizctl` are thin adapters over the same dispatcher. vMix listen details are in [Compatibility APIs](/eiviz/en/developers/compatibility/). This page is the native Protobuf surface.
+The control plane is handled by `ControlService` inside the mixer. vMix-compatible HTTP/TCP, Protobuf WebSocket, and `eivizctl` are thin adapters over the same dispatcher. vMix listen details are in [Compatibility APIs](/en/developers/compatibility/). This page is the native Protobuf surface.
 
 ## Contract
 
@@ -45,7 +45,7 @@ A lagged subscriber receives `Lag` and must take a new snapshot, then resume fro
 
 ## Remote GUI
 
-Operator steps are in [Remote connection](/eiviz/en/features/remote/). Still/Video moves through `BeginUpload` … `CommitUpload` into the host media directory, then adds an Input. Path traversal, overwrite, and symlink/junction targets are rejected.
+Operator steps are in [Remote connection](/en/features/remote/). Still/Video moves through `BeginUpload` … `CommitUpload` into the host media directory, then adds an Input. Path traversal, overwrite, and symlink/junction targets are rejected.
 
 ## Errors
 
@@ -74,7 +74,7 @@ Partial edits send the current snapshot revision as `expected_revision`. `--forc
 
 ## Headless daemon
 
-Operator steps for start, REPL, and Remote are in [Headless](/eiviz/en/features/headless/). This section is the daemon contract.
+Operator steps for start, REPL, and Remote are in [Headless](/en/features/headless/). This section is the daemon contract.
 
 ```bash
 eiviz-headless validate --session show.eivz

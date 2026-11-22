@@ -3,7 +3,7 @@ title: Inputs
 description: 映像ソースと、Input・Scene・Outputの関係
 ---
 
-<img src="/eiviz/images/ja/concepts/inputs.jpg" alt="Inputsの概念図" style="max-width: 100%; height: auto;" />
+<img src="/images/ja/concepts/inputs.jpg" alt="Inputsの概念図" style="max-width: 100%; height: auto;" />
 
 Inputは、eivizに取り込まれるすべての映像・音声入力の基本要素です。一般的なスイッチャーにおけるソースやOBS Studioのソースに該当します。
 

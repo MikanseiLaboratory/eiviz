@@ -3,7 +3,7 @@ title: Scenes
 description: A composite stacked from Inputs
 ---
 
-<img src="/eiviz/images/en/concepts/scenes.jpg" alt="Scenes concept diagram" style="max-width: 100%; height: auto;" />
+<img src="/images/en/concepts/scenes.jpg" alt="Scenes concept diagram" style="max-width: 100%; height: auto;" />
 
 Inputs stacked as layers.
 
@@ -14,7 +14,7 @@ Audio Follow on a layer ties that Input’s sound to the picture.
 
 ## Where it goes
 
-Use it on a Mixing Unit bus, as an [Overlay](/eiviz/en/concepts/overlays/) source, on a [Multiview](/eiviz/en/concepts/multiviews/) tile, or as an Output source.
+Use it on a Mixing Unit bus, as an [Overlay](/en/concepts/overlays/) source, on a [Multiview](/en/concepts/multiviews/) tile, or as an Output source.
 
 ## Camera
 

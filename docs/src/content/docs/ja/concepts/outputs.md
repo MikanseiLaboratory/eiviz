@@ -7,7 +7,7 @@ Outputは、Mixing UnitのProgram本線や各種ソース（Input、Scene、Mult
 
 ## 設定とルーティング
 
-[設定](/eiviz/ja/introduction/settings/)ウィンドウの「出力」から設定します。
+[設定](/ja/introduction/settings/)ウィンドウの「出力」から設定します。
 
 - **転送プロトコル**: OMTまたはNDIに対応しています（DeckLinkなどのハードウェア出力は現在実装中）。
 - **映像ソース**: Input、Scene、MU Preview、MU Program、Multiviewから選択できます。

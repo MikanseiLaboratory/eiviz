@@ -19,7 +19,7 @@ Mixerプロセス内でHTTPサーバーが動作します（既定: ポート`80
 | 状態取得 | クエリなし。vMix互換のXML（`application/xml`）を返却 |
 | Function実行 | `GET /api?Function=Fade&Duration=500` のようにクエリで指定し、実行後にXMLを返却 |
 
-XML出力では、Sceneに続いてInputがフラットな一覧として展開されます。対応しているFunctionの一覧は[Function Reference](/eiviz/ja/developers/function-reference/)を参照してください。未定義のFunctionには404、不正な引数には400を返します。なお、本家vMixとは異なり、既知のFunctionであっても処理に失敗した場合は成功として扱われません。
+XML出力では、Sceneに続いてInputがフラットな一覧として展開されます。対応しているFunctionの一覧は[Function Reference](/ja/developers/function-reference/)を参照してください。未定義のFunctionには404、不正な引数には400を返します。なお、本家vMixとは異なり、既知のFunctionであっても処理に失敗した場合は成功として扱われません。
 
 アクセスログは`eiviz-mixer-http.log`に出力されます（定期ポーリングの`GET /api`は除外されます）。
 
@@ -38,7 +38,7 @@ XML出力では、Sceneに続いてInputがフラットな一覧として展開�
 | `SUBSCRIBE` / `UNSUBSCRIBE` | タリーやアクティベータ状態の変更通知を購読 |
 | `VERSION` / `QUIT` | バージョン取得および接続切断 |
 
-対応しているFunctionの一覧は[Function Reference](/eiviz/ja/developers/function-reference/)を参照してください。
+対応しているFunctionの一覧は[Function Reference](/ja/developers/function-reference/)を参照してください。
 
 ## OBS WebSocket API
 

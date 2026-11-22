@@ -3,7 +3,7 @@ title: Inputs
 description: Video sources, and how Input, Scene, and Output connect
 ---
 
-<img src="/eiviz/images/en/concepts/inputs.jpg" alt="Inputs concept diagram" style="max-width: 100%; height: auto;" />
+<img src="/images/en/concepts/inputs.jpg" alt="Inputs concept diagram" style="max-width: 100%; height: auto;" />
 
 The same idea as Input, Source, or a camera input on other tools.
 
@@ -64,4 +64,4 @@ Right-click the tab strip to add, rename, or delete a tag.
 - Rename follows through on every Input that had the old name
 - Delete removes the tag from those Inputs. If you were on that tab, the list returns to All
 
-Detail is in [Scenes](/eiviz/en/concepts/scenes/), [Mixing Unit](/eiviz/en/concepts/mixing-unit/), and [Outputs](/eiviz/en/concepts/outputs/).
+Detail is in [Scenes](/en/concepts/scenes/), [Mixing Unit](/en/concepts/mixing-unit/), and [Outputs](/en/concepts/outputs/).

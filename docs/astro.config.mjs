@@ -4,8 +4,8 @@ import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 import mermaid from 'astro-mermaid';
 
-const SITE = 'https://mikanseilaboratory.github.io';
-const BASE = '/eiviz/';
+const SITE = 'https://eiviz.mikansei.dev';
+const BASE = '/';
 
 async function latestReleaseTag() {
 	if (process.env.PUBLIC_EIVIZ_VERSION) {
@@ -39,7 +39,7 @@ if (version) {
 }
 
 // https://astro.build/config
-// GitHub Pages: https://mikanseilaboratory.github.io/eiviz/
+// GitHub Pages: https://eiviz.mikansei.dev/
 export default defineConfig({
 	site: SITE,
 	base: BASE,
@@ -112,7 +112,7 @@ export default defineConfig({
 					attrs: {
 						rel: 'icon',
 						type: 'image/png',
-						href: '/eiviz/favicon.png',
+						href: '/favicon.png',
 						media: '(prefers-color-scheme: light)',
 					},
 				},
@@ -121,7 +121,7 @@ export default defineConfig({
 					attrs: {
 						rel: 'icon',
 						type: 'image/png',
-						href: '/eiviz/favicon-dark.png',
+						href: '/favicon-dark.png',
 						media: '(prefers-color-scheme: dark)',
 					},
 				},

@@ -9,7 +9,7 @@ Open it from Settings in the main window. Remote uses the same window to edit th
 
 Adjusts what you see in the GUI.
 
-<img src="/eiviz/images/en/introduction/settings/setting_ui.jpg" alt="Screenshot of the Settings window" style="max-width: 100%; height: auto;" />
+<img src="/images/en/introduction/settings/setting_ui.jpg" alt="Screenshot of the Settings window" style="max-width: 100%; height: auto;" />
 
 ### Colours
 
@@ -29,7 +29,7 @@ The default resolution of Mixing Units you add later. Default is 1920×1080. Exi
 
 How many finished frames to keep in memory. Default is 3.  
 It buffers so a late compose does not stop the output; audio is delayed by the same count.  
-If processing cannot keep up within that count, frames are skipped until the clock catches up. The pipeline is in [System architecture](/eiviz/en/introduction/architecture/).
+If processing cannot keep up within that count, frames are skipped until the clock catches up. The pipeline is in [System architecture](/en/introduction/architecture/).
 
 ### Internal colour format
 
@@ -39,7 +39,7 @@ How pixels sit in RAM and on the upload path. The default, UYVY 4:2:2, is half t
 
 Settings that affect compose performance.
 
-<img src="/eiviz/images/en/introduction/settings/performance.jpg" alt="Screenshot of the Performance settings" style="max-width: 100%; height: auto;" />
+<img src="/images/en/introduction/settings/performance.jpg" alt="Screenshot of the Performance settings" style="max-width: 100%; height: auto;" />
 
 ## Graphics adapter
 
@@ -48,7 +48,7 @@ Shows the graphics adapter in use.
 ### Resizable BAR / Unified Memory
 
 On Windows you get Resizable BAR status, BAR window / VRAM, and whether GPU upload heaps exist.  
-Use ReBAR optimization writes frames straight into GPU VRAM on upload. Integrated GPUs, and adapters that do not expose upload heaps, cannot turn it on. Turn it off if you see flicker or tearing. Why ReBAR is assumed is in [About eiviz](/eiviz/en/introduction/about/).
+Use ReBAR optimization writes frames straight into GPU VRAM on upload. Integrated GPUs, and adapters that do not expose upload heaps, cannot turn it on. Turn it off if you see flicker or tearing. Why ReBAR is assumed is in [About eiviz](/en/introduction/about/).
 
 Even on a Resizable BAR system, GPU upload heaps may be unavailable — for example on Windows 11 before 24H2 — so this optimization cannot be used.
 
@@ -62,7 +62,7 @@ On by default. On uploads each received frame to the GPU from a dedicated CPU th
 
 Where pictures leave the mixer.
 
-<img src="/eiviz/images/en/introduction/settings/outputs.jpg" alt="Screenshot of the Outputs settings" style="max-width: 100%; height: auto;" />
+<img src="/images/en/introduction/settings/outputs.jpg" alt="Screenshot of the Outputs settings" style="max-width: 100%; height: auto;" />
 
 Each row is a name, a transport, an On/Off switch, a video source, audio, resolution, and frame rate.  
 Transport is OMT, NDI, DeckLink, or RTMP. RTMP uses a stream encoder and a Keychain-held stream key; DeckLink requires the Pro module and supported hardware.  
@@ -76,7 +76,7 @@ OMT supports two encoding paths:
 - **GPU**: An auxiliary encoder that offloads work from the CPU. Useful for Multiview and secondary monitoring outputs where lower compression efficiency is acceptable.  
 NDI is always CPU encoded.
 
-One thread is assigned per output. Detail is in [NDI / OMT](/eiviz/en/features/outputs/ndi-omt/).
+One thread is assigned per output. Detail is in [NDI / OMT](/en/features/outputs/ndi-omt/).
 
 Windows applies when you press OK. macOS can also Apply per row.
 
@@ -86,9 +86,9 @@ When a stream does not start and the log says `stream destination id=…: stream
 
 ## Multiview
 
-<img src="/eiviz/images/en/introduction/settings/multiview.jpg" alt="Screenshot of the Multiview settings" style="max-width: 100%; height: auto;" />
+<img src="/images/en/introduction/settings/multiview.jpg" alt="Screenshot of the Multiview settings" style="max-width: 100%; height: auto;" />
 
-Adds and controls monitor mosaics. Detail is in [Multiviews](/eiviz/en/concepts/multiviews/).
+Adds and controls monitor mosaics. Detail is in [Multiviews](/en/concepts/multiviews/).
 
 ### Default Mixing Unit for new Multiviews
 
@@ -101,26 +101,26 @@ Every frame through every 8 frames. Default is every 3, about 20 fps at 59.94.
 
 ## Headphone
 
-<img src="/eiviz/images/en/introduction/settings/audio-aux.jpg" alt="Screenshot of the Headphone settings" style="max-width: 100%; height: auto;" />
+<img src="/images/en/introduction/settings/audio-aux.jpg" alt="Screenshot of the Headphone settings" style="max-width: 100%; height: auto;" />
 
 The internal mix is 48 kHz stereo. This page sets the Headphone output device. Choose what to hear with the headphone icon on a meter. Each Mixing Unit's own output device is on the Mixing Unit dialog.  
-Detail is in [MU Bus](/eiviz/en/concepts/audio-auxs/) and [Audio, ASIO, and related](/eiviz/en/features/outputs/audio/).
+Detail is in [MU Bus](/en/concepts/audio-auxs/) and [Audio, ASIO, and related](/en/features/outputs/audio/).
 
 None keeps the mix internal. Hardware output is WASAPI shared or ASIO.
 
 ## Web API
 
-vMix-compatible HTTP, vMix-compatible TCP, and Protobuf WebSocket listen settings. HTTP and TCP stay in the session file. WebSocket bind address, token, max role, and media directory are host Preferences (or headless CLI/env). Enable and port in Settings still apply to the host listen. See [eiviz API](/eiviz/en/developers/api/) for the protocol.
+vMix-compatible HTTP, vMix-compatible TCP, and Protobuf WebSocket listen settings. HTTP and TCP stay in the session file. WebSocket bind address, token, max role, and media directory are host Preferences (or headless CLI/env). Enable and port in Settings still apply to the host listen. See [eiviz API](/en/developers/api/) for the protocol.
 
 - HTTP: start the HTTP server when the mixer starts. Default on. Default port 8088
 - TCP: [vMix TCP API](https://www.vmix.com/help29/TCPAPI.html) on port 8099. Default on. Port is fixed
 - WebSocket: Protobuf control API. Default on. Default port 9400, subprotocol `eiviz.protobuf.v1`. Default bind is loopback. Non-loopback bind requires a token. This release is authenticated `ws://` on a trusted LAN or VPN; TLS is not included
 - Username / password: BasicAuth on HTTP if either is set. Both empty means no HTTP auth. TCP has no auth. WebSocket tokens are the listen token in Preferences, or `EIVIZ_API_TOKEN` for headless
-- Browser `Origin`: `EIVIZ_API_ALLOWED_ORIGINS` (comma-separated; `*` allows any). When unset, connections that send `Origin` are refused. See [eiviz API](/eiviz/en/developers/api/)
+- Browser `Origin`: `EIVIZ_API_ALLOWED_ORIGINS` (comma-separated; `*` allows any). When unset, connections that send `Origin` are refused. See [eiviz API](/en/developers/api/)
 
 If the HTTP port is already in use, eiviz shows a warning and attempts to bind the next port (e.g. 8089). If only port 8099 is busy, HTTP still runs and TCP warns on its own. A WebSocket bind failure is handled similarly. Listen start/stop and Functions are written to the mixer log (Help → Logs).
 
-Endpoints and Functions are in [Compatibility APIs](/eiviz/en/developers/compatibility/) and the [Function Reference](/eiviz/en/developers/function-reference/).
+Endpoints and Functions are in [Compatibility APIs](/en/developers/compatibility/) and the [Function Reference](/en/developers/function-reference/).
 
 ## Advanced
 
@@ -130,11 +130,11 @@ Sets the maximum number of simultaneous real-time preview windows (Preview, Prog
 A Switcher UI shows both Preview and Program, consuming 2 slots. Main Preview/Program, each open Multiview, the Scene Editor, and the Overlay window count toward this limit (scene thumbnails and input previews do not).
 
 Auto defaults to 6. You can raise it in Settings, but doing so may reduce system stability.  
-When the limit is reached, new windows will not open until an existing window is closed to free a slot. The host implementation is detailed in [System architecture](/eiviz/en/introduction/architecture/).
+When the limit is reached, new windows will not open until an existing window is closed to free a slot. The host implementation is detailed in [System architecture](/en/introduction/architecture/).
 
 ## Preferences
 
-<img src="/eiviz/images/en/introduction/settings/preferences.jpg" alt="Screenshot of the Preferences window" style="max-width: 100%; height: auto;" />
+<img src="/images/en/introduction/settings/preferences.jpg" alt="Screenshot of the Preferences window" style="max-width: 100%; height: auto;" />
 
 Global eiviz settings.
 
@@ -148,7 +148,7 @@ Dark, Light, or Follow OS.
 
 ### Connection
 
-`Eiviz.Host.exe` runs the mixer on this computer. `Eiviz.Remote.exe` operates another eiviz over WebSocket. Remote connects from the Connect button in the top left. Steps and video handling are in [Remote connection](/eiviz/en/features/remote/).
+`Eiviz.Host.exe` runs the mixer on this computer. `Eiviz.Remote.exe` operates another eiviz over WebSocket. Remote connects from the Connect button in the top left. Steps and video handling are in [Remote connection](/en/features/remote/).
 
 ### API listen (host)
 
@@ -156,7 +156,7 @@ Bind address, listen token, and uploaded media directory. Non-loopback bind requ
 
 ### Headless
 
-Running without a GUI is [Headless](/eiviz/en/features/headless/). Edit listen values with `eivizctl prefs`.
+Running without a GUI is [Headless](/en/features/headless/). Edit listen values with `eivizctl prefs`.
 
 ### Help
 

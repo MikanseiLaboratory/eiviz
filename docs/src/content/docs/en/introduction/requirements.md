@@ -3,7 +3,7 @@ title: System requirements and supported hardware
 description: What eiviz needs to run, and which hardware is supported
 ---
 
-Recommended environment as of September 2026. Why this stack exists is in [About eiviz](/eiviz/en/introduction/about/).
+Recommended environment as of September 2026. Why this stack exists is in [About eiviz](/en/introduction/about/).
 
 Frame upload assumes the CPU can write GPU memory directly, instead of a normal slow path (256 MB windows).  
 That is Resizable BAR (ReBAR) on Windows, unified memory on Apple Silicon, and host-visible VRAM in Vulkan on Linux.

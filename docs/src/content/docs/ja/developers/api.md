@@ -3,7 +3,7 @@ title: eiviz API
 description: eiviz固有の制御APIとheadless運用
 ---
 
-eivizの各種操作は、Mixer内の`ControlService`を通じて処理されます。vMix互換HTTP/TCP、Protobuf WebSocket、CLIツール（`eivizctl`）からの要求はすべて同一のディスパッチャに集約されます。vMix互換APIについては[互換API](/eiviz/ja/developers/compatibility/)を参照してください。本ページではProtobufベースの制御APIについて解説します。
+eivizの各種操作は、Mixer内の`ControlService`を通じて処理されます。vMix互換HTTP/TCP、Protobuf WebSocket、CLIツール（`eivizctl`）からの要求はすべて同一のディスパッチャに集約されます。vMix互換APIについては[互換API](/ja/developers/compatibility/)を参照してください。本ページではProtobufベースの制御APIについて解説します。
 
 ## 基本仕様
 
@@ -51,5 +51,5 @@ APIエラーコードは`INVALID_ARGUMENT`、`NOT_FOUND`、`AMBIGUOUS`、`CONFLI
 
 ## CLIおよびデーモンの仕様
 
-- `eivizctl`: コマンドラインからAPIを呼び出すツールです。`--repl`で対話モードに対応します。詳細は[headless](/eiviz/ja/features/headless/)を参照してください。
+- `eivizctl`: コマンドラインからAPIを呼び出すツールです。`--repl`で対話モードに対応します。詳細は[headless](/ja/features/headless/)を参照してください。
 - `eiviz-headless`: GUIを持たないデーモン実行用バイナリです。Ctrl+C、SIGTERM、または`Shutdown`コマンドにより安全に終了します。
