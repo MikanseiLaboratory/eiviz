@@ -49,10 +49,6 @@ struct ReplaySettingsView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    if !status.isEmpty {
-                        // Apply and every refusal report here, where it cannot be missed.
-                        Text(status).fontWeight(.bold).foregroundStyle(EivizTheme.dim)
-                    }
                     VStack(alignment: .leading, spacing: 6) {
                         Text(L10n.t("replay.storage"))
                             .font(.system(size: 14, weight: .bold))
@@ -229,10 +225,13 @@ struct ReplaySettingsView: View {
                                 }
                                 .width(80)
                             }
-                            .frame(minHeight: 210)                            .frame(minHeight: 230)
+                            .frame(minHeight: 230)
                             HStack {
+                                // The button stays enabled at the plan limit, as it does on
+                                // Windows: pressing it says why another angle is refused. A
+                                // dimmed button is indistinguishable from a broken one, and
+                                // "nothing happened" is the one answer an operator cannot use.
                                 Button(L10n.t("replay.addAngleRow")) { addAngle() }
-                                    .disabled(angleLimitReached)
                                     .help(L10n.t("replay.angleRowHelp"))
                                 Text(L10n.t("replay.angleRowHelp")).font(.caption)
                             }
@@ -256,15 +255,20 @@ struct ReplaySettingsView: View {
                     } else {
                         Text(L10n.t("replay.noActiveAngle"))
                     }
-                    if !status.isEmpty {
-                        Text(status).font(.caption)
-                    }
                 }
                 .padding(14)
             }
             .frame(height: 720)
             Divider()
+            // Every answer sits below the scroll, next to the buttons that caused it. The
+            // line used to be the first item of the scrolled content, so a refusal from a
+            // button halfway down the form was written where nobody was looking, and the
+            // action read as a button that does nothing.
             HStack(spacing: 8) {
+                Text(status)
+                    .fontWeight(.bold)
+                    .foregroundStyle(EivizTheme.dim)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 // Closing discards the edits: nothing was published, so the window
                 // just goes away. Apply keeps it open.
@@ -303,16 +307,6 @@ struct ReplaySettingsView: View {
             Text(L10n.t(key)).font(.caption)
             TextField("", text: value).frame(width: width)
         }
-    }
-
-    /// The plan is conveyed by what the deck lets the operator do (disabled rows,
-    /// capped angle count), not by a sentence at the top of the settings window.
-    private var angleLimitReached: Bool {
-        guard let limits = mixer.replayLimits(),
-              limits.angles > 0,
-              limits.angles != .max
-        else { return false }
-        return angles.count >= Int(limits.angles)
     }
 
     /// The format Replay records in: the first Mixing Unit's picture and rate. It is
@@ -503,24 +497,42 @@ struct ReplaySettingsView: View {
     /// Adds a row for a new angle. It starts on the next unused scene, so the common case
     /// needs no edits at all, and the row is there to be changed in place if it is not the
     /// one they wanted.
+    ///
+    /// The row lives in this window's copy and is published by Apply, so the click is one
+    /// table edit and nothing else. The scene a row needs when every scene is already
+    /// recorded is created after the row exists, because creating it first publishes a
+    /// session mutation in the middle of the handler, and a tick that adopted the document
+    /// from that mutation could take the row away before the operator ever saw it.
     private func addAngle() {
         // Adding the row is not the same decision as choosing where it records.
         // Refusing here made the button look broken on a new project; the row can
         // be added now and the drive assigned before Apply.
         let needsDrive = storages.isEmpty
-        if angleLimitReached { return }
-        let used = Set(angles.filter { $0.source == "Scene" }.map(\.sceneId))
-        var scene = mixer.session.scenes.first { !used.contains($0.id) }
-        // A deck can have more angles than scenes. Adding an angle used to leave
-        // sceneId 0 silently, which Apply then refused; create the scene that the
-        // new angle needs instead.
-        if scene == nil {
-            mixer.addScene()
-            scene = mixer.session.scenes.last
+        // The plan limit is answered here rather than by a disabled button: the
+        // operator pressed a control, so the window owes them the reason.
+        if let limits = mixer.replayLimits(),
+           limits.angles > 0,
+           limits.angles != .max,
+           angles.count >= Int(limits.angles)
+        {
+            status = L10n.format("replay.planLimits", "\(limits.angles)", "\(limits.channels)")
+            return
         }
-        guard var current = document else { return }
-        let id = current.reserveAngleId()
-        document = current
+        // The live document, not only this window's copy: the deck can change it while the
+        // window is open, and a row this window could not add is a button that did nothing.
+        guard var current = mixer.replayDocument ?? document else {
+            status = L10n.t("replay.missing")
+            return
+        }
+        let scene = ReplayDeckMath.nextFreeScene(
+            angles: angles,
+            scenes: mixer.session.scenes.map(\.id)
+        )
+        let id = ReplayDeckMath.nextAngleId(
+            existing: angles.map(\.id),
+            reserved: current.raw["nextAngleId"]?.uint32Value ?? 1
+        )
+        current.raw["nextAngleId"] = .number(Double(id == .max ? id : id + 1))
         angles.append(
             ReplayAngleInfo(
                 id: id,
@@ -528,7 +540,7 @@ struct ReplaySettingsView: View {
                 // change later and "Scene 2" was never an angle name.
                 name: L10n.format("replay.angleName", "\(id)"),
                 source: "Scene",
-                sceneId: scene?.id ?? 0,
+                sceneId: scene ?? 0,
                 inputId: 0,
                 audioUnitId: 0
             )
@@ -543,14 +555,38 @@ struct ReplaySettingsView: View {
         // open could be overwritten by the next document sync.
         current.setAngles(angles)
         document = current
+        // The row stays this window's unsaved edit: `loadedAngleIds` keeps naming what the
+        // deck last published, so the adoption rule sees local rows the document does not
+        // have and leaves them alone until Apply.
         status = needsDrive
             ? L10n.t("replay.needDriveForAngle")
             : L10n.format("replay.angleAdded", L10n.format("replay.angleName", "\(id)"))
+        // Every scene is already recorded: the new row needs a scene of its own, and the
+        // one created for it must not take the preview with it.
+        guard scene == nil else { return }
+        mixer.addScene(switchPreview: false)
+        if let created = mixer.session.scenes.last, created.id != 0 {
+            pointAngle(id, at: created.id)
+        }
+    }
+
+    /// Points one angle row at a scene, keeping the copy Apply publishes in step.
+    private func pointAngle(_ angleId: UInt32, at sceneId: UInt64) {
+        guard let index = angles.firstIndex(where: { $0.id == angleId }) else { return }
+        angles[index].sceneId = sceneId
+        angles[index].inputId = 0
+        guard var current = document else { return }
+        current.setAngles(angles)
+        document = current
     }
 
     /// Removes one angle by id, from its own row's button.
     private func removeAngle(_ angleId: UInt32) {
-        guard let angle = angles.first(where: { $0.id == angleId }), var current = document else { return }
+        guard let angle = angles.first(where: { $0.id == angleId }) else { return }
+        guard var current = mixer.replayDocument ?? document else {
+            status = L10n.t("replay.missing")
+            return
+        }
         // A clip that plays this angle, or takes its sound from it, has nowhere to go
         // once the angle is gone. The deck may have filed clips since this window
         // loaded, so the live document is what decides; removing the angle therefore
@@ -651,7 +687,10 @@ struct ReplaySettingsView: View {
     }
 
     private func apply() {
-        guard var current = document else { return }
+        guard var current = mixer.replayDocument ?? document else {
+            status = L10n.t("replay.missing")
+            return
+        }
         guard let queueValue = UInt32(queue), (2...60).contains(queueValue),
               let bufferValue = UInt32(buffer), (64...8192).contains(bufferValue),
               let reserveValue = UInt32(reserve)

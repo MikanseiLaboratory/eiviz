@@ -424,7 +424,12 @@ extension MixerController {
         }
     }
 
-    func addScene() {
+    /// Adds a scene to the document.
+    ///
+    /// `switchPreview` is false for a caller that needs a scene to exist rather than a
+    /// scene to look at: Replay Setup creates the scene a new angle records, and moving
+    /// the program preview from a settings window was not what the operator asked for.
+    func addScene(switchPreview: Bool = true) {
         if isRemote {
             let scene = SceneEntry(id: session.nextSceneId, name: "Scene \(session.nextSceneId)")
             _ = mutateRemote(MixerRemote.upsertScene(scene))
@@ -432,7 +437,9 @@ extension MixerController {
         }
         let scene = session.addScene(name: "Scene \(session.nextSceneId)", input: nil)
         pushScene(scene)
-        previewScene(scene)
+        if switchPreview {
+            previewScene(scene)
+        }
         _ = mutateLocal(MixerRemote.upsertScene(scene))
     }
 

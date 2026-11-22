@@ -38,6 +38,15 @@ assemble() {
     /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $EIVIZ_VERSION" "$app/Contents/Info.plist"
     /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $EIVIZ_VERSION" "$app/Contents/Info.plist"
   fi
+  if [ -n "${EIVIZ_APP_NAME:-}" ] && [ "$bin" = "eiviz-mac" ]; then
+    # An edition build for one event shows its own name in the Dock and the menu
+    # bar. The bundle path, its identifier and the executable stay "eiviz", so the
+    # package replaces the normal install instead of adding a second copy of the
+    # app with the same identifier beside it.
+    plutil -replace CFBundleDisplayName -string "$EIVIZ_APP_NAME" "$app/Contents/Info.plist" 2>/dev/null \
+      || plutil -insert CFBundleDisplayName -string "$EIVIZ_APP_NAME" "$app/Contents/Info.plist"
+    plutil -replace CFBundleName -string "$EIVIZ_APP_NAME" "$app/Contents/Info.plist"
+  fi
   "$ROOT/hosts/macos/relocate-dylib.sh" "$app/Contents/MacOS/$bin" "$app/Contents/MacOS/libeiviz_mixer.dylib" "$app/Contents/MacOS/libeiviz_remote.dylib"
   # The relocation above invalidated the bundle's signature; put an ad-hoc
   # one back so NDI/Bonjour/TCC see a validly signed bundle.

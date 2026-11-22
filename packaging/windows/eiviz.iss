@@ -20,12 +20,19 @@
 #ifndef RepoRoot
   #define RepoRoot "..\.."
 #endif
+; An edition build for one event passes its own display name. Everything the
+; installed copy is found by — AppId, install folder, executable name — stays
+; "eiviz", so an edition replaces the normal install instead of adding a second
+; one beside it.
+#ifndef MyAppName
+  #define MyAppName "eiviz"
+#endif
 
-#define MyAppName "eiviz"
 #define MyAppPublisher "Mikansei Laboratory"
 #define MyAppPublisherDir "MikanseiLaboratory"
 #define MyAppURL "https://github.com/MikanseiLaboratory/eiviz"
 #define MyAppExeName "Eiviz.Host.exe"
+#define MyAppDirName "eiviz"
 #define MyAppIcon RepoRoot + "\docs\src\assets\branding\app-icon\windows\eiviz.ico"
 
 [Setup]
@@ -36,7 +43,7 @@ AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
-DefaultDirName={autopf}\{#MyAppPublisherDir}\{#MyAppName}
+DefaultDirName={autopf}\{#MyAppPublisherDir}\{#MyAppDirName}
 DefaultGroupName={#MyAppPublisherDir}
 DisableProgramGroupPage=yes
 LicenseFile={#SourceDir}\LICENSE
