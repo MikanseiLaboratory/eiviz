@@ -345,6 +345,8 @@ public sealed class InputEntry
     public float Gain { get; set; } = 1;
     public bool Mute { get; set; }
     public bool UseGpu { get; set; }
+    /// Decode OMT video on the GPU bit-identically to the CPU decoder.
+    public bool OmtDecodeExact { get; set; }
     /// Decoder choice for video files and UVC cameras.
     public InputDecodePath DecodePath { get; set; } = InputDecodePath.Auto;
     public uint FrameBufferFrames { get; set; } = 1;

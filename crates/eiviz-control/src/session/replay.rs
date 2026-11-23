@@ -1451,6 +1451,7 @@ fn replay_input(id: u64, name: String) -> InputDto {
         bandwidth_save: Default::default(),
         keep_full_on_multiview: false,
         omt_quality: Default::default(),
+        omt_decode_exact: false,
         ndi_bandwidth: Default::default(),
         video_loop: false,
         video_play_when: Default::default(),

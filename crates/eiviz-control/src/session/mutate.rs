@@ -169,6 +169,7 @@ pub fn apply(document: &mut Document, mutation: SessionMutation) -> ControlResul
                 bandwidth_save: crate::session::BandwidthSave::NotOnPreviewOrProgram,
                 keep_full_on_multiview: false,
                 omt_quality: crate::session::OmtQuality::Default,
+                omt_decode_exact: false,
                 ndi_bandwidth: crate::session::NdiBandwidth::Highest,
                 video_loop,
                 video_play_when: crate::session::VideoPlayWhen::Never,

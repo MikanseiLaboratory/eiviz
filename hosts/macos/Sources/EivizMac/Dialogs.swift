@@ -1211,6 +1211,7 @@ struct AddInputView: View {
     @State private var scroll = false
     @State private var toneHz: Float = 1000
     @State private var useGpu = false
+    @State private var omtDecodeExact = false
     @State private var decodePath: InputDecodePath = .auto
     @State private var buffer: UInt32 = 1
     @State private var mediaBuffer: UInt32 = 3
@@ -1411,6 +1412,11 @@ struct AddInputView: View {
                 Text(L10n.t("settings.omtGpu")).tag(true)
             }
             Text(L10n.t("settings.omtDecodeHelp"))
+                .foregroundStyle(EivizTheme.dim)
+                .fixedSize(horizontal: false, vertical: true)
+            Toggle(L10n.t("settings.omtDecodeExact"), isOn: $omtDecodeExact)
+                .disabled(!useGpu)
+            Text(L10n.t("settings.omtDecodeExactHelp"))
                 .foregroundStyle(EivizTheme.dim)
                 .fixedSize(horizontal: false, vertical: true)
             frameBufferPicker($buffer)
@@ -1778,6 +1784,7 @@ struct AddInputView: View {
         scroll = editing.scroll
         toneHz = editing.toneHz
         useGpu = editing.useGpu
+        omtDecodeExact = editing.omtDecodeExact
         decodePath = editing.decodePath
         buffer = editing.frameBufferFrames
         mediaBuffer = max(1, min(8, editing.frameBufferFrames == 0 ? 3 : editing.frameBufferFrames))
@@ -1886,6 +1893,7 @@ struct AddInputView: View {
             input.kind = .omt
             input.pathOrAddress = omtAddress
             input.useGpu = useGpu
+            input.omtDecodeExact = omtDecodeExact
             input.decodePath = decodePath
             input.frameBufferFrames = buffer
             input.omtQuality = switch quality {
@@ -1901,6 +1909,7 @@ struct AddInputView: View {
             input.ndiBandwidth = ndiLow ? .lowest : .highest
             input.frameBufferFrames = buffer
             input.useGpu = false
+            input.omtDecodeExact = false
         case "DeckLink":
             guard !selectedDeckLink.isEmpty else { return false }
             input.kind = .deckLink

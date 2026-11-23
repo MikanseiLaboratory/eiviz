@@ -932,6 +932,7 @@ fn live_connect(input: &InputDto) -> LiveConnectApply {
         id: input.id,
         address: input.path_or_address.clone().unwrap_or_default(),
         use_gpu: input.use_gpu,
+        omt_decode_exact: input.kind == InputKind::OMT && input.omt_decode_exact,
         frame_buffer_frames: input.frame_buffer_frames,
         quality_or_bandwidth: match input.kind {
             InputKind::NDI => {
@@ -1245,6 +1246,7 @@ fn input_desired_equal(a: &InputDto, b: &InputDto) -> bool {
         && a.color_b == b.color_b
         && a.scroll == b.scroll
         && a.use_gpu == b.use_gpu
+        && a.omt_decode_exact == b.omt_decode_exact
         && a.decode_path == b.decode_path
         && a.frame_buffer_frames == b.frame_buffer_frames
         && a.mix_target_id == b.mix_target_id
@@ -1775,6 +1777,41 @@ mod tests {
                 "omtQuality {label} should map to ABI {expected}"
             );
         }
+    }
+
+    #[test]
+    fn omt_decode_exact_reaches_the_connect_op() {
+        let src = br#"{
+          "version": 2,
+          "inputs": [
+            {
+              "id": 10,
+              "name": "Cam",
+              "kind": "Omt",
+              "pathOrAddress": "omt://studio/cam",
+              "useGpu": true,
+              "omtDecodeExact": true
+            },
+            {
+              "id": 11,
+              "name": "Cam fast",
+              "kind": "Omt",
+              "pathOrAddress": "omt://studio/cam2",
+              "useGpu": true
+            }
+          ],
+          "scenes": [{ "id": 1, "name": "Scene 1", "layers": [{ "inputId": 10, "width": 1, "height": 1 }] }],
+          "units": [{ "id": 1, "name": "MU 1" }]
+        }"#;
+        let doc = parse(src).unwrap();
+        let ops = plan(None, &doc);
+        let exact = |id: u64| {
+            ops.iter().any(|op| {
+                matches!(op, ReconcileOp::ConnectOmt(spec) if spec.id == id && spec.omt_decode_exact)
+            })
+        };
+        assert!(exact(10), "input 10 asked for the exact GPU decode path");
+        assert!(!exact(11), "input 11 left it at the fast default");
     }
 
     #[test]

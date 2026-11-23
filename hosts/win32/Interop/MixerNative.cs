@@ -403,7 +403,7 @@ internal static partial class MixerNative
     internal static unsafe partial int CopyVideoInfo(ulong id, MixerVideoInfo* info);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_omt_connect", StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int ConnectOmt(ulong id, string address, uint useGpu, uint frameBufferFrames, uint quality);
+    internal static partial int ConnectOmt(ulong id, string address, uint useGpu, uint frameBufferFrames, uint quality, uint decodeExact);
 
     [LibraryImport(LibraryName, EntryPoint = "mixer_omt_set_quality")]
     internal static partial int SetOmtQuality(ulong id, uint quality);

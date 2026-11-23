@@ -383,6 +383,8 @@ pub struct LiveConnectApply {
     pub id: u64,
     pub address: String,
     pub use_gpu: bool,
+    /// Decode OMT video bit-identically to the CPU decoder (GPU path only).
+    pub omt_decode_exact: bool,
     pub frame_buffer_frames: u32,
     pub quality_or_bandwidth: u32,
     pub save_mode: u32,

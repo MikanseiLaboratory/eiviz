@@ -29,7 +29,7 @@ tokio.workspace = true
 bytemuck = { version = "1.25", features = ["derive"] }
 fontdue = "0.9"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-openmediatransport = { version = "0.3.0", features = ["wgpu"] }
+openmediatransport = { version = "0.4.0", features = ["wgpu"] }
 pollster = "0.4"
 arc-swap = "1.9"
 raw-window-handle = "0.6"
@@ -40,7 +40,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tiny_http = "0.12"
 vmix-core = { git = "https://github.com/MikanseiLaboratory/vmix-rs", features = ["xml", "std"] }
-vmx = { version = "0.2.3", features = ["wgpu"] }
+vmx = { version = "0.3.1", features = ["wgpu"] }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "wgsl", "parking_lot"] }
 naga = { version = "30.0.1", default-features = false, features = ["wgsl-in"] }
 
@@ -82,4 +82,4 @@ sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png"] }
 pollster = "0.4"
 serial_test = "3"
-vmx = { version = "0.2.3", features = ["wgpu"] }
+vmx = { version = "0.3.1", features = ["wgpu"] }

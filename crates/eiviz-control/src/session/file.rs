@@ -566,6 +566,7 @@ fn input_to_pb(input: &InputDto) -> pb::Input {
         bandwidth_save: bandwidth_to_pb(input.bandwidth_save).into(),
         keep_full_on_multiview: input.keep_full_on_multiview,
         omt_quality: omt_quality_to_pb(input.omt_quality).into(),
+        omt_decode_exact: input.omt_decode_exact,
         ndi_bandwidth: ndi_bandwidth_to_pb(input.ndi_bandwidth).into(),
         video_loop: input.video_loop,
         video_play_when: play_when_to_pb(input.video_play_when).into(),
@@ -614,6 +615,7 @@ fn input_from_pb(input: pb::Input) -> Result<InputDto, String> {
         bandwidth_save: bandwidth_from_pb(input.bandwidth_save)?,
         keep_full_on_multiview: input.keep_full_on_multiview,
         omt_quality: omt_quality_from_pb(input.omt_quality)?,
+        omt_decode_exact: input.omt_decode_exact,
         ndi_bandwidth: ndi_bandwidth_from_pb(input.ndi_bandwidth)?,
         video_loop: input.video_loop,
         video_play_when: play_when_from_pb(input.video_play_when)?,
@@ -2030,6 +2032,14 @@ mod tests {
   "nextOutputId": 101,
   "selectedUnitId": 1
 }"#
+    }
+
+    #[test]
+    fn protobuf_roundtrip_keeps_omt_decode_exact() {
+        let mut original = parse(sample_json()).unwrap();
+        original.inputs[0].omt_decode_exact = true;
+        let decoded = decode_file(&encode_file(&original).unwrap()).unwrap();
+        assert!(decoded.inputs[0].omt_decode_exact);
     }
 
     #[test]
