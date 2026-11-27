@@ -1330,15 +1330,6 @@ public partial class SettingsWindow : Window
         }
     }
 
-    // Keep in sync with StreamDestinationCard.platformPresets on macOS.
-    // YouTube: https://support.google.com/youtube/answer/2907883
-    // Twitch: https://dev.twitch.tv/docs/video-broadcast/reference/ingest
-    private static readonly (string Name, string Url)[] StreamPlatformPresets =
-    [
-        ("YouTube", "rtmp://a.rtmp.youtube.com/live2"),
-        ("Twitch", "rtmp://ingest.global-contribute.live-video.net/app")
-    ];
-
     private Border BuildStreamRow(OutputEntry output, int index)
     {
         var locked = OnAirLock.Active;
@@ -1381,9 +1372,11 @@ public partial class SettingsWindow : Window
             Content = Loc.T("settings.streamPlatform") + " ▾",
             Margin = new Thickness(8, 0, 0, 0),
             IsEnabled = !locked,
-            ContextMenu = new ContextMenu()
+            // WPF's menu template scrolls when constrained, including keyboard
+            // navigation. Keep the editable server field separate from presets.
+            ContextMenu = new ContextMenu { MaxHeight = 320 }
         };
-        foreach (var preset in StreamPlatformPresets)
+        foreach (var preset in StreamPlatformPresets.All)
         {
             var item = new MenuItem { Header = preset.Name };
             item.Click += (_, _) =>

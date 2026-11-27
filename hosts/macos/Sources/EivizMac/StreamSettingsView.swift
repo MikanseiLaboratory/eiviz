@@ -531,14 +531,6 @@ private struct EncodeProfileCard: View {
 
 /// One RTMP destination, laid out like the Windows `BuildStreamRow`.
 private struct StreamDestinationCard: View {
-    // Keep in sync with SettingsWindow.StreamPlatformPresets on Windows.
-    // YouTube: https://support.google.com/youtube/answer/2907883
-    // Twitch: https://dev.twitch.tv/docs/video-broadcast/reference/ingest
-    private static let platformPresets: [(name: String, url: String)] = [
-        ("YouTube", "rtmp://a.rtmp.youtube.com/live2"),
-        ("Twitch", "rtmp://ingest.global-contribute.live-video.net/app"),
-    ]
-
     @Binding var output: OutputEntry
     let locked: Bool
     @EnvironmentObject private var mixer: MixerController
@@ -583,13 +575,16 @@ private struct StreamDestinationCard: View {
                     TextField(L10n.t("settings.rtmpUrl"), text: $output.rtmpUrl)
                         .textFieldStyle(.roundedBorder)
                     Menu(L10n.t("settings.streamPlatform")) {
-                        ForEach(Self.platformPresets, id: \.name) { preset in
+                        // macOS native menus scroll at the screen edges and
+                        // support keyboard navigation and typing service names.
+                        ForEach(StreamPlatformPresets.all, id: \.name) { preset in
                             Button(preset.name) {
                                 guard !OnAirLock.active else { return }
                                 output.rtmpUrl = preset.url
                             }
                         }
                     }
+                    .menuOrder(.fixed)
                     .fixedSize()
                 }
                 .disabled(locked)
