@@ -347,6 +347,7 @@ enum MixerFFI {
         var lagMs: UInt32
         var fpsMilli: UInt32
         var message: String
+        var planLimited: Bool = false
     }
 
     /// Live state of one RTMP destination, for the strip beside the deck.
@@ -372,6 +373,19 @@ enum MixerFFI {
                 &fps,
                 buffer.baseAddress,
                 buffer.count
+            )
+        }
+        if code == EIVIZ_ERR_NOT_SUPPORTED_PLAN {
+            var caps = EivizCapabilities()
+            _ = mixer_capabilities(&caps)
+            let fpsLimit = caps.rtmp_max_fps_den == 1
+                ? "\(caps.rtmp_max_fps_num)" : "\(caps.rtmp_max_fps_num)/\(caps.rtmp_max_fps_den)"
+            return StreamDestinationStats(
+                connected: false, frames: 0, dropped: 0, bitrate: 0, lagMs: 0, fpsMilli: 0,
+                message: L10n.format("status.streamPlanLimit",
+                    "\(caps.rtmp_max_width)", "\(caps.rtmp_max_height)",
+                    fpsLimit),
+                planLimited: true
             )
         }
         guard code == EIVIZ_OK else { return nil }

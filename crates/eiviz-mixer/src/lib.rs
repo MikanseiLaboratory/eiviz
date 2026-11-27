@@ -4503,6 +4503,7 @@ pub unsafe extern "C" fn mixer_stream_encoder_add(
 enum StreamEncoderState {
     Running,
     Failed(String),
+    PlanLimited(String),
 }
 
 static STREAM_ENCODER_STATES: OnceLock<Mutex<HashMap<u64, StreamEncoderState>>> = OnceLock::new();
@@ -4531,8 +4532,19 @@ fn stream_encoder_note_or(encoder_id: u64) -> Option<String> {
         StreamEncoderState::Running => {
             "the last add succeeded; it has since been removed or stopped".to_string()
         }
-        StreamEncoderState::Failed(message) => format!("the last add failed: {message}"),
+        StreamEncoderState::Failed(message) | StreamEncoderState::PlanLimited(message) => {
+            format!("the last add failed: {message}")
+        }
     })
+}
+
+/// Preserve a plan refusal for strip polling without changing other failures.
+fn stream_encoder_missing_code(encoder_id: u64) -> i32 {
+    let states = stream_encoder_states().lock_or_recover();
+    match states.get(&encoder_id) {
+        Some(StreamEncoderState::PlanLimited(_)) => ERR_NOT_SUPPORTED_PLAN,
+        _ => ERR_IO,
+    }
 }
 
 fn stream_encoder_add_ffi(
@@ -4581,7 +4593,14 @@ fn stream_encoder_add_ffi(
         // destination attach, which otherwise reports only "not running".
         let message = with_mixer(|mixer| mixer.telemetry.lock_or_recover().last_error.clone())
             .unwrap_or_else(|_| "the stream encoder was refused".to_string());
-        record_stream_encoder_result(encoder_id, StreamEncoderState::Failed(message));
+        record_stream_encoder_result(
+            encoder_id,
+            if code == ERR_NOT_SUPPORTED_PLAN {
+                StreamEncoderState::PlanLimited(message)
+            } else {
+                StreamEncoderState::Failed(message)
+            },
+        );
         return code;
     }
     let (width, height, fps_num, fps_den) = picture_of(unit_id, width, height, fps_num, fps_den);
@@ -4910,7 +4929,7 @@ pub unsafe extern "C" fn mixer_stream_destination_stats(
                 .and_then(|output| output.stream.clone())
         }) {
             Ok(Some(stream)) => stream,
-            Ok(None) => return ERR_IO,
+            Ok(None) => return stream_encoder_missing_code(encoder_id),
             Err(code) => return code,
         };
         match lock_stream(&stream).destination_stats(destination_id) {
@@ -8061,6 +8080,119 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::collections::HashMap;
+
+    #[test]
+    #[serial(mixer)]
+    fn stream_stats_preserve_plan_refusal_only_until_encoder_restarts() {
+        mixer_destroy();
+        assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+        let id = u64::MAX - 334;
+        let stats_code = || {
+            let (mut connected, mut bitrate) = (0, 0);
+            let (mut frames, mut dropped) = (0, 0);
+            unsafe {
+                mixer_stream_destination_stats(
+                    id,
+                    1,
+                    &mut connected,
+                    &mut frames,
+                    &mut dropped,
+                    &mut bitrate,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    0,
+                )
+            }
+        };
+        assert_eq!(stats_code(), ERR_IO);
+        record_stream_encoder_result(
+            id,
+            StreamEncoderState::PlanLimited(
+                "RTMP 1920x1080 at 60000/1001 exceeds this plan".into(),
+            ),
+        );
+        assert_eq!(stats_code(), ERR_NOT_SUPPORTED_PLAN);
+        assert!(stream_encoder_note(id).contains("exceeds this plan"));
+        record_stream_encoder_result(id, StreamEncoderState::Running);
+        assert_eq!(stats_code(), ERR_IO);
+        record_stream_encoder_result(id, StreamEncoderState::Failed("connection failed".into()));
+        assert_eq!(stats_code(), ERR_IO);
+        stream_encoder_states().lock_or_recover().remove(&id);
+        mixer_destroy();
+    }
+
+    #[test]
+    #[serial(mixer)]
+    fn stream_stats_report_real_plan_gate_refusal() {
+        mixer_destroy();
+        assert_eq!(mixer_create(0, 60_000, 1_001), OK);
+        let id = u64::MAX - 335;
+        assert_eq!(
+            crate::pro::entitlements().plan,
+            eiviz_pro_api::Plan::Community
+        );
+        let add = |width, height, fps_num, fps_den| unsafe {
+            mixer_stream_encoder_add(
+                id,
+                SRC_KIND_MU_PROGRAM,
+                0,
+                0,
+                0,
+                width,
+                height,
+                fps_num,
+                fps_den,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                std::ptr::null(),
+            )
+        };
+        let stats_code = || {
+            let (mut connected, mut bitrate) = (0, 0);
+            let (mut frames, mut dropped) = (0, 0);
+            unsafe {
+                mixer_stream_destination_stats(
+                    id,
+                    1,
+                    &mut connected,
+                    &mut frames,
+                    &mut dropped,
+                    &mut bitrate,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    0,
+                )
+            }
+        };
+        assert_eq!(add(1920, 1080, 60_000, 1_001), ERR_NOT_SUPPORTED_PLAN);
+        assert_eq!(stats_code(), ERR_NOT_SUPPORTED_PLAN);
+        assert!(stream_encoder_note(id).contains("exceeds this plan"));
+
+        // The Community stand-in has no streaming backend. The allowed picture
+        // passes the plan gate, then reports the missing backend as ordinary I/O.
+        assert_eq!(add(1280, 720, 30, 1), ERR_IO);
+        assert!(stream_encoder_note(id).contains("RTMP is not linked in this build"));
+        assert_eq!(stats_code(), ERR_IO);
+        stream_encoder_states().lock_or_recover().remove(&id);
+        mixer_destroy();
+    }
 
     /// The status indicator asks for stream statistics every 400 ms. A sender writing a
     /// frame to a slow socket holds its stream for as long as that write blocks, so the
