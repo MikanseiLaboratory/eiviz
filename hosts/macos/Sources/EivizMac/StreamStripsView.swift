@@ -53,6 +53,9 @@ struct StreamStripsView: View {
         guard let state = mixer.streamStats[output.id] else {
             return (amber, L10n.t("status.streamConnecting"))
         }
+        if state.planLimited {
+            return (red, state.message)
+        }
         if state.connected {
             let encoder = mixer.session.streamEncoders.first { $0.id == output.streamEncoderId }
             let target = encoder.map { $0.fpsDen > 0 ? Double($0.fpsNum) / Double($0.fpsDen) : 0 } ?? 0

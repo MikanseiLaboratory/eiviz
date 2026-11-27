@@ -964,6 +964,14 @@ public partial class MainWindow
                     (nuint)message.Length);
             }
         }
+        if (code == MixerNative.ErrNotSupportedPlan)
+        {
+            var caps = MixerNative.QueryCapabilities();
+            var fpsLimit = caps.RtmpMaxFpsDen == 1
+                ? $"{caps.RtmpMaxFpsNum}" : $"{caps.RtmpMaxFpsNum}/{caps.RtmpMaxFpsDen}";
+            return (StripLamp.Fault, Loc.Format("status.streamPlanLimit",
+                caps.RtmpMaxWidth, caps.RtmpMaxHeight, fpsLimit));
+        }
         var detail = MessageText(message);
         if (code == 0 && connected != 0)
         {
