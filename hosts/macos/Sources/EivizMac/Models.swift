@@ -1289,6 +1289,8 @@ struct StreamEncoderEntry: Identifiable {
     var sceneChange: Bool = false
     /// Added on top of the measured video encode time.
     var audioDelayMs: UInt32 = 0
+    /// Folded in Settings > Streaming.
+    var collapsed: Bool = false
 }
 
 extension StreamEncoderEntry: Codable {
@@ -1297,7 +1299,7 @@ extension StreamEncoderEntry: Codable {
         case width, height, fpsNum, fpsDen
         case videoBitrate, audioBitrate, keyint, videoOnly, encoderThreads, bufferMs
         case encoder, encoderDevice, complexity, refFrames, cabac, deblock
-        case backgroundDetection, adaptiveQuant, sceneChange, audioDelayMs
+        case backgroundDetection, adaptiveQuant, sceneChange, audioDelayMs, collapsed
     }
 
     init(from decoder: Decoder) throws {
@@ -1328,6 +1330,7 @@ extension StreamEncoderEntry: Codable {
         adaptiveQuant = try container.decodeIfPresent(Bool.self, forKey: .adaptiveQuant) ?? false
         sceneChange = try container.decodeIfPresent(Bool.self, forKey: .sceneChange) ?? false
         audioDelayMs = try container.decodeIfPresent(UInt32.self, forKey: .audioDelayMs) ?? 0
+        collapsed = try container.decodeIfPresent(Bool.self, forKey: .collapsed) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1358,6 +1361,7 @@ extension StreamEncoderEntry: Codable {
         try container.encode(adaptiveQuant, forKey: .adaptiveQuant)
         try container.encode(sceneChange, forKey: .sceneChange)
         try container.encode(audioDelayMs, forKey: .audioDelayMs)
+        try container.encode(collapsed, forKey: .collapsed)
     }
 }
 

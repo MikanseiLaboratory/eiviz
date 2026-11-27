@@ -1100,6 +1100,7 @@ fn stream_encoder_to_pb(encoder: &StreamEncoderDto) -> pb::StreamEncoder {
         adaptive_quant: encoder.adaptive_quant,
         scene_change: encoder.scene_change,
         audio_delay_ms: encoder.audio_delay_ms,
+        collapsed: encoder.collapsed,
     }
 }
 
@@ -1139,6 +1140,7 @@ fn stream_encoder_from_pb(encoder: pb::StreamEncoder) -> Result<StreamEncoderDto
         adaptive_quant: encoder.adaptive_quant,
         scene_change: encoder.scene_change,
         audio_delay_ms: encoder.audio_delay_ms,
+        collapsed: encoder.collapsed,
     })
 }
 

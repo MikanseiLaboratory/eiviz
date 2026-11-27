@@ -1369,6 +1369,9 @@ pub struct StreamEncoderDto {
     /// Added on top of the measured video encode time.
     #[serde(default)]
     pub audio_delay_ms: u32,
+    /// Folded in Settings > Streaming. Only the hosts read it.
+    #[serde(default)]
+    pub collapsed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1984,6 +1987,21 @@ mod tests {
         assert_eq!(again.inputs[0].tags, vec!["Cameras"]);
         assert_eq!(again.scenes[0].tags, vec!["Open"]);
         assert!(again.scenes[0].preview_collapsed);
+    }
+
+    #[test]
+    fn stream_encoder_collapsed_roundtrip() {
+        let src = r#"{
+  "version": 2,
+  "streamEncoders": [{ "id": 1, "name": "Encode 1", "collapsed": true }, { "id": 2, "name": "Encode 2" }]
+}"#;
+        let doc = parse(src.as_bytes()).unwrap();
+        assert!(doc.stream_encoders[0].collapsed);
+        assert!(!doc.stream_encoders[1].collapsed);
+        let text = String::from_utf8(to_vec(&doc).unwrap()).unwrap();
+        let again = parse(text.as_bytes()).unwrap();
+        assert!(again.stream_encoders[0].collapsed);
+        assert!(!again.stream_encoders[1].collapsed);
     }
 
     #[test]

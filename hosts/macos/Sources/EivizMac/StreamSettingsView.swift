@@ -114,6 +114,16 @@ private struct EncodeProfileCard: View {
     @EnvironmentObject private var mixer: MixerController
 
     private var meters: EncodeMeters { EncodeMeters(encoder) }
+    private var collapsed: Bool { encoder.collapsed }
+
+    private var summary: String {
+        [
+            sizeOptions.first { $0.tag == sizeTag }?.label ?? sizeTag,
+            fpsOptions.first { $0.tag == fpsTag }?.label ?? fpsTag,
+            "\(encoder.videoBitrate / 1000) kbps",
+            encoder.encoder,
+        ].joined(separator: " / ")
+    }
 
     /// Controls that only take effect by rebuilding the encoder.
     private var controlLocked: Bool { locked || live }
@@ -133,10 +143,25 @@ private struct EncodeProfileCard: View {
             }
         Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 8) {
             GridRow {
-                TextField(L10n.t("settings.encodeName"), text: $encoder.name)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(controlLocked)
-                    .gridCellColumns(3)
+                HStack(spacing: 8) {
+                    // Folding keeps only this row and names the profile by what a
+                    // destination picks it for, so the list below stays in view.
+                    Button {
+                        encoder.collapsed.toggle()
+                    } label: {
+                        Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                    }
+                    .help(L10n.t(collapsed ? "settings.encodeExpand" : "settings.encodeCollapse"))
+                    TextField(L10n.t("settings.encodeName"), text: $encoder.name)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(controlLocked)
+                    if collapsed {
+                        Text(summary)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
+                .gridCellColumns(3)
                 Button(action: onRemove) {
                     Image(systemName: "minus")
                 }
@@ -144,92 +169,94 @@ private struct EncodeProfileCard: View {
                 .help(L10n.t("settings.removeEncode"))
             }
 
-            GridRow {
-                metered(L10n.t("settings.encodeLoad"), meters.total, L10n.t("settings.encodeLoadHint"), count: 10) {
-                    Color.clear.frame(height: 0)
+            if !collapsed {
+                GridRow {
+                    metered(L10n.t("settings.encodeLoad"), meters.total, L10n.t("settings.encodeLoadHint"), count: 10) {
+                        Color.clear.frame(height: 0)
+                    }
+                    .gridCellColumns(3)
                 }
-                .gridCellColumns(3)
-            }
 
-            GridRow {
-                metered(L10n.t("settings.videoBitrate"), meters.video, L10n.t("settings.videoBitrateHint")) {
-                    bitrateField($encoder.videoBitrate, minimum: 100)
+                GridRow {
+                    metered(L10n.t("settings.videoBitrate"), meters.video, L10n.t("settings.videoBitrateHint")) {
+                        bitrateField($encoder.videoBitrate, minimum: 100)
+                    }
+                    metered(L10n.t("settings.audioBitrate"), meters.audio, L10n.t("settings.audioBitrateHint")) {
+                        bitrateField($encoder.audioBitrate, minimum: 32)
+                    }
+                    metered(L10n.t("settings.keyframeInterval"), meters.keyint, L10n.t("settings.keyframeIntervalHint")) {
+                        DraggableUIntField(value: $encoder.keyint, minimum: 1)
+                            .disabled(controlLocked)
+                    }
                 }
-                metered(L10n.t("settings.audioBitrate"), meters.audio, L10n.t("settings.audioBitrateHint")) {
-                    bitrateField($encoder.audioBitrate, minimum: 32)
+
+                GridRow {
+                    metered(L10n.t("settings.encodeSize"), meters.size, L10n.t("settings.encodeSizeHint")) {
+                        sizePicker
+                    }
+                    metered(L10n.t("settings.encodeFps"), meters.fps, L10n.t("settings.encodeFpsHint")) {
+                        fpsPicker
+                    }
                 }
-                metered(L10n.t("settings.keyframeInterval"), meters.keyint, L10n.t("settings.keyframeIntervalHint")) {
-                    DraggableUIntField(value: $encoder.keyint, minimum: 1)
+
+                GridRow {
+                    metered(L10n.t("settings.threads"), meters.threads, L10n.t("settings.threadsHint"), fixedByEncoder: !support.threads) {
+                        threadsPicker
+                    }
+                    metered(L10n.t("settings.sendBuffer"), meters.buffer, L10n.t("settings.sendBufferHint")) {
+                        DraggableUIntField(
+                            value: Binding(
+                                get: { encoder.bufferMs },
+                                set: { encoder.bufferMs = min($0, 10_000) }
+                            ),
+                            step: 10
+                        )
                         .disabled(controlLocked)
+                    }
                 }
-            }
 
-            GridRow {
-                metered(L10n.t("settings.encodeSize"), meters.size, L10n.t("settings.encodeSizeHint")) {
-                    sizePicker
+                GridRow {
+                    metered(L10n.t("settings.encoder"), meters.encoder, encoderHint) {
+                        encoderPicker
+                    }
+                    metered(L10n.t("settings.complexity"), meters.complexity, L10n.t("settings.complexityHint"), fixedByEncoder: !support.complexity) {
+                        complexityPicker
+                    }
+                    metered(L10n.t("settings.refFrames"), meters.refs, L10n.t("settings.refFramesHint"), fixedByEncoder: !support.refFrames) {
+                        refFramesPicker
+                    }
                 }
-                metered(L10n.t("settings.encodeFps"), meters.fps, L10n.t("settings.encodeFpsHint")) {
-                    fpsPicker
-                }
-            }
 
-            GridRow {
-                metered(L10n.t("settings.threads"), meters.threads, L10n.t("settings.threadsHint"), fixedByEncoder: !support.threads) {
-                    threadsPicker
-                }
-                metered(L10n.t("settings.sendBuffer"), meters.buffer, L10n.t("settings.sendBufferHint")) {
-                    DraggableUIntField(
-                        value: Binding(
-                            get: { encoder.bufferMs },
-                            set: { encoder.bufferMs = min($0, 10_000) }
-                        ),
-                        step: 10
-                    )
-                    .disabled(controlLocked)
-                }
-            }
-
-            GridRow {
-                metered(L10n.t("settings.encoder"), meters.encoder, encoderHint) {
-                    encoderPicker
-                }
-                metered(L10n.t("settings.complexity"), meters.complexity, L10n.t("settings.complexityHint"), fixedByEncoder: !support.complexity) {
-                    complexityPicker
-                }
-                metered(L10n.t("settings.refFrames"), meters.refs, L10n.t("settings.refFramesHint"), fixedByEncoder: !support.refFrames) {
-                    refFramesPicker
-                }
-            }
-
-            GridRow {
-                metered(L10n.t("settings.audioDelay"), meters.delay, L10n.t("settings.audioDelayHint")) {
-                    DraggableUIntField(
-                        value: Binding(
-                            get: { encoder.audioDelayMs },
-                            set: { encoder.audioDelayMs = min($0, 1_000) }
-                        ),
-                        step: 10
-                    )
-                    .disabled(controlLocked)
-                }
-                metered(L10n.t("settings.entropy"), meters.entropy, L10n.t("settings.entropyHint"), fixedByEncoder: !support.entropy) {
-                    entropyPicker
-                }
-            }
-
-            GridRow {
-                VStack(alignment: .leading, spacing: 6) {
-                    meteredToggle(L10n.t("settings.deblock"), meters.deblock, L10n.t("settings.deblockHint"), $encoder.deblock, enabled: support.deblock)
-                    meteredToggle(L10n.t("settings.backgroundDetect"), meters.background, L10n.t("settings.backgroundDetectHint"), $encoder.backgroundDetection, enabled: support.background)
-                    meteredToggle(L10n.t("settings.adaptiveQuant"), meters.quant, L10n.t("settings.adaptiveQuantHint"), $encoder.adaptiveQuant, enabled: support.adaptiveQuant)
-                    meteredToggle(L10n.t("settings.sceneChange"), meters.scene, L10n.t("settings.sceneChangeHint"), $encoder.sceneChange, enabled: support.sceneChange)
-                    // macOS streams video only until AudioToolbox AAC is linked, so this
-                    // switch is not in the Windows page.
-                    Toggle(L10n.t("settings.videoOnly"), isOn: $encoder.videoOnly)
-                        .toggleStyle(.checkbox)
+                GridRow {
+                    metered(L10n.t("settings.audioDelay"), meters.delay, L10n.t("settings.audioDelayHint")) {
+                        DraggableUIntField(
+                            value: Binding(
+                                get: { encoder.audioDelayMs },
+                                set: { encoder.audioDelayMs = min($0, 1_000) }
+                            ),
+                            step: 10
+                        )
                         .disabled(controlLocked)
+                    }
+                    metered(L10n.t("settings.entropy"), meters.entropy, L10n.t("settings.entropyHint"), fixedByEncoder: !support.entropy) {
+                        entropyPicker
+                    }
                 }
-                .gridCellColumns(3)
+
+                GridRow {
+                    VStack(alignment: .leading, spacing: 6) {
+                        meteredToggle(L10n.t("settings.deblock"), meters.deblock, L10n.t("settings.deblockHint"), $encoder.deblock, enabled: support.deblock)
+                        meteredToggle(L10n.t("settings.backgroundDetect"), meters.background, L10n.t("settings.backgroundDetectHint"), $encoder.backgroundDetection, enabled: support.background)
+                        meteredToggle(L10n.t("settings.adaptiveQuant"), meters.quant, L10n.t("settings.adaptiveQuantHint"), $encoder.adaptiveQuant, enabled: support.adaptiveQuant)
+                        meteredToggle(L10n.t("settings.sceneChange"), meters.scene, L10n.t("settings.sceneChangeHint"), $encoder.sceneChange, enabled: support.sceneChange)
+                        // macOS streams video only until AudioToolbox AAC is linked, so this
+                        // switch is not in the Windows page.
+                        Toggle(L10n.t("settings.videoOnly"), isOn: $encoder.videoOnly)
+                            .toggleStyle(.checkbox)
+                            .disabled(controlLocked)
+                    }
+                    .gridCellColumns(3)
+                }
             }
         }
         .padding(8)

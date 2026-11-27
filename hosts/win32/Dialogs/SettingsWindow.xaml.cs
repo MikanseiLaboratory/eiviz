@@ -800,7 +800,7 @@ public partial class SettingsWindow : Window
         var meters = new EncodeMeters();
         void Paint() => PaintEncodeLoad(encoder, meters);
 
-        var name = new TextBox { Text = encoder.Name, Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
+        var name = new TextBox { Text = encoder.Name, Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked, VerticalContentAlignment = VerticalAlignment.Center };
         name.TextChanged += (_, _) => encoder.Name = name.Text.Trim();
         var remove = new Button { Content = "−", Width = 28, IsEnabled = !locked };
         remove.Click += (_, _) =>
@@ -1037,7 +1037,40 @@ public partial class SettingsWindow : Window
         var refsPanel = Metered(Loc.T("settings.refFrames"), Loc.T("settings.refFramesHint"), meters.Refs, refs);
         var entropyPanel = Metered(Loc.T("settings.entropy"), Loc.T("settings.entropyHint"), meters.Entropy, entropy);
 
-        Grid.SetColumnSpan(name, 3);
+        // Folding keeps only the header row and names the profile by what a
+        // destination picks it for, so the list below stays in view.
+        var toggle = new Button { Width = 28, Margin = new Thickness(0, 0, 8, 6) };
+        var summary = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 6) };
+        var header = new DockPanel();
+        DockPanel.SetDock(toggle, Dock.Left);
+        DockPanel.SetDock(summary, Dock.Right);
+        header.Children.Add(toggle);
+        header.Children.Add(summary);
+        header.Children.Add(name);
+        void ApplyCollapsed()
+        {
+            var collapsed = encoder.Collapsed;
+            foreach (UIElement child in grid.Children)
+            {
+                if (Grid.GetRow(child) > 0)
+                    child.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+            }
+            toggle.Content = collapsed ? "▸" : "▾";
+            toggle.ToolTip = Loc.T(collapsed ? "settings.encodeExpand" : "settings.encodeCollapse");
+            summary.Visibility = collapsed ? Visibility.Visible : Visibility.Collapsed;
+            summary.Text = string.Join(" / ",
+                (size.SelectedItem as ComboBoxItem)?.Content,
+                (fps.SelectedItem as ComboBoxItem)?.Content,
+                $"{(encoder.VideoBitrate == 0 ? 6000u : encoder.VideoBitrate / 1000)} kbps",
+                string.IsNullOrEmpty(encoder.Encoder) ? "OpenH264" : encoder.Encoder);
+        }
+        toggle.Click += (_, _) =>
+        {
+            encoder.Collapsed = !encoder.Collapsed;
+            ApplyCollapsed();
+        };
+
+        Grid.SetColumnSpan(header, 3);
         Grid.SetColumn(remove, 3);
         Grid.SetRow(load, 1);
         Grid.SetColumnSpan(load, 3);
@@ -1062,7 +1095,7 @@ public partial class SettingsWindow : Window
         Grid.SetColumn(entropyPanel, 1);
         Grid.SetRow(toggles, 7);
         Grid.SetColumnSpan(toggles, 3);
-        grid.Children.Add(name);
+        grid.Children.Add(header);
         grid.Children.Add(remove);
         grid.Children.Add(load);
         grid.Children.Add(video);
@@ -1078,6 +1111,7 @@ public partial class SettingsWindow : Window
         grid.Children.Add(delay);
         grid.Children.Add(entropyPanel);
         grid.Children.Add(toggles);
+        ApplyCollapsed();
         Paint();
         box.Child = grid;
         return box;
