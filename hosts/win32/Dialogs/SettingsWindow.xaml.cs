@@ -1049,7 +1049,7 @@ public partial class SettingsWindow : Window
         header.Children.Add(name);
         void ApplyCollapsed()
         {
-            var collapsed = AppPrefs.Current.CollapsedEncodes.Contains(encoder.Id);
+            var collapsed = encoder.Collapsed;
             foreach (UIElement child in grid.Children)
             {
                 if (Grid.GetRow(child) > 0)
@@ -1066,10 +1066,7 @@ public partial class SettingsWindow : Window
         }
         toggle.Click += (_, _) =>
         {
-            var folded = AppPrefs.Current.CollapsedEncodes;
-            if (!folded.Remove(encoder.Id))
-                folded.Add(encoder.Id);
-            AppPrefs.Current.Save();
+            encoder.Collapsed = !encoder.Collapsed;
             ApplyCollapsed();
         };
 

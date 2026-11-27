@@ -49,8 +49,6 @@ final class AppPrefs: ObservableObject {
     @Published var nativeApiPort: UInt32
     @Published var nativeApiRole: String
     @Published var mediaDirectory: String
-    /// Encode profiles the operator folded in Settings > Streaming, by id.
-    @Published var collapsedEncodes: [UInt64]
     @Published var localeRevision = 0
 
     static var defaultMediaDirectory: String {
@@ -97,7 +95,6 @@ final class AppPrefs: ObservableObject {
         nativeApiPort = loaded.nativeApiPort
         nativeApiRole = loaded.nativeApiRole
         mediaDirectory = loaded.mediaDirectory
-        collapsedEncodes = loaded.collapsedEncodes
     }
 
     func save() {
@@ -123,20 +120,10 @@ final class AppPrefs: ObservableObject {
         dto.nativeApiPort = nativeApiPort
         dto.nativeApiRole = nativeApiRole
         dto.mediaDirectory = resolvedMediaDirectory
-        dto.collapsedEncodes = collapsedEncodes
         do {
             try FileManager.default.createDirectory(at: Self.storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(dto).write(to: Self.storeURL, options: .atomic)
         } catch {}
-    }
-
-    func toggleEncodeCollapsed(_ id: UInt64) {
-        if let index = collapsedEncodes.firstIndex(of: id) {
-            collapsedEncodes.remove(at: index)
-        } else {
-            collapsedEncodes.append(id)
-        }
-        save()
     }
 
     func rememberSession(_ path: String) {
@@ -206,7 +193,6 @@ final class AppPrefs: ObservableObject {
         var nativeApiPort: UInt32 = 9400
         var nativeApiRole: String = "admin"
         var mediaDirectory: String = AppPrefs.defaultMediaDirectory
-        var collapsedEncodes: [UInt64] = []
 
         init() {}
 
@@ -235,7 +221,6 @@ final class AppPrefs: ObservableObject {
             let mediaDir = try container.decodeIfPresent(String.self, forKey: .mediaDirectory) ?? ""
             let trimmedMediaDir = mediaDir.trimmingCharacters(in: .whitespacesAndNewlines)
             mediaDirectory = trimmedMediaDir.isEmpty ? AppPrefs.defaultMediaDirectory : trimmedMediaDir
-            collapsedEncodes = try container.decodeIfPresent([UInt64].self, forKey: .collapsedEncodes) ?? []
         }
     }
 }

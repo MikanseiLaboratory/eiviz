@@ -114,8 +114,7 @@ private struct EncodeProfileCard: View {
     @EnvironmentObject private var mixer: MixerController
 
     private var meters: EncodeMeters { EncodeMeters(encoder) }
-    @ObservedObject private var prefs = AppPrefs.shared
-    private var collapsed: Bool { prefs.collapsedEncodes.contains(encoder.id) }
+    private var collapsed: Bool { encoder.collapsed }
 
     private var summary: String {
         [
@@ -148,7 +147,7 @@ private struct EncodeProfileCard: View {
                     // Folding keeps only this row and names the profile by what a
                     // destination picks it for, so the list below stays in view.
                     Button {
-                        prefs.toggleEncodeCollapsed(encoder.id)
+                        encoder.collapsed.toggle()
                     } label: {
                         Image(systemName: collapsed ? "chevron.right" : "chevron.down")
                     }

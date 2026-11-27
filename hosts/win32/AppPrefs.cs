@@ -51,8 +51,6 @@ internal sealed class AppPrefs
     public string MultiviewVideoTransport { get; set; } = "OMT";
     public string RemoteVideoLayout { get; set; } = "previewProgram";
     public bool RemoteOmtUseGpu { get; set; }
-    // Encode profiles the operator folded in Settings > Streaming, by id.
-    public List<ulong> CollapsedEncodes { get; set; } = [];
 
     public static AppPrefs Current { get; private set; } = Load();
 

@@ -1115,6 +1115,8 @@ public sealed class StreamEncoderEntry
     public bool AdaptiveQuant { get; set; }
     public bool SceneChange { get; set; }
     public uint AudioDelayMs { get; set; }
+    // Folded in Settings > Streaming.
+    public bool Collapsed { get; set; }
 
     public StreamEncoderEntry Clone() => new()
     {
@@ -1143,7 +1145,8 @@ public sealed class StreamEncoderEntry
         BackgroundDetection = BackgroundDetection,
         AdaptiveQuant = AdaptiveQuant,
         SceneChange = SceneChange,
-        AudioDelayMs = AudioDelayMs
+        AudioDelayMs = AudioDelayMs,
+        Collapsed = Collapsed
     };
 }
 
