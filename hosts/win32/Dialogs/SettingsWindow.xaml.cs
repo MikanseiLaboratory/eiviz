@@ -1330,6 +1330,15 @@ public partial class SettingsWindow : Window
         }
     }
 
+    // Keep in sync with StreamDestinationCard.platformPresets on macOS.
+    // YouTube: https://support.google.com/youtube/answer/2907883
+    // Twitch: https://dev.twitch.tv/docs/video-broadcast/reference/ingest
+    private static readonly (string Name, string Url)[] StreamPlatformPresets =
+    [
+        ("YouTube", "rtmp://a.rtmp.youtube.com/live2"),
+        ("Twitch", "rtmp://ingest.global-contribute.live-video.net/app")
+    ];
+
     private Border BuildStreamRow(OutputEntry output, int index)
     {
         var locked = OnAirLock.Active;
@@ -1364,6 +1373,36 @@ public partial class SettingsWindow : Window
         var encodeLabel = new TextBlock { Text = Loc.T("settings.useEncode"), Margin = new Thickness(0, 0, 8, 2) };
 
         var server = Labeled(Loc.T("settings.streamServer"), output.RtmpUrl, !locked, value => output.RtmpUrl = value.Trim());
+        var serverField = (TextBox)server.Children[1];
+        server.Children.Remove(serverField);
+        var serverRow = new DockPanel();
+        var platform = new Button
+        {
+            Content = Loc.T("settings.streamPlatform") + " ▾",
+            Margin = new Thickness(8, 0, 0, 0),
+            IsEnabled = !locked,
+            ContextMenu = new ContextMenu()
+        };
+        foreach (var preset in StreamPlatformPresets)
+        {
+            var item = new MenuItem { Header = preset.Name };
+            item.Click += (_, _) =>
+            {
+                if (!OnAirLock.Active)
+                    serverField.Text = preset.Url;
+            };
+            platform.ContextMenu.Items.Add(item);
+        }
+        platform.Click += (_, _) =>
+        {
+            platform.ContextMenu.PlacementTarget = platform;
+            platform.ContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            platform.ContextMenu.IsOpen = true;
+        };
+        DockPanel.SetDock(platform, Dock.Right);
+        serverRow.Children.Add(platform);
+        serverRow.Children.Add(serverField);
+        server.Children.Add(serverRow);
         var key = new PasswordBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
         if (!string.IsNullOrEmpty(output.RtmpSecretRef))
             key.Password = CredentialStore.Load("rtmp/" + output.RtmpSecretRef);
