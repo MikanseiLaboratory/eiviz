@@ -571,9 +571,23 @@ private struct StreamDestinationCard: View {
             }
 
             labeled(L10n.t("settings.streamServer")) {
-                TextField(L10n.t("settings.rtmpUrl"), text: $output.rtmpUrl)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(locked)
+                HStack(spacing: 8) {
+                    TextField(L10n.t("settings.rtmpUrl"), text: $output.rtmpUrl)
+                        .textFieldStyle(.roundedBorder)
+                    Menu(L10n.t("settings.streamPlatform")) {
+                        // macOS native menus scroll at the screen edges and
+                        // support keyboard navigation and typing service names.
+                        ForEach(StreamPlatformPresets.all, id: \.name) { preset in
+                            Button(preset.name) {
+                                guard !OnAirLock.active else { return }
+                                output.rtmpUrl = preset.url
+                            }
+                        }
+                    }
+                    .menuOrder(.fixed)
+                    .fixedSize()
+                }
+                .disabled(locked)
             }
 
             labeled(L10n.t("settings.streamKey")) {

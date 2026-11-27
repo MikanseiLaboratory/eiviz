@@ -1364,6 +1364,38 @@ public partial class SettingsWindow : Window
         var encodeLabel = new TextBlock { Text = Loc.T("settings.useEncode"), Margin = new Thickness(0, 0, 8, 2) };
 
         var server = Labeled(Loc.T("settings.streamServer"), output.RtmpUrl, !locked, value => output.RtmpUrl = value.Trim());
+        var serverField = (TextBox)server.Children[1];
+        server.Children.Remove(serverField);
+        var serverRow = new DockPanel();
+        var platform = new Button
+        {
+            Content = Loc.T("settings.streamPlatform") + " ▾",
+            Margin = new Thickness(8, 0, 0, 0),
+            IsEnabled = !locked,
+            // WPF's menu template scrolls when constrained, including keyboard
+            // navigation. Keep the editable server field separate from presets.
+            ContextMenu = new ContextMenu { MaxHeight = 320 }
+        };
+        foreach (var preset in StreamPlatformPresets.All)
+        {
+            var item = new MenuItem { Header = preset.Name };
+            item.Click += (_, _) =>
+            {
+                if (!OnAirLock.Active)
+                    serverField.Text = preset.Url;
+            };
+            platform.ContextMenu.Items.Add(item);
+        }
+        platform.Click += (_, _) =>
+        {
+            platform.ContextMenu.PlacementTarget = platform;
+            platform.ContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            platform.ContextMenu.IsOpen = true;
+        };
+        DockPanel.SetDock(platform, Dock.Right);
+        serverRow.Children.Add(platform);
+        serverRow.Children.Add(serverField);
+        server.Children.Add(serverRow);
         var key = new PasswordBox { Margin = new Thickness(0, 0, 8, 6), IsEnabled = !locked };
         if (!string.IsNullOrEmpty(output.RtmpSecretRef))
             key.Password = CredentialStore.Load("rtmp/" + output.RtmpSecretRef);
